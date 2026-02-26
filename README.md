@@ -5,6 +5,14 @@ This README is the execution guide for an agent running the Galaxy Benchmark.
 ## Objective
 For each experiment in `experiments/`, execute the task, produce a structured result, and compare it to the ground truth only after result generation is complete.
 
+## Non-Negotiable Write Boundary
+Write operations are restricted to `outputs/` only.
+
+- Agents must never create, modify, rename, move, or delete files outside `outputs/`.
+- Allowed write target for an active run: `outputs/<date_time>_<experiment_name>/`.
+- Paths such as `experiments/`, `ground_truth/`, project root files, and source scripts are read-only during benchmark execution.
+- If any step would require writing outside `outputs/`, stop and report a blocking violation.
+
 ## Run Entrypoint (No Command)
 To start a benchmark run:
 1. Open the `experiments/` directory.
@@ -193,7 +201,7 @@ This replaces a fixed 1-minute cooldown for every action. The 1-minute interval 
 - Keep outputs deterministic and structured.
 - Record failures explicitly in `errors/error.json` instead of silently continuing.
 - Apply dependency-aware progression: wait for required Galaxy outputs, but do not idle when independent actions can proceed safely.
-- Write-scope restriction (strict): agents may write files only inside `outputs/<date_time>_<experiment_name>/` for the active run. Writing anywhere outside this directory is never allowed.
+- Write-scope restriction (strict): all writes must stay inside `outputs/`, specifically under `outputs/<date_time>_<experiment_name>/` for the active run. Writing anywhere else is never allowed.
 - Secret handling (strict): never expose the Galaxy API key. Do not print, log, store, echo, or include `GALAXY_API_KEY` in any artifact, report, script output, or command history.
 - Recordkeeping (strict): anything planned, executed, checked, or retried must be logged in `results/activity_log.jsonl` with a category tag.
 - Immutability (strict): never modify previously written files. Any script/writing/parameter change after a prior attempt must be recorded as a new `revise` entry and written to a new versioned artifact path.
