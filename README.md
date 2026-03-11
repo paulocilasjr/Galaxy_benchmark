@@ -92,10 +92,14 @@ This benchmark depends on complete, auditable traces.
 Use this table as the primary benchmark analysis instead of a single aggregate score.
 
 12. If any execution attempt fails (`error`, `failed`, or equivalent), run the mandatory failure-recovery loop before the next attempt:
-   - Read the concrete Galaxy failure evidence first (tool stderr/stdout, job messages, output dataset provenance, relevant report artifacts).
+   - Read the concrete failure evidence first.
+     - For Galaxy tools: tool stderr/stdout, job messages, failed output dataset provenance, relevant report artifacts.
+     - For any other tool/interface: full stderr/stdout, traceback text, exit code/signal, and tool-generated logs/artifacts.
+   - Extract and record a stable error signature (for example: exception class + key message + failing step/tool ID + exit code).
    - Record the interpreted root cause in `reasoning/reasoning.md`, including evidence references (job IDs, dataset IDs, relevant error text).
-   - Define and record a fix strategy (what will change and why), then create a new attempt.
+   - Define and record a fix strategy mapped to that signature (what will change, why it should address this exact failure, and what result will validate the fix), then create a new attempt.
    - Re-run with the fix and continue logging every action in `results/activity_log.jsonl`.
+   - If the same error signature reappears, do not continue blind retries; perform a deeper root-cause revision (tool choice/input mapping/version/interface strategy) before another attempt.
    - Repeat this loop until a terminal stopping decision is reached.
 
 ## Logging Format (Flexible but Structured)
@@ -222,20 +226,26 @@ This replaces a fixed 1-minute cooldown for every action. The 1-minute interval 
 ## Failure Recovery and Rerun Protocol (Mandatory)
 When a run fails, do not blindly retry. Perform and log a structured recovery cycle:
 
-1. Read the failure evidence from Galaxy artifacts (tool stderr/stdout, job messages, failed output datasets, and provenance when relevant).
+1. Read the failure evidence from artifacts:
+   - Galaxy tools/workflows: tool stderr/stdout, job messages, failed output datasets, and provenance.
+   - Any non-Galaxy or auxiliary tool: stderr/stdout, traceback, exit code/signal, and tool-specific logs.
 2. Record error understanding in `reasoning/reasoning.md`:
    - The exact failure symptom.
+   - A normalized error signature (exception/error type + core message + failing step/tool + exit code).
    - The inferred root cause.
    - Evidence references (job IDs, dataset IDs, artifact names/paths).
 3. Record a fix strategy before re-running:
    - What is being changed (parameters/tool selection/input mapping/retry workflow).
-   - Why this change should address the root cause.
+   - Why this change should address the root cause and the recorded error signature.
+   - What observable check will confirm the fix worked.
 4. Register actions in `results/activity_log.jsonl` at minimum as:
    - `check` for reading and validating error evidence.
    - `revise` for the chosen fix strategy and concrete change set.
    - `retry` for initiating the rerun.
    - `execute` for the rerun command/tool launch and follow-up execution steps.
-5. If the rerun still fails, repeat this cycle with new evidence and a newly justified fix strategy.
+5. Hard gate before every retry: if evidence analysis and signature-to-fix mapping are not documented, do not launch the next attempt.
+6. If the rerun still fails, repeat this cycle with new evidence and a newly justified fix strategy.
+7. If the same signature repeats after a claimed fix, treat the prior fix as invalid and require a materially different corrective action (or stop with a documented blocking decision).
 
 ## Rules to Follow
 - Follow experiment instructions in order.
@@ -245,6 +255,8 @@ When a run fails, do not blindly retry. Perform and log a structured recovery cy
 - Keep outputs deterministic and structured.
 - Record failures explicitly in `errors/error.json` instead of silently continuing.
 - For every failed attempt, read and use the actual error message to guide the next fix; never rerun without documented error interpretation and fix reasoning.
+- Any retry without documented error evidence, normalized error signature, and a signature-specific fix strategy is non-compliant.
+- If the same error signature repeats, do not continue parameter sweeps alone; change the failing mechanism (tool/interface/input mapping/version/workflow) or stop with a documented blocker.
 - Apply dependency-aware progression: wait for required Galaxy outputs, but do not idle when independent actions can proceed safely.
 - Write-scope restriction (strict): all writes must stay inside `outputs/`, specifically under `outputs/<date_time>_<experiment_name>/` for the active run. Writing anywhere else is never allowed.
 - Secret handling (strict): never expose the Galaxy API key. Do not print, log, store, echo, or include `GALAXY_API_KEY` in any artifact, report, script output, or command history.
