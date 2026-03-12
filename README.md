@@ -1,6 +1,10 @@
 # Galaxy Benchmark
 
-This README is the execution guide for an agent running the Galaxy Benchmark.
+This repository now uses a two-document layout:
+- `SKILLS.md`: concise, agent-oriented skill specification.
+- `README.md` (this file): full benchmark reference with complete policy detail.
+
+The content below preserves the full execution requirements, detailed logging standards, and recovery rules.
 
 ## Objective
 For each experiment in `experiments/`, execute the task, produce a structured result, and compare it to the ground truth only after result generation is complete.
