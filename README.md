@@ -1,9 +1,15 @@
 # Galaxy Benchmark
 
-This README is the execution guide for an agent running the Galaxy Benchmark.
+This repository now uses a two-document layout:
+- `SKILLS.md`: concise, agent-oriented skill specification.
+- `README.md` (this file): full benchmark reference with complete policy detail.
+
+The content below preserves the full execution requirements, detailed logging standards, and recovery rules.
 
 ## Objective
 For each experiment in `experiments/`, execute the task, produce a structured result, and compare it to the ground truth only after result generation is complete.
+
+Complete traceability is a primary benchmark requirement: the run must be reconstructable from artifacts without relying on memory or hidden actions.
 
 ## Non-Negotiable Write Boundary
 Write operations are restricted to `outputs/` only.
@@ -53,6 +59,16 @@ Notes:
 - `results/reproduce_<name_of_experiment>.py` must reproduce all benchmark actions through command-line steps and include comments/annotations that explain each step for a human reader.
 - Any additional artifact not explicitly part of `plan/`, `reasoning/`, or `errors/` must be written in `results/`.
 - `results/activity_log.jsonl` is mandatory and must contain a chronological categorical record of all planned, executed, checked, and retried actions.
+- All logs/artifacts are audit evidence. Missing actions or missing decision rationale are treated as benchmark-quality failures.
+
+## Traceability Standard (Critical)
+This benchmark depends on complete, auditable traces.
+
+- Anything performed during a run must be recorded in artifacts (`plan`, `reasoning`, `errors`, `results/activity_log.jsonl`), including exploratory/probing steps.
+- If an action or decision is not logged, it is considered not performed.
+- Do not omit “small” actions (for example: tool metadata checks, parameter probes, manual inspections, fallback checks, waiting decisions, and rerun preparation steps).
+- Do not omit decision rationale (why a choice was made, why alternatives were rejected, and what evidence was used).
+- Logs must be sufficiently detailed for a third party to reconstruct the full sequence later.
 
 ## Execution Steps (Per Experiment)
 1. Read the experiment JSON file from `experiments/`.
@@ -65,7 +81,7 @@ Notes:
 4. Execute the experiment tasks exactly as instructed.
 5. Log ongoing reasoning and decision process in `reasoning/reasoning.md`.
 6. Log all errors/status issues in `errors/error.json` throughout execution.
-7. Continuously append categorical records to `results/activity_log.jsonl` for every planned, executed, checked, and retried action.
+7. Continuously append categorical records to `results/activity_log.jsonl` for every planned, executed, checked, and retried action, without exception.
 8. Fill `results/result.json` using `experiment_outputs` as the template.
 9. Create `results/reproduce_<name_of_experiment>.py` with annotated, step-by-step CLI reproduction instructions for everything the agent executed.
 10. Only after steps 8 and 9 are complete, read the matching ground truth file.
@@ -78,6 +94,17 @@ Notes:
 | roc-auc | ... | ... | match/mismatch | ... |
 
 Use this table as the primary benchmark analysis instead of a single aggregate score.
+
+12. If any execution attempt fails (`error`, `failed`, or equivalent), run the mandatory failure-recovery loop before the next attempt:
+   - Read the concrete failure evidence first.
+     - For Galaxy tools: tool stderr/stdout, job messages, failed output dataset provenance, relevant report artifacts.
+     - For any other tool/interface: full stderr/stdout, traceback text, exit code/signal, and tool-generated logs/artifacts.
+   - Extract and record a stable error signature (for example: exception class + key message + failing step/tool ID + exit code).
+   - Record the interpreted root cause in `reasoning/reasoning.md`, including evidence references (job IDs, dataset IDs, relevant error text).
+   - Define and record a fix strategy mapped to that signature (what will change, why it should address this exact failure, and what result will validate the fix), then create a new attempt.
+   - Re-run with the fix and continue logging every action in `results/activity_log.jsonl`.
+   - If the same error signature reappears, do not continue blind retries; perform a deeper root-cause revision (tool choice/input mapping/version/interface strategy) before another attempt.
+   - Repeat this loop until a terminal stopping decision is reached.
 
 ## Logging Format (Flexible but Structured)
 The benchmark requires logs in `plan/`, `reasoning/`, and `errors/`. Use the following format rules to keep logs easy to read while allowing flexibility.
@@ -106,6 +133,9 @@ Reasoning entries must also capture decision-critical technical details:
 - Parameter-selection rationale (how parameter values were chosen from experiment instructions and tool metadata).
 - Evidence used for decisions (tool IDs, API responses, history/dataset IDs, validation checks).
 - Any assumption or constraint that changes execution strategy.
+- For failed runs, explicit failure-analysis details: what error message was read, how it was interpreted, what fix strategy was selected, and why alternatives were not chosen.
+- Any exploratory/probing action that influenced execution (even if not part of the final successful path).
+- Decision-level granularity: do not collapse multiple independent decisions into a single vague summary entry.
 
 If it affected execution decisions, it must be recorded in `reasoning/reasoning.md`.
 
@@ -176,6 +206,9 @@ Activity log rules:
 - Any modification from a previous attempt (script changes, writing/content changes, parameter changes) must be captured as one `revise` record.
 - A `revise` record must include, in `details`, at least: `attempt`, `changed_items`, `reason`, and `new_artifact_path`.
 - Keep entries append-only; never rewrite history.
+- On failure and rerun, logging is mandatory for each action: reading the error evidence, understanding/interpreting the root cause, defining the fix strategy, launching the new run, and any intermediate checks/changes made for the rerun.
+- Log all exploratory and diagnostic actions (for example: schema inspection, parameter probing, artifact inspection, compatibility checks), even when they happen before the main run starts.
+- Each entry must include enough `details` to be interpretable later (relevant IDs, parameters, paths, and outcome context).
 
 Immutability policy:
 - Previously written artifacts are immutable. In-place edits or overwrites are not permitted.
@@ -194,12 +227,40 @@ Use this status policy for Galaxy tool jobs and workflow invocations:
 
 This replaces a fixed 1-minute cooldown for every action. The 1-minute interval is for active async monitoring, not for blocking all actions.
 
+## Failure Recovery and Rerun Protocol (Mandatory)
+When a run fails, do not blindly retry. Perform and log a structured recovery cycle:
+
+1. Read the failure evidence from artifacts:
+   - Galaxy tools/workflows: tool stderr/stdout, job messages, failed output datasets, and provenance.
+   - Any non-Galaxy or auxiliary tool: stderr/stdout, traceback, exit code/signal, and tool-specific logs.
+2. Record error understanding in `reasoning/reasoning.md`:
+   - The exact failure symptom.
+   - A normalized error signature (exception/error type + core message + failing step/tool + exit code).
+   - The inferred root cause.
+   - Evidence references (job IDs, dataset IDs, artifact names/paths).
+3. Record a fix strategy before re-running:
+   - What is being changed (parameters/tool selection/input mapping/retry workflow).
+   - Why this change should address the root cause and the recorded error signature.
+   - What observable check will confirm the fix worked.
+4. Register actions in `results/activity_log.jsonl` at minimum as:
+   - `check` for reading and validating error evidence.
+   - `revise` for the chosen fix strategy and concrete change set.
+   - `retry` for initiating the rerun.
+   - `execute` for the rerun command/tool launch and follow-up execution steps.
+5. Hard gate before every retry: if evidence analysis and signature-to-fix mapping are not documented, do not launch the next attempt.
+6. If the rerun still fails, repeat this cycle with new evidence and a newly justified fix strategy.
+7. If the same signature repeats after a claimed fix, treat the prior fix as invalid and require a materially different corrective action (or stop with a documented blocking decision).
+
 ## Rules to Follow
 - Follow experiment instructions in order.
 - Do not skip required logs (`plan`, `reasoning`, `errors`, `results`).
+- No action or decision rationale may be left out of logs. This is mandatory for benchmark success.
 - Do not read ground truth before producing the final result JSON.
 - Keep outputs deterministic and structured.
 - Record failures explicitly in `errors/error.json` instead of silently continuing.
+- For every failed attempt, read and use the actual error message to guide the next fix; never rerun without documented error interpretation and fix reasoning.
+- Any retry without documented error evidence, normalized error signature, and a signature-specific fix strategy is non-compliant.
+- If the same error signature repeats, do not continue parameter sweeps alone; change the failing mechanism (tool/interface/input mapping/version/workflow) or stop with a documented blocker.
 - Apply dependency-aware progression: wait for required Galaxy outputs, but do not idle when independent actions can proceed safely.
 - Write-scope restriction (strict): all writes must stay inside `outputs/`, specifically under `outputs/<date_time>_<experiment_name>/` for the active run. Writing anywhere else is never allowed.
 - Secret handling (strict): never expose the Galaxy API key. Do not print, log, store, echo, or include `GALAXY_API_KEY` in any artifact, report, script output, or command history.

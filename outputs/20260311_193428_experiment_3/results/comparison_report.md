@@ -2,4 +2,4 @@
 |---|---|---|---|---|
 | tool_name | Multimodal Learner | Multimodal Learner | match |  |
 | target | target | target | match |  |
-| ROC-AUC | unknown | 0.6 | mismatch | Value differs. |
+| ROC-AUC | 0.7567 | 0.6 | mismatch | Value differs. |
