@@ -146,3 +146,52 @@
 - Add a resource-risk preflight for heavy Galaxy tools such as MMseqs2 taxonomy. Check the available database, expected input size, and whether the target Galaxy instance is likely to have enough memory for that step.
 - Prefer running this workflow on a Galaxy instance or queue with more memory for MMseqs2 taxonomy, or on an environment where the taxonomy database or job resources can be controlled.
 - If the benchmark must stay on `usegalaxy.org`, avoid blind retries after the same MMseqs2 signature repeats. Only retry when there is a real mechanism change, such as a different execution environment or a justified workflow/tool substitution.
+
+# Experiment 8
+
+## What was found
+
+- The first run failed at genome BUSCO because `usegalaxy.org` auto-lineage tried to use missing offline lineage data `eukaryota_odb10`.
+- That failure was not caused by the input FASTA or by BUSCO in general. It was specific to the server-side auto-lineage configuration on the current Galaxy instance.
+- A later retry fixed BUSCO by switching to explicit lineage `ascomycota_odb12`, and genome BUSCO then completed successfully.
+- Another retry was interrupted locally while polling Maker because the runner lost DNS resolution to `usegalaxy.org`, but remote inspection showed that the Maker job itself had already completed successfully.
+- A final blocker remained on transcript BUSCO: the job stayed queued for an extended period with no runner assignment or error details, while the rest of the annotation pipeline had already completed.
+
+## Lesson learned
+
+- For BUSCO on shared Galaxy instances, auto-lineage is not always the most robust choice. Live server lineage availability can diverge from older tutorial assumptions.
+- Local runner failure and remote Galaxy failure are different problems. Polling interruptions should trigger remote state inspection before any rerun.
+- Once long upstream jobs have succeeded, recovery should prefer resuming from the existing Galaxy history instead of re-running the full pipeline.
+- Not every queued job needs to block benchmark completion. If the requested outputs are already answerable from completed steps, the scheduler issue should be recorded explicitly and handled as a bounded warning.
+
+## How to prevent this
+
+- Probe the live BUSCO tool form before submission and choose an explicit lineage from the currently advertised options instead of relying on auto-lineage defaults. For this dataset, `ascomycota_odb12` was the stable choice.
+- Make the runner resumable by history ID, job ID, and dataset ID so a local polling failure can continue from the last successful remote state.
+- Run long Galaxy polling outside the sandbox or otherwise in a network-stable environment when possible.
+- Add a queue-wait threshold for non-critical jobs such as the second BUSCO run. After that threshold, inspect the queued job metadata and continue with downstream steps if the blocked job is not required for the benchmark answers.
+
+# Experiment 8
+
+## What was found
+
+- Attempt 1 failed at genome BUSCO because the current `usegalaxy.org` BUSCO setup tried to use missing offline lineage data `eukaryota_odb10` when auto-lineage was selected.
+- The failure was fixed by switching from BUSCO auto-lineage to explicit lineage `ascomycota_odb12`, which succeeded for the genome BUSCO run.
+- A later run then hit a local orchestration failure while polling Maker: DNS resolution to `usegalaxy.org` failed locally, but direct inspection showed the remote Maker job had already completed successfully.
+- That was fixed by resuming from the existing Galaxy history instead of rerunning uploads, BUSCO, and Maker.
+- A final scheduler issue remained on the transcript BUSCO run: the job stayed queued for an extended period with no runner assignment or error message.
+- That queued transcript BUSCO step was treated as non-blocking because the benchmark outputs only required identifying the evaluation tool and the visualization tool, both of which were already determined from successful completed steps.
+
+## Lesson learned
+
+- Galaxy tutorial logic is not enough by itself when the live server has different lineage assets or tool behavior. For BUSCO, current server state must override older default assumptions.
+- Local runner failure and remote Galaxy failure are different classes of problem and must not be conflated.
+- For long Galaxy pipelines, resume-from-history is often the correct recovery strategy after local interruptions.
+- Not every queued late-stage job is worth blocking forever; the decision should depend on whether that job is actually required for the benchmark answer.
+
+## How to prevent this
+
+- Before submitting BUSCO, probe the live Galaxy BUSCO form and prefer an explicit lineage from the currently available options instead of relying on auto-lineage or older tutorial defaults.
+- For long-running jobs, prefer polling outside environments that can lose network access, and record history IDs, job IDs, and dataset IDs early so a run can be resumed cleanly.
+- Add a recovery rule that checks the remote history before launching a rerun; if required upstream datasets are already `ok`, resume from them instead of duplicating work.
+- Add a queue-wait threshold for non-critical downstream jobs. If a job remains queued with no runner or error details and the benchmark outputs do not depend on it, record the scheduler issue and continue with the answer-bearing steps.
