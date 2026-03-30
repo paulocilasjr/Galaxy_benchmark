@@ -1,7 +1,7 @@
 # Galaxy Benchmark
 
 This repository now uses a two-document layout:
-- `SKILLS.md`: concise, agent-oriented skill specification.
+- `SKILL.md`: concise, agent-oriented skill specification.
 - `README.md` (this file): full benchmark reference with complete policy detail.
 
 The content below preserves the full execution requirements, detailed logging standards, and recovery rules.
@@ -15,14 +15,14 @@ Complete traceability is a primary benchmark requirement: the run must be recons
 Write operations are restricted to `outputs/` only.
 
 - Agents must never create, modify, rename, move, or delete files outside `outputs/`.
-- Allowed write target for an active run: `outputs/<date_time>_<experiment_name>/`.
+- Allowed write target for an active run: `outputs/<date_time>_<level>_<experiment_name>/`.
 - Paths such as `experiments/`, `ground_truth/`, project root files, and source scripts are read-only during benchmark execution.
 - If any step would require writing outside `outputs/`, stop and report a blocking violation.
 
 ## Run Entrypoint (No Command)
 To start a benchmark run:
 1. Open the `experiments/` directory.
-2. Read the experiment files one by one.
+2. Read the selected experiment file one by one, including level-specific files under `experiments/low_context/`, `experiments/medium_context/`, or `experiments/high_context/` when applicable.
 3. Execute one experiment at a time from start to finish (do not mix steps from multiple experiments).
 4. For each experiment, complete all required outputs before moving to the next experiment file.
 
@@ -38,24 +38,27 @@ Recommended blocking message:
 
 ## Input Directory
 - `experiments/`
-  - Contains experiment JSON files with instructions and an `experiment_outputs` structure to fill.
+  - Contains agent-facing experiment JSON files only.
+  - Tasks are organized under `experiments/low_context/`, `experiments/medium_context/`, and `experiments/high_context/`.
+- `evaluators/`
+  - Contains hidden evaluation metadata, rubric/check definitions, and benchmark-specific expectations that should not be shown to the agent.
 
 ## Required Output Structure
-For each experiment file (example: `experiment_1.json`), create:
+For each experiment file (example: `experiments/low_context/experiment_1.json`), create:
 
-- `outputs/<date_time>_<experiment_name>/plan/saved.md`
-- `outputs/<date_time>_<experiment_name>/reasoning/reasoning.md`
-- `outputs/<date_time>_<experiment_name>/errors/error.json`
-- `outputs/<date_time>_<experiment_name>/results/result.json`
-- `outputs/<date_time>_<experiment_name>/results/reproduce_<experiment_name>.py`
-- `outputs/<date_time>_<experiment_name>/results/activity_log.jsonl`
+- `outputs/<date_time>_<level>_<experiment_name>/plan/saved.md`
+- `outputs/<date_time>_<level>_<experiment_name>/reasoning/reasoning.md`
+- `outputs/<date_time>_<level>_<experiment_name>/errors/error.json`
+- `outputs/<date_time>_<level>_<experiment_name>/results/result.json`
+- `outputs/<date_time>_<level>_<experiment_name>/results/reproduce_<experiment_name>.py`
+- `outputs/<date_time>_<level>_<experiment_name>/results/activity_log.jsonl`
 
 Notes:
-- The run directory inside `outputs/` must be named as `<date_time>_<experiment_name>`.
+- The run directory inside `outputs/` must be named as `<date_time>_<level>_<experiment_name>`.
 - Use a sortable timestamp format for `<date_time>` (recommended: `YYYYMMDD_HHMMSS`).
-- Example for `experiment_1`: `outputs/20260226_153000_experiment_1/`.
-- Each new run/attempt must use a new `<date_time>_<experiment_name>` directory to avoid overwriting previous runs.
-- The result JSON must follow the structure defined in `experiment_outputs` in the experiment file.
+- Example for low-context `experiment_1`: `outputs/20260330_153000_low_context_experiment_1/`.
+- Each new run/attempt must use a new `<date_time>_<level>_<experiment_name>` directory to avoid overwriting previous runs.
+- The result JSON must follow the benchmark result fields required by the task's evaluation setup.
 - `results/reproduce_<name_of_experiment>.py` must reproduce all benchmark actions through command-line steps and include comments/annotations that explain each step for a human reader.
 - Any additional artifact not explicitly part of `plan/`, `reasoning/`, or `errors/` must be written in `results/`.
 - `results/activity_log.jsonl` is mandatory and must contain a chronological categorical record of all planned, executed, checked, and retried actions.
@@ -71,8 +74,8 @@ This benchmark depends on complete, auditable traces.
 - Logs must be sufficiently detailed for a third party to reconstruct the full sequence later.
 
 ## Execution Steps (Per Experiment)
-1. Read the experiment JSON file from `experiments/`.
-2. Create a run-specific experiment directory in `outputs/` named `<date_time>_<experiment_name>` and create subdirectories:
+1. Read the selected experiment JSON file from `experiments/` or a level-specific subdirectory such as `experiments/low_context/`.
+2. Create a run-specific experiment directory in `outputs/` named `<date_time>_<level>_<experiment_name>` and create subdirectories:
    - `plan/`
    - `reasoning/`
    - `errors/`
@@ -82,7 +85,7 @@ This benchmark depends on complete, auditable traces.
 5. Log ongoing reasoning and decision process in `reasoning/reasoning.md`.
 6. Log all errors/status issues in `errors/error.json` throughout execution.
 7. Continuously append categorical records to `results/activity_log.jsonl` for every planned, executed, checked, and retried action, without exception.
-8. Fill `results/result.json` using `experiment_outputs` as the template.
+8. Fill `results/result.json` using the benchmark result fields required by the task's evaluation setup.
 9. Create `results/reproduce_<name_of_experiment>.py` with annotated, step-by-step CLI reproduction instructions for everything the agent executed.
 10. Only after steps 8 and 9 are complete, read the matching ground truth file.
 11. Build a comparison report table between `results/result.json` and ground truth using this format:
@@ -262,7 +265,7 @@ When a run fails, do not blindly retry. Perform and log a structured recovery cy
 - Any retry without documented error evidence, normalized error signature, and a signature-specific fix strategy is non-compliant.
 - If the same error signature repeats, do not continue parameter sweeps alone; change the failing mechanism (tool/interface/input mapping/version/workflow) or stop with a documented blocker.
 - Apply dependency-aware progression: wait for required Galaxy outputs, but do not idle when independent actions can proceed safely.
-- Write-scope restriction (strict): all writes must stay inside `outputs/`, specifically under `outputs/<date_time>_<experiment_name>/` for the active run. Writing anywhere else is never allowed.
+- Write-scope restriction (strict): all writes must stay inside `outputs/`, specifically under `outputs/<date_time>_<level>_<experiment_name>/` for the active run. Writing anywhere else is never allowed.
 - Secret handling (strict): never expose the Galaxy API key. Do not print, log, store, echo, or include `GALAXY_API_KEY` in any artifact, report, script output, or command history.
 - Recordkeeping (strict): anything planned, executed, checked, or retried must be logged in `results/activity_log.jsonl` with a category tag.
 - Immutability (strict): never modify previously written files. Any script/writing/parameter change after a prior attempt must be recorded as a new `revise` entry and written to a new versioned artifact path.
