@@ -14,10 +14,12 @@ def main() -> int:
     from galaxy_benchmark.infrastructure.repositories.json_task_repository import JsonTaskRepository
 
     repository = JsonTaskRepository()
-    task_dir = root / "benchmark" / "tasks" / "legacy" / "canonical"
-    ground_truth_dir = root / "benchmark" / "ground_truth" / "legacy" / "canonical"
-    tasks = repository.list_tasks(task_dir)
-    truths = [repository.load_ground_truth(path) for path in sorted(ground_truth_dir.glob("*.json"))]
+    task_dir = root / "benchmark" / "tasks"
+    ground_truth_dir = root / "benchmark" / "ground_truth"
+    task_paths = sorted(path for path in task_dir.glob("*.json") if path.is_file())
+    ground_truth_paths = sorted(path for path in ground_truth_dir.glob("*.json") if path.is_file())
+    tasks = [repository.load_task(path) for path in task_paths]
+    truths = [repository.load_ground_truth(path) for path in ground_truth_paths]
     print(f"Validated {len(tasks)} task(s) and {len(truths)} ground-truth file(s).")
     return 0
 

@@ -15,8 +15,20 @@ Core claim:
 ## Three Benchmark Pillars
 
 - `platform_operation_capability`: can the agent operate Galaxy correctly across histories, datasets, tools, workflows, polling, and provenance
-- `prompt_robustness_and_trust`: does performance hold across novice, intermediate, and expert prompts plus multiple prompt formats
+- `prompt_robustness_and_trust`: does performance hold across novice, intermediate, and expert prompts
 - `ecosystem_knowledge_use`: can the agent retrieve, select, and adapt GTN, IWC, and Galaxy tool metadata correctly
+
+## Prompt Structure
+
+The benchmark prompts now use one fixed brief:
+
+- `Task`
+- `Attachments`
+- `Suggested Galaxy Resources`
+- `Requirements`
+- `Return`
+
+This keeps the question shape stable across tiers while changing only explicitness. The structure is inspired by recent agent benchmarks that emphasize concrete objectives with available files, explicit atomic constraints, and focused guidance instead of long documentation dumps.
 
 ## Experimental Matrix
 
@@ -37,15 +49,14 @@ Core claim:
 ## Repository Layout
 
 - `src/galaxy_benchmark/`: typed benchmark package using clean architecture
-- `benchmark/tasks/`: canonical task definitions and legacy migrated fixtures
+- `benchmark/tasks/`: canonical task definitions
 - `benchmark/ground_truth/`: normalized gold standards
 - `benchmark/datasets/local/`: local benchmark inputs used by canonical tasks
-- `benchmark/prompts/`: prompt templates plus tiered prompt variants
+- `benchmark/prompts/`: one benchmark prompt template plus tiered prompt variants
 - `benchmark/schemas/`: JSON schemas generated from the typed models
-- `benchmark/suites/`: suite manifests and planning structure
+- `benchmark/suites.json`: suite definitions
 - `runs/`: immutable benchmark run artifacts
-- `benchmark/tasks/legacy/raw/` and `benchmark/ground_truth/legacy/raw/`: preserved legacy source snapshots within the new layout
-- `docs/`: benchmark methodology, scoring, failure taxonomy, access matrix, baselines, ADRs
+- `docs/`: concise benchmark, evaluation, and migration notes
 
 ## Audit and Reproducibility Rules
 
@@ -58,7 +69,7 @@ Core claim:
 ## Current Status
 
 Implemented now:
-- typed domain models, ports, migration tooling, prompt generation, scoring skeleton, artifact-store foundation, schemas, docs, and migrated legacy fixtures
+- typed domain models, ports, paper-style prompt generation, scoring skeleton, artifact-store foundation, schemas, docs, and canonical task fixtures
 
 Still scaffolded:
 - live Galaxy/BioBlend execution adapter
@@ -69,13 +80,6 @@ Still scaffolded:
 ## Documentation Index
 
 - [Architecture](ARCHITECTURE.md)
-- [Benchmark Overview](docs/benchmark_overview.md)
-- [Benchmark Methodology](docs/benchmark_methodology.md)
-- [Experimental Matrix](docs/experimental_matrix.md)
-- [Task Families](docs/task_families.md)
-- [Scoring](docs/scoring.md)
-- [Failure Taxonomy](docs/failure_taxonomy.md)
-- [Prompt Tiers](docs/prompt_tiers.md)
-- [Baselines](docs/baselines.md)
-- [Evaluation Protocol](docs/evaluation_protocol.md)
+- [Benchmark Design](docs/benchmark.md)
+- [Evaluation](docs/evaluation.md)
 - [Migration From Main](docs/migration_from_main.md)

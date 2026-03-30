@@ -14,7 +14,7 @@ def main() -> int:
     from galaxy_benchmark.interfaces.cli.app import generate_prompts
 
     generate_prompts(
-        task_dir=root / "benchmark" / "tasks" / "legacy" / "canonical",
+        task_dir=root / "benchmark" / "tasks",
         output_dir=root / "benchmark" / "prompts",
     )
     return 0

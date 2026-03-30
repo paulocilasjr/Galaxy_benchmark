@@ -18,7 +18,7 @@ def test_artifact_store_creates_immutable_run_layout(tmp_path) -> None:
         agent_id="openai",
         access_mode=AccessMode.API,
         knowledge_condition=KnowledgeCondition.NONE,
-        prompt_variant_id="core_tabular_001_novice_prose",
+        prompt_variant_id="core_tabular_001_novice_brief",
     )
 
     paths, manifest = store.create_run(config)

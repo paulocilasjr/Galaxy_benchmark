@@ -28,10 +28,7 @@ class PromptTier(StrEnum):
 
 
 class PromptFormat(StrEnum):
-    PROSE = "prose"
-    BULLETS = "bullets"
-    STRUCTURED = "structured"
-    JSON_LIKE = "json_like"
+    BRIEF = "brief"
 
 
 class AgentType(StrEnum):

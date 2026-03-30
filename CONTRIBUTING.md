@@ -6,7 +6,7 @@ Keep the benchmark platform small, typed, and modular.
 
 - Preserve clean architecture boundaries.
 - Keep canonical JSON and code in `snake_case`.
-- Treat `benchmark/tasks/legacy/raw/` and `benchmark/ground_truth/legacy/raw/` as migration inputs, not primary definitions.
+- Keep checked-in benchmark content in the flat canonical paths under `benchmark/tasks/` and `benchmark/ground_truth/`.
 - Write benchmark execution artifacts only under `runs/`.
 - Do not add provider-specific or Galaxy-specific logic to the domain layer.
 

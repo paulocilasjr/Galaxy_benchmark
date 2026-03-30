@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Migrate legacy Galaxy benchmark experiments into canonical fixtures.
-
-This script preserves the current legacy JSON files as raw snapshots and
-generates canonical task and ground-truth documents with normalized field
-names. It is intentionally self-contained so it can run without the future
-benchmark package skeleton.
-"""
+"""Migrate legacy Galaxy benchmark experiments into clean canonical fixtures."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -110,15 +103,23 @@ TASK_BLUEPRINTS: dict[str, dict[str, Any]] = {
 
 INFERRED_INPUTS: dict[str, list[tuple[str, str, str, str]]] = {
     "experiment_8": [
-        ("S_pombe_chrIII_genome.fasta", "benchmark/datasets/local/experiment_8/S_pombe_chrIII_genome.fasta", "fasta", "genome"),
-        ("S_pombe_trinity_assembly.fasta", "benchmark/datasets/local/experiment_8/S_pombe_trinity_assembly.fasta", "fasta", "assembly"),
-        ("Swissprot_no_S_pombe.fasta", "benchmark/datasets/local/experiment_8/Swissprot_no_S_pombe.fasta", "fasta", "protein_reference"),
-        ("snap_training.snaphmm", "benchmark/datasets/local/experiment_8/snap_training.snaphmm", "snaphmm", "snap_model"),
-        ("augustus_training.tar.gz.augustus", "benchmark/datasets/local/experiment_8/augustus_training.tar.gz.augustus", "augustus", "augustus_model"),
+        ("S_pombe_chrIII_genome.fasta", "benchmark/datasets/local/core_genome_annotation_001/S_pombe_chrIII_genome.fasta", "fasta", "genome"),
+        ("S_pombe_trinity_assembly.fasta", "benchmark/datasets/local/core_genome_annotation_001/S_pombe_trinity_assembly.fasta", "fasta", "assembly"),
+        ("Swissprot_no_S_pombe.fasta", "benchmark/datasets/local/core_genome_annotation_001/Swissprot_no_S_pombe.fasta", "fasta", "protein_reference"),
+        ("snap_training.snaphmm", "benchmark/datasets/local/core_genome_annotation_001/snap_training.snaphmm", "snaphmm", "snap_model"),
+        ("augustus_training.tar.gz.augustus", "benchmark/datasets/local/core_genome_annotation_001/augustus_training.tar.gz.augustus", "augustus", "augustus_model"),
     ],
     "experiment_9": [
-        ("anton_2025.pdf", "benchmark/datasets/local/experiment_9/anton_2025.pdf", "pdf", "paper"),
+        ("anton_2025.pdf", "benchmark/datasets/local/legacy_paper_reproduction_001/anton_2025.pdf", "pdf", "paper"),
     ],
+}
+
+LOCAL_DATASET_DIRS = {
+    "experiment_1": "core_tabular_001",
+    "experiment_4": "iwc_atac_seq_001",
+    "experiment_7": "core_metagenomics_resistome_001",
+    "experiment_8": "core_genome_annotation_001",
+    "experiment_9": "legacy_paper_reproduction_001",
 }
 
 PROCESS_EXPECTATIONS: dict[str, list[str]] = {
@@ -243,19 +244,25 @@ def infer_role(dataset_name: str, index: int, total: int) -> str:
 
 
 def normalize_dataset_path(experiment_id: str, path_or_url: str) -> str:
-    if experiment_id == "experiment_7":
-        if path_or_url.endswith("meta_genomic_R1.fastqsanger.gz"):
-            return "benchmark/datasets/local/experiment_7/meta_genomics_R1.fastqsanger.gz"
-        if path_or_url.endswith("meta_genomic_R2.fastqsanger.gz"):
-            return "benchmark/datasets/local/experiment_7/meta_genomics_R2.fastqsanger.gz"
     normalized = path_or_url.lstrip("./")
     if normalized.startswith("dataset/"):
-        return normalized.replace("dataset/", "benchmark/datasets/local/", 1)
+        parts = normalized.split("/", 2)
+        if len(parts) >= 3 and experiment_id in LOCAL_DATASET_DIRS:
+            normalized = f"benchmark/datasets/local/{LOCAL_DATASET_DIRS[experiment_id]}/{parts[2]}"
+        else:
+            normalized = normalized.replace("dataset/", "benchmark/datasets/local/", 1)
+    if experiment_id == "experiment_7":
+        normalized = normalized.replace("meta_genomic_R1.fastqsanger.gz", "meta_genomics_R1.fastqsanger.gz")
+        normalized = normalized.replace("meta_genomic_R2.fastqsanger.gz", "meta_genomics_R2.fastqsanger.gz")
     return normalized
 
 
-def canonicalize_text_references(text: str) -> str:
-    return text.replace("dataset/", "benchmark/datasets/local/")
+def canonicalize_text_references(experiment_id: str, text: str) -> str:
+    normalized = text.replace("dataset/", "benchmark/datasets/local/")
+    task_dir = LOCAL_DATASET_DIRS.get(experiment_id)
+    if task_dir:
+        normalized = normalized.replace(f"benchmark/datasets/local/{experiment_id}", f"benchmark/datasets/local/{task_dir}")
+    return normalized
 
 
 def normalize_output_name(key: str, experiment_id: str | None = None) -> str:
@@ -372,14 +379,6 @@ def build_canonical_task(pair: LegacyPair, legacy: dict[str, Any]) -> dict[str, 
     }
 
     metadata = {
-        "legacy_experiment_name": experiment_id,
-        "legacy_title": legacy.get("title"),
-        "legacy_level": legacy.get("level"),
-        "legacy_experiment_path": str(pair.experiment_path),
-        "legacy_ground_truth_path": str(pair.ground_truth_path),
-        "legacy_prompt_keys": sorted(prompt.keys()),
-        "legacy_experiment_outputs": legacy.get("experiment_outputs") or {},
-        "task_subfamily": blueprint["task_subfamily"],
         "benchmark_hypotheses": hypotheses_for_pillars(blueprint["benchmark_pillars"]),
     }
 
@@ -387,7 +386,7 @@ def build_canonical_task(pair: LegacyPair, legacy: dict[str, Any]) -> dict[str, 
         "task_id": blueprint["task_id"],
         "suite_id": blueprint["suite_id"],
         "title": legacy.get("title"),
-        "description": canonicalize_text_references(prompt.get("task")),
+        "description": canonicalize_text_references(experiment_id, prompt.get("task")),
         "task_family": blueprint["task_family"],
         "task_subfamily": blueprint["task_subfamily"],
         "benchmark_pillars": blueprint["benchmark_pillars"],
@@ -420,15 +419,16 @@ def build_canonical_ground_truth(pair: LegacyPair, ground_truth: dict[str, Any])
         process_expectations.extend(PROCESS_EXPECTATIONS["optimization"])
     return {
         "task_id": blueprint["task_id"],
-        "suite_id": blueprint["suite_id"],
-        "legacy_experiment_name": experiment_id,
-        "normalized_fields": normalized,
-        "legacy_field_names": aliases,
+        "expected_artifacts": [],
+        "expected_fields": normalized,
+        "acceptable_alternatives": {},
         "process_expectations": process_expectations,
         "failure_expectations": FAILURE_EXPECTATIONS.get(experiment_id, []),
-        "source": {
-            "path": str(pair.ground_truth_path),
-            "keys": sorted(ground_truth.keys()),
+        "scoring_hints": {
+            "compare_fields": sorted(normalized.keys()),
+        },
+        "metadata": {
+            "field_aliases": aliases,
         },
     }
 
@@ -443,14 +443,8 @@ def hypotheses_for_pillars(pillars: list[str]) -> list[str]:
 
 
 def collect_legacy_pairs(source_root: Path) -> list[LegacyPair]:
-    raw_task_dir = source_root / "benchmark" / "tasks" / "legacy" / "raw"
-    raw_ground_truth_dir = source_root / "benchmark" / "ground_truth" / "legacy" / "raw"
-    if raw_task_dir.exists() and raw_ground_truth_dir.exists():
-        experiment_dir = raw_task_dir
-        ground_truth_dir = raw_ground_truth_dir
-    else:
-        experiment_dir = source_root / "experiments"
-        ground_truth_dir = source_root / "ground_truth"
+    experiment_dir = source_root / "experiments"
+    ground_truth_dir = source_root / "ground_truth"
     pairs: list[LegacyPair] = []
     for experiment_path in sorted(experiment_dir.glob("experiment_*.json")):
         ground_truth_path = ground_truth_dir / experiment_path.name
@@ -469,49 +463,32 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def copy_raw_file(source: Path, destination: Path) -> None:
-    ensure_parent(destination)
-    shutil.copy2(source, destination)
-
-
 def migrate_legacy_experiments(source_root: Path, output_root: Path) -> dict[str, Any]:
     pairs = collect_legacy_pairs(source_root)
 
     benchmark_root = output_root / "benchmark"
-    raw_task_root = benchmark_root / "tasks" / "legacy" / "raw"
-    canonical_task_root = benchmark_root / "tasks" / "legacy" / "canonical"
-    raw_gt_root = benchmark_root / "ground_truth" / "legacy" / "raw"
-    canonical_gt_root = benchmark_root / "ground_truth" / "legacy" / "canonical"
-
     manifest_items: list[dict[str, Any]] = []
 
     for pair in pairs:
         legacy_experiment = json.loads(pair.experiment_path.read_text(encoding="utf-8"))
         legacy_ground_truth = json.loads(pair.ground_truth_path.read_text(encoding="utf-8"))
+        canonical_task = build_canonical_task(pair, legacy_experiment)
+        canonical_gt = build_canonical_ground_truth(pair, legacy_ground_truth)
+        canonical_task_path = benchmark_root / "tasks" / f"{canonical_task['task_id']}.json"
+        canonical_gt_path = benchmark_root / "ground_truth" / f"{canonical_task['task_id']}.json"
 
-        raw_task_path = raw_task_root / pair.experiment_path.name
-        canonical_task_path = canonical_task_root / pair.experiment_path.name
-        raw_gt_path = raw_gt_root / pair.ground_truth_path.name
-        canonical_gt_path = canonical_gt_root / pair.ground_truth_path.name
-
-        copy_raw_file(pair.experiment_path, raw_task_path)
-        copy_raw_file(pair.ground_truth_path, raw_gt_path)
-        write_json(canonical_task_path, build_canonical_task(pair, legacy_experiment))
-        write_json(canonical_gt_path, build_canonical_ground_truth(pair, legacy_ground_truth))
+        write_json(canonical_task_path, canonical_task)
+        write_json(canonical_gt_path, canonical_gt)
 
         manifest_items.append(
             {
-                "task_id": TASK_BLUEPRINTS[pair.experiment_path.stem]["task_id"],
-                "suite_id": TASK_BLUEPRINTS[pair.experiment_path.stem]["suite_id"],
-                "legacy_experiment_path": str(pair.experiment_path),
-                "legacy_ground_truth_path": str(pair.ground_truth_path),
-                "raw_task_path": str(raw_task_path.relative_to(output_root)),
+                "task_id": canonical_task["task_id"],
+                "suite_id": canonical_task["suite_id"],
                 "canonical_task_path": str(canonical_task_path.relative_to(output_root)),
-                "raw_ground_truth_path": str(raw_gt_path.relative_to(output_root)),
                 "canonical_ground_truth_path": str(canonical_gt_path.relative_to(output_root)),
-                "task_family": build_canonical_task(pair, legacy_experiment)["task_family"],
-                "task_subfamily": build_canonical_task(pair, legacy_experiment)["task_subfamily"],
-                "benchmark_pillars": build_canonical_task(pair, legacy_experiment)["benchmark_pillars"],
+                "task_family": canonical_task["task_family"],
+                "task_subfamily": canonical_task["task_subfamily"],
+                "benchmark_pillars": canonical_task["benchmark_pillars"],
             }
         )
 
@@ -522,7 +499,7 @@ def migrate_legacy_experiments(source_root: Path, output_root: Path) -> dict[str
         "task_count": len(manifest_items),
         "tasks": manifest_items,
     }
-    write_json(benchmark_root / "tasks" / "legacy" / "manifest.json", manifest)
+    write_json(benchmark_root / "migration_manifest.json", manifest)
     return manifest
 
 
@@ -532,7 +509,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--source-root",
         type=Path,
         default=Path(__file__).resolve().parents[1],
-        help="Repository root that contains benchmark/tasks/legacy/raw and benchmark/ground_truth/legacy/raw.",
+        help="Legacy repository root that contains experiments/ and ground_truth/.",
     )
     parser.add_argument(
         "--output-root",

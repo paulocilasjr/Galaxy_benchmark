@@ -9,23 +9,26 @@ import typer
 from rich.console import Console
 
 from galaxy_benchmark.application.prompting.services import PromptVariantGenerator
-from galaxy_benchmark.application.use_cases.migrate_legacy import LegacyExperimentMigrator
 from galaxy_benchmark.infrastructure.repositories.json_task_repository import JsonTaskRepository
 
 app = typer.Typer(help="Galaxy benchmark CLI.")
 console = Console()
 
 
+def _json_files(root: Path) -> list[Path]:
+    return sorted(path for path in root.glob("*.json") if path.is_file())
+
+
 @app.command("validate")
 def validate(
-    task_dir: Path = typer.Option(Path("benchmark/tasks/legacy/canonical"), exists=False),
-    ground_truth_dir: Path = typer.Option(Path("benchmark/ground_truth/legacy/canonical"), exists=False),
+    task_dir: Path = typer.Option(Path("benchmark/tasks"), exists=False),
+    ground_truth_dir: Path = typer.Option(Path("benchmark/ground_truth"), exists=False),
 ) -> None:
     """Validate canonical tasks and ground truths."""
 
     repository = JsonTaskRepository()
-    task_paths = sorted(task_dir.glob("*.json"))
-    ground_truth_paths = sorted(ground_truth_dir.glob("*.json"))
+    task_paths = _json_files(task_dir)
+    ground_truth_paths = _json_files(ground_truth_dir)
     tasks = [repository.load_task(path) for path in task_paths]
     truths = [repository.load_ground_truth(path) for path in ground_truth_paths]
     console.print(
@@ -33,21 +36,9 @@ def validate(
     )
 
 
-@app.command("migrate-legacy")
-def migrate_legacy(
-    experiments_dir: Path = typer.Option(Path("benchmark/tasks/legacy/raw"), exists=False),
-    ground_truth_dir: Path = typer.Option(Path("benchmark/ground_truth/legacy/raw"), exists=False),
-) -> None:
-    """Preview migration from legacy inputs into canonical models."""
-
-    migrator = LegacyExperimentMigrator()
-    migrated = migrator.migrate_directory(experiments_dir, ground_truth_dir)
-    console.print(f"Migrated {len(migrated)} legacy experiment(s).")
-
-
 @app.command("generate-prompts")
 def generate_prompts(
-    task_dir: Path = typer.Option(Path("benchmark/tasks/legacy/canonical"), exists=False),
+    task_dir: Path = typer.Option(Path("benchmark/tasks"), exists=False),
     output_dir: Path = typer.Option(Path("benchmark/prompts"), exists=False),
 ) -> None:
     """Generate prompt variants for canonical tasks."""
@@ -56,7 +47,7 @@ def generate_prompts(
     generator = PromptVariantGenerator()
     output_dir.mkdir(parents=True, exist_ok=True)
     total = 0
-    for task_path in sorted(task_dir.glob("*.json")):
+    for task_path in _json_files(task_dir):
         task = repository.load_task(task_path)
         variants = generator.generate(task)
         variants_by_tier: dict[str, list[dict[str, object]]] = {}
@@ -65,7 +56,7 @@ def generate_prompts(
         for tier, tier_variants in variants_by_tier.items():
             tier_dir = output_dir / tier
             tier_dir.mkdir(parents=True, exist_ok=True)
-            output_path = tier_dir / f"{task_path.stem}.json"
+            output_path = tier_dir / f"{task.task_id}.json"
             output_path.write_text(json.dumps(tier_variants, indent=2) + "\n")
         total += len(variants)
     console.print(f"Generated {total} prompt variant(s).")

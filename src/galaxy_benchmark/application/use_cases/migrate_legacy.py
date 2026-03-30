@@ -162,15 +162,23 @@ EXPERIMENT_SPECIFIC_OUTPUTS = {
 
 INFERRED_INPUTS = {
     "experiment_8": [
-        ("S_pombe_chrIII_genome.fasta", "benchmark/datasets/local/experiment_8/S_pombe_chrIII_genome.fasta", "fasta", "genome"),
-        ("S_pombe_trinity_assembly.fasta", "benchmark/datasets/local/experiment_8/S_pombe_trinity_assembly.fasta", "fasta", "assembly"),
-        ("Swissprot_no_S_pombe.fasta", "benchmark/datasets/local/experiment_8/Swissprot_no_S_pombe.fasta", "fasta", "protein_reference"),
-        ("snap_training.snaphmm", "benchmark/datasets/local/experiment_8/snap_training.snaphmm", "snaphmm", "snap_model"),
-        ("augustus_training.tar.gz.augustus", "benchmark/datasets/local/experiment_8/augustus_training.tar.gz.augustus", "augustus", "augustus_model"),
+        ("S_pombe_chrIII_genome.fasta", "benchmark/datasets/local/core_genome_annotation_001/S_pombe_chrIII_genome.fasta", "fasta", "genome"),
+        ("S_pombe_trinity_assembly.fasta", "benchmark/datasets/local/core_genome_annotation_001/S_pombe_trinity_assembly.fasta", "fasta", "assembly"),
+        ("Swissprot_no_S_pombe.fasta", "benchmark/datasets/local/core_genome_annotation_001/Swissprot_no_S_pombe.fasta", "fasta", "protein_reference"),
+        ("snap_training.snaphmm", "benchmark/datasets/local/core_genome_annotation_001/snap_training.snaphmm", "snaphmm", "snap_model"),
+        ("augustus_training.tar.gz.augustus", "benchmark/datasets/local/core_genome_annotation_001/augustus_training.tar.gz.augustus", "augustus", "augustus_model"),
     ],
     "experiment_9": [
-        ("anton_2025.pdf", "benchmark/datasets/local/experiment_9/anton_2025.pdf", "pdf", "paper"),
+        ("anton_2025.pdf", "benchmark/datasets/local/legacy_paper_reproduction_001/anton_2025.pdf", "pdf", "paper"),
     ],
+}
+
+LOCAL_DATASET_DIRS = {
+    "experiment_1": "core_tabular_001",
+    "experiment_4": "iwc_atac_seq_001",
+    "experiment_7": "core_metagenomics_resistome_001",
+    "experiment_8": "core_genome_annotation_001",
+    "experiment_9": "legacy_paper_reproduction_001",
 }
 
 
@@ -247,19 +255,25 @@ def _role_from_name(name: str) -> str:
 
 
 def _normalize_dataset_path(experiment_name: str, path_or_url: str) -> str:
-    if experiment_name == "experiment_7":
-        if path_or_url.endswith("meta_genomic_R1.fastqsanger.gz"):
-            return "benchmark/datasets/local/experiment_7/meta_genomics_R1.fastqsanger.gz"
-        if path_or_url.endswith("meta_genomic_R2.fastqsanger.gz"):
-            return "benchmark/datasets/local/experiment_7/meta_genomics_R2.fastqsanger.gz"
     normalized = path_or_url.lstrip("./")
     if normalized.startswith("dataset/"):
-        return normalized.replace("dataset/", "benchmark/datasets/local/", 1)
+        parts = normalized.split("/", 2)
+        if len(parts) >= 3 and experiment_name in LOCAL_DATASET_DIRS:
+            normalized = f"benchmark/datasets/local/{LOCAL_DATASET_DIRS[experiment_name]}/{parts[2]}"
+        else:
+            normalized = normalized.replace("dataset/", "benchmark/datasets/local/", 1)
+    if experiment_name == "experiment_7":
+        normalized = normalized.replace("meta_genomic_R1.fastqsanger.gz", "meta_genomics_R1.fastqsanger.gz")
+        normalized = normalized.replace("meta_genomic_R2.fastqsanger.gz", "meta_genomics_R2.fastqsanger.gz")
     return normalized
 
 
-def _canonicalize_text_references(text: str) -> str:
-    return text.replace("dataset/", "benchmark/datasets/local/")
+def _canonicalize_text_references(experiment_name: str, text: str) -> str:
+    normalized = text.replace("dataset/", "benchmark/datasets/local/")
+    task_dir = LOCAL_DATASET_DIRS.get(experiment_name)
+    if task_dir:
+        normalized = normalized.replace(f"benchmark/datasets/local/{experiment_name}", f"benchmark/datasets/local/{task_dir}")
+    return normalized
 
 
 class LegacyExperimentMigrator:
@@ -294,7 +308,7 @@ class LegacyExperimentMigrator:
             knowledge_notes.append("Galaxy training material is expected to guide workflow selection.")
 
         task_definition = TaskDefinition(
-            goal=_canonicalize_text_references(prompt.get("task", payload.get("title", ""))),
+            goal=_canonicalize_text_references(experiment_name, prompt.get("task", payload.get("title", ""))),
             required_actions=self._required_actions_for_task(experiment_name),
             tool_hints=tool_hints,
             target_outputs=expected_outputs,
@@ -307,7 +321,7 @@ class LegacyExperimentMigrator:
             task_id=spec["task_id"],
             suite_id=spec["suite_id"],
             title=payload.get("title", experiment_name).strip(),
-            description=_canonicalize_text_references(prompt.get("task", payload.get("title", ""))),
+            description=_canonicalize_text_references(experiment_name, prompt.get("task", payload.get("title", ""))),
             task_family=spec["task_family"],
             task_subfamily=spec["task_subfamily"],
             benchmark_pillars=spec["benchmark_pillars"],
@@ -328,15 +342,9 @@ class LegacyExperimentMigrator:
             workflow_hints=spec["workflow_hints"],
             success_criteria=success_criteria,
             process_constraints=ProcessConstraints(
-                notes=[ground_truth_gate, "Legacy experiments are preserved as raw input fixtures."],
+                notes=[ground_truth_gate],
             ),
             metadata={
-                "legacy_experiment_name": experiment_name,
-                "legacy_history_name": prompt.get("history_name", experiment_name),
-                "legacy_level": payload.get("level"),
-                "legacy_outputs": output_template,
-                "must_have": must_have,
-                "iwc_instance": prompt.get("IWC_instance"),
                 "benchmark_hypotheses": self._hypotheses_for_task(spec["benchmark_pillars"]),
             },
             task_definition=task_definition,
@@ -359,10 +367,6 @@ class LegacyExperimentMigrator:
             process_expectations=self._process_expectations_for_task(experiment_name),
             failure_expectations=self._failure_expectations_for_task(experiment_name),
             scoring_hints={"compare_fields": list(expected_fields.keys())},
-            metadata={
-                "legacy_experiment_name": experiment_name,
-                "legacy_field_names": list(payload.keys()),
-            },
         )
 
     def migrate_directory(
