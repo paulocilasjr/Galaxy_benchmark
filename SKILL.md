@@ -79,9 +79,9 @@ Optional/additional artifacts must live under `results/`.
 - polling/validation checks (`check`)
 - retries (`retry`)
 - changes between attempts (`revise`)
-8. Fill `results/result.json` using the benchmark result fields required by the task's hidden evaluation setup.
+8. Fill `results/result.json` using the experiment file's `required_result_format`. The shared top-level sections are `scientific_answer` and `galaxy_execution`.
 9. Write `results/reproduce_<experiment_name>.py` with reproducible CLI/API steps and annotations.
-10. Read matching ground truth and generate comparison table report.
+10. Read matching ground truth and generate comparison report with both a field-by-field table and a three-score summary.
 11. Mark `errors/error.json` final `run_status` as one of:
 - `completed`
 - `completed_with_errors`
@@ -192,18 +192,26 @@ Use this table format:
 
 | Field | Agent Result | Ground Truth | Match Status | Notes |
 |---|---|---|---|---|
-| tool_name | ... | ... | match/mismatch | ... |
-| target | ... | ... | match/mismatch | ... |
-| ROC-AUC | ... | ... | match/mismatch | ... |
+| scientific_answer.target | ... | ... | match/mismatch | ... |
+| scientific_answer.primary_metric.value | ... | ... | match/mismatch | ... |
+| galaxy_execution.final_entity_name | ... | ... | match/mismatch | ... |
+
+Then add a score summary table:
+
+| Score | Value | Status | Basis | Notes |
+|---|---|---|---|---|
+| scientific_solution_score | ... | pass/partial/fail | scientific_answer | ... |
+| standard_analysis_score | ... | pass/partial/fail/not_applicable | tier_specific_expectations | ... |
+| galaxy_execution_score | ... | pass/partial/fail | galaxy_execution and run trace | ... |
 
 ## Completion Checklist
 
 Before considering a run complete, verify:
 - All required output files exist.
-- `result.json` matches the benchmark result fields required by the evaluation setup.
+- `result.json` matches the experiment file's `required_result_format`, including `scientific_answer` and `galaxy_execution`.
 - `reproduce_<experiment>.py` is present and executable/readable.
 - `activity_log.jsonl` covers planning, execution, checks, and retries/revisions.
-- Ground truth comparison report exists.
+- Ground truth comparison report exists and includes the three-score summary.
 - `errors/error.json` has final status and accurate summary counts.
 
 ## Hard Stop Conditions

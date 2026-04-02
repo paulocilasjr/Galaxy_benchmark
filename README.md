@@ -1,149 +1,332 @@
 # Galaxy Benchmark
 
-This repository now uses a two-document layout:
-- `SKILL.md`: concise, agent-oriented skill specification.
-- `README.md` (this file): full benchmark reference with complete policy detail.
+Galaxy Benchmark is an end-to-end benchmark for evaluating AI agents on real Galaxy-based biomedical and bioinformatics tasks. The repository is organized like a published benchmark release: it exposes task definitions, input data, hidden evaluation references, and a required artifact format for reproducible runs.
 
-The content below preserves the full execution requirements, detailed logging standards, and recovery rules.
+This benchmark does not score only final answers. It also evaluates whether a run is auditable and reproducible. Clear reporting is a first-class requirement: if an action, decision, retry, or failure analysis is not recorded in the run artifacts, it is treated as not performed.
 
-## Objective
-For each experiment in `experiments/`, execute the task, produce a structured result, and compare it to the ground truth only after result generation is complete.
+`SKILL.md` is the concise executor-oriented companion. `README.md` is the benchmark reference, protocol, and reporting standard.
 
-Complete traceability is a primary benchmark requirement: the run must be reconstructable from artifacts without relying on memory or hidden actions.
+The explicit three-score formalization for this benchmark is documented in [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md).
 
-## Non-Negotiable Write Boundary
-Write operations are restricted to `outputs/` only.
+## Benchmark Summary
 
-- Agents must never create, modify, rename, move, or delete files outside `outputs/`.
-- Allowed write target for an active run: `outputs/<date_time>_<level>_<experiment_name>/`.
-- Paths such as `experiments/`, `ground_truth/`, project root files, and source scripts are read-only during benchmark execution.
-- If any step would require writing outside `outputs/`, stop and report a blocking violation.
+- Task groups: 8
+- Prompt variants per task: 3 (`low_context`, `medium_context`, `high_context`)
+- Total benchmark instances: 24
+- Platform: Galaxy (`https://usegalaxy.org/`)
+- Output style: structured files under `outputs/`
+- Evaluation style: produce results first, then compare against ground truth field by field with an explicit three-score summary
 
-## Run Entrypoint (No Command)
-To start a benchmark run:
-1. Open the `experiments/` directory.
-2. Read the selected experiment file one by one, including level-specific files under `experiments/low_context/`, `experiments/medium_context/`, or `experiments/high_context/` when applicable.
-3. Execute one experiment at a time from start to finish (do not mix steps from multiple experiments).
-4. For each experiment, complete all required outputs before moving to the next experiment file.
+### Task Families
 
-## Galaxy API Prerequisite
-Before starting any Galaxy action, validate API credentials:
+| Experiment | Task family |
+|---|---|
+| `experiment_1` | Biomedical tabular classification |
+| `experiment_2` | Biomedical image classification |
+| `experiment_3` | Biomedical multimodal survival prediction |
+| `experiment_4` | ATAC-seq workflow execution |
+| `experiment_5` | Paired-end RNA-seq workflow |
+| `experiment_6` | Single-cell RNA-seq clustering |
+| `experiment_7` | Metagenomics gene-catalog pipeline |
+| `experiment_8` | Genome annotation and quality evaluation |
 
-- The Galaxy API key must be available in the root `.env` file as `GALAXY_API_KEY`.
-- The key must be non-empty.
-- If `GALAXY_API_KEY` is missing or empty, stop execution and report a blocking issue so the user can provide it.
+### Context Levels
 
-Recommended blocking message:
-- `Missing required credential: GALAXY_API_KEY in .env. Provide this key before running Galaxy API tasks.`
+Each task group is released in three prompt tiers with the same inputs and task family but different prompt specificity:
 
-## Input Directory
-- `experiments/`
-  - Contains agent-facing experiment JSON files only.
-  - Tasks are organized under `experiments/low_context/`, `experiments/medium_context/`, and `experiments/high_context/`.
-- `evaluators/`
-  - Contains hidden evaluation metadata, rubric/check definitions, and benchmark-specific expectations that should not be shown to the agent.
+- `low_context`: open-ended task request with minimal procedural guidance
+- `medium_context`: clearer task framing, expected metric/output, and methodological hints
+- `high_context`: more prescriptive tool, workflow, parameter, or target-column guidance
 
-## Required Output Structure
-For each experiment file (example: `experiments/low_context/experiment_1.json`), create:
+This structure supports evaluation of instruction following under different context budgets without changing the underlying task.
 
-- `outputs/<date_time>_<level>_<experiment_name>/plan/saved.md`
-- `outputs/<date_time>_<level>_<experiment_name>/reasoning/reasoning.md`
-- `outputs/<date_time>_<level>_<experiment_name>/errors/error.json`
-- `outputs/<date_time>_<level>_<experiment_name>/results/result.json`
-- `outputs/<date_time>_<level>_<experiment_name>/results/reproduce_<experiment_name>.py`
-- `outputs/<date_time>_<level>_<experiment_name>/results/activity_log.jsonl`
+## Repository Layout
+
+```text
+.
+|-- README.md
+|-- SKILL.md
+|-- dataset/
+|-- experiments/
+|   |-- low_context/
+|   |-- medium_context/
+|   `-- high_context/
+|-- evaluators/
+|-- ground_truth/
+`-- outputs/
+```
+
+### Directory Roles
+
+- `experiments/`: public experiment definitions that agents read and execute
+- `dataset/`: benchmark input files referenced by the experiment JSON files
+- `evaluators/`: hidden evaluation metadata, rubric details, and benchmark-specific expectations; not part of the agent-facing prompt
+- `ground_truth/`: reference answers used only after result generation is complete
+- `outputs/`: the only writable location during benchmark execution
+
+## Experiment Format
+
+Each experiment file is a JSON task package. The structure is stable across prompt tiers:
+
+```json
+{
+  "format_version": "galaxy_benchmark_task_input_v2",
+  "task_id": "experiment_1",
+  "task_group_id": "experiment_1_response_prediction_prompt_tiers",
+  "level": "low_context",
+  "task_family": "biomedical_tabular_classification",
+  "benchmark_axes": {
+    "scientist_level_band": "junior",
+    "galaxy_complexity_band": "intermediate",
+    "focus_capabilities": [
+      "dataset inspection",
+      "target identification",
+      "Galaxy tool selection",
+      "held-out test evaluation"
+    ]
+  },
+  "required_result_format": {
+    "format_name": "galaxy_benchmark_result_v2",
+    "scientific_answer": {
+      "required_fields": [
+        "target",
+        "primary_metric.name",
+        "primary_metric.split",
+        "primary_metric.value"
+      ]
+    },
+    "galaxy_execution": {
+      "required_fields": [
+        "final_entity_type",
+        "final_entity_name",
+        "history_input_mode",
+        "adaptation_summary"
+      ]
+    }
+  },
+  "execution_environment": {
+    "platform": "Galaxy",
+    "galaxy_instance": "https://usegalaxy.org/",
+    "execution_rule": "After you form a plan for the analysis, execute that plan in Galaxy."
+  },
+  "inputs": {
+    "datasets": [
+      {"name": "example.tsv", "path": "dataset/experiment_1/example.tsv"}
+    ]
+  },
+  "user_prompt": "..."
+}
+```
+
+Important interpretation rules:
+
+- The `user_prompt` is the task instruction to execute.
+- The `inputs` block defines the files available to the run.
+- `execution_environment` constrains the intended platform.
+- `benchmark_axes` label the scientist-help level and Galaxy-operation complexity the task is meant to probe.
+- `required_result_format` defines the structured result contract the benchmark expects under `results/result.json`.
+- Across prompt tiers for the same experiment, the primary benchmark variable is the prompt wording, not the input data.
+
+## Result Format
+
+Benchmark runs should write `results/result.json` using the shared schema `galaxy_benchmark_result_v2`:
+
+```json
+{
+  "scientific_answer": {
+    "...": "task-specific scientific output fields"
+  },
+  "galaxy_execution": {
+    "final_entity_type": "tool|workflow|mixed",
+    "final_entity_name": "...",
+    "history_input_mode": "local_upload|remote_fetch|mixed",
+    "adaptation_summary": "single_valid_run|justified_retry|stopped_with_documented_blocker"
+  }
+}
+```
+
+Design intent:
+
+- `scientific_answer` measures the quality of the biomedical or analytical conclusion.
+- `galaxy_execution` measures whether the agent can operate competently inside Galaxy.
+- This separation is deliberate so the benchmark can answer both:
+  - what level of scientist the agent can help
+  - how trustworthy the agent is inside the Galaxy environment
+
+## Formal Score Model
+
+Each benchmark run should be interpreted with three explicit scores:
+
+- `scientific_solution_score`: how scientifically useful the solution is for the biomedical problem
+- `standard_analysis_score`: how closely the run followed the requested or benchmark-standard analysis path
+- `galaxy_execution_score`: how competently the agent manipulated and accessed the Galaxy environment, independent of whether the chosen analysis was scientifically ideal
+
+These three scores should remain separate in benchmark analysis.
+
+Practical interpretation:
+
+- `scientific_solution_score` is driven primarily by `scientific_answer`
+- `standard_analysis_score` is driven primarily by explicit standard-path constraints, especially in `high_context`
+- `galaxy_execution_score` is driven primarily by `galaxy_execution` and the run trace
+
+Tier behavior:
+
+- `low_context`: emphasize `scientific_solution_score` and `galaxy_execution_score`; use `standard_analysis_score` only when a standard path is explicitly requested
+- `medium_context`: all three may apply, but `standard_analysis_score` should only reflect constraints that are actually stated
+- `high_context`: all three apply, and `standard_analysis_score` is expected to matter most because this tier tests detailed instruction adherence
+
+The full benchmark-wide definition lives in [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md).
+
+## Operational Scorer
+
+The repository now includes an executable scorer at [tools/benchmark_scorer.py](/Users/4475918/Projects/Galaxy_benchmark/tools/benchmark_scorer.py). It reads a run directory, normalizes legacy result payloads when needed, applies the hidden ground-truth rules, and emits both:
+
+- `results/comparison.scored.md`
+- `results/score_summary.json`
+
+Example usage:
+
+```bash
+python3 tools/benchmark_scorer.py \
+  --run-dir outputs/20260319_222516_experiment_6 \
+  --level high_context
+```
 
 Notes:
-- The run directory inside `outputs/` must be named as `<date_time>_<level>_<experiment_name>`.
-- Use a sortable timestamp format for `<date_time>` (recommended: `YYYYMMDD_HHMMSS`).
-- Example for low-context `experiment_1`: `outputs/20260330_153000_low_context_experiment_1/`.
-- Each new run/attempt must use a new `<date_time>_<level>_<experiment_name>` directory to avoid overwriting previous runs.
-- The result JSON must follow the benchmark result fields required by the task's evaluation setup.
-- `results/reproduce_<name_of_experiment>.py` must reproduce all benchmark actions through command-line steps and include comments/annotations that explain each step for a human reader.
-- Any additional artifact not explicitly part of `plan/`, `reasoning/`, or `errors/` must be written in `results/`.
-- `results/activity_log.jsonl` is mandatory and must contain a chronological categorical record of all planned, executed, checked, and retried actions.
-- All logs/artifacts are audit evidence. Missing actions or missing decision rationale are treated as benchmark-quality failures.
 
-## Traceability Standard (Critical)
-This benchmark depends on complete, auditable traces.
+- `--level` is optional for runs whose directory name already contains `low_context`, `medium_context`, or `high_context`.
+- For historical runs created before prompt tiers were encoded in the path, pass `--level` explicitly if you want `standard_analysis_score`.
+- `--stdout-only` prints the machine-readable score summary without writing files.
 
-- Anything performed during a run must be recorded in artifacts (`plan`, `reasoning`, `errors`, `results/activity_log.jsonl`), including exploratory/probing steps.
-- If an action or decision is not logged, it is considered not performed.
-- Do not omit “small” actions (for example: tool metadata checks, parameter probes, manual inspections, fallback checks, waiting decisions, and rerun preparation steps).
-- Do not omit decision rationale (why a choice was made, why alternatives were rejected, and what evidence was used).
-- Logs must be sufficiently detailed for a third party to reconstruct the full sequence later.
+## Ground Truth Format
 
-## Execution Steps (Per Experiment)
-1. Read the selected experiment JSON file from `experiments/` or a level-specific subdirectory such as `experiments/low_context/`.
-2. Create a run-specific experiment directory in `outputs/` named `<date_time>_<level>_<experiment_name>` and create subdirectories:
-   - `plan/`
-   - `reasoning/`
-   - `errors/`
-   - `results/`
-3. Before execution starts, write the initial plan in `plan/saved.md`.
-4. Execute the experiment tasks exactly as instructed.
-5. Log ongoing reasoning and decision process in `reasoning/reasoning.md`.
-6. Log all errors/status issues in `errors/error.json` throughout execution.
-7. Continuously append categorical records to `results/activity_log.jsonl` for every planned, executed, checked, and retried action, without exception.
-8. Fill `results/result.json` using the benchmark result fields required by the task's evaluation setup.
-9. Create `results/reproduce_<name_of_experiment>.py` with annotated, step-by-step CLI reproduction instructions for everything the agent executed.
-10. Only after steps 8 and 9 are complete, read the matching ground truth file.
-11. Build a comparison report table between `results/result.json` and ground truth using this format:
+Ground-truth files now follow `galaxy_benchmark_ground_truth_v2`. They are hidden benchmark assets and are designed for fair comparison rather than brittle exact matching.
 
-| Field | Agent Result | Ground Truth | Match Status | Notes |
-|---|---|---|---|---|
-| tool_name | ... | ... | match/mismatch | ... |
-| target | ... | ... | match/mismatch | ... |
-| roc-auc | ... | ... | match/mismatch | ... |
+Ground-truth files can specify:
 
-Use this table as the primary benchmark analysis instead of a single aggregate score.
+- exact matches where the benchmark truly requires an exact answer
+- alias matches for common naming differences such as `Response` vs `c22: Response`
+- threshold-based metrics when higher values are better
+- tolerance-based numeric comparison when live Galaxy workflow versions may drift slightly
+- set-overlap rules for outputs such as marker-gene panels
+- explicit `score_model_support` mappings that tie `scientific_solution_score`, `standard_analysis_score`, and `galaxy_execution_score` to the appropriate hidden sections
+- `preserve_three_score_vector` so downstream scoring does not collapse the run into a single opaque number
 
-12. If any execution attempt fails (`error`, `failed`, or equivalent), run the mandatory failure-recovery loop before the next attempt:
-   - Read the concrete failure evidence first.
-     - For Galaxy tools: tool stderr/stdout, job messages, failed output dataset provenance, relevant report artifacts.
-     - For any other tool/interface: full stderr/stdout, traceback text, exit code/signal, and tool-generated logs/artifacts.
-   - Extract and record a stable error signature (for example: exception class + key message + failing step/tool ID + exit code).
-   - Record the interpreted root cause in `reasoning/reasoning.md`, including evidence references (job IDs, dataset IDs, relevant error text).
-   - Define and record a fix strategy mapped to that signature (what will change, why it should address this exact failure, and what result will validate the fix), then create a new attempt.
-   - Re-run with the fix and continue logging every action in `results/activity_log.jsonl`.
-   - If the same error signature reappears, do not continue blind retries; perform a deeper root-cause revision (tool choice/input mapping/version/interface strategy) before another attempt.
-   - Repeat this loop until a terminal stopping decision is reached.
+This is important for fairness. The benchmark should not penalize an agent for:
 
-## Logging Format (Flexible but Structured)
-The benchmark requires logs in `plan/`, `reasoning/`, and `errors/`. Use the following format rules to keep logs easy to read while allowing flexibility.
+- achieving a better valid metric than the reference threshold
+- using equivalent naming for the same scientific target
+- small workflow-size differences caused by validated workflow updates
+- equivalent Galaxy execution paths that satisfy the task goal and reporting contract
 
-### plan/saved.md
-Use this structure:
-- Experiment name
-- Initial objective
-- Inputs and datasets
-- Planned steps (ordered list)
-- Expected outputs
-- Risks/assumptions
+Ground-truth and evaluator design should preserve the distinction between:
 
-### reasoning/reasoning.md
-Log chronological reasoning entries with:
-- Timestamp
-- Step reference
-- Decision made
-- Why this decision was made
-- Next action
+- `scientific_solution_score`
+- `standard_analysis_score`
+- `galaxy_execution_score`
 
-Reasoning entries must also capture decision-critical technical details:
-- Tool discovery method (how available Galaxy tools/workflows were retrieved).
-- Candidate tools considered and why each was accepted or rejected.
-- Interface choice for execution (for example `BioBlend` vs direct Galaxy API calls), including rationale and tradeoffs.
-- Parameter-selection rationale (how parameter values were chosen from experiment instructions and tool metadata).
-- Evidence used for decisions (tool IDs, API responses, history/dataset IDs, validation checks).
-- Any assumption or constraint that changes execution strategy.
-- For failed runs, explicit failure-analysis details: what error message was read, how it was interpreted, what fix strategy was selected, and why alternatives were not chosen.
-- Any exploratory/probing action that influenced execution (even if not part of the final successful path).
-- Decision-level granularity: do not collapse multiple independent decisions into a single vague summary entry.
+## Execution Protocol
 
-If it affected execution decisions, it must be recorded in `reasoning/reasoning.md`.
+No single runner command is mandated. Any implementation is acceptable if it follows the benchmark protocol and write boundary.
 
-### errors/error.json
-Use a structured JSON envelope with flexible context fields. Keep required keys stable and store variable details under `context` and `additional_data`.
+### Prerequisites
+
+- A valid Galaxy API key must exist in the repository root `.env` file as `GALAXY_API_KEY`.
+- The key must be non-empty before any Galaxy interaction starts.
+- If the key is missing or empty, stop and report:
+  - `Missing required credential: GALAXY_API_KEY in .env. Provide this key before running Galaxy API tasks.`
+
+### Per-Experiment Workflow
+
+1. Read one experiment JSON from `experiments/<level>/`.
+2. Execute one experiment at a time from start to finish.
+3. Create a new run directory under `outputs/` named `outputs/<date_time>_<level>_<experiment_name>/`.
+4. Create the required subdirectories: `plan/`, `reasoning/`, `errors/`, and `results/`.
+5. Write the initial plan before execution starts.
+6. Execute the task in Galaxy exactly as instructed by the experiment file.
+7. Continuously log planning, execution, checks, revisions, and retries.
+8. Write the final structured result artifact.
+9. Write a reproduction artifact that documents the run in executable, annotated form.
+10. Only after the result and reproduction artifacts exist, read the matching ground-truth file.
+11. Generate a field-by-field comparison report between the produced result and the ground truth.
+
+## Required Output Artifacts
+
+For each run, create the following structure:
+
+```text
+outputs/<date_time>_<level>_<experiment_name>/
+|-- plan/
+|   `-- saved.md
+|-- reasoning/
+|   `-- reasoning.md
+|-- errors/
+|   `-- error.json
+`-- results/
+    |-- result.json
+    |-- reproduce_<experiment_name>.py
+    |-- activity_log.jsonl
+    `-- <comparison-report>.md
+```
+
+Notes:
+
+- Use a sortable timestamp such as `YYYYMMDD_HHMMSS`.
+- Every new benchmark run should use a new top-level run directory.
+- Additional run artifacts are allowed, but they must be stored under `results/`.
+- A comparison report is required under `results/`; `comparison.md` is the recommended filename.
+- Do not overwrite prior artifacts. If a correction is needed within a run, create a new versioned artifact instead.
+
+## Reporting Standard
+
+The benchmark requires explicit, reconstructable reporting. Traceability is part of benchmark compliance, not optional housekeeping.
+
+### Core Rule
+
+- If an action or decision is not recorded in the run artifacts, it is considered not performed.
+
+### What Must Be Reported
+
+- The initial plan and expected outputs
+- Tool and workflow discovery steps
+- Candidate approaches considered and why they were accepted or rejected
+- Interface choice and tradeoffs when multiple execution paths exist
+- Parameter-selection rationale
+- Concrete evidence used for decisions, including relevant IDs and artifact paths
+- All execution actions
+- All status checks and polling actions
+- All failures, normalized error signatures, and root-cause interpretations
+- All changes between attempts, including why the new attempt should fix the previous failure
+- The final structured result and the post hoc comparison to ground truth
+
+### Required Artifact Semantics
+
+#### `plan/saved.md`
+
+Record:
+
+- experiment name
+- initial objective
+- inputs and datasets
+- ordered plan
+- expected outputs
+- risks and assumptions
+
+#### `reasoning/reasoning.md`
+
+Write chronological entries that include:
+
+- timestamp
+- step reference
+- decision made
+- why that decision was made
+- next action
+
+Decision-level reporting is required. Do not collapse multiple independent decisions into one vague summary.
+
+#### `errors/error.json`
+
+Keep this file valid JSON throughout the run. Use a stable envelope:
 
 ```json
 {
@@ -156,116 +339,170 @@ Use a structured JSON envelope with flexible context fields. Keep required keys 
     "open_errors": 0,
     "resolved_errors": 0
   },
-  "errors": [
-    {
-      "id": "err-0001",
-      "timestamp": "2026-02-26T12:10:00Z",
-      "step": "tool_run",
-      "phase": "execution",
-      "severity": "error",
-      "category": "tool",
-      "status": "open",
-      "message": "Human-readable description of the issue.",
-      "job_id": "optional-job-id",
-      "invocation_id": "optional-invocation-id",
-      "action_taken": "What the agent did after the error.",
-      "resolution": "How it was resolved, if resolved.",
-      "retry_count": 0,
-      "context": {},
-      "additional_data": {}
-    }
-  ]
+  "errors": []
 }
 ```
 
-Error logging rules:
-- Always keep valid JSON.
-- Keep `errors` as an array (empty array if no errors occurred).
-- Use `context` for variable details (API responses, parameters, paths, traceback snippets).
-- Update `summary` counts whenever `errors` entries change.
+Rules:
+
+- Keep `errors` as an array.
+- Update `summary` counts when error entries change.
+- Store variable details under `context` and `additional_data`.
 - Mark final `run_status` as `completed`, `completed_with_errors`, or `failed`.
 
-### results/activity_log.jsonl
-This is the single categorical record file for execution history. Append one JSON object per line in chronological order.
+#### `results/activity_log.jsonl`
+
+This is the append-only categorical execution log. Write one JSON object per line in chronological order.
 
 Required categories:
+
 - `plan`
 - `execute`
 - `check`
 - `retry`
 - `revise`
 
-Record format (one line example):
+Example:
 
 ```json
 {"timestamp":"2026-02-26T12:10:00Z","step":"tool_run","category":"execute","action":"Run Tabular Learner","status":"started","details":{"tool_id":"tabular_learner","history_id":"abc123"}}
 ```
 
-Activity log rules:
-- Every planned action must have a `plan` record.
-- Every execution action must have an `execute` record.
-- Every verification/status polling action must have a `check` record.
-- Every retry attempt must have a `retry` record, with reason in `details`.
-- Any modification from a previous attempt (script changes, writing/content changes, parameter changes) must be captured as one `revise` record.
-- A `revise` record must include, in `details`, at least: `attempt`, `changed_items`, `reason`, and `new_artifact_path`.
-- Keep entries append-only; never rewrite history.
-- On failure and rerun, logging is mandatory for each action: reading the error evidence, understanding/interpreting the root cause, defining the fix strategy, launching the new run, and any intermediate checks/changes made for the rerun.
-- Log all exploratory and diagnostic actions (for example: schema inspection, parameter probing, artifact inspection, compatibility checks), even when they happen before the main run starts.
-- Each entry must include enough `details` to be interpretable later (relevant IDs, parameters, paths, and outcome context).
+Minimum expectations:
 
-Immutability policy:
-- Previously written artifacts are immutable. In-place edits or overwrites are not permitted.
-- If a correction is needed, create a new versioned artifact instead of editing the old one (example: `results/result.attempt_2.json`, `results/reproduce_experiment_1.attempt_2.py`).
-- Never delete or replace prior versions; keep all versions for traceability.
+- Every planned action has a `plan` record.
+- Every executed action has an `execute` record.
+- Every verification, inspection, or polling action has a `check` record.
+- Every retry has a `retry` record with its reason.
+- Every change in parameters, scripts, inputs, or workflow configuration has a `revise` record.
 
-## Galaxy Execution and Polling Rules
-Use this status policy for Galaxy tool jobs and workflow invocations:
+#### `results/result.json`
 
-1. After triggering a tool or workflow, immediately confirm submission and capture IDs (job ID and, if applicable, workflow invocation ID).
-2. Perform a first status check after 15-30 seconds to confirm the run has entered a valid non-terminal state (for example `new`, `queued`, or `running`) or reached a terminal state.
-3. If still non-terminal, poll every 1 minute.
-4. Continue polling every 1 minute until terminal state (`ok`, `error`, `failed`, `deleted`, or equivalent).
-5. Do not execute dependent downstream steps until required upstream jobs are terminal and outputs are available.
-6. Independent work is allowed while waiting (for example, preparing logs, validating previous outputs, or launching unrelated branches of the workflow).
+This is the structured task result used for evaluation. All tasks use the shared top-level sections:
 
-This replaces a fixed 1-minute cooldown for every action. The 1-minute interval is for active async monitoring, not for blocking all actions.
+- `scientific_answer`
+- `galaxy_execution`
 
-## Failure Recovery and Rerun Protocol (Mandatory)
-When a run fails, do not blindly retry. Perform and log a structured recovery cycle:
+The task-specific required fields are declared in the experiment file under `required_result_format`.
 
-1. Read the failure evidence from artifacts:
-   - Galaxy tools/workflows: tool stderr/stdout, job messages, failed output datasets, and provenance.
-   - Any non-Galaxy or auxiliary tool: stderr/stdout, traceback, exit code/signal, and tool-specific logs.
-2. Record error understanding in `reasoning/reasoning.md`:
-   - The exact failure symptom.
-   - A normalized error signature (exception/error type + core message + failing step/tool + exit code).
-   - The inferred root cause.
-   - Evidence references (job IDs, dataset IDs, artifact names/paths).
-3. Record a fix strategy before re-running:
-   - What is being changed (parameters/tool selection/input mapping/retry workflow).
-   - Why this change should address the root cause and the recorded error signature.
-   - What observable check will confirm the fix worked.
-4. Register actions in `results/activity_log.jsonl` at minimum as:
-   - `check` for reading and validating error evidence.
-   - `revise` for the chosen fix strategy and concrete change set.
-   - `retry` for initiating the rerun.
-   - `execute` for the rerun command/tool launch and follow-up execution steps.
-5. Hard gate before every retry: if evidence analysis and signature-to-fix mapping are not documented, do not launch the next attempt.
-6. If the rerun still fails, repeat this cycle with new evidence and a newly justified fix strategy.
-7. If the same signature repeats after a claimed fix, treat the prior fix as invalid and require a materially different corrective action (or stop with a documented blocking decision).
+#### `results/reproduce_<experiment_name>.py`
 
-## Rules to Follow
-- Follow experiment instructions in order.
-- Do not skip required logs (`plan`, `reasoning`, `errors`, `results`).
-- No action or decision rationale may be left out of logs. This is mandatory for benchmark success.
-- Do not read ground truth before producing the final result JSON.
-- Keep outputs deterministic and structured.
-- Record failures explicitly in `errors/error.json` instead of silently continuing.
-- For every failed attempt, read and use the actual error message to guide the next fix; never rerun without documented error interpretation and fix reasoning.
-- Any retry without documented error evidence, normalized error signature, and a signature-specific fix strategy is non-compliant.
-- If the same error signature repeats, do not continue parameter sweeps alone; change the failing mechanism (tool/interface/input mapping/version/workflow) or stop with a documented blocker.
-- Apply dependency-aware progression: wait for required Galaxy outputs, but do not idle when independent actions can proceed safely.
-- Write-scope restriction (strict): all writes must stay inside `outputs/`, specifically under `outputs/<date_time>_<level>_<experiment_name>/` for the active run. Writing anywhere else is never allowed.
-- Secret handling (strict): never expose the Galaxy API key. Do not print, log, store, echo, or include `GALAXY_API_KEY` in any artifact, report, script output, or command history.
-- Recordkeeping (strict): anything planned, executed, checked, or retried must be logged in `results/activity_log.jsonl` with a category tag.
-- Immutability (strict): never modify previously written files. Any script/writing/parameter change after a prior attempt must be recorded as a new `revise` entry and written to a new versioned artifact path.
+This file must reproduce the benchmark run through explicit, annotated command-line or API steps. It should be understandable by a human reviewer and sufficient to reconstruct what the agent did.
+
+#### `results/<comparison-report>.md`
+
+After result generation is complete, compare the produced result against the matching ground-truth file using a field-by-field table. Then add a three-score summary section. Use this format:
+
+| Field | Agent Result | Ground Truth | Match Status | Notes |
+|---|---|---|---|---|
+| `scientific_answer.target` | ... | ... | match/mismatch | ... |
+| `scientific_answer.primary_metric.value` | ... | ... | match/mismatch | ... |
+| `galaxy_execution.final_entity_name` | ... | ... | match/mismatch | ... |
+
+Then append a score summary table:
+
+| Score | Value | Status | Basis | Notes |
+|---|---|---|---|---|
+| `scientific_solution_score` | ... | pass/partial/fail | `scientific_answer` | ... |
+| `standard_analysis_score` | ... | pass/partial/fail/not_applicable | `tier_specific_expectations` | ... |
+| `galaxy_execution_score` | ... | pass/partial/fail | `galaxy_execution` and run trace | ... |
+
+This comparison is the primary benchmark analysis artifact, not an optional summary. `comparison.md` is the recommended standard filename.
+
+## Galaxy Execution Rules
+
+### Polling Policy
+
+After launching a Galaxy tool or workflow:
+
+1. Immediately capture submission identifiers such as job ID and workflow invocation ID.
+2. Perform a first status check after 15 to 30 seconds.
+3. If the run is still non-terminal, poll every 1 minute.
+4. Continue until a terminal state is reached (`ok`, `error`, `failed`, `deleted`, or equivalent).
+5. Do not execute downstream dependent steps until required upstream jobs are complete.
+6. Independent work may continue while waiting if it does not violate dependencies.
+
+### Failure-Recovery Protocol
+
+Blind retries are non-compliant. For every failed attempt:
+
+1. Read the failure evidence first.
+2. Extract a stable error signature such as error type, core message, failing step or tool, and exit code or state.
+3. Record the inferred root cause with evidence references.
+4. Define a signature-specific fix strategy before retrying.
+5. Log the recovery cycle in `activity_log.jsonl` using `check`, `revise`, `retry`, and `execute` entries as appropriate.
+6. If the same error signature reappears, do not continue parameter sweeps alone; change the failing mechanism or stop with a documented blocker.
+
+## Data Access and Compliance Rules
+
+### Non-Negotiable Write Boundary
+
+Write operations are restricted to `outputs/` only.
+
+- Never create, modify, rename, move, or delete files outside `outputs/` during benchmark execution.
+- Treat `experiments/`, `dataset/`, `evaluators/`, `ground_truth/`, and project-root files as read-only.
+- If a step would require writing outside `outputs/`, stop and report a blocking violation.
+
+### Ground-Truth Gate
+
+- Do not read `ground_truth/<experiment>.json` until both `results/result.json` and `results/reproduce_<experiment_name>.py` are complete.
+
+### Secret Handling
+
+- Never print, log, store, or expose `GALAXY_API_KEY` in any artifact, report, or command trace.
+
+### Immutability
+
+- Previously written artifacts are immutable.
+- Do not overwrite prior versions.
+- If a correction is required, write a new versioned artifact and record the change in `results/activity_log.jsonl`.
+
+## Recommended Reporting for Papers or Benchmark Releases
+
+If you publish results derived from this benchmark, report at minimum:
+
+- experiment ID and context level
+- Galaxy instance used
+- tool or workflow chosen
+- key task outputs requested by the experiment
+- final metric or requested evaluation value
+- terminal run status
+- whether retries were needed
+- location of the comparison artifact or equivalent field-by-field analysis
+
+This repository is designed so that benchmark claims can be backed by inspectable run artifacts rather than only a headline score.
+
+## Fair Scoring Principles
+
+The benchmark is designed to answer two questions fairly:
+
+1. What level of scientist can the agent help on biomedical tasks?
+2. How reliably can the agent work inside Galaxy?
+
+To support those goals:
+
+- scientific-task scoring and Galaxy-operation scoring should be reported separately before any aggregate score
+- held-out test metrics should be preferred over train-only or validation-only metrics
+- threshold scoring should be used for optimization tasks where better performance should count as success
+- exact output matching should be reserved for fields that are genuinely deterministic
+- workflow provenance, upload mode, history navigation, retries, and recovery behavior should be judged from run artifacts, not only from final text
+
+## Completion Checklist
+
+Before treating a run as complete, verify:
+
+- all required output files exist under the run directory
+- `result.json` is populated with the task-specific result fields
+- `reproduce_<experiment_name>.py` exists and is readable
+- `activity_log.jsonl` covers planning, execution, checks, revisions, and retries
+- `error.json` has a correct final status and summary counts
+- a comparison report exists under `results/` and was generated only after the ground-truth gate was satisfied
+
+## Hard Stop Conditions
+
+Stop and report a blocker if:
+
+- `GALAXY_API_KEY` is missing or empty
+- writing outside `outputs/` would be required
+- a required Galaxy job never reaches a usable terminal state and no safe fallback exists
+- the same failure signature repeats without a materially different corrective action
