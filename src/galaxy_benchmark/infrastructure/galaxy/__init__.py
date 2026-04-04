@@ -1,1 +1,0 @@
-"""Galaxy access adapters."""

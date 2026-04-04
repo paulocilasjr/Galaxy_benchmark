@@ -1,1 +1,0 @@
-"""Parsing and extraction adapters."""
