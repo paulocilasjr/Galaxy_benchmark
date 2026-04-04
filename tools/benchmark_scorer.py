@@ -100,6 +100,10 @@ class ArtifactBundle:
     history_contents: Any
     tool_outputs: dict[str, Any] | None
     tool_discovery: dict[str, Any] | None
+    attempt_summary: Any
+    plan_text: str | None
+    reasoning_text: str | None
+    reproduce_text: str | None
     result_path: Path
     normalization_notes: list[str] = field(default_factory=list)
 
@@ -113,6 +117,7 @@ class ComparisonEntry:
     match_status: str
     score_value: float | None
     notes: str
+    weight: float = 1.0
 
 
 @dataclass
@@ -234,6 +239,23 @@ def load_optional_json(path: Path) -> Any:
     return load_json(path)
 
 
+def load_optional_text(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def load_reproduce_text(results_dir: Path) -> str | None:
+    chunks: list[str] = []
+    for path in sorted(results_dir.glob("reproduce_*.py")):
+        text = load_optional_text(path)
+        if text:
+            chunks.append(text)
+    if not chunks:
+        return None
+    return "\n\n".join(chunks)
+
+
 def load_activity_log(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -285,6 +307,7 @@ def build_bundle(run_dir: Path, experiment_id: str, level: str | None) -> Artifa
     if not result_path.exists():
         raise FileNotFoundError(f"Missing result artifact: {result_path}")
 
+    results_dir = run_dir / "results"
     evaluator_path = ROOT_DIR / "evaluators" / f"{experiment_id}.json"
     ground_truth_path = ROOT_DIR / "ground_truth" / f"{experiment_id}.json"
     if not evaluator_path.exists():
@@ -307,6 +330,10 @@ def build_bundle(run_dir: Path, experiment_id: str, level: str | None) -> Artifa
         history_contents=load_optional_json(run_dir / "results" / "history_contents.json"),
         tool_outputs=load_optional_json(run_dir / "results" / "tool_outputs.json"),
         tool_discovery=load_optional_json(run_dir / "results" / "tool_discovery.json"),
+        attempt_summary=load_optional_json(run_dir / "results" / "attempt_summary.json"),
+        plan_text=load_optional_text(run_dir / "plan" / "saved.md"),
+        reasoning_text=load_optional_text(run_dir / "reasoning" / "reasoning.md"),
+        reproduce_text=load_reproduce_text(results_dir),
         result_path=result_path,
     )
 
@@ -448,6 +475,101 @@ def workflow_text_haystack(bundle: ArtifactBundle) -> str:
     return normalize_token(" ".join(collect_workflow_text(bundle)))
 
 
+def trace_text_haystack(bundle: ArtifactBundle) -> str:
+    texts = [
+        bundle.plan_text or "",
+        bundle.reasoning_text or "",
+        bundle.reproduce_text or "",
+        stringify(bundle.activity_log),
+        stringify(bundle.raw_result),
+    ]
+    return normalize_token(" ".join(texts))
+
+
+def collect_metric_trace_texts(bundle: ArtifactBundle) -> list[str]:
+    texts: list[str] = []
+    raw_metric = get_nested(bundle.raw_result, ("scientific_answer", "primary_metric"))
+    if raw_metric:
+        texts.extend(collect_nested_strings(raw_metric))
+    for key in ("metric_source", "metric_split", "split"):
+        value = bundle.raw_result.get(key) if isinstance(bundle.raw_result, dict) else None
+        if value:
+            texts.append(stringify(value))
+    if isinstance(bundle.attempt_summary, list):
+        for item in bundle.attempt_summary:
+            texts.extend(collect_nested_strings(item))
+    elif isinstance(bundle.attempt_summary, dict):
+        texts.extend(collect_nested_strings(bundle.attempt_summary))
+    for entry in bundle.activity_log:
+        if not isinstance(entry, dict):
+            continue
+        details = entry.get("details")
+        if isinstance(details, dict):
+            for key in ("metric_source", "source", "evidence", "split"):
+                if details.get(key):
+                    texts.append(stringify(details.get(key)))
+            metric_source = details.get("metric_source")
+            if metric_source:
+                texts.append(stringify(metric_source))
+    texts.extend(
+        text
+        for text in (
+            bundle.plan_text,
+            bundle.reasoning_text,
+            bundle.reproduce_text,
+        )
+        if text
+    )
+    return texts
+
+
+def infer_metric_split(bundle: ArtifactBundle) -> str | None:
+    split_haystack = normalize_token(" ".join(collect_metric_trace_texts(bundle)))
+    if not split_haystack:
+        return None
+    if any(token in split_haystack for token in ("held out test", "held-out test", "test metrics", "test metric", "test roc", "test split", "test dataset", "test ag roc auc")):
+        return "test"
+    if re.search(r"\btest\b", split_haystack):
+        return "test"
+    if any(token in split_haystack for token in ("validation split", "validation metric", "validation roc", " val split ", " val roc ")):
+        return "validation"
+    if re.search(r"\bvalidation\b|\bval\b", split_haystack):
+        return "validation"
+    if any(token in split_haystack for token in ("train only", "training metric", "training roc", "train roc")):
+        return "train"
+    if re.search(r"\btrain\b|\btraining\b", split_haystack):
+        return "train"
+    return None
+
+
+def planning_resource_review_observation(bundle: ArtifactBundle) -> tuple[bool, str]:
+    trace_haystack = trace_text_haystack(bundle)
+    workflow_haystack = workflow_text_haystack(bundle)
+    observed = False
+    notes: list[str] = []
+    if bundle.tool_discovery:
+        observed = True
+        notes.append("Found explicit tool_discovery artifact.")
+    for hint, note in (
+        ("training galaxyproject", "Found GTN-style training reference."),
+        ("intergalactic workflow commission", "Found Intergalactic Workflow Commission reference."),
+        (" iwc ", "Found IWC reference."),
+        ("tutorial", "Found tutorial reference."),
+        ("tool help", "Found Galaxy tool-help reference."),
+        ("toolbox", "Found Galaxy toolbox/tool search reference."),
+        ("api tools", "Found Galaxy tools API discovery reference."),
+    ):
+        if hint in f" {trace_haystack} ":
+            observed = True
+            notes.append(note)
+    if '"owner": "iwc"' in stringify(bundle.raw_result).lower() or " owner iwc " in f" {workflow_haystack} ":
+        observed = True
+        notes.append("Workflow evidence indicates an IWC-sourced workflow.")
+    if observed:
+        return True, " ".join(dict.fromkeys(notes)) or "Planning-resource review evidence was present."
+    return False, "No GTN/IWC/tutorial/tool-help discovery evidence was found in the run trace."
+
+
 def stage_present(stage: str, bundle: ArtifactBundle) -> tuple[bool | None, str]:
     haystack = workflow_text_haystack(bundle)
     hints = STAGE_HINTS.get(stage, {normalize_token(stage)})
@@ -466,16 +588,22 @@ def capability_observation(capability: str, bundle: ArtifactBundle) -> tuple[boo
     }
     history_mode = history_input_mode_from_experiment(bundle.experiment)
     raw_text = normalize_token(stringify(bundle.raw_result))
+    trace_haystack = trace_text_haystack(bundle)
     history_present = (
         bool(bundle.history_contents)
         or "history" in raw_text
+        or "history" in trace_haystack
         or bool(get_nested(bundle.raw_result, ("evidence", "history")))
     )
-    workflow_present = bool(bundle.workflow_export or bundle.workflow_metadata)
+    workflow_present = bool(bundle.workflow_export or bundle.workflow_metadata) or "workflow" in trace_haystack
     parameter_present = "selected params" in raw_text
     parameter_present = parameter_present or bool(get_nested(bundle.raw_result, ("evidence", "workflow", "selected_params")))
     parameter_present = parameter_present or bool(get_nested(bundle.tool_outputs or {}, ("selected_busco_lineage",)))
     parameter_present = parameter_present or (bundle.workflow_export is not None)
+    parameter_present = parameter_present or any(
+        token in trace_haystack
+        for token in ("target column", "test dataset", "reference genome", "target_sum", "train split", "test split")
+    )
     has_retry = "retry" in activity_categories or "revise" in activity_categories
     has_check = "check" in activity_categories
     workflow_candidates = derive_artifact_candidates("galaxy_execution.final_entity_name", bundle)
@@ -505,7 +633,10 @@ def capability_observation(capability: str, bundle: ArtifactBundle) -> tuple[boo
         observed = step_count >= 10
         return observed, f"Observed workflow step count candidate: {step_count}."
     if capability_norm == "workflow discovery":
-        observed = bool(bundle.tool_discovery) or bool(workflow_candidates) or "iwc" in workflow_haystack or "training" in workflow_haystack
+        planning_observed, planning_note = planning_resource_review_observation(bundle)
+        observed = planning_observed or bool(workflow_candidates) or "iwc" in workflow_haystack or "training" in workflow_haystack
+        if observed:
+            return True, planning_note if planning_observed else "Workflow-discovery evidence was present."
         return observed, "Workflow-discovery evidence was present." if observed else "No workflow-discovery evidence was available."
     if capability_norm in {"run state monitoring", "run-state monitoring"}:
         return has_check, "Observed `check` activity entries." if has_check else "No monitoring-oriented `check` activity entries were observed."
@@ -541,6 +672,11 @@ def capability_observation(capability: str, bundle: ArtifactBundle) -> tuple[boo
     if capability_norm == "train test dataset handling":
         agent_split = get_nested(bundle.raw_result, ("scientific_answer", "primary_metric", "split"))
         if agent_split is None:
+            inferred_split = infer_metric_split(bundle)
+            if inferred_split == "test":
+                return True, "Run trace explicitly referenced held-out test evaluation."
+            if "test dataset" in trace_haystack or "separate test" in trace_haystack:
+                return True, "Run trace configured a separate test dataset."
             return True, "Legacy run did not report the split explicitly; task inputs still expose separate train/test datasets."
         return normalize_token(agent_split) == "test", f"Reported split: {agent_split!r}."
     if capability_norm == "error recovery":
@@ -858,11 +994,24 @@ def normalize_result(bundle: ArtifactBundle) -> dict[str, Any]:
             raw.get("ROC-AUC"),
         )
         if metric_value is not None:
-            scientific.setdefault(
-                "primary_metric",
-                {"name": "ROC-AUC", "split": "test", "value": parse_number(metric_value)},
-            )
-            bundle.normalization_notes.append("Normalized legacy metric fields into scientific_answer.primary_metric.")
+            metric_payload = scientific.get("primary_metric")
+            if not isinstance(metric_payload, dict):
+                metric_payload = {}
+                scientific["primary_metric"] = metric_payload
+            if not metric_payload.get("name"):
+                metric_payload["name"] = "ROC-AUC"
+            if metric_payload.get("value") is None:
+                metric_payload["value"] = parse_number(metric_value)
+            inferred_split = first_nonempty(metric_payload.get("split"), infer_metric_split(bundle))
+            if inferred_split and not metric_payload.get("split"):
+                metric_payload["split"] = inferred_split
+                bundle.normalization_notes.append(
+                    "Normalized legacy metric fields into scientific_answer.primary_metric with split inferred from run trace."
+                )
+            else:
+                bundle.normalization_notes.append(
+                    "Normalized legacy metric fields into scientific_answer.primary_metric without assuming an unreported split."
+                )
         tool_name = raw.get("tool_name")
         if tool_name:
             galaxy.setdefault("final_entity_name", tool_name)
@@ -1304,6 +1453,103 @@ def build_standard_comparisons(
     return entries
 
 
+def build_auditability_comparisons(bundle: ArtifactBundle) -> list[ComparisonEntry]:
+    entries: list[ComparisonEntry] = []
+
+    core_artifacts = {
+        "plan/saved.md": (bundle.run_dir / "plan" / "saved.md").exists(),
+        "reasoning/reasoning.md": (bundle.run_dir / "reasoning" / "reasoning.md").exists(),
+        "errors/error.json": (bundle.run_dir / "errors" / "error.json").exists(),
+        "results/result.json": (bundle.run_dir / "results" / "result.json").exists(),
+        "results/activity_log.jsonl": (bundle.run_dir / "results" / "activity_log.jsonl").exists(),
+        "results/reproduce_<experiment>.py": bool(list((bundle.run_dir / "results").glob("reproduce_*.py"))),
+    }
+    artifact_fraction = sum(1 for present in core_artifacts.values() if present) / len(core_artifacts)
+    missing_artifacts = [path for path, present in core_artifacts.items() if not present]
+    entries.append(
+        ComparisonEntry(
+            score_name="galaxy_execution_score",
+            field_path="galaxy_execution.audit_trail.core_artifacts",
+            agent_value=f"{sum(1 for present in core_artifacts.values() if present)}/{len(core_artifacts)}",
+            reference_rule="required_core_artifacts",
+            match_status="match" if artifact_fraction >= 0.999 else "mismatch",
+            score_value=artifact_fraction,
+            notes=(
+                "All required run artifacts were present."
+                if not missing_artifacts
+                else f"Missing required artifacts: {missing_artifacts}."
+            ),
+            weight=0.75,
+        )
+    )
+
+    observed_categories = {
+        normalize_token(entry.get("category")) for entry in bundle.activity_log if isinstance(entry, dict)
+    }
+    required_categories = {"plan", "execute", "check"}
+    retry_like = "retry" in observed_categories or "revise" in observed_categories
+    total_errors = get_nested(bundle.errors or {}, ("summary", "total_errors"))
+    if retry_like or (isinstance(total_errors, int) and total_errors > 0):
+        required_categories.update({"retry", "revise"})
+    category_fraction = sum(1 for category in required_categories if category in observed_categories) / len(required_categories)
+    missing_categories = sorted(category for category in required_categories if category not in observed_categories)
+    entries.append(
+        ComparisonEntry(
+            score_name="galaxy_execution_score",
+            field_path="galaxy_execution.audit_trail.activity_log_categories",
+            agent_value=sorted(observed_categories),
+            reference_rule=f"required_categories({sorted(required_categories)})",
+            match_status="match" if category_fraction >= 0.999 else "mismatch",
+            score_value=category_fraction,
+            notes=(
+                "Observed all required activity log categories."
+                if not missing_categories
+                else f"Missing required activity categories: {missing_categories}."
+            ),
+            weight=0.75,
+        )
+    )
+
+    error_envelope_valid = bool(
+        isinstance(bundle.errors, dict)
+        and isinstance(bundle.errors.get("summary"), dict)
+        and isinstance(bundle.errors.get("errors"), list)
+        and bundle.errors.get("run_status")
+    )
+    entries.append(
+        ComparisonEntry(
+            score_name="galaxy_execution_score",
+            field_path="galaxy_execution.audit_trail.error_envelope",
+            agent_value="valid" if error_envelope_valid else "invalid_or_missing",
+            reference_rule="valid_error_envelope",
+            match_status="match" if error_envelope_valid else "mismatch",
+            score_value=1.0 if error_envelope_valid else 0.0,
+            notes=(
+                "errors/error.json contained the required benchmark envelope."
+                if error_envelope_valid
+                else "errors/error.json was missing or did not match the required benchmark envelope."
+            ),
+            weight=0.75,
+        )
+    )
+
+    planning_observed, planning_note = planning_resource_review_observation(bundle)
+    entries.append(
+        ComparisonEntry(
+            score_name="galaxy_execution_score",
+            field_path="galaxy_execution.audit_trail.planning_resource_review",
+            agent_value="observed" if planning_observed else "not_observed",
+            reference_rule="planning_resource_reviewed",
+            match_status="match" if planning_observed else "mismatch",
+            score_value=1.0 if planning_observed else 0.0,
+            notes=planning_note,
+            weight=0.75,
+        )
+    )
+
+    return entries
+
+
 def build_galaxy_comparisons(
     normalized_result: dict[str, Any],
     bundle: ArtifactBundle,
@@ -1369,6 +1615,7 @@ def build_galaxy_comparisons(
                 notes=note,
             )
         )
+    entries.extend(build_auditability_comparisons(bundle))
     return entries
 
 
@@ -1393,15 +1640,25 @@ def summarize_score(
         )
 
     matched = sum(1 for entry in applicable if entry.match_status == "match")
-    values = [entry.score_value if entry.score_value is not None else 0.0 for entry in applicable]
-    score_value = sum(values) / len(values)
-    if score_value >= 0.8:
+    weighted_values = [
+        (entry.score_value if entry.score_value is not None else 0.0, max(entry.weight, 0.0))
+        for entry in applicable
+    ]
+    total_weight = sum(weight for _, weight in weighted_values)
+    score_value = (
+        sum(value * weight for value, weight in weighted_values) / total_weight
+        if total_weight > 0
+        else 0.0
+    )
+    score_meta = bundle.evaluator.get("score_model", {}).get(score_name, {})
+    pass_threshold = float(score_meta.get("pass_threshold", 0.85))
+    partial_threshold = float(score_meta.get("partial_threshold", 0.5))
+    if score_value >= pass_threshold:
         status = "pass"
-    elif score_value > 0.0:
+    elif score_value >= partial_threshold:
         status = "partial"
     else:
         status = "fail"
-    score_meta = bundle.evaluator.get("score_model", {}).get(score_name, {})
     basis = score_meta.get("description", "")
     notes = [entry.notes for entry in applicable if entry.match_status != "match" and entry.notes]
     return ScoreValue(

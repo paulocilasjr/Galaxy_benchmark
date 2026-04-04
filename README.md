@@ -175,6 +175,13 @@ Tier behavior:
 - `medium_context`: all three may apply, but `standard_analysis_score` should only reflect constraints that are actually stated
 - `high_context`: all three apply, and `standard_analysis_score` is expected to matter most because this tier tests detailed instruction adherence
 
+Operational scoring policy:
+
+- Each score is computed as a weighted mean over the applicable checks for that score.
+- The benchmark-wide status thresholds are `pass >= 0.85`, `partial >= 0.50`, and `fail < 0.50`.
+- `galaxy_execution_score` includes audit-trace compliance, not just final Galaxy output fields.
+- Missing reporting provenance should not silently receive full credit; result fields should be explicit or trace-backed.
+
 The full benchmark-wide definition lives in [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md).
 
 ## Operational Scorer
@@ -197,6 +204,7 @@ Notes:
 - `--level` is optional for runs whose directory name already contains `low_context`, `medium_context`, or `high_context`.
 - For historical runs created before prompt tiers were encoded in the path, pass `--level` explicitly if you want `standard_analysis_score`.
 - `--stdout-only` prints the machine-readable score summary without writing files.
+- The scorer now uses run-trace evidence when normalizing legacy outputs. It does not blindly assume that an unlabelled metric came from the held-out test split.
 
 ## Ground Truth Format
 
@@ -486,6 +494,8 @@ To support those goals:
 - threshold scoring should be used for optimization tasks where better performance should count as success
 - exact output matching should be reserved for fields that are genuinely deterministic
 - workflow provenance, upload mode, history navigation, retries, and recovery behavior should be judged from run artifacts, not only from final text
+- auditability should contribute to `galaxy_execution_score`, because an end-to-end benchmark is only trustworthy when the run trace can be inspected
+- missing metric provenance should reduce credit rather than being silently normalized to the benchmark-preferred split
 
 ## Completion Checklist
 

@@ -46,6 +46,7 @@ class BenchmarkScorerRegressionTest(unittest.TestCase):
         self.assertEqual(normalized["scientific_answer"]["primary_metric"]["split"], "test")
         self.assertEqual(normalized["scientific_answer"]["primary_metric"]["value"], 0.87)
         self.assertEqual(summaries["scientific_solution_score"].value, 1.0)
+        self.assertLess(summaries["galaxy_execution_score"].value, 0.85)
 
     def test_experiment_4_parses_descriptive_step_count_and_input_type(self) -> None:
         normalized, entries, summaries = score_run("20260312_220316_experiment_4")
@@ -67,6 +68,11 @@ class BenchmarkScorerRegressionTest(unittest.TestCase):
         self.assertEqual(normalized["galaxy_execution"]["total_tool_executions"], 7)
         self.assertIn("maker", normalized["galaxy_execution"]["final_entity_name"].lower())
         self.assertEqual(summaries["galaxy_execution_score"].value, 1.0)
+
+    def test_experiment_5_medium_context_standard_score_is_active(self) -> None:
+        _, _, summaries = score_run("20260313_193404_experiment_5", level="medium_context")
+        self.assertEqual(summaries["standard_analysis_score"].value, 1.0)
+        self.assertEqual(summaries["standard_analysis_score"].status, "pass")
 
 
 if __name__ == "__main__":

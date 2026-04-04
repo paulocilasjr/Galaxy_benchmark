@@ -88,11 +88,15 @@ The same task may emphasize the three scores differently across prompt tiers.
 ## Scoring Rules
 
 - Each score should be reported separately on a normalized `0.0` to `1.0` scale.
+- Each score should be computed as a weighted mean over its applicable checks.
+- Benchmark-wide score status thresholds should be consistent across experiments: `pass >= 0.85`, `partial >= 0.50`, `fail < 0.50`.
 - `standard_analysis_score` may be reported as `not_applicable` when a task instance does not define a meaningful standard path.
 - The benchmark should always preserve the score vector even if a paper later reports an optional aggregate.
 - A low `standard_analysis_score` does not automatically mean the run was scientifically bad.
 - A high `scientific_solution_score` does not automatically mean the run was compliant with a requested standard method.
 - A high `galaxy_execution_score` does not automatically mean the scientific solution was correct.
+- `galaxy_execution_score` should include audit-trace compliance, because Galaxy competence is not fully creditable without inspectable provenance.
+- Missing or ambiguous reporting provenance should not silently receive full credit; if a metric split or artifact identity is unreported, full credit should require trace-backed evidence.
 
 ## Mapping To Current Benchmark Files
 
@@ -111,6 +115,8 @@ To keep the score model explicit in repository assets:
 
 - each `evaluators/experiment_N.json` should include a `score_model` block
 - each `ground_truth/experiment_N.json` should include `fair_scoring.score_model_support` and `fair_scoring.preserve_three_score_vector`
+- evaluator `score_model` blocks should use the same aggregation method and score-status thresholds across experiments
+- ground-truth `fair_scoring` blocks should state that auditability contributes to `galaxy_execution_score`
 - each comparison artifact should include both field-level comparison and the three-score summary
 
 ## Authoring Rules
