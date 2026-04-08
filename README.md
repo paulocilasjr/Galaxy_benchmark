@@ -10,7 +10,7 @@ The explicit three-score formalization for this benchmark is documented in [docs
 
 ## Benchmark Summary
 
-- Task groups: 8
+- Task groups: 11
 - Prompt variants per task: 3 (`low_context`, `medium_context`, `high_context`)
 - Total benchmark instances: 24
 - Platform: Galaxy (`https://usegalaxy.org/`)
@@ -29,6 +29,9 @@ The explicit three-score formalization for this benchmark is documented in [docs
 | `experiment_6` | Single-cell RNA-seq clustering |
 | `experiment_7` | Metagenomics gene-catalog pipeline |
 | `experiment_8` | Genome annotation and quality evaluation |
+| `experiment_9` | Workflow-built tabular ML with external validation |
+| `experiment_10` | ChIP-seq workflow replay and equivalence comparison |
+| `experiment_11` | Paper-faithful RNA-seq reproduction and validation |
 
 ### Context Levels
 
@@ -39,6 +42,8 @@ Each task group is released in three prompt tiers with the same inputs and task 
 - `high_context`: more prescriptive tool, workflow, parameter, or target-column guidance
 
 This structure supports evaluation of instruction following under different context budgets without changing the underlying task.
+
+Task-source reconciliation across the legacy benchmark repo and the standalone experiment repo is documented in [docs/task_source_crosswalk.md](/Users/4475918/Projects/Galaxy_benchmark/docs/task_source_crosswalk.md).
 
 ## Repository Layout
 
@@ -205,6 +210,84 @@ Notes:
 - For historical runs created before prompt tiers were encoded in the path, pass `--level` explicitly if you want `standard_analysis_score`.
 - `--stdout-only` prints the machine-readable score summary without writing files.
 - The scorer now uses run-trace evidence when normalizing legacy outputs. It does not blindly assume that an unlabelled metric came from the held-out test split.
+
+## Benchmark Support Package
+
+The repository now also includes a lightweight implementation of the generalized benchmark scaffold described in `project_spec/` under [src/galaxy_benchmark](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark).
+
+It provides:
+
+- schema-oriented payload validation for task, prompt, and run records
+- typed loaders for the example spec artifacts
+- scoring utilities for performance, robustness, adaptability, and user-level confidence
+- benchmark-report aggregation across run records
+- executable workbench orchestration for task × prompt × environment runs
+- built-in agent adapters and environment runners for local end-to-end execution
+
+The report builder CLI is [tools/build_benchmark_report.py](/Users/4475918/Projects/Galaxy_benchmark/tools/build_benchmark_report.py).
+The matrix runner CLI is [tools/run_benchmark_workbench.py](/Users/4475918/Projects/Galaxy_benchmark/tools/run_benchmark_workbench.py).
+
+Example usage:
+
+```bash
+python3 tools/build_benchmark_report.py \
+  --benchmark-id galaxy_agent_benchmark_v1 \
+  --run-record project_spec/examples/run.example.json
+```
+
+## Workbench Execution
+
+The workbench now supports end-to-end execution over benchmark tasks using a consistent orchestration layer.
+
+Core pieces:
+
+- [`src/galaxy_benchmark/application/registry.py`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/application/registry.py): loads experiment definitions across prompt tiers
+- [`src/galaxy_benchmark/application/orchestrator.py`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/application/orchestrator.py): creates run directories, writes required artifacts, executes agents in environments, and writes run records
+- [`src/galaxy_benchmark/agents/`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/agents): built-in agent adapters
+- [`src/galaxy_benchmark/environments/`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/environments): built-in environment runners
+
+Built-in agents:
+
+- `heuristic`: inspects supported tabular inputs and emits a conservative structured result
+- `echo`: dry-run adapter for validating the workbench path without attempting a scientific solution
+
+Built-in environments:
+
+- `open`
+- `galaxy`
+- `galaxy_skills`
+
+Each run writes the required benchmark artifact layout:
+
+- `plan/saved.md`
+- `reasoning/reasoning.md`
+- `errors/error.json`
+- `results/result.json`
+- `results/reproduce_<experiment>.py`
+- `results/activity_log.jsonl`
+- `results/run_record.json`
+
+When matching hidden assets exist, the orchestrator also writes `results/score_summary.json`.
+
+Example matrix execution:
+
+```bash
+python3 tools/run_benchmark_workbench.py \
+  --experiment-id experiment_1 \
+  --level low_context \
+  --environment open \
+  --environment galaxy \
+  --agent heuristic
+```
+
+This command:
+
+1. loads the selected public task file
+2. creates a new timestamped run directory under `outputs/`
+3. executes the selected agent in each requested environment
+4. writes run artifacts and run records
+5. scores completed runs when evaluator and ground-truth files are present
+6. prints an aggregated benchmark report for the generated run set
 
 ## Ground Truth Format
 
