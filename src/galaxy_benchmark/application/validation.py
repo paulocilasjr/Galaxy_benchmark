@@ -109,6 +109,7 @@ def validate_run_payload(payload: Any) -> None:
         "failure_modes",
         "component_scores",
         "performance_score",
+        "score_summary",
     }
     required = {
         "run_id",
@@ -139,6 +140,8 @@ def validate_run_payload(payload: Any) -> None:
         raise ValidationError("Run payload timing must be an object or null")
     if "failure_modes" in data and not isinstance(data["failure_modes"], list):
         raise ValidationError("Run payload failure_modes must be a list when present")
+    if data.get("score_summary") is not None and not isinstance(data["score_summary"], dict):
+        raise ValidationError("Run payload score_summary must be an object or null")
     component_scores = data["component_scores"]
     if not isinstance(component_scores, dict):
         raise ValidationError("Run payload component_scores must be an object")

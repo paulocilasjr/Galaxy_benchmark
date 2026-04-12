@@ -46,6 +46,7 @@ class RunRecord:
     trace: list[dict[str, Any]] | None = None
     timing: dict[str, Any] | None = None
     failure_modes: list[str] = field(default_factory=list)
+    score_summary: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

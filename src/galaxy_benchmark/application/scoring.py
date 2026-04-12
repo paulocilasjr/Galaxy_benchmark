@@ -49,6 +49,16 @@ def weighted_mean_available(values: Mapping[str, float], weights: Mapping[str, f
     return sum(float(values[key]) * weight for key, weight in present.items()) / total_weight
 
 
+def score_value_from_summary(score_summary: Mapping[str, object], score_name: str) -> float | None:
+    score = score_summary.get(score_name)
+    if not isinstance(score, Mapping):
+        return None
+    value = score.get("value")
+    if value is None:
+        return None
+    return float(value)
+
+
 def run_performance(
     component_scores: Mapping[str, float],
     weights: Mapping[str, float] | None = None,

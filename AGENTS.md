@@ -94,11 +94,11 @@ When working in this repo:
 
 2. Respect public vs hidden benchmark assets:
 - `experiments/` and `dataset/` are public benchmark inputs
-- `evaluators/` and `ground_truth/` are hidden benchmark assets
+- `ground_truth/` is the hidden benchmark asset bundle and contains both reference-answer and evaluator metadata
 - do not leak hidden evaluator or ground-truth information into public task files
 
 3. Distinguish benchmark authoring from benchmark execution:
-- when authoring the benchmark, editing `dataset/`, `experiments/`, `evaluators/`, `ground_truth/`, `docs/`, and root docs is allowed
+- when authoring the benchmark, editing `dataset/`, `experiments/`, `ground_truth/`, `docs/`, and root docs is allowed
 - when executing a benchmark run, follow [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md) and write only inside `outputs/`
 
 4. Keep instructions focused:
@@ -114,7 +114,6 @@ When working in this repo:
 |-- SKILL.md
 |-- dataset/
 |-- docs/
-|-- evaluators/
 |-- experiments/
 |   |-- low_context/
 |   |-- medium_context/
@@ -127,8 +126,7 @@ Directory roles:
 
 - `dataset/experiment_N/`: files attached to a benchmark task
 - `experiments/<level>/experiment_N.json`: public task definitions for each prompt tier
-- `evaluators/experiment_N.json`: hidden evaluator metadata, success criteria, and rubric
-- `ground_truth/experiment_N.json`: hidden reference answer used only after result generation
+- `ground_truth/experiment_N.json`: hidden reference answer plus evaluator metadata used only after result generation
 - `outputs/<timestamp>_<level>_<experiment>/`: run artifacts for one benchmark execution
 - `docs/`: extended design notes or benchmark-authoring documentation
 
@@ -170,9 +168,8 @@ Each experiment must have three task files:
 
 Across these three files:
 
-- keep `task_id`, `task_group_id`, `task_family`, `execution_environment`, and `inputs` aligned
-- change `level` and `user_prompt`
-- keep the expected final result fields aligned across tiers
+- keep the underlying task, datasets, and expected result contract aligned
+- change only the prompt specificity
 - if the task target, datasets, or required outcome changes materially, create a new experiment instead of a new tier
 
 Tier definitions:
@@ -211,52 +208,25 @@ Galaxy-specific benchmark rules:
 
 ## Public Task File Schema
 
-Each public task file should follow the current repository schema:
+The checked-in public task files use a minimal legacy shape:
 
 ```json
 {
-  "format_version": "galaxy_benchmark_task_input_v2",
-  "task_id": "experiment_N",
-  "task_group_id": "experiment_N_<slug>_prompt_tiers",
-  "level": "low_context",
-  "task_family": "<family>",
-  "benchmark_axes": {
-    "scientist_level_band": "junior|intermediate|advanced",
-    "galaxy_complexity_band": "basic|intermediate|advanced",
-    "focus_capabilities": ["..."]
-  },
-  "required_result_format": {
-    "format_name": "galaxy_benchmark_result_v2",
-    "scientific_answer": {
-      "required_fields": ["..."]
+  "experiment_N": {
+    "Task": "...",
+    "Inputs_Path": {
+      "dataset": ["dataset/experiment_N/<file>"]
     },
-    "galaxy_execution": {
-      "required_fields": [
-        "final_entity_type",
-        "final_entity_name",
-        "history_input_mode",
-        "adaptation_summary"
-      ]
-    }
-  },
-  "execution_environment": {
-    "platform": "Galaxy",
-    "galaxy_instance": "https://usegalaxy.org/",
-    "execution_rule": "After you form a plan for the analysis, execute that plan in Galaxy."
-  },
-  "inputs": {
-    "datasets": [
-      {
-        "name": "<file>",
-        "path": "dataset/experiment_N/<file>"
-      }
-    ]
-  },
-  "user_prompt": "..."
+    "Prompt": "..."
+  }
 }
 ```
 
-Authoring rules for `user_prompt`:
+Application note:
+
+- runtime code normalizes this public shape into an internal task contract using metadata from `ground_truth/experiment_N.json`
+
+Authoring rules for `Prompt`:
 
 - write it like a real user request, not like evaluator instructions
 - mention the attached data naturally
@@ -275,7 +245,7 @@ Result-format rules:
 
 ## Hidden Evaluator Requirements
 
-Each `evaluators/experiment_N.json` should define, at minimum:
+Each `ground_truth/experiment_N.json` should define, at minimum:
 
 - `source_task_files`
 - `benchmark_metadata`
@@ -367,8 +337,7 @@ When creating `experiment_N`:
 4. Assign `scientist_level_band` and `galaxy_complexity_band` deliberately.
 5. Keep the task constant across tiers and vary only prompt specificity.
 6. Define a `required_result_format` that separates `scientific_answer` from `galaxy_execution`.
-7. Create `evaluators/experiment_N.json` with hidden expectations, checks, and rubric logic.
-8. Create `ground_truth/experiment_N.json` with fair-scoring comparison rules.
+7. Create `ground_truth/experiment_N.json` with hidden expectations, checks, rubric logic, and fair-scoring comparison rules.
 9. Verify that evaluator `expected_result_fields` align with the new nested result schema.
 10. Verify that the high-context prompt is executable as written in Galaxy.
 11. Verify that low-context and medium-context prompts remain realistic and do not accidentally leak the solution path.
@@ -412,6 +381,6 @@ Use [README.md](/Users/4475918/Projects/Galaxy_benchmark/README.md) and [SKILL.m
 - Do not read `ground_truth/` during a blind execution run before result generation is complete.
 - Do not replace Galaxy execution with local scripts after planning unless the benchmark authoring task explicitly changes the benchmark design.
 - Do not change the meaning of an existing experiment tier without updating its paired evaluator and ground-truth files.
-- Keep filenames aligned across `experiments/`, `evaluators/`, and `ground_truth/`.
+- Keep filenames aligned across `experiments/` and `ground_truth/`.
 
 If a future Codex session needs to run experiments, follow [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md). If it needs to extend the benchmark, follow this file first and then check the matching evaluator and task files already in the repository.

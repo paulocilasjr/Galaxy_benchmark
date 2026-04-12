@@ -79,7 +79,7 @@ Optional/additional artifacts must live under `results/`.
 - polling/validation checks (`check`)
 - retries (`retry`)
 - changes between attempts (`revise`)
-8. Fill `results/result.json` using the experiment file's `required_result_format`. The shared top-level sections are `scientific_answer` and `galaxy_execution`.
+8. Fill `results/result.json` using the benchmark's normalized internal result contract derived from the public experiment file plus the matching hidden `ground_truth/<experiment>.json`. The shared top-level sections are `scientific_answer` and `galaxy_execution`.
 9. Write `results/reproduce_<experiment_name>.py` with reproducible CLI/API steps and annotations.
 10. Read matching ground truth and generate comparison report with both a field-by-field table and a three-score summary.
 11. Mark `errors/error.json` final `run_status` as one of:
@@ -208,7 +208,7 @@ Then add a score summary table:
 
 Before considering a run complete, verify:
 - All required output files exist.
-- `result.json` matches the experiment file's `required_result_format`, including `scientific_answer` and `galaxy_execution`.
+- `result.json` matches the benchmark's normalized internal result contract, including `scientific_answer` and `galaxy_execution`.
 - `reproduce_<experiment>.py` is present and executable/readable.
 - `activity_log.jsonl` covers planning, execution, checks, and retries/revisions.
 - Ground truth comparison report exists and includes the three-score summary.

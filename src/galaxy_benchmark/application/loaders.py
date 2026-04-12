@@ -67,6 +67,7 @@ def load_run_record(path: str | Path) -> RunRecord:
         trace=payload.get("trace"),
         timing=payload.get("timing"),
         failure_modes=payload.get("failure_modes", []),
+        score_summary=payload.get("score_summary"),
     )
 
 

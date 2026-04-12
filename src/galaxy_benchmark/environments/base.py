@@ -11,6 +11,7 @@ from galaxy_benchmark.agents.base import AgentAdapter
 class EnvironmentRunResult:
     status: str
     outputs: dict[str, Any]
+    reasoning: list[str] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     trace: list[dict[str, Any]] = field(default_factory=list)
     timing: dict[str, Any] | None = None

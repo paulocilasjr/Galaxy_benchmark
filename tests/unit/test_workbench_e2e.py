@@ -14,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
 
 from galaxy_benchmark.agents import EchoAgentAdapter, HeuristicAgentAdapter
 from galaxy_benchmark.application.orchestrator import BenchmarkWorkbench
+from galaxy_benchmark.application.registry import BenchmarkRegistry
 from galaxy_benchmark.environments import GalaxyEnvironmentRunner, OpenEnvironmentRunner
 
 
@@ -23,12 +24,13 @@ class WorkbenchE2ETest(unittest.TestCase):
         self.output_root = self.temp_dir / "outputs"
         self.output_root.mkdir()
         self.workbench = BenchmarkWorkbench(ROOT_DIR)
+        self.registry = BenchmarkRegistry(ROOT_DIR)
 
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_dir)
 
     def test_execute_task_writes_required_artifacts(self) -> None:
-        task = json.loads((ROOT_DIR / "experiments" / "low_context" / "experiment_1.json").read_text(encoding="utf-8"))
+        task = self.registry.load_experiment("experiment_1", "low_context")
         run_dir = self.workbench.execute_task(
             task=task,
             environment=GalaxyEnvironmentRunner(),
@@ -49,7 +51,7 @@ class WorkbenchE2ETest(unittest.TestCase):
         self.assertEqual(result["scientific_answer"]["target"], "Response")
 
     def test_execute_open_environment_generates_partial_run_record(self) -> None:
-        task = json.loads((ROOT_DIR / "experiments" / "low_context" / "experiment_1.json").read_text(encoding="utf-8"))
+        task = self.registry.load_experiment("experiment_1", "low_context")
         run_dir = self.workbench.execute_task(
             task=task,
             environment=OpenEnvironmentRunner(),

@@ -1,5 +1,7 @@
 # Galaxy Agent Benchmark – PROJECT_SPEC
 
+Note: this document describes an internal benchmark-implementation scaffold. The canonical benchmark definition for publication and release is the Galaxy-only prompt-tier benchmark documented in the repository root README and the `experiments/` / `ground_truth/` assets.
+
 ## 1. Overview
 
 This project implements a benchmark to evaluate AI agents in biomedical workflows using the Galaxy environment.

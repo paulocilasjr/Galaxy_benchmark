@@ -143,6 +143,47 @@ class ProjectSpecSupportTest(unittest.TestCase):
         self.assertAlmostEqual(payload["metrics"]["overall_performance"]["open"], 0.601)
         self.assertAlmostEqual(payload["metrics"]["overall_performance"]["galaxy"], 0.801)
         self.assertAlmostEqual(payload["metrics"]["adaptability"]["galaxy_minus_open"], 0.2)
+        self.assertEqual(payload["metrics"]["overall_score_vector"], {})
+
+    def test_report_generation_preserves_three_score_vector_when_available(self) -> None:
+        runs = [
+            {
+                "run_id": "r1",
+                "task_id": "t1",
+                "prompt_level": "vague",
+                "environment": "galaxy",
+                "agent_id": "agentA",
+                "input_prompt": "a",
+                "status": "success",
+                "component_scores": {
+                    "correctness": 1.0,
+                    "execution": 1.0,
+                    "scientific_validity": 1.0,
+                    "reproducibility": 1.0,
+                    "interpretation": 1.0,
+                },
+                "performance_score": 1.0,
+                "score_summary": {
+                    "scientific_solution_score": {"value": 0.9},
+                    "standard_analysis_score": {"value": 0.8},
+                    "galaxy_execution_score": {"value": 0.7},
+                },
+            }
+        ]
+        report = build_benchmark_report("bench2", runs)
+        payload = benchmark_report_as_dict(report)
+        self.assertAlmostEqual(
+            payload["metrics"]["overall_score_vector"]["scientific_solution_score"]["galaxy"],
+            0.9,
+        )
+        self.assertAlmostEqual(
+            payload["metrics"]["overall_score_vector"]["standard_analysis_score"]["galaxy"],
+            0.8,
+        )
+        self.assertAlmostEqual(
+            payload["metrics"]["overall_score_vector"]["galaxy_execution_score"]["galaxy"],
+            0.7,
+        )
 
     def test_validation_rejects_invalid_run(self) -> None:
         with self.assertRaises(ValidationError):

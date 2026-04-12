@@ -8,11 +8,17 @@ This benchmark does not score only final answers. It also evaluates whether a ru
 
 The explicit three-score formalization for this benchmark is documented in [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md).
 
+Publication-facing companion documents:
+
+- [docs/benchmark_card.md](/Users/4475918/Projects/Galaxy_benchmark/docs/benchmark_card.md): benchmark scope, intended use, known limitations, and reporting expectations
+- [docs/publication_release.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_release.md): release policy, baseline/uncertainty guidance, and live-Galaxy drift policy
+- [docs/dataset_governance_manifest.json](/Users/4475918/Projects/Galaxy_benchmark/docs/dataset_governance_manifest.json): source, checksum, citation, and persistence metadata for benchmark inputs
+
 ## Benchmark Summary
 
 - Task groups: 11
 - Prompt variants per task: 3 (`low_context`, `medium_context`, `high_context`)
-- Total benchmark instances: 24
+- Total benchmark instances: 33
 - Platform: Galaxy (`https://usegalaxy.org/`)
 - Output style: structured files under `outputs/`
 - Evaluation style: produce results first, then compare against ground truth field by field with an explicit three-score summary
@@ -45,6 +51,17 @@ This structure supports evaluation of instruction following under different cont
 
 Task-source reconciliation across the legacy benchmark repo and the standalone experiment repo is documented in [docs/task_source_crosswalk.md](/Users/4475918/Projects/Galaxy_benchmark/docs/task_source_crosswalk.md).
 
+## Published Scope
+
+The published benchmark is the 33-task Galaxy-only prompt-tier benchmark under:
+
+- `experiments/`
+- `dataset/`
+- `ground_truth/`
+- `outputs/` artifact protocol
+
+The `project_spec/` directory and the `open` / `galaxy_skills` execution modes are retained as internal scaffolding for development, harness testing, and methodological comparison. They are not the canonical benchmark definition used for the benchmark release or paper claims.
+
 ## Repository Layout
 
 ```text
@@ -56,7 +73,6 @@ Task-source reconciliation across the legacy benchmark repo and the standalone e
 |   |-- low_context/
 |   |-- medium_context/
 |   `-- high_context/
-|-- evaluators/
 |-- ground_truth/
 `-- outputs/
 ```
@@ -65,71 +81,34 @@ Task-source reconciliation across the legacy benchmark repo and the standalone e
 
 - `experiments/`: public experiment definitions that agents read and execute
 - `dataset/`: benchmark input files referenced by the experiment JSON files
-- `evaluators/`: hidden evaluation metadata, rubric details, and benchmark-specific expectations; not part of the agent-facing prompt
-- `ground_truth/`: reference answers used only after result generation is complete
+- `ground_truth/`: hidden reference answers plus evaluator metadata used only after result generation is complete
 - `outputs/`: the only writable location during benchmark execution
 
 ## Experiment Format
 
-Each experiment file is a JSON task package. The structure is stable across prompt tiers:
+The checked-in experiment files use the legacy public-task shape:
 
 ```json
 {
-  "format_version": "galaxy_benchmark_task_input_v2",
-  "task_id": "experiment_1",
-  "task_group_id": "experiment_1_response_prediction_prompt_tiers",
-  "level": "low_context",
-  "task_family": "biomedical_tabular_classification",
-  "benchmark_axes": {
-    "scientist_level_band": "junior",
-    "galaxy_complexity_band": "intermediate",
-    "focus_capabilities": [
-      "dataset inspection",
-      "target identification",
-      "Galaxy tool selection",
-      "held-out test evaluation"
-    ]
-  },
-  "required_result_format": {
-    "format_name": "galaxy_benchmark_result_v2",
-    "scientific_answer": {
-      "required_fields": [
-        "target",
-        "primary_metric.name",
-        "primary_metric.split",
-        "primary_metric.value"
+  "experiment_1": {
+    "Task": "Predict treatment response from separate biomedical training and test TSV files in Galaxy using a tabular classification approach.",
+    "Inputs_Path": {
+      "dataset": [
+        "dataset/experiment_1/Chowell_train_Response.tsv",
+        "dataset/experiment_1/Chowell_test_Response.tsv"
       ]
     },
-    "galaxy_execution": {
-      "required_fields": [
-        "final_entity_type",
-        "final_entity_name",
-        "history_input_mode",
-        "adaptation_summary"
-      ]
-    }
-  },
-  "execution_environment": {
-    "platform": "Galaxy",
-    "galaxy_instance": "https://usegalaxy.org/",
-    "execution_rule": "After you form a plan for the analysis, execute that plan in Galaxy."
-  },
-  "inputs": {
-    "datasets": [
-      {"name": "example.tsv", "path": "dataset/experiment_1/example.tsv"}
-    ]
-  },
-  "user_prompt": "..."
+    "Prompt": "..."
+  }
 }
 ```
 
 Important interpretation rules:
 
-- The `user_prompt` is the task instruction to execute.
-- The `inputs` block defines the files available to the run.
-- `execution_environment` constrains the intended platform.
-- `benchmark_axes` label the scientist-help level and Galaxy-operation complexity the task is meant to probe.
-- `required_result_format` defines the structured result contract the benchmark expects under `results/result.json`.
+- The checked-in public task files are intentionally minimal and user-facing.
+- The application normalizes them internally into a richer execution contract using the corresponding `ground_truth/experiment_N.json` metadata.
+- The `Prompt` field is the task instruction to execute.
+- `Inputs_Path.dataset` defines the files available to the run.
 - Across prompt tiers for the same experiment, the primary benchmark variable is the prompt wording, not the input data.
 
 ## Result Format
@@ -211,9 +190,42 @@ Notes:
 - `--stdout-only` prints the machine-readable score summary without writing files.
 - The scorer now uses run-trace evidence when normalizing legacy outputs. It does not blindly assume that an unlabelled metric came from the held-out test split.
 
+Asset-audit entry point:
+
+```bash
+python3 tools/audit_benchmark_assets.py
+```
+
+This validates publication-facing invariants such as prompt-tier alignment, `public_task_variants` consistency, derived evaluator/result-field completeness, and dataset-governance coverage.
+
+## Reproducibility Packaging
+
+The repository includes lightweight release engineering for reproducibility:
+
+- `pyproject.toml` for installable package metadata
+- `Dockerfile` for a pinned containerized execution baseline
+- `Makefile` for common local commands
+- `.github/workflows/ci.yml` for continuous validation
+
+Recommended local verification commands:
+
+```bash
+make test
+make scorer-test
+make audit
+```
+
+For repeated benchmark runs, uncertainty summaries can be generated from scored `run_record.json` files with:
+
+```bash
+python3 tools/build_reliability_report.py \
+  --run-record outputs/<run_a>/results/run_record.json \
+  --run-record outputs/<run_b>/results/run_record.json
+```
+
 ## Benchmark Support Package
 
-The repository now also includes a lightweight implementation of the generalized benchmark scaffold described in `project_spec/` under [src/galaxy_benchmark](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark).
+The repository also includes a lightweight implementation scaffold under [src/galaxy_benchmark](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark). This code supports the benchmark release, but the generalized `project_spec/` bundle should be read as internal implementation scaffolding rather than as the canonical benchmark definition.
 
 It provides:
 
@@ -221,8 +233,8 @@ It provides:
 - typed loaders for the example spec artifacts
 - scoring utilities for performance, robustness, adaptability, and user-level confidence
 - benchmark-report aggregation across run records
-- executable workbench orchestration for task × prompt × environment runs
-- built-in agent adapters and environment runners for local end-to-end execution
+- executable workbench orchestration for benchmark-style runs
+- built-in agent adapters and environment runners for local harness execution
 
 The report builder CLI is [tools/build_benchmark_report.py](/Users/4475918/Projects/Galaxy_benchmark/tools/build_benchmark_report.py).
 The matrix runner CLI is [tools/run_benchmark_workbench.py](/Users/4475918/Projects/Galaxy_benchmark/tools/run_benchmark_workbench.py).
@@ -257,6 +269,11 @@ Built-in environments:
 - `galaxy`
 - `galaxy_skills`
 
+Important scope note:
+
+- `galaxy` is the benchmark-aligned execution mode.
+- `open` and `galaxy_skills` remain available for internal diagnostics and methodological experiments, but they are not part of the canonical published benchmark matrix.
+
 Each run writes the required benchmark artifact layout:
 
 - `plan/saved.md`
@@ -275,7 +292,6 @@ Example matrix execution:
 python3 tools/run_benchmark_workbench.py \
   --experiment-id experiment_1 \
   --level low_context \
-  --environment open \
   --environment galaxy \
   --agent heuristic
 ```
@@ -286,7 +302,7 @@ This command:
 2. creates a new timestamped run directory under `outputs/`
 3. executes the selected agent in each requested environment
 4. writes run artifacts and run records
-5. scores completed runs when evaluator and ground-truth files are present
+5. scores completed runs when hidden ground-truth metadata are present
 6. prints an aggregated benchmark report for the generated run set
 
 ## Ground Truth Format
@@ -531,7 +547,7 @@ Blind retries are non-compliant. For every failed attempt:
 Write operations are restricted to `outputs/` only.
 
 - Never create, modify, rename, move, or delete files outside `outputs/` during benchmark execution.
-- Treat `experiments/`, `dataset/`, `evaluators/`, `ground_truth/`, and project-root files as read-only.
+- Treat `experiments/`, `dataset/`, `ground_truth/`, and project-root files as read-only.
 - If a step would require writing outside `outputs/`, stop and report a blocking violation.
 
 ### Ground-Truth Gate

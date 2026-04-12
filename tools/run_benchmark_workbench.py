@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the benchmark workbench over task, prompt, and environment combinations."""
+"""Execute the internal benchmark workbench over task and environment combinations."""
 
 from __future__ import annotations
 
@@ -33,13 +33,13 @@ def parse_args() -> argparse.Namespace:
         "--environment",
         action="append",
         choices=sorted(BUILTIN_ENVIRONMENTS),
-        help="Environment(s) to run. Defaults to all built-in environments.",
+        help="Environment(s) to run. Defaults to `galaxy` for benchmark-aligned execution.",
     )
     parser.add_argument(
         "--agent",
         choices=sorted(BUILTIN_AGENTS),
         default="heuristic",
-        help="Built-in agent adapter to use.",
+        help="Built-in harness agent adapter to use.",
     )
     parser.add_argument("--output-root", help="Optional output root. Defaults to outputs/.")
     parser.add_argument("--benchmark-id", default="galaxy_benchmark_workbench_run")
@@ -54,7 +54,7 @@ def main() -> int:
     args = parse_args()
     registry = BenchmarkRegistry(ROOT_DIR)
     tasks = registry.load_task_matrix(experiment_ids=args.experiment_id, levels=args.level)
-    environments = [BUILTIN_ENVIRONMENTS[name]() for name in (args.environment or sorted(BUILTIN_ENVIRONMENTS))]
+    environments = [BUILTIN_ENVIRONMENTS[name]() for name in (args.environment or ["galaxy"])]
     workbench = BenchmarkWorkbench(ROOT_DIR)
     agent_cls = BUILTIN_AGENTS[args.agent]
     run_dirs = workbench.execute_matrix(

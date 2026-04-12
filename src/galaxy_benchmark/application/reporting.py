@@ -11,6 +11,7 @@ from .scoring import (
     DEFAULT_PROMPT_WEIGHTS,
     aggregate_by_environment,
     environment_pair_adaptability,
+    score_value_from_summary,
     task_robustness,
     user_level_confidence_by_environment,
     weighted_mean_available,
@@ -50,6 +51,20 @@ def build_benchmark_report(
     per_task = []
     task_env_scores: dict[str, dict[str, float]] = {}
     task_robustness_scores: dict[str, dict[str, float]] = {}
+    score_vectors: dict[str, dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
+    for record in normalized_runs:
+        task_id = str(record["task_id"])
+        environment = str(record["environment"])
+        score_summary = record.get("score_summary")
+        if isinstance(score_summary, dict):
+            for score_name in (
+                "scientific_solution_score",
+                "standard_analysis_score",
+                "galaxy_execution_score",
+            ):
+                value = score_value_from_summary(score_summary, score_name)
+                if value is not None:
+                    score_vectors[score_name][task_id][environment] = value
     for task_id, env_scores in sorted(task_prompt_environment.items()):
         env_performance = {
             environment: weighted_mean_available(prompt_scores, DEFAULT_PROMPT_WEIGHTS)
@@ -72,6 +87,10 @@ def build_benchmark_report(
 
     overall_performance = aggregate_by_environment(task_env_scores)
     overall_robustness = aggregate_by_environment(task_robustness_scores)
+    overall_score_vector = {
+        score_name: aggregate_by_environment(task_scores)
+        for score_name, task_scores in sorted(score_vectors.items())
+    }
     galaxy_minus_open = aggregate_by_environment(
         {
             task_id: {"galaxy_minus_open": value}
@@ -115,6 +134,7 @@ def build_benchmark_report(
         metrics={
             "overall_performance": overall_performance,
             "overall_robustness": overall_robustness,
+            "overall_score_vector": overall_score_vector,
             "adaptability": {
                 "galaxy_minus_open": galaxy_minus_open,
                 "skills_minus_galaxy": skills_minus_galaxy,

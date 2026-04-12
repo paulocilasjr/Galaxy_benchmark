@@ -1,5 +1,7 @@
 # Galaxy Agent Benchmark Specification Bundle
 
+This directory is retained as an internal specification scaffold for implementation work. It is not the canonical published benchmark definition for the Galaxy Benchmark release in this repository.
+
 This bundle contains a project-ready specification scaffold for implementing the Galaxy Agent Benchmark.
 
 Included:

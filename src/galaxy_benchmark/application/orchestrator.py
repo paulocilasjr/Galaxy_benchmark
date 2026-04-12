@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from galaxy_benchmark.agents.base import AgentAdapter
+from galaxy_benchmark.application.contracts import prompt_level_from_specificity
 from galaxy_benchmark.application.scoring import run_performance
 from galaxy_benchmark.domain.enums import Environment as EnvironmentEnum
 from galaxy_benchmark.domain.enums import PromptLevel, RunStatus
@@ -61,7 +62,7 @@ def _build_plan_text(task: dict[str, Any], environment_name: str, datasets: list
     lines = [
         f"# Plan for {task['task_id']}",
         "",
-        f"- Objective: {task['user_prompt']}",
+            f"- Objective: {task['user_prompt']}",
         f"- Environment: {environment_name}",
         f"- Datasets: {', '.join(path.name for path in datasets)}",
         "- Ordered plan:",
@@ -192,7 +193,7 @@ class BenchmarkWorkbench:
         reasoning_entries = [
             f"Loaded task {experiment_id} at level {level}.",
             f"Prepared {len(datasets)} dataset reference(s).",
-            *environment_result.outputs.get("reasoning", []),
+            *environment_result.reasoning,
         ]
         _write_text(reasoning_path, _build_reasoning_text(reasoning_entries))
 
@@ -231,14 +232,11 @@ class BenchmarkWorkbench:
 
         component_scores = _component_scores(asdict(environment_result), environment.environment_name)
         performance_score = run_performance(component_scores)
+        score_summary = self._score_if_available(run_dir, experiment_id, task["level"])
         run_record = RunRecord(
             run_id=run_dir.name,
             task_id=experiment_id,
-            prompt_level=PromptLevel(task["level"].replace("context", "specific") if False else {
-                "low_context": "vague",
-                "medium_context": "specific",
-                "high_context": "very_specific",
-            }[task["level"]]),
+            prompt_level=PromptLevel(prompt_level_from_specificity(task["level"])),
             environment=EnvironmentEnum(environment.environment_name),
             agent_id=getattr(agent, "agent_id", "unknown"),
             input_prompt=task["user_prompt"],
@@ -250,10 +248,9 @@ class BenchmarkWorkbench:
             trace=environment_result.trace,
             timing=environment_result.timing,
             failure_modes=environment_result.failure_modes,
+            score_summary=score_summary,
         )
         _write_json(run_record_path, asdict(run_record))
-
-        self._score_if_available(run_dir, experiment_id, task["level"])
         return run_dir
 
     def execute_matrix(
@@ -277,11 +274,10 @@ class BenchmarkWorkbench:
                 )
         return run_dirs
 
-    def _score_if_available(self, run_dir: Path, experiment_id: str, level: str) -> None:
-        evaluator_path = self.root_dir / "evaluators" / f"{experiment_id}.json"
+    def _score_if_available(self, run_dir: Path, experiment_id: str, level: str) -> dict[str, Any] | None:
         ground_truth_path = self.root_dir / "ground_truth" / f"{experiment_id}.json"
-        if not evaluator_path.exists() or not ground_truth_path.exists():
-            return
+        if not ground_truth_path.exists():
+            return None
         if str(self.root_dir) not in sys.path:
             sys.path.insert(0, str(self.root_dir))
         from tools import benchmark_scorer
@@ -327,3 +323,4 @@ class BenchmarkWorkbench:
             ),
         }
         _write_json(run_dir / "results" / "score_summary.json", summaries)
+        return summaries

@@ -3,7 +3,7 @@
 
 This scorer reads:
 - a benchmark run directory under outputs/
-- the hidden evaluator and ground-truth files for the experiment
+- the hidden ground-truth file for the experiment, including evaluator metadata
 - the run's result and supporting artifacts
 
 It then produces:
@@ -29,9 +29,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from galaxy_benchmark.application.contracts import normalize_evaluator_payload, normalize_experiment_payload
+
 
 LEVELS = ("low_context", "medium_context", "high_context")
-ROOT_DIR = Path(__file__).resolve().parent.parent
 
 INPUT_STEP_TYPES = {
     "data_input",
@@ -295,10 +301,22 @@ def load_experiment_contract(experiment_id: str, level: str | None) -> dict[str,
     if level:
         candidate = ROOT_DIR / "experiments" / level / f"{experiment_id}.json"
         if candidate.exists():
-            return load_json(candidate)  # type: ignore[return-value]
+            ground_truth_path = ROOT_DIR / "ground_truth" / f"{experiment_id}.json"
+            ground_truth_payload = load_json(ground_truth_path) if ground_truth_path.exists() else None
+            return normalize_experiment_payload(
+                load_json(candidate),  # type: ignore[arg-type]
+                level=level,
+                ground_truth_payload=ground_truth_payload if isinstance(ground_truth_payload, dict) else None,
+            )
     fallback = ROOT_DIR / "experiments" / "low_context" / f"{experiment_id}.json"
     if fallback.exists():
-        return load_json(fallback)  # type: ignore[return-value]
+        ground_truth_path = ROOT_DIR / "ground_truth" / f"{experiment_id}.json"
+        ground_truth_payload = load_json(ground_truth_path) if ground_truth_path.exists() else None
+        return normalize_experiment_payload(
+            load_json(fallback),  # type: ignore[arg-type]
+            level=level or "low_context",
+            ground_truth_payload=ground_truth_payload if isinstance(ground_truth_payload, dict) else None,
+        )
     return None
 
 
@@ -308,20 +326,21 @@ def build_bundle(run_dir: Path, experiment_id: str, level: str | None) -> Artifa
         raise FileNotFoundError(f"Missing result artifact: {result_path}")
 
     results_dir = run_dir / "results"
-    evaluator_path = ROOT_DIR / "evaluators" / f"{experiment_id}.json"
     ground_truth_path = ROOT_DIR / "ground_truth" / f"{experiment_id}.json"
-    if not evaluator_path.exists():
-        raise FileNotFoundError(f"Missing evaluator file: {evaluator_path}")
     if not ground_truth_path.exists():
         raise FileNotFoundError(f"Missing ground truth file: {ground_truth_path}")
+    ground_truth_payload = load_json(ground_truth_path)
+    evaluator_payload = normalize_evaluator_payload(
+        ground_truth_payload if isinstance(ground_truth_payload, dict) else None
+    )
 
     return ArtifactBundle(
         run_dir=run_dir,
         experiment_id=experiment_id,
         level=level,
         experiment=load_experiment_contract(experiment_id, level),
-        evaluator=load_json(evaluator_path),  # type: ignore[arg-type]
-        ground_truth=load_json(ground_truth_path),  # type: ignore[arg-type]
+        evaluator=evaluator_payload if isinstance(evaluator_payload, dict) else {},
+        ground_truth=ground_truth_payload if isinstance(ground_truth_payload, dict) else {},
         raw_result=load_json(result_path),  # type: ignore[arg-type]
         activity_log=load_activity_log(run_dir / "results" / "activity_log.jsonl"),
         errors=load_optional_json(run_dir / "errors" / "error.json"),

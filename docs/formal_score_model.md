@@ -44,7 +44,7 @@ What it should not capture:
 Primary evidence sources:
 - `tier_specific_expectations`
 - exact-match or stage-pattern checks in `ground_truth/`
-- `high_context` deterministic checks in `evaluators/`
+- `high_context` deterministic checks in the hidden evaluator metadata embedded in `ground_truth/`
 
 ### `galaxy_execution_score`
 
@@ -67,7 +67,7 @@ What it should not capture:
 Primary evidence sources:
 - `galaxy_execution`
 - activity logs, retry records, failure analyses, and reproduction artifacts
-- Galaxy-oriented deterministic checks in `evaluators/`
+- Galaxy-oriented deterministic checks in the hidden evaluator metadata embedded in `ground_truth/`
 
 ## Tier Behavior
 
@@ -113,7 +113,7 @@ This means the benchmark should prefer:
 
 To keep the score model explicit in repository assets:
 
-- each `evaluators/experiment_N.json` should include a `score_model` block
+- each `ground_truth/experiment_N.json` should expose evaluator metadata with a `score_model` block
 - each `ground_truth/experiment_N.json` should include `fair_scoring.score_model_support` and `fair_scoring.preserve_three_score_vector`
 - evaluator `score_model` blocks should use the same aggregation method and score-status thresholds across experiments
 - ground-truth `fair_scoring` blocks should state that auditability contributes to `galaxy_execution_score`

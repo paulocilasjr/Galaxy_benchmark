@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .contracts import normalize_experiment_payload
 
 LEVELS = ("low_context", "medium_context", "high_context")
 
@@ -24,7 +25,16 @@ class BenchmarkRegistry:
 
     def load_experiment(self, experiment_id: str, level: str) -> dict[str, Any]:
         path = self.root_dir / "experiments" / level / f"{experiment_id}.json"
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        ground_truth_path = self.root_dir / "ground_truth" / f"{experiment_id}.json"
+        ground_truth_payload = None
+        if ground_truth_path.exists():
+            ground_truth_payload = json.loads(ground_truth_path.read_text(encoding="utf-8"))
+        return normalize_experiment_payload(
+            payload,
+            level=level,
+            ground_truth_payload=ground_truth_payload,
+        )
 
     def load_task_matrix(
         self,
