@@ -1,6 +1,6 @@
 ---
 name: galaxy-benchmark-executor
-description: Execute Galaxy benchmark experiments from experiments/*.json with strict traceability, output boundaries, logging, and failure-recovery requirements.
+description: Execute Galaxy benchmark experiments from the level-specific task files under experiments/ with strict traceability, output boundaries, logging, and failure-recovery requirements.
 metadata:
   short-description: Run Galaxy benchmark experiment(s)
 ---
@@ -18,7 +18,7 @@ Use this skill when the user asks to:
 
 ## Required Inputs
 
-- Experiment definitions in `experiments/*.json`
+- Experiment definitions in `experiments/low_context/*.json`, `experiments/medium_context/*.json`, or `experiments/high_context/*.json`
 - Galaxy API key in root `.env` as `GALAXY_API_KEY`
 - Ground truth files in `ground_truth/*.json` (read only after result generation)
 
@@ -29,7 +29,7 @@ Use this skill when the user asks to:
 - Never create, modify, move, rename, or delete files outside `outputs/`.
 
 2. Run directory naming:
-- Use `outputs/<date_time>_<experiment_name>/`.
+- Use `outputs/<date_time>_<level>_<experiment_name>/`.
 - Recommended timestamp format: `YYYYMMDD_HHMMSS`.
 - Every new run/attempt must use a new directory.
 
@@ -57,18 +57,22 @@ Use this skill when the user asks to:
 ## Required Output Structure
 
 For each experiment run, create:
-- `outputs/<date_time>_<experiment_name>/plan/saved.md`
-- `outputs/<date_time>_<experiment_name>/reasoning/reasoning.md`
-- `outputs/<date_time>_<experiment_name>/errors/error.json`
-- `outputs/<date_time>_<experiment_name>/results/result.json`
-- `outputs/<date_time>_<experiment_name>/results/reproduce_<experiment_name>.py`
-- `outputs/<date_time>_<experiment_name>/results/activity_log.jsonl`
+- `outputs/<date_time>_<level>_<experiment_name>/plan/saved.md`
+- `outputs/<date_time>_<level>_<experiment_name>/reasoning/reasoning.md`
+- `outputs/<date_time>_<level>_<experiment_name>/errors/error.json`
+- `outputs/<date_time>_<level>_<experiment_name>/results/result.json`
+- `outputs/<date_time>_<level>_<experiment_name>/results/reproduce_<experiment_name>.py`
+- `outputs/<date_time>_<level>_<experiment_name>/results/activity_log.jsonl`
 
 Optional/additional artifacts must live under `results/`.
 
+Repository note:
+- `outputs/` is tracked only as an empty placeholder in git.
+- Do not commit run artifacts from blind or scored executions back into the repository.
+
 ## Execution Workflow (Per Experiment)
 
-1. Read `experiments/<experiment>.json`.
+1. Read the selected task file from `experiments/low_context/`, `experiments/medium_context/`, or `experiments/high_context/`.
 2. Create run directory and required subfolders (`plan`, `reasoning`, `errors`, `results`).
 3. Write initial plan to `plan/saved.md` before execution starts.
 4. Initialize `errors/error.json` with `run_status=running`.
@@ -79,9 +83,9 @@ Optional/additional artifacts must live under `results/`.
 - polling/validation checks (`check`)
 - retries (`retry`)
 - changes between attempts (`revise`)
-8. Fill `results/result.json` using `experiment_outputs` schema from the experiment file.
+8. Fill `results/result.json` using the benchmark's normalized internal result contract derived from the public experiment file plus the matching hidden `ground_truth/<experiment>.json`. The shared top-level sections are `scientific_answer` and `galaxy_execution`.
 9. Write `results/reproduce_<experiment_name>.py` with reproducible CLI/API steps and annotations.
-10. Read matching ground truth and generate comparison table report.
+10. Read matching ground truth and generate comparison report with both a field-by-field table and a three-score summary.
 11. Mark `errors/error.json` final `run_status` as one of:
 - `completed`
 - `completed_with_errors`
@@ -192,18 +196,26 @@ Use this table format:
 
 | Field | Agent Result | Ground Truth | Match Status | Notes |
 |---|---|---|---|---|
-| tool_name | ... | ... | match/mismatch | ... |
-| target | ... | ... | match/mismatch | ... |
-| ROC-AUC | ... | ... | match/mismatch | ... |
+| scientific_answer.target | ... | ... | match/mismatch | ... |
+| scientific_answer.primary_metric.value | ... | ... | match/mismatch | ... |
+| galaxy_execution.final_entity_name | ... | ... | match/mismatch | ... |
+
+Then add a score summary table:
+
+| Score | Value | Status | Basis | Notes |
+|---|---|---|---|---|
+| scientific_solution_score | ... | pass/partial/fail | scientific_answer | ... |
+| standard_analysis_score | ... | pass/partial/fail/not_applicable | tier_specific_expectations | ... |
+| galaxy_execution_score | ... | pass/partial/fail | galaxy_execution and run trace | ... |
 
 ## Completion Checklist
 
 Before considering a run complete, verify:
 - All required output files exist.
-- `result.json` matches experiment `experiment_outputs` schema.
+- `result.json` matches the benchmark's normalized internal result contract, including `scientific_answer` and `galaxy_execution`.
 - `reproduce_<experiment>.py` is present and executable/readable.
 - `activity_log.jsonl` covers planning, execution, checks, and retries/revisions.
-- Ground truth comparison report exists.
+- Ground truth comparison report exists and includes the three-score summary.
 - `errors/error.json` has final status and accurate summary counts.
 
 ## Hard Stop Conditions
