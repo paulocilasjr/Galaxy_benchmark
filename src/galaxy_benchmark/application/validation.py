@@ -110,6 +110,9 @@ def validate_run_payload(payload: Any) -> None:
         "component_scores",
         "performance_score",
         "score_summary",
+        "execution_mode",
+        "benchmark_validity",
+        "execution_context",
     }
     required = {
         "run_id",
@@ -142,6 +145,22 @@ def validate_run_payload(payload: Any) -> None:
         raise ValidationError("Run payload failure_modes must be a list when present")
     if data.get("score_summary") is not None and not isinstance(data["score_summary"], dict):
         raise ValidationError("Run payload score_summary must be an object or null")
+    if "execution_mode" in data:
+        execution_mode = data["execution_mode"]
+        if not isinstance(execution_mode, str) or not execution_mode.strip():
+            raise ValidationError("Run payload execution_mode must be a non-empty string when present")
+    if data.get("benchmark_validity") is not None:
+        validity = data["benchmark_validity"]
+        if not isinstance(validity, dict):
+            raise ValidationError("Run payload benchmark_validity must be an object or null")
+        if "publication_eligible" in validity and not isinstance(validity["publication_eligible"], bool):
+            raise ValidationError("Run payload benchmark_validity.publication_eligible must be a boolean")
+        if "blind_package_eligible" in validity and not isinstance(validity["blind_package_eligible"], bool):
+            raise ValidationError("Run payload benchmark_validity.blind_package_eligible must be a boolean")
+        if "reasons" in validity and not isinstance(validity["reasons"], list):
+            raise ValidationError("Run payload benchmark_validity.reasons must be a list when present")
+    if data.get("execution_context") is not None and not isinstance(data["execution_context"], dict):
+        raise ValidationError("Run payload execution_context must be an object or null")
     component_scores = data["component_scores"]
     if not isinstance(component_scores, dict):
         raise ValidationError("Run payload component_scores must be an object")

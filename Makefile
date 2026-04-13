@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: test scorer-test audit reliability
+.PHONY: test scorer-test audit reliability publication-results release-packages
 
 test:
 	$(PYTHON) -m unittest discover -s tests/unit -v
@@ -13,3 +13,9 @@ audit:
 
 reliability:
 	@echo "Use: python3 tools/build_reliability_report.py --run-record <path> [--run-record <path> ...]"
+
+publication-results:
+	$(PYTHON) tools/build_publication_results_bundle.py
+
+release-packages:
+	$(PYTHON) tools/build_release_packages.py --output-dir /tmp/galaxy_benchmark_release

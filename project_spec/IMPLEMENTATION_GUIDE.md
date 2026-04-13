@@ -34,6 +34,8 @@ The benchmark should be implemented as a pipeline with six major subsystems:
 
 6. **Report Generator**
    - Produces per-run, per-task, per-agent, and benchmark summary outputs
+   - Separates simulated harness runs from publication-eligible benchmark runs
+   - Captures normalized execution context needed for live-Galaxy drift interpretation
 
 ## Recommended implementation order
 

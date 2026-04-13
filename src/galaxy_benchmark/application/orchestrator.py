@@ -99,6 +99,87 @@ def _component_scores(environment_result: dict[str, Any], execution_mode: str) -
     }
 
 
+def _collect_execution_context(
+    task: dict[str, Any],
+    environment: EnvironmentRunner,
+    environment_result: dict[str, Any],
+) -> dict[str, Any]:
+    execution_environment = task.get("execution_environment", {})
+    trace = environment_result.get("trace", []) if isinstance(environment_result, dict) else []
+    history_ids = []
+    invocation_ids = []
+    tool_ids = []
+    tool_versions = []
+    workflow_ids = []
+    workflow_names = []
+    workflow_revisions = []
+    queue_blockers = []
+    for entry in trace if isinstance(trace, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        details = entry.get("details")
+        candidates = [entry]
+        if isinstance(details, dict):
+            candidates.append(details)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key, bucket in (
+                ("history_id", history_ids),
+                ("invocation_id", invocation_ids),
+                ("tool_id", tool_ids),
+                ("tool_version", tool_versions),
+                ("workflow_id", workflow_ids),
+                ("workflow_name", workflow_names),
+                ("workflow_revision", workflow_revisions),
+            ):
+                value = candidate.get(key)
+                if value not in (None, "") and value not in bucket:
+                    bucket.append(value)
+        for failure in ("queue_blocker", "scheduler_blocker"):
+            blocker = entry.get(failure)
+            if blocker and blocker not in queue_blockers:
+                queue_blockers.append(blocker)
+    timing = environment_result.get("timing", {}) if isinstance(environment_result, dict) else {}
+    return {
+        "platform": execution_environment.get("platform", "Galaxy" if environment.environment_name != "open" else "Open"),
+        "environment_name": environment.environment_name,
+        "galaxy_instance": execution_environment.get("galaxy_instance"),
+        "execution_rule": execution_environment.get("execution_rule"),
+        "run_started_at": timing.get("started_at"),
+        "run_finished_at": timing.get("finished_at"),
+        "history_ids": history_ids,
+        "invocation_ids": invocation_ids,
+        "workflow_ids": workflow_ids,
+        "workflow_names": workflow_names,
+        "workflow_revisions": workflow_revisions,
+        "tool_ids": tool_ids,
+        "tool_versions": tool_versions,
+        "queue_blockers": queue_blockers,
+    }
+
+
+def _benchmark_validity(environment: EnvironmentRunner) -> dict[str, Any]:
+    if environment.environment_name == "galaxy":
+        return {
+            "publication_eligible": False,
+            "blind_package_eligible": False,
+            "benchmark_alignment": "galaxy-aligned but simulated harness execution",
+            "reasons": [
+                "This run was produced by the internal workbench using a simulated environment runner.",
+                "Publication-grade benchmark claims require a live Galaxy execution trace rather than a stubbed harness run.",
+            ],
+        }
+    return {
+        "publication_eligible": False,
+        "blind_package_eligible": False,
+        "benchmark_alignment": "internal non-canonical harness execution",
+        "reasons": [
+            f"Environment `{environment.environment_name}` is retained for internal diagnostics and is not a canonical benchmark mode.",
+        ],
+    }
+
+
 class BenchmarkWorkbench:
     def __init__(self, root_dir: str | Path) -> None:
         self.root_dir = Path(root_dir)
@@ -233,6 +314,7 @@ class BenchmarkWorkbench:
         component_scores = _component_scores(asdict(environment_result), environment.environment_name)
         performance_score = run_performance(component_scores)
         score_summary = self._score_if_available(run_dir, experiment_id, task["level"])
+        execution_context = _collect_execution_context(task, environment, asdict(environment_result))
         run_record = RunRecord(
             run_id=run_dir.name,
             task_id=experiment_id,
@@ -249,6 +331,9 @@ class BenchmarkWorkbench:
             timing=environment_result.timing,
             failure_modes=environment_result.failure_modes,
             score_summary=score_summary,
+            execution_mode="simulated_harness",
+            benchmark_validity=_benchmark_validity(environment),
+            execution_context=execution_context,
         )
         _write_json(run_record_path, asdict(run_record))
         return run_dir

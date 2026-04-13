@@ -95,6 +95,7 @@ When working in this repo:
 2. Respect public vs hidden benchmark assets:
 - `experiments/` and `dataset/` are public benchmark inputs
 - `ground_truth/` is the hidden benchmark asset bundle and contains both reference-answer and evaluator metadata
+- external blind-public releases should be built from the release-packaging tools rather than by publishing this authoring tree verbatim
 - do not leak hidden evaluator or ground-truth information into public task files
 
 3. Distinguish benchmark authoring from benchmark execution:
@@ -127,7 +128,7 @@ Directory roles:
 - `dataset/experiment_N/`: files attached to a benchmark task
 - `experiments/<level>/experiment_N.json`: public task definitions for each prompt tier
 - `ground_truth/experiment_N.json`: hidden reference answer plus evaluator metadata used only after result generation
-- `outputs/<timestamp>_<level>_<experiment>/`: run artifacts for one benchmark execution
+- `outputs/<timestamp>_<level>_<experiment>/`: run artifacts for one benchmark execution; committed repository contents should remain placeholder-only
 - `docs/`: extended design notes or benchmark-authoring documentation
 
 ## Benchmark Design Principles

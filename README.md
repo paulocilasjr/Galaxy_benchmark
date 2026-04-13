@@ -1,6 +1,6 @@
 # Galaxy Benchmark
 
-Galaxy Benchmark is an end-to-end benchmark for evaluating AI agents on real Galaxy-based biomedical and bioinformatics tasks. The repository is organized like a published benchmark release: it exposes task definitions, input data, hidden evaluation references, and a required artifact format for reproducible runs.
+Galaxy Benchmark is an end-to-end benchmark for evaluating AI agents on real Galaxy-based biomedical and bioinformatics tasks. This repository is the benchmark authoring and release-engineering repository: it contains the public task assets, the hidden scoring assets, and the tooling required to stage separate blind-public, publication-companion, and hidden-scoring packages.
 
 This benchmark does not score only final answers. It also evaluates whether a run is auditable and reproducible. Clear reporting is a first-class requirement: if an action, decision, retry, or failure analysis is not recorded in the run artifacts, it is treated as not performed.
 
@@ -13,6 +13,9 @@ Publication-facing companion documents:
 - [docs/benchmark_card.md](/Users/4475918/Projects/Galaxy_benchmark/docs/benchmark_card.md): benchmark scope, intended use, known limitations, and reporting expectations
 - [docs/publication_release.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_release.md): release policy, baseline/uncertainty guidance, and live-Galaxy drift policy
 - [docs/dataset_governance_manifest.json](/Users/4475918/Projects/Galaxy_benchmark/docs/dataset_governance_manifest.json): source, checksum, citation, and persistence metadata for benchmark inputs
+- [docs/publication_results_source.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_source.json): sanitized scored-run snapshots used to rebuild publication summaries
+- [docs/publication_results_bundle.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_bundle.json): canonical machine-readable benchmark-results bundle
+- [docs/publication_results_summary.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_summary.md): release-facing summary table without field-level ground truth
 
 ## Benchmark Summary
 
@@ -51,16 +54,28 @@ This structure supports evaluation of instruction following under different cont
 
 Task-source reconciliation across the legacy benchmark repo and the standalone experiment repo is documented in [docs/task_source_crosswalk.md](/Users/4475918/Projects/Galaxy_benchmark/docs/task_source_crosswalk.md).
 
-## Published Scope
+## Release Model
 
-The published benchmark is the 33-task Galaxy-only prompt-tier benchmark under:
+The canonical benchmark definition is the 33-instance Galaxy-only prompt-tier benchmark defined by:
 
 - `experiments/`
 - `dataset/`
 - `ground_truth/`
-- `outputs/` artifact protocol
+- the `outputs/` artifact protocol
 
-The `project_spec/` directory and the `open` / `galaxy_skills` execution modes are retained as internal scaffolding for development, harness testing, and methodological comparison. They are not the canonical benchmark definition used for the benchmark release or paper claims.
+Release packaging is intentionally split:
+
+- blind public package: public tasks, dataset assets/references, docs, schemas, and execution guidance
+- publication companion package: benchmark card, dataset governance, and publication-results summaries
+- hidden scoring package: `ground_truth/` plus scorer tooling for blind or delayed evaluation
+
+Build the staged packages with:
+
+```bash
+python3 tools/build_release_packages.py --output-dir /tmp/galaxy_benchmark_release
+```
+
+The `project_spec/` directory and the `open` / `galaxy_skills` execution modes are retained as internal scaffolding for development, harness testing, and methodological comparison. They are not the canonical published benchmark matrix.
 
 ## Repository Layout
 
@@ -81,8 +96,8 @@ The `project_spec/` directory and the `open` / `galaxy_skills` execution modes a
 
 - `experiments/`: public experiment definitions that agents read and execute
 - `dataset/`: benchmark input files referenced by the experiment JSON files
-- `ground_truth/`: hidden reference answers plus evaluator metadata used only after result generation is complete
-- `outputs/`: the only writable location during benchmark execution
+- `ground_truth/`: authoring-repo hidden reference answers plus evaluator metadata used only after result generation is complete
+- `outputs/`: the only writable location during benchmark execution; tracked repository contents should remain placeholder-only
 
 ## Experiment Format
 
@@ -198,6 +213,16 @@ python3 tools/audit_benchmark_assets.py
 
 This validates publication-facing invariants such as prompt-tier alignment, `public_task_variants` consistency, derived evaluator/result-field completeness, and dataset-governance coverage.
 
+Publication-results entry point:
+
+```bash
+python3 tools/build_publication_results_bundle.py
+```
+
+This writes the canonical machine-readable publication summary bundle and a Markdown summary without copying field-level ground-truth tables into public docs.
+If `outputs/` is empty, the builder falls back to the sanitized scored-run source file in `docs/publication_results_source.json`.
+Pass `--run-dir` explicitly if the scored runs live outside the current `outputs/` tree.
+
 ## Reproducibility Packaging
 
 The repository includes lightweight release engineering for reproducibility:
@@ -213,6 +238,8 @@ Recommended local verification commands:
 make test
 make scorer-test
 make audit
+make publication-results
+make release-packages
 ```
 
 For repeated benchmark runs, uncertainty summaries can be generated from scored `run_record.json` files with:
@@ -303,7 +330,8 @@ This command:
 3. executes the selected agent in each requested environment
 4. writes run artifacts and run records
 5. scores completed runs when hidden ground-truth metadata are present
-6. prints an aggregated benchmark report for the generated run set
+6. marks the resulting run records as simulated harness runs that are not publication-eligible
+7. prints an aggregated benchmark report for the generated run set
 
 ## Ground Truth Format
 

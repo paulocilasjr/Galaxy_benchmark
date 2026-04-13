@@ -6,6 +6,8 @@ The reporting layer should emit:
 - run record JSON
 - component scores
 - performance score
+- execution mode and publication-eligibility flags
+- normalized execution context for Galaxy provenance
 - trace references
 - artifacts manifest
 

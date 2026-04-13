@@ -27,6 +27,14 @@ def _normalize_run_dict(record: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _is_publication_eligible(record: Mapping[str, Any]) -> bool:
+    validity = record.get("benchmark_validity")
+    if not isinstance(validity, Mapping):
+        return True
+    eligible = validity.get("publication_eligible")
+    return True if eligible is None else bool(eligible)
+
+
 def build_benchmark_report(
     benchmark_id: str,
     run_records: Iterable[Mapping[str, Any]],
@@ -34,6 +42,7 @@ def build_benchmark_report(
     confidence_threshold: float = 0.70,
 ) -> BenchmarkReport:
     normalized_runs = [_normalize_run_dict(record) for record in run_records]
+    publication_eligible_runs = [record for record in normalized_runs if _is_publication_eligible(record)]
     task_prompt_environment: dict[str, dict[str, dict[str, float]]] = defaultdict(
         lambda: defaultdict(dict)
     )
@@ -135,6 +144,11 @@ def build_benchmark_report(
             "overall_performance": overall_performance,
             "overall_robustness": overall_robustness,
             "overall_score_vector": overall_score_vector,
+            "run_partitioning": {
+                "total_runs": len(normalized_runs),
+                "publication_eligible_runs": len(publication_eligible_runs),
+                "excluded_runs": len(normalized_runs) - len(publication_eligible_runs),
+            },
             "adaptability": {
                 "galaxy_minus_open": galaxy_minus_open,
                 "skills_minus_galaxy": skills_minus_galaxy,

@@ -61,6 +61,9 @@ class WorkbenchE2ETest(unittest.TestCase):
         run_record = json.loads((run_dir / "results" / "run_record.json").read_text(encoding="utf-8"))
         self.assertEqual(run_record["environment"], "open")
         self.assertEqual(run_record["status"], "partial")
+        self.assertEqual(run_record["execution_mode"], "simulated_harness")
+        self.assertFalse(run_record["benchmark_validity"]["publication_eligible"])
+        self.assertIn("environment_name", run_record["execution_context"])
 
 
 if __name__ == "__main__":

@@ -91,6 +91,7 @@ Paper- or release-level reporting should include:
 - failure taxonomy
 - cost/runtime envelope
 - any excluded or failed runs with reasons
+- the release-stage publication summary bundle and its generation command
 
 ## Baseline Policy
 
@@ -113,6 +114,7 @@ If human or analyst baselines are used, the protocol should specify:
 - Some public inputs are remote URLs and therefore depend on third-party persistence unless mirrored at release time.
 - The benchmark emphasizes execution and reporting quality, so it does not cover every dimension of scientific reliability.
 - Archived `outputs/` in the authoring repository are useful for development but should not be treated as part of a blind public evaluation release.
+- Internal workbench runs produced by simulated harness adapters should not be reported as benchmark-valid publication runs.
 
 ## Intended Misuse to Avoid
 
@@ -127,3 +129,5 @@ If human or analyst baselines are used, the protocol should specify:
 - [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md)
 - [docs/publication_release.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_release.md)
 - [docs/dataset_governance_manifest.json](/Users/4475918/Projects/Galaxy_benchmark/docs/dataset_governance_manifest.json)
+- [docs/publication_results_source.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_source.json)
+- [docs/publication_results_bundle.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_bundle.json)

@@ -46,6 +46,9 @@ class ProjectSpecSupportTest(unittest.TestCase):
         run = load_run_record(ROOT_DIR / "project_spec" / "examples" / "run.example.json")
         self.assertEqual(run.environment.value, "galaxy")
         self.assertAlmostEqual(run.performance_score, 0.923)
+        self.assertEqual(run.execution_mode, "live_galaxy")
+        self.assertTrue(run.benchmark_validity["publication_eligible"])
+        self.assertEqual(run.execution_context["platform"], "Galaxy")
 
     def test_scoring_formulas_match_spec(self) -> None:
         component_scores = {

@@ -68,6 +68,9 @@ def load_run_record(path: str | Path) -> RunRecord:
         timing=payload.get("timing"),
         failure_modes=payload.get("failure_modes", []),
         score_summary=payload.get("score_summary"),
+        execution_mode=payload.get("execution_mode", "unspecified"),
+        benchmark_validity=payload.get("benchmark_validity"),
+        execution_context=payload.get("execution_context"),
     )
 
 

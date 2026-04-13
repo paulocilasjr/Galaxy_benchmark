@@ -47,6 +47,9 @@ class RunRecord:
     timing: dict[str, Any] | None = None
     failure_modes: list[str] = field(default_factory=list)
     score_summary: dict[str, Any] | None = None
+    execution_mode: str = "unspecified"
+    benchmark_validity: dict[str, Any] | None = None
+    execution_context: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Execute the internal benchmark workbench over task and environment combinations."""
+"""Execute the internal benchmark workbench over task and environment combinations.
+
+The resulting runs are harness artifacts for development and are marked as non-publication-eligible.
+"""
 
 from __future__ import annotations
 

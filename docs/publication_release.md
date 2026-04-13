@@ -20,6 +20,8 @@ Repository support for this policy includes:
 - `.github/workflows/ci.yml`
 - `tools/audit_benchmark_assets.py`
 - `tools/build_reliability_report.py`
+- `tools/build_publication_results_bundle.py`
+- `tools/build_release_packages.py`
 
 ## Baselines And Uncertainty
 
@@ -33,6 +35,12 @@ Minimum recommendation:
 - report failure counts and non-completions separately from successful scored runs
 
 The repository provides `tools/build_reliability_report.py` to summarize repeated `run_record.json` artifacts.
+
+The canonical machine-readable publication summary lives in:
+
+- [docs/publication_results_source.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_source.json)
+- [docs/publication_results_bundle.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_bundle.json)
+- [docs/publication_results_summary.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_summary.md)
 
 ## Dataset Governance
 
@@ -74,7 +82,13 @@ For an external benchmark release:
 - publish public tasks, dataset references, documentation, tooling, and schemas
 - keep blind scoring assets separate if the release is meant to support ongoing blind evaluation
 - exclude local credentials and developer-only configuration
-- avoid treating archived development `outputs/` as part of the public blind benchmark package
+- exclude committed run artifacts under `outputs/`; keep only the placeholder directory in the public blind package
+
+Release-package staging command:
+
+```bash
+python3 tools/build_release_packages.py --output-dir /tmp/galaxy_benchmark_release
+```
 
 ## Governance Metadata
 
@@ -94,5 +108,6 @@ Before tagging a benchmark release:
 2. Run `make scorer-test`
 3. Run `make audit`
 4. Rebuild any publication summary tables from current scored run records
-5. Verify that dataset-governance entries cover every public benchmark input
-6. Verify that benchmark-facing docs still match the implemented runtime contract
+5. Rebuild `docs/publication_results_bundle.json` and `docs/publication_results_summary.md`
+6. Verify that dataset-governance entries cover every public benchmark input
+7. Verify that benchmark-facing docs still match the implemented runtime contract

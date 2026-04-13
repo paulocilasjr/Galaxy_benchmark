@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import sys
 import unittest
 from pathlib import Path
@@ -11,7 +12,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from galaxy_benchmark.application.contracts import normalize_evaluator_payload
-from galaxy_benchmark.application.publication import build_reliability_report, build_release_audit
+from galaxy_benchmark.application.publication import (
+    build_reliability_report,
+    build_release_audit,
+    build_release_packages,
+)
 from galaxy_benchmark.application.registry import BenchmarkRegistry
 
 
@@ -21,6 +26,8 @@ class PublicationReadinessTest(unittest.TestCase):
         self.assertEqual(audit["public_task_alignment"], [])
         self.assertEqual(audit["expected_result_fields"], [])
         self.assertEqual(audit["dataset_manifest"], [])
+        self.assertEqual(audit["outputs_directory"], [])
+        self.assertEqual(audit["publication_results"], [])
 
     def test_normalized_evaluator_derives_missing_result_fields(self) -> None:
         ground_truth = json.loads((ROOT_DIR / "ground_truth" / "experiment_10.json").read_text(encoding="utf-8"))
@@ -76,6 +83,25 @@ class PublicationReadinessTest(unittest.TestCase):
         self.assertEqual(overall["n"], 2)
         self.assertAlmostEqual(overall["mean"], 0.85)
         self.assertGreater(overall["ci_high"], overall["ci_low"])
+
+    def test_publication_results_bundle_covers_full_instance_matrix(self) -> None:
+        bundle = json.loads((ROOT_DIR / "docs" / "publication_results_bundle.json").read_text(encoding="utf-8"))
+        coverage = bundle["coverage_by_instance"]
+        self.assertEqual(len(coverage), 33)
+        self.assertTrue(any(entry["run_status"] == "scored" for entry in coverage))
+        self.assertTrue(any(entry["run_status"] == "missing" for entry in coverage))
+
+    def test_release_package_builder_separates_public_and_hidden_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = build_release_packages(ROOT_DIR, Path(temp_dir) / "release")
+            public_root = Path(manifest["public_blind"])
+            hidden_root = Path(manifest["hidden_scoring"])
+            self.assertTrue((public_root / "experiments").exists())
+            self.assertTrue((public_root / "dataset").exists())
+            self.assertFalse((public_root / "ground_truth").exists())
+            self.assertFalse((public_root / "docs" / "publication_results_bundle.json").exists())
+            self.assertTrue((hidden_root / "ground_truth").exists())
+            self.assertTrue((hidden_root / "tools" / "benchmark_scorer.py").exists())
 
 
 if __name__ == "__main__":

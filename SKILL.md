@@ -66,6 +66,10 @@ For each experiment run, create:
 
 Optional/additional artifacts must live under `results/`.
 
+Repository note:
+- `outputs/` is tracked only as an empty placeholder in git.
+- Do not commit run artifacts from blind or scored executions back into the repository.
+
 ## Execution Workflow (Per Experiment)
 
 1. Read the selected task file from `experiments/low_context/`, `experiments/medium_context/`, or `experiments/high_context/`.
