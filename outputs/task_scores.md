@@ -225,20 +225,63 @@ Task 3 recalculated scores:
 Run:
 - `outputs/20260414_012109_bioagent_task_4_deseq`
 
-Current state:
+Scientific evidence sources:
 
-- `errors/error.json` reports `run_status = running`
-- there is no final `results/result.json`
-- there is no scored comparison artifact
-- there is no scientific output to compare against ground truth yet
+- [result.attempt_2.json](/Users/4475918/Projects/Galaxy_benchmark/outputs/20260414_012109_bioagent_task_4_deseq/results/result.attempt_2.json)
+- [comparison.attempt_2_vs_ground_truth.json](/Users/4475918/Projects/Galaxy_benchmark/outputs/20260414_012109_bioagent_task_4_deseq/results/comparison.attempt_2_vs_ground_truth.json)
+
+Latest-state note:
+
+- `results/result.json` exists for the first pass.
+- `results/result.attempt_2.json` and `results/comparison.attempt_2_vs_ground_truth.json` exist for the more recent rerun.
+- `errors/error.json` still reports `run_status = running`, which is stale relative to the newer final artifacts.
+
+Scientific checks:
+
+For this legacy task, the most defensible scientific metric available from the latest artifacts is the proportion of truth genes recovered in the final attempt-2 output.
+
+- truth gene count: `533`
+- attempt-2 overlap gene count: `528`
+- missing genes due to dataset absence: `4`
+- missing genes due to non-positive log2FC after rerun: `1`
+
+Scientific calculation:
+
+`528 / 533 = 0.9906`
+
+Interpretation:
+
+- the latest attempt recovered almost the entire truth gene set
+- the result is scientifically strong, but it is not a perfect full-truth recovery
 
 Task 4 recalculated scores:
 
 | Score | Value | Status |
 |---|---:|---|
-| `scientific_solution_score` | `not_applicable` | `not_applicable` |
+| `scientific_solution_score` | `0.9906` | `pass` |
 | `standard_analysis_score` | `not_applicable` | `not_applicable` |
-| `galaxy_execution_score` | `not_applicable` | `not_applicable` |
+| `galaxy_execution_score` | `1.0000` | `pass` |
+
+Galaxy execution checks:
+
+| Check | Score | Weight | Weighted contribution |
+|---|---:|---:|---:|
+| valid `galaxy_instance` | 1.0 | 1.0 | 1.0000 |
+| present `history_id` | 1.0 | 1.0 | 1.0000 |
+| present `execution_status` | 1.0 | 1.0 | 1.0000 |
+| non-empty `tool_ids` | 1.0 | 1.0 | 1.0000 |
+| core artifact fraction `6/6` | 1.0 | 0.75 | 0.7500 |
+| activity categories fraction `5/5` | 1.0 | 0.75 | 0.7500 |
+| valid error envelope | 1.0 | 0.75 | 0.7500 |
+
+Galaxy execution calculation:
+
+`(1 + 1 + 1 + 1 + 0.75 + 0.75 + 0.75) / (1 + 1 + 1 + 1 + 0.75 + 0.75 + 0.75) = 1.0000`
+
+Operational note:
+
+- this score is based on the run trace and artifact completeness, not on the stale `run_status` string in `errors/error.json`
+- the retry and revision trail is present and the attempt-2 comparison artifacts are captured in Galaxy-facing outputs
 
 ## Summary Table
 
@@ -247,7 +290,7 @@ Task 4 recalculated scores:
 | Alzheimer mouse | `0.5833` `partial` | `not_applicable` | `0.9762` `pass` |
 | Comparative genomics | `0.1667` `fail` | `not_applicable` | `1.0000` `pass` |
 | Cystic fibrosis | `1.0000` `pass` | `not_applicable` | `1.0000` `pass` |
-| DESeq | `not_applicable` | `not_applicable` | `not_applicable` |
+| DESeq | `0.9906` `pass` | `not_applicable` | `1.0000` `pass` |
 
 ## Interpretation
 
