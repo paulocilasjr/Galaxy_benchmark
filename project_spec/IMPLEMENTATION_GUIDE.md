@@ -1,16 +1,16 @@
-# Implementation Guide For Galaxy Benchmark v0.3
+# Implementation Guide For Galaxy-Bench v0.3
 
 ## Implementation Strategy
 
-Implement the benchmark in layers so the scientific contract and the execution contract stay aligned.
+Implement the benchmark in layers so the scientific contract, iteration contract, and execution contract stay aligned.
 
 ## Phase 1. Contract Alignment
 
 Update the benchmark assets so that:
 
-- task schema supports preprocessing, parameter targets, human-baseline protocol, and confidence policies
+- task schema supports preprocessing, parameter targets, acceptable workflow classes, iteration policy, human-baseline protocol, and confidence policies
 - prompt schema supports context tier plus prompt-style metadata
-- run schema supports immutable artifacts, score vectors, operational metrics, confidence, and Galaxy traces
+- run schema supports immutable artifacts, score vectors, operational metrics, confidence, attempt manifests, and Galaxy traces
 - report schema supports benchmark-level endpoint reporting
 
 ## Phase 2. Task And Prompt Registry
@@ -28,6 +28,7 @@ The orchestrator should:
 - create immutable run directories
 - record manifests and trace artifacts
 - preserve attempt-specific outputs
+- preserve workflow differences across attempts
 - keep benchmark-valid runs distinct from simulated development runs
 
 ## Phase 4. Evaluation Engine
@@ -36,9 +37,11 @@ Implement:
 
 - three-score vector calculation
 - endpoint metrics
+- best-of-N and improvement-trajectory calculations
 - prompt-variant robustness
 - environment adaptability
 - confidence-calibration calculations
+- scientific acceptability summaries
 
 ## Phase 5. Reporting
 
@@ -62,6 +65,7 @@ Retries must create versioned artifacts instead of replacing previous outputs.
 ### Explicit evidence mapping
 
 Every score should map to concrete fields or trace evidence.
+Every iterative claim should map to attempt-specific artifacts.
 
 ### Publication separation
 
@@ -79,6 +83,7 @@ Every benchmark run record should include:
 - execution context
 - artifact manifests
 - retry chain
+- attempt manifest
 - score vector
 - operational metrics
 - confidence record

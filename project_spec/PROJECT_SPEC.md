@@ -1,41 +1,37 @@
-# Galaxy Benchmark v0.3 – Project Specification
+# Galaxy-Bench v0.3 – Project Specification
 
 ## 1. Purpose
 
-Galaxy Benchmark v0.3 evaluates the combined performance of an agent and its harness on biomedical tasks, with special emphasis on how Galaxy Workbench changes that performance.
+Galaxy-Bench v0.3 evaluates the combined performance of an agent and its harness on biomedical tasks, with special emphasis on:
 
-The benchmark is designed to support four claims:
-
-1. whether Galaxy improves execution reliability relative to standalone execution
-2. whether agents can operate Galaxy coherently and reproducibly
-3. whether performance is robust to prompt variation
-4. whether agents can perform preprocessing and parameter configuration accurately enough for valid analysis
+- how Galaxy-mediated execution changes performance
+- how performance changes when agents are allowed to iterate across multiple attempts
+- whether the resulting analyses are scientifically acceptable under non-unique ground truth
 
 ## 2. Benchmark Philosophy
 
-The benchmark should not reward hidden-pipeline imitation alone.
+Galaxy-Bench treats biomedical analysis as:
 
-It should instead distinguish:
+- procedural
+- iterative
+- non-unique in valid solution space
+- sensitive to preprocessing and parameter choices
+
+The benchmark should not reward hidden-pipeline imitation alone when that would be scientifically misleading.
+
+It instead distinguishes:
 
 - scientific usefulness of the result
-- adherence to an explicitly requested standard analysis path
+- adherence to any explicitly requested standard path
 - operational competence inside Galaxy
-
-It should also expose the mechanisms underlying performance:
-
-- tool choice
-- workflow sequencing
-- parameterization
-- preprocessing
-- retry behavior
-- provenance capture
-- confidence calibration
+- quality of iterative improvement
+- scientific acceptability under multiple valid solutions
 
 ## 3. Core Benchmark Unit
 
 The core unit is:
 
-`task × prompt_variant × environment × agent`
+`task × prompt_variant × environment × iteration_setting × agent`
 
 ### Prompt variants
 
@@ -45,49 +41,57 @@ The core unit is:
 
 ### Environments
 
-- `open`: standalone execution baseline analogous to BioAgent-style execution
-- `galaxy`: Galaxy Workbench execution baseline
-- `galaxy_skills`: optional Galaxy execution with procedural support
+- `open`
+- `galaxy`
+- `galaxy_skills`
 
-The primary scientific comparison is `open` versus `galaxy`.
+### Iteration settings
 
-## 4. Study Aims And Endpoints
+- `single_run`
+- `multi_run`
 
-### Aim 1. Galaxy effect on agent performance
+Primary methodological comparisons:
 
-Primary endpoint:
+- `open` versus `galaxy`
+- `single_run` versus `multi_run`
 
-- `pipeline_completion_rate`
+## 4. Scientific Aims And Endpoints
 
-Secondary endpoints:
+### Aim 1. Quantify how Galaxy-mediated execution and iterative refinement influence performance
 
-- final artifact validity
-- task success rate
-- failure mode profile
+Primary endpoints:
 
-### Aim 2. Mechanistic analysis of Galaxy interaction
+- `first_run_completion_rate`
+- `best_of_n_completion_rate`
+- `improvement_trajectory`
+
+### Aim 2. Characterize workflow orchestration and strategy search
 
 Primary metrics:
 
 - `tool_selection_accuracy`
 - `workflow_coherence`
 - `parameterization_accuracy`
+- `exploration_exploitation_profile`
+- `failure_recovery_quality`
 
-### Aim 3. Robustness and confidence under prompt variability
+### Aim 3. Measure robustness to prompt variability
 
 Primary metrics:
 
 - `performance_consistency`
-- `output_agreement`
+- `workflow_agreement`
+- `iterative_stability`
 - `confidence_calibration`
 
-### Aim 4. Preprocessing and configuration competence
+### Aim 4. Evaluate preprocessing, parameterization, and scientific acceptability under multiple valid solutions
 
 Primary metrics:
 
 - `preprocessing_accuracy`
 - `parameter_configuration_accuracy`
 - `result_quality`
+- `scientific_acceptability`
 
 ## 5. Run-Level Score Vector
 
@@ -97,9 +101,14 @@ Each run preserves:
 - `standard_analysis_score`
 - `galaxy_execution_score`
 
-These scores remain mandatory and separate.
+These remain mandatory and separate.
 
-They are complemented by endpoint metrics that support benchmark-level reporting.
+They are complemented by:
+
+- completion endpoints
+- iteration endpoints
+- mechanistic operational metrics
+- scientific acceptability review outputs
 
 ## 6. Task Requirements
 
@@ -118,9 +127,12 @@ Each task must include:
 - `preprocessing_requirements`
 - `parameter_targets`
 - `acceptable_tool_classes`
+- `acceptable_workflow_classes`
 - `acceptable_solution_families`
+- `iteration_policy`
 - `human_baseline_protocol`
 - `confidence_query_policy`
+- `scientific_acceptability_policy`
 - `evaluation_spec`
 - `ground_truth_contract`
 
@@ -128,7 +140,8 @@ Tasks should be designed so that:
 
 - the same task survives across all prompt variants
 - the final artifact contract is explicit
-- multiple scientifically valid methods can receive credit when appropriate
+- multiple scientifically valid methods can receive credit where justified
+- iterative refinement can be measured across attempts
 - Galaxy operations can be audited directly
 
 ## 7. Prompt Requirements
@@ -163,6 +176,7 @@ Each environment runner must return:
 - execution context
 - failure modes
 - confidence record if queried
+- attempt-level summaries
 
 Galaxy environments must additionally preserve:
 
@@ -172,8 +186,32 @@ Galaxy environments must additionally preserve:
 - dataset IDs
 - workflow IDs when applicable
 - parameter payloads or equivalent trace evidence
+- workflow differences between attempts when iteration occurs
 
-## 9. Run Artifact Contract
+## 9. Iteration Contract
+
+Iteration is a first-class benchmark feature.
+
+Each task must define:
+
+- whether iteration is allowed
+- the maximum number of attempts
+- what counts as a materially new attempt
+- whether early stopping is allowed
+
+Recommended default:
+
+- `multi_run` permits up to 3 attempts
+
+Each attempt should preserve:
+
+- its own plan update
+- its own reasoning update
+- its own result artifact
+- any workflow or parameter changes
+- evaluation output if scored
+
+## 10. Run Artifact Contract
 
 Each run must preserve immutable artifacts for:
 
@@ -182,80 +220,83 @@ Each run must preserve immutable artifacts for:
 - execution logs
 - error history
 - Galaxy trace snapshots
+- workflow differences across attempts
 - final outputs
 - attempt-specific outputs
 - field-level evaluation
+- iteration summary
+- scientific acceptability review
 - score summary
 - artifact manifests
 
 No benchmark-valid run may depend on ephemeral in-memory reasoning or unstored execution state.
 
-## 10. Scoring Layers
+## 11. Scoring Layers
 
-### 10.1 Run-level
+### 11.1 Attempt-level
 
-Mandatory:
+Each attempt may receive:
 
-- three-score vector
+- the three-score vector
 - operational metrics
-- confidence record
+- scientific acceptability status
 
-### 10.2 Task-level
+### 11.2 Run-level
 
-Aggregate across prompt variants for each environment.
+Each benchmark run must support:
 
-### 10.3 Benchmark-level
+- first-attempt metrics
+- best-of-N metrics
+- improvement-trajectory metrics
+
+### 11.3 Task-level
+
+Aggregate across prompt variants for each environment and iteration setting.
+
+### 11.4 Benchmark-level
 
 Aggregate across tasks and environments to report:
 
 - environment performance
+- iteration benefit
 - robustness
 - Galaxy effect
-- Skills effect
-- user support bands
 - confidence calibration
+- scientific acceptability distribution
 
-## 11. Human-Level And Harness-Aware Framing
+## 12. Human-Informed Validation
 
-The benchmark should support comparison against:
+The benchmark should support human-informed adjudication when deterministic scoring alone cannot distinguish:
 
-- transparent heuristic baselines
-- strong agent baselines
-- optional human or analyst reference protocols
+- invalid analyses
+- acceptable but suboptimal analyses
+- high-quality analyses
 
-Reporting must clearly distinguish:
+Human-informed review should be:
 
-- model capability
-- harness capability
-- environment effect
+- structured
+- bounded by explicit rubrics
+- traceable to concrete artifacts
 
-## 12. Publication Readiness Requirements
+## 13. Publication Readiness Requirements
 
-The benchmark must be able to support publication claims about:
+The benchmark must support claims about:
 
-- scientific usefulness
-- operational competence
+- capability
 - robustness
 - reproducibility
-- confidence calibration
+- scientific readiness
+- iterative improvement
 
-Publication-facing benchmark bundles should include:
+Publication-facing bundles should include:
 
 - benchmark version
 - task inventory
 - prompt inventory
 - environment definitions
+- iteration policy
 - scoring definitions
 - uncertainty reporting
 - failure taxonomy
+- scientific acceptability rubric summary
 - dataset governance manifest
-
-## 13. Deprecated Concepts
-
-The following older patterns should not be expanded in v0.3:
-
-- prompt labels only as `vague/specific/very_specific` without contextual semantics
-- performance-only reporting without operational endpoints
-- overwrite-prone run outputs
-- scores with no field-level justification
-- benchmark claims that do not separate Galaxy competence from scientific answer quality

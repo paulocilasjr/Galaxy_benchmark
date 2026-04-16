@@ -1,232 +1,237 @@
-# Galaxy Benchmark v0.3
+# Galaxy-Bench
 
-Galaxy Benchmark is a biomedical agent benchmark for measuring how well an AI system can translate a user's analysis goal into a valid, auditable Galaxy execution.
+## Project Title
 
-This repository is being reshaped around a stronger benchmark logic:
+Galaxy-Bench: A Benchmark for Evaluating Iterative, Robust, and Scientifically Valid Agent Execution in Biomedical Research
 
-- benchmark the combined capability of a model and its harness
-- compare standalone execution against Galaxy-augmented execution
-- preserve human-auditable evidence for every decision and action
-- score both scientific usefulness and operational competence
-- quantify robustness to prompt variation and confidence calibration
+Galaxy-Bench evaluates biomedical AI agents as iterative scientific problem-solvers rather than as single-shot task executors.
 
-## Why This Benchmark Exists
+## Significance
 
-Agent benchmarks usually compare task outputs against a ground truth. In biomedical settings that is necessary but insufficient:
+AI agents are increasingly proposed as interfaces for biomedical analysis, but current evaluation frameworks still miss the properties that determine scientific usefulness.
 
-- many tasks admit multiple scientifically valid solution paths
-- exact output matching can be unfair when live infrastructure or workflow versions drift
-- a model may reason correctly but fail operationally
-- a system may execute successfully but still produce a scientifically weak answer
+Three limitations are especially important:
 
-Galaxy changes the benchmark design space because execution is not just free-form tool calling. Galaxy provides:
+- reliance on implicit or single-path ground truth
+- insufficient support for multiple scientifically acceptable workflows and parameterizations
+- lack of evaluation of iterative scientific improvement across attempts
 
-- curated community tools
-- parameterized workflow execution
-- managed computational infrastructure
-- persistent histories and provenance
-- reproducibility-oriented artifact storage
+In biomedical research, analytical correctness is rarely defined by one workflow alone. Multiple preprocessing strategies, tool combinations, and parameter settings may all yield scientifically acceptable analyses. Real scientific work is also iterative: analysts refine methods after seeing outputs, revising preprocessing, models, and parameters over multiple runs.
 
-The benchmark therefore asks a narrower and more useful question:
+Galaxy provides a useful execution substrate for this benchmark because it:
 
-Can an agent connect a user's biomedical intent to the right Galaxy operations, configure those operations correctly, adapt when they fail, and produce a scientifically useful result with full provenance?
+- standardizes workflow execution
+- preserves tool and parameter provenance
+- stores persistent workflow histories
+- supports reproducibility and auditability
 
-## Benchmark Positioning
+Using Galaxy as the execution layer lets the benchmark evaluate not only whether an agent finished a task, but whether it iteratively converged toward a scientifically valid analysis under realistic conditions.
 
-This benchmark is designed to sit between prior work on:
+## Innovation
 
-- human-level or analyst-level evaluation
-- agentic benchmark performance
-- harness-aware evaluation such as MLE-Bench and BioAgent Bench
+Galaxy-Bench introduces four core innovations.
 
-Galaxy Benchmark extends those ideas by using Galaxy as a constrained execution substrate. That reduces avoidable execution variance while preserving difficult scientific decisions:
+### 1. Procedural execution benchmarking
 
+The benchmark decouples part of reasoning from execution by using Galaxy to standardize workflows and isolate procedural specification.
+
+### 2. Solution-aware evaluation under non-unique ground truth
+
+The benchmark moves beyond single-reference scoring and allows multiple scientifically valid workflows and parameterizations when justified by the task.
+
+### 3. Iterative evaluation of scientific improvement
+
+Inspired by MLE-bench, the benchmark evaluates agents across multiple attempts per task rather than only a single pass.
+
+Primary iterative views include:
+
+- `first_run_completion_rate`
+- `best_of_n_completion_rate`
+- `improvement_trajectory`
+
+### 4. Human-informed validation of scientific acceptability
+
+Scientific correctness is not reduced to exact parameter matching. The benchmark supports contextual adjudication that distinguishes:
+
+- invalid analyses
+- acceptable but suboptimal analyses
+- high-quality analyses
+
+## Central Hypothesis
+
+Galaxy-mediated execution, combined with iterative evaluation across multiple agent runs, enables a benchmark that measures procedural competence, robustness, and scientific validity more accurately than single-run, ground-truth-only evaluation.
+
+## Specific Aims
+
+### Aim 1. Quantify how Galaxy-mediated execution and iterative refinement influence agent performance across biomedical analysis tasks
+
+Galaxy-Bench evaluates agents along two benchmark dimensions:
+
+- execution setting: `open` vs `galaxy`
+- iteration setting: `single_run` vs `multi_run`
+
+In `multi_run`, agents are allowed to refine:
+
+- preprocessing steps
 - tool selection
-- workflow composition
-- preprocessing
-- parameterization
-- failure recovery
-- output interpretation
+- workflow structure
+- parameter configuration
 
-## Scientific Aims
+Primary outcomes:
 
-### Aim 1. Effect Of Galaxy Workbench On Agent Performance
+- `first_run_completion_rate`
+- `best_of_n_completion_rate`
+- `improvement_trajectory`
 
-Question:
-- How much does Galaxy improve agent success relative to standalone execution?
+Default multi-run budget:
 
-Primary comparison:
-- `open` environment: BioAgent-style standalone execution
-- `galaxy` environment: Galaxy-Workbench execution
+- up to 3 attempts per task instance unless the task defines a different cap
 
-Primary endpoint:
-- `pipeline_completion_rate`
+### Aim 2. Characterize how agents orchestrate Galaxy workflows and explore alternative analytical strategies
 
-Definition:
-- fraction of tasks for which the agent completes the required analysis steps and produces the required final artifact in the expected format
+The benchmark evaluates how agents:
 
-Secondary endpoints:
-- final artifact validity
-- task success under blind scoring
-- failure mode distribution
+- select tools
+- sequence workflow steps
+- revise parameters
+- recover from failures
+- switch between valid workflow classes
 
-### Aim 2. Mechanistic Analysis Of Galaxy Interaction
+Primary outcomes:
 
-Question:
-- How do agents select, sequence, and configure Galaxy tools?
-
-Primary mechanistic metrics:
 - `tool_selection_accuracy`
 - `workflow_coherence`
 - `parameterization_accuracy`
+- `exploration_exploitation_profile`
+- `failure_recovery_quality`
+- `alternative_valid_workflow_classes`
 
-Evidence sources:
-- Galaxy histories
-- job and invocation traces
-- tool selections
-- parameter payloads
-- retry chains
+### Aim 3. Determine robustness and reliability under variability in user prompt formulation
 
-### Aim 3. Robustness To Prompt Variability And Confidence
+Each task is tested under multiple semantically equivalent prompt variants and under both `single_run` and `multi_run` settings where applicable.
 
-Question:
-- How sensitive is performance to user phrasing, ambiguity, and style?
+Primary outcomes:
 
-Per-task prompt variants:
-- `low_context`
-- `medium_context`
-- `high_context`
-
-Primary robustness metrics:
 - `performance_consistency`
-- `output_agreement`
+- `workflow_agreement`
+- `iterative_stability`
 - `confidence_calibration`
 
-### Aim 4. Preprocessing And Configuration Competence
+### Aim 4. Define and evaluate preprocessing and parameterization strategies that yield scientifically valid analyses under multiple acceptable solutions
 
-Question:
-- Can the agent transform raw inputs into Galaxy-compatible forms and configure tools correctly enough to support reproducible analysis?
+This aim addresses the non-unique ground truth problem directly.
 
-Primary metrics:
+Primary outcomes:
+
 - `preprocessing_accuracy`
 - `parameter_configuration_accuracy`
 - `result_quality`
+- `scientific_acceptability`
 
-## What v0.3 Keeps vs Replaces
+## Benchmark Positioning
 
-### Retained From Earlier Versions
+Galaxy-Bench sits between:
 
-- realistic end-to-end biomedical tasks
-- multiple prompt variants for the same task
-- separate hidden ground truth
-- explicit output artifacts
-- environment-aware evaluation
-- benchmark-level reporting and aggregation
-- auditability as a core design principle
+- human-level or analyst-level evaluation
+- harness-aware agent benchmarks such as MLE-Bench
+- biomedical agent benchmarks such as BioAgent Bench
 
-### Replaced Or Tightened In v0.3
+Its distinctive contribution is the combination of:
 
-- replace underspecified “performance only” framing with explicit study aims and endpoints
-- replace weak run-trace requirements with immutable trace contracts
-- replace prompt-only robustness framing with prompt-style robustness plus confidence calibration
-- replace vague execution scoring with explicit Galaxy-operational metrics
-- replace single-result reporting with versioned attempts, evaluations, and manifests
-- replace ad hoc run directories with a stricter lossless artifact layout
+- Galaxy-mediated procedural execution
+- explicit multi-attempt evaluation
+- support for multiple acceptable scientific solutions
+- human-informed scientific acceptability review
 
-## Canonical Benchmark Unit
+## Core Benchmark Unit
 
 The benchmark unit is:
 
-`task × prompt_variant × environment × agent`
+`task × prompt_variant × environment × iteration_setting × agent`
 
-Recommended environments:
+### Environments
 
-- `open`: standalone BioAgent-style execution baseline
-- `galaxy`: Galaxy-Workbench execution baseline
-- `galaxy_skills`: optional Galaxy execution with explicit procedural support
+- `open`: standalone execution baseline
+- `galaxy`: Galaxy-mediated execution baseline
+- `galaxy_skills`: optional procedural-support diagnostic environment
 
-The published benchmark emphasis is:
+### Iteration settings
 
-- primary comparison: `open` vs `galaxy`
-- secondary diagnostic comparison: `galaxy` vs `galaxy_skills`
+- `single_run`
+- `multi_run`
 
-## Task Design Requirements
+Primary comparisons:
 
-Every benchmark task must:
-
-- represent a real biomedical objective that can be executed in Galaxy
-- include attached public inputs under `dataset/`
-- define an explicit final artifact contract
-- support hidden evaluation without leaking the solution path
-- encode required preprocessing expectations
-- encode tool-class and parameter expectations where relevant
-- support failure analysis and recovery scoring
-- support prompt variants without changing the underlying task
-
-Each task should also declare:
-
-- `scientist_help_band`
-- `galaxy_complexity_band`
-- `required_steps`
-- `acceptable_tool_classes`
-- `acceptable_solution_families`
-- `preprocessing_requirements`
-- `parameter_targets`
-- `confidence_query_policy`
-
-## Prompt Variant Contract
-
-Each task should have three prompt variants:
-
-- `low_context`
-- `medium_context`
-- `high_context`
-
-Rules:
-
-- all three prompts must preserve the same task
-- only specificity and user style may vary
-- `low_context` emphasizes inference
-- `medium_context` emphasizes informed planning
-- `high_context` emphasizes instruction adherence
-
-Prompt variation should deliberately include real-world user diversity:
-
-- concise
-- verbose
-- ambiguous
-- informal
-- goal-driven
-- method-constrained
+- `open` vs `galaxy`
+- `single_run` vs `multi_run`
 
 ## Evaluation Model
 
-Galaxy Benchmark preserves a three-score run-level vector:
+Each run preserves the three-score vector:
 
 - `scientific_solution_score`
 - `standard_analysis_score`
 - `galaxy_execution_score`
 
-These remain the core per-run scores. In v0.3 they are complemented by endpoint metrics that answer the scientific aims:
+These remain mandatory and are complemented by benchmark endpoints:
 
 - `pipeline_completion_rate`
+- `first_run_completion_rate`
+- `best_of_n_completion_rate`
+- `improvement_trajectory`
 - `tool_selection_accuracy`
 - `workflow_coherence`
 - `parameterization_accuracy`
 - `preprocessing_accuracy`
 - `result_quality`
+- `scientific_acceptability`
 - `output_agreement`
 - `confidence_calibration`
 
 Interpretation:
 
-- the score vector explains the quality of an individual run
-- the endpoint metrics support benchmark-level scientific claims
+- the score vector explains the quality of a given run
+- the endpoint metrics explain iterative behavior, robustness, and benchmark-level scientific claims
 
-See:
+## Task Design Requirements
 
-- [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md)
-- [project_spec/evaluation/SCORING_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/evaluation/SCORING_SPEC.md)
+Every task must:
+
+- represent a real biomedical objective executable in Galaxy
+- define an explicit final artifact contract
+- define required step classes
+- define preprocessing expectations
+- define parameter targets
+- support evaluation under multiple acceptable solutions where justified
+- support iterative refinement analysis
+- support human-informed scientific acceptability review when deterministic scoring is insufficient
+
+Each task should declare:
+
+- `scientist_help_band`
+- `galaxy_complexity_band`
+- `iteration_policy`
+- `acceptable_solution_families`
+- `acceptable_workflow_classes`
+- `preprocessing_requirements`
+- `parameter_targets`
+- `scientific_acceptability_policy`
+- `confidence_query_policy`
+
+## Prompt Variant Contract
+
+Each task should have three canonical prompt variants:
+
+- `low_context`
+- `medium_context`
+- `high_context`
+
+The prompts must preserve the same task and vary only:
+
+- user phrasing
+- level of detail
+- style
+- ambiguity
 
 ## Required Run Artifact Layout
 
@@ -247,12 +252,15 @@ outputs/<timestamp>_<level>_<experiment>/
 |   |   |-- histories/
 |   |   |-- invocations/
 |   |   |-- jobs/
-|   |   `-- datasets/
+|   |   |-- datasets/
+|   |   `-- workflow_diffs/
 |   `-- local/
 |-- evaluations/
 |   |-- comparison.scored.md
 |   |-- field_comparisons.json
-|   `-- score_summary.json
+|   |-- score_summary.json
+|   |-- iteration_summary.json
+|   `-- scientific_acceptability_review.json
 `-- results/
     |-- result.json
     |-- result.attempt_<N>.json
@@ -260,102 +268,41 @@ outputs/<timestamp>_<level>_<experiment>/
     |-- run_record.json
     |-- artifacts_manifest.json
     |-- evaluation_manifest.json
+    |-- attempt_manifest.json
     `-- reproduce_<experiment>.py
 ```
 
-Rules:
-
-- never overwrite a previous attempt artifact
-- append to `activity_log.jsonl`; do not rewrite history
-- store Galaxy evidence snapshots under `traces/`
-- record every evaluation artifact under `evaluations/`
-- keep `result.json` as the latest canonical result and preserve prior attempt versions
-
 ## Traceability And Immutability
 
-For v0.3, lossless trace capture is non-negotiable.
+Galaxy-Bench depends on lossless trace capture.
 
 If a decision or action affected execution, it must be recoverable from artifacts:
 
 - tool discovery
-- rejected alternatives
-- parameter decisions
-- upload mode
-- history creation
-- polling checks
-- failure evidence
-- root-cause analysis
+- preprocessing choice
+- parameter choice
+- workflow modification
+- failure interpretation
 - retry rationale
+- confidence statement or proxy
+- cross-attempt comparison
 - final evaluation
 
 If it is not recorded, it does not count toward benchmark credit.
 
-## Hidden Evaluation Assets
+## Reviewer-Facing Safeguards
 
-Public assets:
+Galaxy-Bench is intended to answer the questions reviewers will ask:
 
-- `dataset/`
-- `experiments/`
+- Does the benchmark support multiple valid solutions?
+- Does it evaluate iterative improvement?
+- Does it separate model behavior from harness and environment effects?
+- Does it preserve execution evidence strongly enough for audit?
+- Does it measure scientific acceptability rather than exact imitation alone?
 
-Hidden assets:
+See:
 
-- `ground_truth/`
-
-Hidden assets must support:
-
-- exact checks only where justified
-- threshold scoring for better-is-better metrics
-- tolerant scoring for live-Galaxy drift
-- overlap scoring for set-like outputs
-- explicit mapping from checks to the three-score vector
-- step-level operational scoring for preprocessing, tool choice, and parameterization
-
-## Reviewer-Facing Design Safeguards
-
-v0.3 is designed to answer common review questions up front.
-
-### Fairness
-
-- valid alternative biomedical solutions can receive credit
-- hidden exact matching is not the default scientific criterion
-- score attribution separates scientific value from operational quality
-
-### Reproducibility
-
-- all benchmark-valid runs require immutable trace artifacts
-- Galaxy histories and execution evidence are preserved
-- benchmark releases should ship schema, scoring, and task contracts
-
-### Robustness
-
-- prompt-style variability is part of the benchmark design, not post hoc augmentation
-- robustness is evaluated across semantically equivalent prompts
-- confidence calibration is reported against actual outcomes
-
-### Harness Awareness
-
-- the benchmark evaluates the full system, not the language model in isolation
-- comparisons across environments are explicit
-- model and harness contributions are not conflated in reporting
-
-### Scientific Usefulness
-
-- the benchmark supports assessment against analyst usefulness, not only hidden-reference imitation
-- preprocessing and parameter choices are evaluated because they affect biological validity
-
-## Repository Guide
-
-- [AGENTS.md](/Users/4475918/Projects/Galaxy_benchmark/AGENTS.md): repository startup and authoring rules
-- [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md): benchmark execution skill
-- [project_spec/PROJECT_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/PROJECT_SPEC.md): formal v0.3 implementation scaffold
-- [project_spec/IMPLEMENTATION_GUIDE.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/IMPLEMENTATION_GUIDE.md): implementation guidance
-- [docs/benchmark_card.md](/Users/4475918/Projects/Galaxy_benchmark/docs/benchmark_card.md): concise benchmark card
-
-## Current Development Status
-
-This repository contains both:
-
-- canonical benchmark assets used for execution and scoring
-- a stronger v0.3 specification scaffold for the next benchmark revision
-
-Where older assets and the v0.3 spec disagree, use the v0.3 benchmark contract for new authoring and benchmark-methodology work.
+- [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md)
+- [project_spec/PROJECT_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/PROJECT_SPEC.md)
+- [project_spec/evaluation/SCORING_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/evaluation/SCORING_SPEC.md)
+- [docs/reviewer_readiness.md](/Users/4475918/Projects/Galaxy_benchmark/docs/reviewer_readiness.md)

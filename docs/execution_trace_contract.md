@@ -12,6 +12,7 @@ Galaxy Benchmark v0.3 requires a lossless execution trace.
 - all important Galaxy identifiers
 - failure evidence
 - attempt-specific outputs
+- attempt-to-attempt workflow differences
 - final evaluation artifacts
 
 ## Minimum required directories
@@ -33,10 +34,13 @@ Galaxy Benchmark v0.3 requires a lossless execution trace.
 - `results/run_record.json`
 - `results/artifacts_manifest.json`
 - `results/evaluation_manifest.json`
+- `results/attempt_manifest.json`
 - `results/reproduce_<experiment>.py`
 - `evaluations/comparison.scored.md`
 - `evaluations/field_comparisons.json`
 - `evaluations/score_summary.json`
+- `evaluations/iteration_summary.json`
+- `evaluations/scientific_acceptability_review.json`
 
 ## Immutability rules
 
@@ -44,6 +48,7 @@ Galaxy Benchmark v0.3 requires a lossless execution trace.
 - do not overwrite prior attempt artifacts
 - retries create new versioned files
 - logs are append-only
+- cross-attempt comparisons must be preserved, not reconstructed implicitly later
 
 ## If an action mattered but no artifact preserves it:
 

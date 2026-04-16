@@ -1,12 +1,16 @@
-# Galaxy Benchmark v0.3 Specification Bundle
+# Galaxy-Bench v0.3 Specification Bundle
 
 This directory is the internal implementation scaffold for the benchmark redesign.
 
 It is aligned to the v0.3 benchmark logic:
 
 - compare standalone execution with Galaxy-augmented execution
+- compare `single_run` and `multi_run` settings
 - preserve the three-score run vector
 - add mechanistic operational metrics
+- add explicit iteration metrics and best-of-N reporting
+- support multiple acceptable scientific solutions
+- support human-informed scientific acceptability review
 - add robustness and confidence-calibration endpoints
 - require lossless execution traces
 

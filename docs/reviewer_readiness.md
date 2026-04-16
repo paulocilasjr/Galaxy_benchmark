@@ -11,6 +11,7 @@ Expected evidence:
 - real biomedical tasks
 - explicit final artifact contracts
 - allowance for scientifically valid alternatives where appropriate
+- explicit treatment of non-unique acceptable solutions
 - task-level rationale for preprocessing and parameter choices
 
 ### 2. Does the benchmark separate model quality from harness quality?
@@ -36,6 +37,7 @@ Expected evidence:
 - semantically equivalent prompt variants
 - prompt-style metadata
 - robustness and output-agreement reporting
+- iterative stability under prompt variation
 
 ### 5. Is confidence evaluated rather than assumed?
 
@@ -45,7 +47,16 @@ Expected evidence:
 - confidence records in run artifacts
 - confidence-calibration metric in reporting
 
-### 6. Can failures be audited after the fact?
+### 6. Is iterative improvement evaluated rather than hidden inside retry behavior?
+
+Expected evidence:
+
+- explicit `single_run` and `multi_run` settings
+- first-run versus best-of-N reporting
+- improvement trajectory metrics
+- attempt manifests and workflow differences across runs
+
+### 7. Can failures be audited after the fact?
 
 Expected evidence:
 
@@ -55,7 +66,15 @@ Expected evidence:
 - attempt-specific artifacts
 - Galaxy failure evidence snapshots
 
-### 7. Is the benchmark reproducible?
+### 8. Does the benchmark support human-informed scientific acceptability?
+
+Expected evidence:
+
+- structured scientific acceptability policy
+- explicit acceptable solution classes
+- hybrid or human-informed review when deterministic checks are insufficient
+
+### 9. Is the benchmark reproducible?
 
 Expected evidence:
 

@@ -14,9 +14,12 @@ Every v0.3 task should define:
 - preprocessing requirements
 - parameter targets
 - acceptable tool classes
+- acceptable workflow classes
 - acceptable solution families
+- iteration policy
 - human-baseline protocol
 - confidence query policy
+- scientific acceptability policy
 - hidden evaluation contract
 
 ## Complexity Guidance
@@ -28,6 +31,7 @@ Complexity should reflect:
 - preprocessing burden
 - parameter sensitivity
 - likelihood of retries or adaptation
+- likelihood that multiple attempts materially improve results
 - amount of interpretation required
 
 ## Authoring Rules
@@ -35,4 +39,6 @@ Complexity should reflect:
 - keep the task constant across prompt variants
 - do not hide required outputs only in the evaluator if they materially change the task
 - define acceptable alternative scientific solutions where justified
+- define acceptable non-identical workflow classes where justified
+- define whether iteration is expected to help and how that improvement will be measured
 - make Galaxy-operational expectations explicit enough to score them fairly
