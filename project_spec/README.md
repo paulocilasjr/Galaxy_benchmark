@@ -1,25 +1,27 @@
-# Galaxy Agent Benchmark Specification Bundle
+# Galaxy Benchmark v0.3 Specification Bundle
 
-This directory is retained as an internal specification scaffold for implementation work. It is not the canonical published benchmark definition for the Galaxy Benchmark release in this repository.
+This directory is the internal implementation scaffold for the benchmark redesign.
 
-This bundle contains a project-ready specification scaffold for implementing the Galaxy Agent Benchmark.
+It is aligned to the v0.3 benchmark logic:
+
+- compare standalone execution with Galaxy-augmented execution
+- preserve the three-score run vector
+- add mechanistic operational metrics
+- add robustness and confidence-calibration endpoints
+- require lossless execution traces
 
 Included:
-- `PROJECT_SPEC.md`: benchmark overview and architecture
-- `IMPLEMENTATION_GUIDE.md`: developer-oriented implementation details
-- `schemas/`: JSON Schemas for tasks, prompts, runs, and benchmark reports
-- `evaluation/SCORING_SPEC.md`: scoring formulas and code-ready pseudocode
-- `examples/`: example task, prompts, run record, and report outputs
-- `tasks/README.md`: task authoring guide
-- `prompts/README.md`: prompt authoring guide
-- `environments/README.md`: environment abstraction spec
-- `agents/README.md`: agent adapter spec
-- `skills/README.md`: Galaxy Skills support spec
-- `reports/README.md`: reporting/output expectations
 
-Suggested first implementation order:
-1. Validate example JSON files against the schemas
-2. Build run orchestration for task × prompt × environment
-3. Implement run-level scoring
-4. Add task-level aggregation
-5. Add benchmark-level aggregation and reports
+- `PROJECT_SPEC.md`: benchmark architecture and scientific rationale
+- `IMPLEMENTATION_GUIDE.md`: implementation roadmap
+- `schemas/`: task, prompt, run, and report schemas
+- `evaluation/SCORING_SPEC.md`: endpoint definitions and aggregation rules
+- `examples/`: v0.3-shaped example assets
+- `tasks/README.md`: task authoring guidance
+- `prompts/README.md`: prompt authoring guidance
+- `environments/README.md`: environment abstraction guidance
+- `agents/README.md`: agent adapter guidance
+- `skills/README.md`: skills/environment support guidance
+- `reports/README.md`: report and publication-output guidance
+
+This bundle should be treated as the source of truth for implementation work when the legacy repository shape and the v0.3 benchmark logic diverge.

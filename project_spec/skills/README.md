@@ -1,13 +1,19 @@
 # Skills Support Spec
 
-This folder contains Galaxy-specific Skills used in the `galaxy_skills` environment.
+Skills are optional procedural supports used in the `galaxy_skills` environment.
 
-Skills should encode:
+Skills may encode:
+
 - tool selection heuristics
+- preprocessing heuristics
 - parameter defaults
 - input/output compatibility rules
 - workflow templates
 - debugging hints
 - common failure patterns
 
-Skills must be versioned and referenced in each run record when used.
+Requirements:
+
+- skills must be versioned
+- runs must record which skills were active
+- skills should be treated as harness components, not hidden benchmark knowledge

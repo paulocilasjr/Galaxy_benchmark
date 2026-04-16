@@ -1,78 +1,93 @@
-# Implementation Guide
+# Implementation Guide For Galaxy Benchmark v0.3
 
-## Architecture
+## Implementation Strategy
 
-The benchmark should be implemented as a pipeline with six major subsystems:
+Implement the benchmark in layers so the scientific contract and the execution contract stay aligned.
 
-1. **Task Registry**
-   - Loads benchmark tasks from structured JSON/YAML files
-   - Validates tasks against `schemas/task.schema.json`
+## Phase 1. Contract Alignment
 
-2. **Prompt Generator**
-   - Creates or loads three prompt variants per task
-   - Ensures semantic equivalence across prompt levels
-   - Validates prompt files against `schemas/prompt.schema.json`
+Update the benchmark assets so that:
 
-3. **Environment Runner**
-   - Standardizes execution in:
-     - `open`
-     - `galaxy`
-     - `galaxy_skills`
-   - Returns a run record with outputs, traces, artifacts, and metadata
+- task schema supports preprocessing, parameter targets, human-baseline protocol, and confidence policies
+- prompt schema supports context tier plus prompt-style metadata
+- run schema supports immutable artifacts, score vectors, operational metrics, confidence, and Galaxy traces
+- report schema supports benchmark-level endpoint reporting
 
-4. **Agent Adapter Layer**
-   - Wraps each agent behind a consistent interface:
-     - `prepare(task, prompt, environment)`
-     - `execute()`
-     - `collect_outputs()`
+## Phase 2. Task And Prompt Registry
 
-5. **Evaluation Engine**
-   - Computes component-level scores
-   - Computes run-level performance
-   - Computes task-level prompt-weighted scores
-   - Computes robustness, adaptability, and user-level confidence
+Build or update loaders that:
 
-6. **Report Generator**
-   - Produces per-run, per-task, per-agent, and benchmark summary outputs
-   - Separates simulated harness runs from publication-eligible benchmark runs
-   - Captures normalized execution context needed for live-Galaxy drift interpretation
+- validate tasks and prompts against schemas
+- preserve semantic linkage across prompt variants
+- support environment comparisons without mutating task identity
 
-## Recommended implementation order
+## Phase 3. Run Orchestration
 
-### Phase 1
-- Implement JSON schemas
-- Create schema validation in CI
+The orchestrator should:
 
-### Phase 2
-- Create example task and prompt files
-- Build task loader and prompt loader
+- create immutable run directories
+- record manifests and trace artifacts
+- preserve attempt-specific outputs
+- keep benchmark-valid runs distinct from simulated development runs
 
-### Phase 3
-- Build environment abstraction
-- Build stub agent adapters
+## Phase 4. Evaluation Engine
 
-### Phase 4
-- Build run orchestration over all task × prompt × environment combinations
+Implement:
 
-### Phase 5
-- Implement scoring functions from `evaluation/SCORING_SPEC.md`
+- three-score vector calculation
+- endpoint metrics
+- prompt-variant robustness
+- environment adaptability
+- confidence-calibration calculations
 
-### Phase 6
-- Generate reports and benchmark summary artifacts
+## Phase 5. Reporting
 
-## Minimal execution contract
+Generate:
 
-Every environment runner must return:
-- `status`
-- `outputs`
-- `artifacts`
-- `trace`
-- `timing`
-- `failure_modes`
+- per-run evaluation bundle
+- per-task prompt and environment breakdowns
+- per-agent summaries
+- benchmark-level summaries with uncertainty and failure taxonomies
 
-Every run must be reproducible from:
-- task spec
-- prompt spec
-- environment spec
+## Required Implementation Guarantees
+
+### Lossless trace capture
+
+Every important action must leave an artifact reference.
+
+### No destructive overwrites
+
+Retries must create versioned artifacts instead of replacing previous outputs.
+
+### Explicit evidence mapping
+
+Every score should map to concrete fields or trace evidence.
+
+### Publication separation
+
+Simulated harness runs and publication-eligible benchmark runs must remain distinguishable.
+
+## Minimal Run Record Requirements
+
+Every benchmark run record should include:
+
+- benchmark version
+- task id
+- prompt variant
+- environment
 - agent id
-- random seed if applicable
+- execution context
+- artifact manifests
+- retry chain
+- score vector
+- operational metrics
+- confidence record
+
+## Recommended Verification
+
+Before treating the v0.3 implementation as stable:
+
+- validate example JSON files against schemas
+- run unit tests for scoring, loading, and aggregation
+- validate report generation on mixed environments
+- validate that missing artifacts or overwritten outputs are detected as benchmark-invalid

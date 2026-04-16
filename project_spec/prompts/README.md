@@ -1,21 +1,35 @@
 # Prompt Authoring Guide
 
-Each task must have three prompt variants:
-- `vague`
-- `specific`
-- `very_specific`
+Each task should have exactly three canonical prompt variants:
 
-These are different formulations of the same underlying task.
+- `low_context`
+- `medium_context`
+- `high_context`
 
-Definitions:
-- `vague`: novice-like, underspecified
-- `specific`: intermediate, goal-driven
-- `very_specific`: expert-like, explicit tool/method guidance
+## What May Vary
 
-Prompt authoring rules:
-1. Preserve the same biomedical objective across all three prompts
-2. Do not change the ground truth
-3. Do not introduce extra subgoals in only one prompt
-4. Make specificity the only controlled difference
+- wording
+- brevity
+- ambiguity
+- user sophistication
+- degree of method guidance
 
-See `examples/prompts.example.json`.
+## What Must Not Vary
+
+- attached datasets
+- biomedical objective
+- hidden target
+- final artifact contract
+
+## Prompt-Style Coverage
+
+Across the benchmark, prompt variants should include realistic user styles such as:
+
+- concise
+- verbose
+- ambiguous
+- informal
+- method-constrained
+- report-oriented
+
+Prompt design should support robustness analysis and confidence calibration, not just instruction-following difficulty.

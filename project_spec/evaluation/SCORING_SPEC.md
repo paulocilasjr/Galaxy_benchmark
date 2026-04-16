@@ -1,116 +1,198 @@
-# Scoring Specification
+# Galaxy Benchmark v0.3 Scoring Specification
 
-## 1. Run-level performance
+## 1. Run-Level Score Vector
 
-Define run performance:
+Each run preserves three mandatory scores in `[0,1]`:
 
-Perf(t,p,e) = w_c*C + w_x*X + w_s*S + w_r*R + w_i*I
+- `scientific_solution_score`
+- `standard_analysis_score`
+- `galaxy_execution_score`
+
+Status thresholds:
+
+- `pass >= 0.85`
+- `partial >= 0.50 and < 0.85`
+- `fail < 0.50`
+- `not_applicable` when the benchmark contract does not define a meaningful basis
+
+## 2. Primary Endpoint
+
+### `pipeline_completion_rate`
+
+Definition:
+
+- fraction of task instances where the agent executes all required task steps and produces the required final artifact in the correct format
+
+Run-level scoring:
+
+- `1.0` if all required steps are completed and final artifact contract is met
+- `0.5` if a valid partial execution exists but one or more required steps or final artifact conditions are unmet
+- `0.0` otherwise
+
+## 3. Secondary Operational Metrics
+
+All operational metrics are normalized to `[0,1]`.
+
+### `tool_selection_accuracy`
+
+Definition:
+
+- proportion of required steps for which the selected Galaxy tool or acceptable tool class matches the task contract
+
+### `workflow_coherence`
+
+Definition:
+
+- proportion of required edges in the intended step graph that are satisfied by the executed workflow sequence
+
+### `parameterization_accuracy`
+
+Definition:
+
+- weighted accuracy of task-critical parameter settings
+
+### `preprocessing_accuracy`
+
+Definition:
+
+- proportion of preprocessing requirements satisfied before downstream execution
+
+### `result_quality`
+
+Definition:
+
+- scientific correctness of the final artifact relative to task-specific hidden criteria
+
+### `output_agreement`
+
+Definition:
+
+- similarity of final outputs across prompt variants for the same task and environment
+
+### `confidence_calibration`
+
+Definition:
+
+- agreement between the agent’s predicted success or confidence proxy and observed outcome
+
+Suggested scoring:
+
+- `1 - mean_absolute_error(confidence, realized_success)`
+
+## 4. Legacy Performance Aggregate
+
+The project may still report a legacy performance aggregate for implementation continuity:
+
+`Perf(t,p,e) = w_c*C + w_x*X + w_s*S + w_r*R + w_i*I`
 
 Where:
-- C = correctness
-- X = execution success
-- S = scientific validity
-- R = reproducibility / provenance
-- I = interpretation or iteration quality
 
-All component scores should be normalized to [0,1].
+- `C = correctness`
+- `X = execution success`
+- `S = scientific validity`
+- `R = reproducibility / provenance`
+- `I = interpretation / iteration quality`
 
 Recommended default weights:
-- w_c = 0.35
-- w_x = 0.20
-- w_s = 0.20
-- w_r = 0.15
-- w_i = 0.10
 
-Weights should be configurable per task family.
+- correctness: `0.35`
+- execution: `0.20`
+- scientific_validity: `0.20`
+- reproducibility: `0.15`
+- interpretation: `0.10`
 
-## 2. Task-level performance by environment
+This aggregate is secondary to the score vector plus endpoint metrics.
 
-Perf(t,e) = Σ_p w_p * Perf(t,p,e)
+## 5. Prompt-Level Aggregation
+
+For each task and environment:
+
+`Perf(t,e) = Σ_p w_p * Perf(t,p,e)`
 
 Default prompt weights:
-- vague = 0.33
-- specific = 0.33
-- very_specific = 0.34
+
+- `low_context = 0.33`
+- `medium_context = 0.33`
+- `high_context = 0.34`
 
 Alternative practical-support weighting:
-- vague = 0.40
-- specific = 0.35
-- very_specific = 0.25
 
-## 3. Robustness
+- `low_context = 0.40`
+- `medium_context = 0.35`
+- `high_context = 0.25`
 
-Robust(t,e) = α * mean_p(Perf(t,p,e)) - β * var_p(Perf(t,p,e))
+## 6. Robustness
+
+For each task and environment:
+
+`Robust(t,e) = α * mean_p(Perf(t,p,e)) - β * var_p(Perf(t,p,e))`
 
 Recommended defaults:
-- α = 1.0
-- β = 0.5
 
-Interpretation:
-- high mean across prompts is good
-- high variance across prompts is bad
+- `α = 1.0`
+- `β = 0.5`
 
-## 4. Adaptability
+Also report:
 
-Galaxy adaptation:
-Adapt_G(t,p) = Perf(t,p,galaxy) - Perf(t,p,open)
+- prompt-wise variance
+- output agreement
+- confidence-calibration drift across prompt styles
 
-Skills adaptation:
-Adapt_S(t,p) = Perf(t,p,galaxy_skills) - Perf(t,p,galaxy)
+## 7. Environment Adaptation
+
+Primary Galaxy effect:
+
+`Adapt_G(t,p) = Perf(t,p,galaxy) - Perf(t,p,open)`
+
+Optional Skills effect:
+
+`Adapt_S(t,p) = Perf(t,p,galaxy_skills) - Perf(t,p,galaxy)`
 
 Prompt-aggregated:
-Adapt_G(t) = Σ_p w_p * Adapt_G(t,p)
-Adapt_S(t) = Σ_p w_p * Adapt_S(t,p)
 
-## 5. Benchmark-level aggregation
+`Adapt_G(t) = Σ_p w_p * Adapt_G(t,p)`
 
-Overall performance in environment e:
-Perf(e) = Σ_t w_t * Perf(t,e)
+`Adapt_S(t) = Σ_p w_p * Adapt_S(t,p)`
 
-Overall robustness in environment e:
-Robust(e) = Σ_t w_t * Robust(t,e)
+## 8. Benchmark-Level Reporting
 
-Overall adaptability:
-Adapt_G = Σ_t w_t * Adapt_G(t)
-Adapt_S = Σ_t w_t * Adapt_S(t)
+Report at minimum:
 
-Suggested task weighting:
-- equal per complexity tier, then equal within tier
+- mean `pipeline_completion_rate` by environment
+- mean score-vector components by environment
+- robustness by environment
+- adaptation metrics
+- tool selection accuracy
+- workflow coherence
+- parameterization accuracy
+- preprocessing accuracy
+- result quality
+- confidence calibration
 
-## 6. User-level confidence
+Benchmark-level aggregation should preserve task weighting explicitly.
 
-Map prompts to user levels:
-- vague -> novice
-- specific -> intermediate
-- very_specific -> expert
+## 9. User-Support Interpretation
 
-For prompt p and environment e:
-ULC(p,e) = count_t[ Perf(t,p,e) >= tau ] / |T|
+Map prompt variants to user support levels:
+
+- `low_context -> novice`
+- `medium_context -> intermediate`
+- `high_context -> expert`
+
+User-level confidence:
+
+`ULC(p,e) = count_t[ Perf(t,p,e) >= tau ] / |T|`
 
 Suggested thresholds:
-- usable: tau = 0.70
-- reliable: tau = 0.85
-- expert-grade: tau = 0.93
 
-## 7. Pseudocode
+- usable: `0.70`
+- reliable: `0.85`
+- expert-grade: `0.93`
 
-```python
-def run_performance(component_scores, weights):
-    return sum(component_scores[k] * weights[k] for k in weights)
+## 10. Reviewer-Facing Scoring Rules
 
-def task_performance(prompt_scores, prompt_weights):
-    return sum(prompt_scores[p] * prompt_weights[p] for p in prompt_weights)
-
-def robustness(prompt_scores, alpha=1.0, beta=0.5):
-    vals = list(prompt_scores.values())
-    mean = sum(vals) / len(vals)
-    var = sum((x - mean) ** 2 for x in vals) / len(vals)
-    return alpha * mean - beta * var
-
-def adaptability(scores_a, scores_b, prompt_weights):
-    return sum(prompt_weights[p] * (scores_b[p] - scores_a[p]) for p in prompt_weights)
-
-def user_level_confidence(task_prompt_scores, threshold):
-    passed = sum(1 for score in task_prompt_scores if score >= threshold)
-    return passed / len(task_prompt_scores)
-```
+- never replace the three-score vector with a single aggregate in primary reporting
+- do not claim scientific correctness from operational scores alone
+- do not claim Galaxy competence from final artifact correctness alone
+- score preprocessing and parameterization explicitly where they affect result validity
+- preserve uncertainty and failure taxonomy in benchmark-level reports

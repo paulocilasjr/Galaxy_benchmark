@@ -1,645 +1,361 @@
-# Galaxy Benchmark
+# Galaxy Benchmark v0.3
 
-Galaxy Benchmark is an end-to-end benchmark for evaluating AI agents on real Galaxy-based biomedical and bioinformatics tasks. This repository is the benchmark authoring and release-engineering repository: it contains the public task assets, the hidden scoring assets, and the tooling required to stage separate blind-public, publication-companion, and hidden-scoring packages.
+Galaxy Benchmark is a biomedical agent benchmark for measuring how well an AI system can translate a user's analysis goal into a valid, auditable Galaxy execution.
 
-This benchmark does not score only final answers. It also evaluates whether a run is auditable and reproducible. Clear reporting is a first-class requirement: if an action, decision, retry, or failure analysis is not recorded in the run artifacts, it is treated as not performed.
+This repository is being reshaped around a stronger benchmark logic:
 
-`SKILL.md` is the concise executor-oriented companion. `README.md` is the benchmark reference, protocol, and reporting standard.
+- benchmark the combined capability of a model and its harness
+- compare standalone execution against Galaxy-augmented execution
+- preserve human-auditable evidence for every decision and action
+- score both scientific usefulness and operational competence
+- quantify robustness to prompt variation and confidence calibration
 
-The explicit three-score formalization for this benchmark is documented in [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md).
+## Why This Benchmark Exists
 
-Publication-facing companion documents:
+Agent benchmarks usually compare task outputs against a ground truth. In biomedical settings that is necessary but insufficient:
 
-- [docs/benchmark_card.md](/Users/4475918/Projects/Galaxy_benchmark/docs/benchmark_card.md): benchmark scope, intended use, known limitations, and reporting expectations
-- [docs/publication_release.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_release.md): release policy, baseline/uncertainty guidance, and live-Galaxy drift policy
-- [docs/dataset_governance_manifest.json](/Users/4475918/Projects/Galaxy_benchmark/docs/dataset_governance_manifest.json): source, checksum, citation, and persistence metadata for benchmark inputs
-- [docs/publication_results_source.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_source.json): sanitized scored-run snapshots used to rebuild publication summaries
-- [docs/publication_results_bundle.json](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_bundle.json): canonical machine-readable benchmark-results bundle
-- [docs/publication_results_summary.md](/Users/4475918/Projects/Galaxy_benchmark/docs/publication_results_summary.md): release-facing summary table without field-level ground truth
+- many tasks admit multiple scientifically valid solution paths
+- exact output matching can be unfair when live infrastructure or workflow versions drift
+- a model may reason correctly but fail operationally
+- a system may execute successfully but still produce a scientifically weak answer
 
-## Benchmark Summary
+Galaxy changes the benchmark design space because execution is not just free-form tool calling. Galaxy provides:
 
-- Task groups: 11
-- Prompt variants per task: 3 (`low_context`, `medium_context`, `high_context`)
-- Total benchmark instances: 33
-- Platform: Galaxy (`https://usegalaxy.org/`)
-- Output style: structured files under `outputs/`
-- Evaluation style: produce results first, then compare against ground truth field by field with an explicit three-score summary
+- curated community tools
+- parameterized workflow execution
+- managed computational infrastructure
+- persistent histories and provenance
+- reproducibility-oriented artifact storage
 
-### Task Families
+The benchmark therefore asks a narrower and more useful question:
 
-| Experiment | Task family |
-|---|---|
-| `experiment_1` | Biomedical tabular classification |
-| `experiment_2` | Biomedical image classification |
-| `experiment_3` | Biomedical multimodal survival prediction |
-| `experiment_4` | ATAC-seq workflow execution |
-| `experiment_5` | Paired-end RNA-seq workflow |
-| `experiment_6` | Single-cell RNA-seq clustering |
-| `experiment_7` | Metagenomics gene-catalog pipeline |
-| `experiment_8` | Genome annotation and quality evaluation |
-| `experiment_9` | Workflow-built tabular ML with external validation |
-| `experiment_10` | ChIP-seq workflow replay and equivalence comparison |
-| `experiment_11` | Paper-faithful RNA-seq reproduction and validation |
-
-### Context Levels
-
-Each task group is released in three prompt tiers with the same inputs and task family but different prompt specificity:
-
-- `low_context`: open-ended task request with minimal procedural guidance
-- `medium_context`: clearer task framing, expected metric/output, and methodological hints
-- `high_context`: more prescriptive tool, workflow, parameter, or target-column guidance
-
-This structure supports evaluation of instruction following under different context budgets without changing the underlying task.
-
-Task-source reconciliation across the legacy benchmark repo and the standalone experiment repo is documented in [docs/task_source_crosswalk.md](/Users/4475918/Projects/Galaxy_benchmark/docs/task_source_crosswalk.md).
-
-## Release Model
-
-The canonical benchmark definition is the 33-instance Galaxy-only prompt-tier benchmark defined by:
+Can an agent connect a user's biomedical intent to the right Galaxy operations, configure those operations correctly, adapt when they fail, and produce a scientifically useful result with full provenance?
 
-- `experiments/`
-- `dataset/`
-- `ground_truth/`
-- the `outputs/` artifact protocol
+## Benchmark Positioning
 
-Release packaging is intentionally split:
+This benchmark is designed to sit between prior work on:
 
-- blind public package: public tasks, dataset assets/references, docs, schemas, and execution guidance
-- publication companion package: benchmark card, dataset governance, and publication-results summaries
-- hidden scoring package: `ground_truth/` plus scorer tooling for blind or delayed evaluation
+- human-level or analyst-level evaluation
+- agentic benchmark performance
+- harness-aware evaluation such as MLE-Bench and BioAgent Bench
 
-Build the staged packages with:
+Galaxy Benchmark extends those ideas by using Galaxy as a constrained execution substrate. That reduces avoidable execution variance while preserving difficult scientific decisions:
 
-```bash
-python3 tools/build_release_packages.py --output-dir /tmp/galaxy_benchmark_release
-```
+- tool selection
+- workflow composition
+- preprocessing
+- parameterization
+- failure recovery
+- output interpretation
 
-The `project_spec/` directory and the `open` / `galaxy_skills` execution modes are retained as internal scaffolding for development, harness testing, and methodological comparison. They are not the canonical published benchmark matrix.
+## Scientific Aims
 
-## Repository Layout
+### Aim 1. Effect Of Galaxy Workbench On Agent Performance
 
-```text
-.
-|-- README.md
-|-- SKILL.md
-|-- dataset/
-|-- experiments/
-|   |-- low_context/
-|   |-- medium_context/
-|   `-- high_context/
-|-- ground_truth/
-`-- outputs/
-```
+Question:
+- How much does Galaxy improve agent success relative to standalone execution?
 
-### Directory Roles
+Primary comparison:
+- `open` environment: BioAgent-style standalone execution
+- `galaxy` environment: Galaxy-Workbench execution
 
-- `experiments/`: public experiment definitions that agents read and execute
-- `dataset/`: benchmark input files referenced by the experiment JSON files
-- `ground_truth/`: authoring-repo hidden reference answers plus evaluator metadata used only after result generation is complete
-- `outputs/`: the only writable location during benchmark execution; tracked repository contents should remain placeholder-only
+Primary endpoint:
+- `pipeline_completion_rate`
 
-## Experiment Format
+Definition:
+- fraction of tasks for which the agent completes the required analysis steps and produces the required final artifact in the expected format
 
-The checked-in experiment files use the legacy public-task shape:
+Secondary endpoints:
+- final artifact validity
+- task success under blind scoring
+- failure mode distribution
 
-```json
-{
-  "experiment_1": {
-    "Task": "Predict treatment response from separate biomedical training and test TSV files in Galaxy using a tabular classification approach.",
-    "Inputs_Path": {
-      "dataset": [
-        "dataset/experiment_1/Chowell_train_Response.tsv",
-        "dataset/experiment_1/Chowell_test_Response.tsv"
-      ]
-    },
-    "Prompt": "..."
-  }
-}
-```
+### Aim 2. Mechanistic Analysis Of Galaxy Interaction
 
-Important interpretation rules:
+Question:
+- How do agents select, sequence, and configure Galaxy tools?
 
-- The checked-in public task files are intentionally minimal and user-facing.
-- The application normalizes them internally into a richer execution contract using the corresponding `ground_truth/experiment_N.json` metadata.
-- The `Prompt` field is the task instruction to execute.
-- `Inputs_Path.dataset` defines the files available to the run.
-- Across prompt tiers for the same experiment, the primary benchmark variable is the prompt wording, not the input data.
+Primary mechanistic metrics:
+- `tool_selection_accuracy`
+- `workflow_coherence`
+- `parameterization_accuracy`
 
-## Result Format
+Evidence sources:
+- Galaxy histories
+- job and invocation traces
+- tool selections
+- parameter payloads
+- retry chains
 
-Benchmark runs should write `results/result.json` using the shared schema `galaxy_benchmark_result_v2`:
+### Aim 3. Robustness To Prompt Variability And Confidence
 
-```json
-{
-  "scientific_answer": {
-    "...": "task-specific scientific output fields"
-  },
-  "galaxy_execution": {
-    "final_entity_type": "tool|workflow|mixed",
-    "final_entity_name": "...",
-    "history_input_mode": "local_upload|remote_fetch|mixed",
-    "adaptation_summary": "single_valid_run|justified_retry|stopped_with_documented_blocker"
-  }
-}
-```
+Question:
+- How sensitive is performance to user phrasing, ambiguity, and style?
 
-Design intent:
+Per-task prompt variants:
+- `low_context`
+- `medium_context`
+- `high_context`
 
-- `scientific_answer` measures the quality of the biomedical or analytical conclusion.
-- `galaxy_execution` measures whether the agent can operate competently inside Galaxy.
-- This separation is deliberate so the benchmark can answer both:
-  - what level of scientist the agent can help
-  - how trustworthy the agent is inside the Galaxy environment
+Primary robustness metrics:
+- `performance_consistency`
+- `output_agreement`
+- `confidence_calibration`
 
-## Formal Score Model
+### Aim 4. Preprocessing And Configuration Competence
 
-Each benchmark run should be interpreted with three explicit scores:
+Question:
+- Can the agent transform raw inputs into Galaxy-compatible forms and configure tools correctly enough to support reproducible analysis?
 
-- `scientific_solution_score`: how scientifically useful the solution is for the biomedical problem
-- `standard_analysis_score`: how closely the run followed the requested or benchmark-standard analysis path
-- `galaxy_execution_score`: how competently the agent manipulated and accessed the Galaxy environment, independent of whether the chosen analysis was scientifically ideal
+Primary metrics:
+- `preprocessing_accuracy`
+- `parameter_configuration_accuracy`
+- `result_quality`
 
-These three scores should remain separate in benchmark analysis.
+## What v0.3 Keeps vs Replaces
 
-Practical interpretation:
+### Retained From Earlier Versions
 
-- `scientific_solution_score` is driven primarily by `scientific_answer`
-- `standard_analysis_score` is driven primarily by explicit standard-path constraints, especially in `high_context`
-- `galaxy_execution_score` is driven primarily by `galaxy_execution` and the run trace
+- realistic end-to-end biomedical tasks
+- multiple prompt variants for the same task
+- separate hidden ground truth
+- explicit output artifacts
+- environment-aware evaluation
+- benchmark-level reporting and aggregation
+- auditability as a core design principle
 
-Tier behavior:
+### Replaced Or Tightened In v0.3
 
-- `low_context`: emphasize `scientific_solution_score` and `galaxy_execution_score`; use `standard_analysis_score` only when a standard path is explicitly requested
-- `medium_context`: all three may apply, but `standard_analysis_score` should only reflect constraints that are actually stated
-- `high_context`: all three apply, and `standard_analysis_score` is expected to matter most because this tier tests detailed instruction adherence
+- replace underspecified “performance only” framing with explicit study aims and endpoints
+- replace weak run-trace requirements with immutable trace contracts
+- replace prompt-only robustness framing with prompt-style robustness plus confidence calibration
+- replace vague execution scoring with explicit Galaxy-operational metrics
+- replace single-result reporting with versioned attempts, evaluations, and manifests
+- replace ad hoc run directories with a stricter lossless artifact layout
 
-Operational scoring policy:
+## Canonical Benchmark Unit
 
-- Each score is computed as a weighted mean over the applicable checks for that score.
-- The benchmark-wide status thresholds are `pass >= 0.85`, `partial >= 0.50`, and `fail < 0.50`.
-- `galaxy_execution_score` includes audit-trace compliance, not just final Galaxy output fields.
-- Missing reporting provenance should not silently receive full credit; result fields should be explicit or trace-backed.
+The benchmark unit is:
 
-The full benchmark-wide definition lives in [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md).
+`task × prompt_variant × environment × agent`
 
-## Operational Scorer
+Recommended environments:
 
-The repository now includes an executable scorer at [tools/benchmark_scorer.py](/Users/4475918/Projects/Galaxy_benchmark/tools/benchmark_scorer.py). It reads a run directory, normalizes legacy result payloads when needed, applies the hidden ground-truth rules, and emits both:
+- `open`: standalone BioAgent-style execution baseline
+- `galaxy`: Galaxy-Workbench execution baseline
+- `galaxy_skills`: optional Galaxy execution with explicit procedural support
 
-- `results/comparison.scored.md`
-- `results/score_summary.json`
+The published benchmark emphasis is:
 
-Example usage:
+- primary comparison: `open` vs `galaxy`
+- secondary diagnostic comparison: `galaxy` vs `galaxy_skills`
 
-```bash
-python3 tools/benchmark_scorer.py \
-  --run-dir outputs/20260319_222516_experiment_6 \
-  --level high_context
-```
+## Task Design Requirements
 
-Notes:
+Every benchmark task must:
 
-- `--level` is optional for runs whose directory name already contains `low_context`, `medium_context`, or `high_context`.
-- For historical runs created before prompt tiers were encoded in the path, pass `--level` explicitly if you want `standard_analysis_score`.
-- `--stdout-only` prints the machine-readable score summary without writing files.
-- The scorer now uses run-trace evidence when normalizing legacy outputs. It does not blindly assume that an unlabelled metric came from the held-out test split.
+- represent a real biomedical objective that can be executed in Galaxy
+- include attached public inputs under `dataset/`
+- define an explicit final artifact contract
+- support hidden evaluation without leaking the solution path
+- encode required preprocessing expectations
+- encode tool-class and parameter expectations where relevant
+- support failure analysis and recovery scoring
+- support prompt variants without changing the underlying task
 
-Asset-audit entry point:
+Each task should also declare:
 
-```bash
-python3 tools/audit_benchmark_assets.py
-```
+- `scientist_help_band`
+- `galaxy_complexity_band`
+- `required_steps`
+- `acceptable_tool_classes`
+- `acceptable_solution_families`
+- `preprocessing_requirements`
+- `parameter_targets`
+- `confidence_query_policy`
 
-This validates publication-facing invariants such as prompt-tier alignment, `public_task_variants` consistency, derived evaluator/result-field completeness, and dataset-governance coverage.
+## Prompt Variant Contract
 
-Publication-results entry point:
+Each task should have three prompt variants:
 
-```bash
-python3 tools/build_publication_results_bundle.py
-```
+- `low_context`
+- `medium_context`
+- `high_context`
 
-This writes the canonical machine-readable publication summary bundle and a Markdown summary without copying field-level ground-truth tables into public docs.
-If `outputs/` is empty, the builder falls back to the sanitized scored-run source file in `docs/publication_results_source.json`.
-Pass `--run-dir` explicitly if the scored runs live outside the current `outputs/` tree.
+Rules:
 
-## Reproducibility Packaging
+- all three prompts must preserve the same task
+- only specificity and user style may vary
+- `low_context` emphasizes inference
+- `medium_context` emphasizes informed planning
+- `high_context` emphasizes instruction adherence
 
-The repository includes lightweight release engineering for reproducibility:
+Prompt variation should deliberately include real-world user diversity:
 
-- `pyproject.toml` for installable package metadata
-- `Dockerfile` for a pinned containerized execution baseline
-- `Makefile` for common local commands
-- `.github/workflows/ci.yml` for continuous validation
+- concise
+- verbose
+- ambiguous
+- informal
+- goal-driven
+- method-constrained
 
-Recommended local verification commands:
+## Evaluation Model
 
-```bash
-make test
-make scorer-test
-make audit
-make publication-results
-make release-packages
-```
-
-For repeated benchmark runs, uncertainty summaries can be generated from scored `run_record.json` files with:
-
-```bash
-python3 tools/build_reliability_report.py \
-  --run-record outputs/<run_a>/results/run_record.json \
-  --run-record outputs/<run_b>/results/run_record.json
-```
-
-## Benchmark Support Package
-
-The repository also includes a lightweight implementation scaffold under [src/galaxy_benchmark](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark). This code supports the benchmark release, but the generalized `project_spec/` bundle should be read as internal implementation scaffolding rather than as the canonical benchmark definition.
-
-It provides:
-
-- schema-oriented payload validation for task, prompt, and run records
-- typed loaders for the example spec artifacts
-- scoring utilities for performance, robustness, adaptability, and user-level confidence
-- benchmark-report aggregation across run records
-- executable workbench orchestration for benchmark-style runs
-- built-in agent adapters and environment runners for local harness execution
-
-The report builder CLI is [tools/build_benchmark_report.py](/Users/4475918/Projects/Galaxy_benchmark/tools/build_benchmark_report.py).
-The matrix runner CLI is [tools/run_benchmark_workbench.py](/Users/4475918/Projects/Galaxy_benchmark/tools/run_benchmark_workbench.py).
-
-Example usage:
-
-```bash
-python3 tools/build_benchmark_report.py \
-  --benchmark-id galaxy_agent_benchmark_v1 \
-  --run-record project_spec/examples/run.example.json
-```
-
-## Workbench Execution
-
-The workbench now supports end-to-end execution over benchmark tasks using a consistent orchestration layer.
-
-Core pieces:
-
-- [`src/galaxy_benchmark/application/registry.py`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/application/registry.py): loads experiment definitions across prompt tiers
-- [`src/galaxy_benchmark/application/orchestrator.py`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/application/orchestrator.py): creates run directories, writes required artifacts, executes agents in environments, and writes run records
-- [`src/galaxy_benchmark/agents/`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/agents): built-in agent adapters
-- [`src/galaxy_benchmark/environments/`](/Users/4475918/Projects/Galaxy_benchmark/src/galaxy_benchmark/environments): built-in environment runners
-
-Built-in agents:
-
-- `heuristic`: inspects supported tabular inputs and emits a conservative structured result
-- `echo`: dry-run adapter for validating the workbench path without attempting a scientific solution
-
-Built-in environments:
-
-- `open`
-- `galaxy`
-- `galaxy_skills`
-
-Important scope note:
-
-- `galaxy` is the benchmark-aligned execution mode.
-- `open` and `galaxy_skills` remain available for internal diagnostics and methodological experiments, but they are not part of the canonical published benchmark matrix.
-
-Each run writes the required benchmark artifact layout:
-
-- `plan/saved.md`
-- `reasoning/reasoning.md`
-- `errors/error.json`
-- `results/result.json`
-- `results/reproduce_<experiment>.py`
-- `results/activity_log.jsonl`
-- `results/run_record.json`
-
-When matching hidden assets exist, the orchestrator also writes `results/score_summary.json`.
-
-Example matrix execution:
-
-```bash
-python3 tools/run_benchmark_workbench.py \
-  --experiment-id experiment_1 \
-  --level low_context \
-  --environment galaxy \
-  --agent heuristic
-```
-
-This command:
-
-1. loads the selected public task file
-2. creates a new timestamped run directory under `outputs/`
-3. executes the selected agent in each requested environment
-4. writes run artifacts and run records
-5. scores completed runs when hidden ground-truth metadata are present
-6. marks the resulting run records as simulated harness runs that are not publication-eligible
-7. prints an aggregated benchmark report for the generated run set
-
-## Ground Truth Format
-
-Ground-truth files now follow `galaxy_benchmark_ground_truth_v2`. They are hidden benchmark assets and are designed for fair comparison rather than brittle exact matching.
-
-Ground-truth files can specify:
-
-- exact matches where the benchmark truly requires an exact answer
-- alias matches for common naming differences such as `Response` vs `c22: Response`
-- threshold-based metrics when higher values are better
-- tolerance-based numeric comparison when live Galaxy workflow versions may drift slightly
-- set-overlap rules for outputs such as marker-gene panels
-- explicit `score_model_support` mappings that tie `scientific_solution_score`, `standard_analysis_score`, and `galaxy_execution_score` to the appropriate hidden sections
-- `preserve_three_score_vector` so downstream scoring does not collapse the run into a single opaque number
-
-This is important for fairness. The benchmark should not penalize an agent for:
-
-- achieving a better valid metric than the reference threshold
-- using equivalent naming for the same scientific target
-- small workflow-size differences caused by validated workflow updates
-- equivalent Galaxy execution paths that satisfy the task goal and reporting contract
-
-Ground-truth and evaluator design should preserve the distinction between:
+Galaxy Benchmark preserves a three-score run-level vector:
 
 - `scientific_solution_score`
 - `standard_analysis_score`
 - `galaxy_execution_score`
 
-## Execution Protocol
+These remain the core per-run scores. In v0.3 they are complemented by endpoint metrics that answer the scientific aims:
 
-No single runner command is mandated. Any implementation is acceptable if it follows the benchmark protocol and write boundary.
+- `pipeline_completion_rate`
+- `tool_selection_accuracy`
+- `workflow_coherence`
+- `parameterization_accuracy`
+- `preprocessing_accuracy`
+- `result_quality`
+- `output_agreement`
+- `confidence_calibration`
 
-### Prerequisites
+Interpretation:
 
-- A valid Galaxy API key must exist in the repository root `.env` file as `GALAXY_API_KEY`.
-- The key must be non-empty before any Galaxy interaction starts.
-- If the key is missing or empty, stop and report:
-  - `Missing required credential: GALAXY_API_KEY in .env. Provide this key before running Galaxy API tasks.`
+- the score vector explains the quality of an individual run
+- the endpoint metrics support benchmark-level scientific claims
 
-### Per-Experiment Workflow
+See:
 
-1. Read one experiment JSON from `experiments/<level>/`.
-2. Execute one experiment at a time from start to finish.
-3. Create a new run directory under `outputs/` named `outputs/<date_time>_<level>_<experiment_name>/`.
-4. Create the required subdirectories: `plan/`, `reasoning/`, `errors/`, and `results/`.
-5. Write the initial plan before execution starts.
-6. Execute the task in Galaxy exactly as instructed by the experiment file.
-7. Continuously log planning, execution, checks, revisions, and retries.
-8. Write the final structured result artifact.
-9. Write a reproduction artifact that documents the run in executable, annotated form.
-10. Only after the result and reproduction artifacts exist, read the matching ground-truth file.
-11. Generate a field-by-field comparison report between the produced result and the ground truth.
+- [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md)
+- [project_spec/evaluation/SCORING_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/evaluation/SCORING_SPEC.md)
 
-## Required Output Artifacts
+## Required Run Artifact Layout
 
-For each run, create the following structure:
+Each run must write a new immutable directory:
 
 ```text
-outputs/<date_time>_<level>_<experiment_name>/
+outputs/<timestamp>_<level>_<experiment>/
 |-- plan/
-|   `-- saved.md
+|   |-- saved.md
+|   `-- saved.attempt_<N>.md
 |-- reasoning/
-|   `-- reasoning.md
+|   |-- reasoning.md
+|   `-- reasoning.attempt_<N>.md
 |-- errors/
 |   `-- error.json
+|-- traces/
+|   |-- galaxy/
+|   |   |-- histories/
+|   |   |-- invocations/
+|   |   |-- jobs/
+|   |   `-- datasets/
+|   `-- local/
+|-- evaluations/
+|   |-- comparison.scored.md
+|   |-- field_comparisons.json
+|   `-- score_summary.json
 `-- results/
     |-- result.json
-    |-- reproduce_<experiment_name>.py
+    |-- result.attempt_<N>.json
     |-- activity_log.jsonl
-    `-- <comparison-report>.md
-```
-
-Notes:
-
-- Use a sortable timestamp such as `YYYYMMDD_HHMMSS`.
-- Every new benchmark run should use a new top-level run directory.
-- Additional run artifacts are allowed, but they must be stored under `results/`.
-- A comparison report is required under `results/`; `comparison.md` is the recommended filename.
-- Do not overwrite prior artifacts. If a correction is needed within a run, create a new versioned artifact instead.
-
-## Reporting Standard
-
-The benchmark requires explicit, reconstructable reporting. Traceability is part of benchmark compliance, not optional housekeeping.
-
-### Core Rule
-
-- If an action or decision is not recorded in the run artifacts, it is considered not performed.
-
-### What Must Be Reported
-
-- The initial plan and expected outputs
-- Tool and workflow discovery steps
-- Candidate approaches considered and why they were accepted or rejected
-- Interface choice and tradeoffs when multiple execution paths exist
-- Parameter-selection rationale
-- Concrete evidence used for decisions, including relevant IDs and artifact paths
-- All execution actions
-- All status checks and polling actions
-- All failures, normalized error signatures, and root-cause interpretations
-- All changes between attempts, including why the new attempt should fix the previous failure
-- The final structured result and the post hoc comparison to ground truth
-
-### Required Artifact Semantics
-
-#### `plan/saved.md`
-
-Record:
-
-- experiment name
-- initial objective
-- inputs and datasets
-- ordered plan
-- expected outputs
-- risks and assumptions
-
-#### `reasoning/reasoning.md`
-
-Write chronological entries that include:
-
-- timestamp
-- step reference
-- decision made
-- why that decision was made
-- next action
-
-Decision-level reporting is required. Do not collapse multiple independent decisions into one vague summary.
-
-#### `errors/error.json`
-
-Keep this file valid JSON throughout the run. Use a stable envelope:
-
-```json
-{
-  "experiment_name": "experiment_1",
-  "run_status": "running",
-  "started_at": "2026-02-26T12:00:00Z",
-  "updated_at": "2026-02-26T12:00:00Z",
-  "summary": {
-    "total_errors": 0,
-    "open_errors": 0,
-    "resolved_errors": 0
-  },
-  "errors": []
-}
+    |-- run_record.json
+    |-- artifacts_manifest.json
+    |-- evaluation_manifest.json
+    `-- reproduce_<experiment>.py
 ```
 
 Rules:
 
-- Keep `errors` as an array.
-- Update `summary` counts when error entries change.
-- Store variable details under `context` and `additional_data`.
-- Mark final `run_status` as `completed`, `completed_with_errors`, or `failed`.
+- never overwrite a previous attempt artifact
+- append to `activity_log.jsonl`; do not rewrite history
+- store Galaxy evidence snapshots under `traces/`
+- record every evaluation artifact under `evaluations/`
+- keep `result.json` as the latest canonical result and preserve prior attempt versions
 
-#### `results/activity_log.jsonl`
+## Traceability And Immutability
 
-This is the append-only categorical execution log. Write one JSON object per line in chronological order.
+For v0.3, lossless trace capture is non-negotiable.
 
-Required categories:
+If a decision or action affected execution, it must be recoverable from artifacts:
 
-- `plan`
-- `execute`
-- `check`
-- `retry`
-- `revise`
+- tool discovery
+- rejected alternatives
+- parameter decisions
+- upload mode
+- history creation
+- polling checks
+- failure evidence
+- root-cause analysis
+- retry rationale
+- final evaluation
 
-Example:
+If it is not recorded, it does not count toward benchmark credit.
 
-```json
-{"timestamp":"2026-02-26T12:10:00Z","step":"tool_run","category":"execute","action":"Run Tabular Learner","status":"started","details":{"tool_id":"tabular_learner","history_id":"abc123"}}
-```
+## Hidden Evaluation Assets
 
-Minimum expectations:
+Public assets:
 
-- Every planned action has a `plan` record.
-- Every executed action has an `execute` record.
-- Every verification, inspection, or polling action has a `check` record.
-- Every retry has a `retry` record with its reason.
-- Every change in parameters, scripts, inputs, or workflow configuration has a `revise` record.
+- `dataset/`
+- `experiments/`
 
-#### `results/result.json`
+Hidden assets:
 
-This is the structured task result used for evaluation. All tasks use the shared top-level sections:
+- `ground_truth/`
 
-- `scientific_answer`
-- `galaxy_execution`
+Hidden assets must support:
 
-The task-specific required fields are declared in the experiment file under `required_result_format`.
+- exact checks only where justified
+- threshold scoring for better-is-better metrics
+- tolerant scoring for live-Galaxy drift
+- overlap scoring for set-like outputs
+- explicit mapping from checks to the three-score vector
+- step-level operational scoring for preprocessing, tool choice, and parameterization
 
-#### `results/reproduce_<experiment_name>.py`
+## Reviewer-Facing Design Safeguards
 
-This file must reproduce the benchmark run through explicit, annotated command-line or API steps. It should be understandable by a human reviewer and sufficient to reconstruct what the agent did.
+v0.3 is designed to answer common review questions up front.
 
-#### `results/<comparison-report>.md`
+### Fairness
 
-After result generation is complete, compare the produced result against the matching ground-truth file using a field-by-field table. Then add a three-score summary section. Use this format:
+- valid alternative biomedical solutions can receive credit
+- hidden exact matching is not the default scientific criterion
+- score attribution separates scientific value from operational quality
 
-| Field | Agent Result | Ground Truth | Match Status | Notes |
-|---|---|---|---|---|
-| `scientific_answer.target` | ... | ... | match/mismatch | ... |
-| `scientific_answer.primary_metric.value` | ... | ... | match/mismatch | ... |
-| `galaxy_execution.final_entity_name` | ... | ... | match/mismatch | ... |
+### Reproducibility
 
-Then append a score summary table:
+- all benchmark-valid runs require immutable trace artifacts
+- Galaxy histories and execution evidence are preserved
+- benchmark releases should ship schema, scoring, and task contracts
 
-| Score | Value | Status | Basis | Notes |
-|---|---|---|---|---|
-| `scientific_solution_score` | ... | pass/partial/fail | `scientific_answer` | ... |
-| `standard_analysis_score` | ... | pass/partial/fail/not_applicable | `tier_specific_expectations` | ... |
-| `galaxy_execution_score` | ... | pass/partial/fail | `galaxy_execution` and run trace | ... |
+### Robustness
 
-This comparison is the primary benchmark analysis artifact, not an optional summary. `comparison.md` is the recommended standard filename.
+- prompt-style variability is part of the benchmark design, not post hoc augmentation
+- robustness is evaluated across semantically equivalent prompts
+- confidence calibration is reported against actual outcomes
 
-## Galaxy Execution Rules
+### Harness Awareness
 
-### Polling Policy
+- the benchmark evaluates the full system, not the language model in isolation
+- comparisons across environments are explicit
+- model and harness contributions are not conflated in reporting
 
-After launching a Galaxy tool or workflow:
+### Scientific Usefulness
 
-1. Immediately capture submission identifiers such as job ID and workflow invocation ID.
-2. Perform a first status check after 15 to 30 seconds.
-3. If the run is still non-terminal, poll every 1 minute.
-4. Continue until a terminal state is reached (`ok`, `error`, `failed`, `deleted`, or equivalent).
-5. Do not execute downstream dependent steps until required upstream jobs are complete.
-6. Independent work may continue while waiting if it does not violate dependencies.
+- the benchmark supports assessment against analyst usefulness, not only hidden-reference imitation
+- preprocessing and parameter choices are evaluated because they affect biological validity
 
-### Failure-Recovery Protocol
+## Repository Guide
 
-Blind retries are non-compliant. For every failed attempt:
+- [AGENTS.md](/Users/4475918/Projects/Galaxy_benchmark/AGENTS.md): repository startup and authoring rules
+- [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md): benchmark execution skill
+- [project_spec/PROJECT_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/PROJECT_SPEC.md): formal v0.3 implementation scaffold
+- [project_spec/IMPLEMENTATION_GUIDE.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/IMPLEMENTATION_GUIDE.md): implementation guidance
+- [docs/benchmark_card.md](/Users/4475918/Projects/Galaxy_benchmark/docs/benchmark_card.md): concise benchmark card
 
-1. Read the failure evidence first.
-2. Extract a stable error signature such as error type, core message, failing step or tool, and exit code or state.
-3. Record the inferred root cause with evidence references.
-4. Define a signature-specific fix strategy before retrying.
-5. Log the recovery cycle in `activity_log.jsonl` using `check`, `revise`, `retry`, and `execute` entries as appropriate.
-6. If the same error signature reappears, do not continue parameter sweeps alone; change the failing mechanism or stop with a documented blocker.
+## Current Development Status
 
-## Data Access and Compliance Rules
+This repository contains both:
 
-### Non-Negotiable Write Boundary
+- canonical benchmark assets used for execution and scoring
+- a stronger v0.3 specification scaffold for the next benchmark revision
 
-Write operations are restricted to `outputs/` only.
-
-- Never create, modify, rename, move, or delete files outside `outputs/` during benchmark execution.
-- Treat `experiments/`, `dataset/`, `ground_truth/`, and project-root files as read-only.
-- If a step would require writing outside `outputs/`, stop and report a blocking violation.
-
-### Ground-Truth Gate
-
-- Do not read `ground_truth/<experiment>.json` until both `results/result.json` and `results/reproduce_<experiment_name>.py` are complete.
-
-### Secret Handling
-
-- Never print, log, store, or expose `GALAXY_API_KEY` in any artifact, report, or command trace.
-
-### Immutability
-
-- Previously written artifacts are immutable.
-- Do not overwrite prior versions.
-- If a correction is required, write a new versioned artifact and record the change in `results/activity_log.jsonl`.
-
-## Recommended Reporting for Papers or Benchmark Releases
-
-If you publish results derived from this benchmark, report at minimum:
-
-- experiment ID and context level
-- Galaxy instance used
-- tool or workflow chosen
-- key task outputs requested by the experiment
-- final metric or requested evaluation value
-- terminal run status
-- whether retries were needed
-- location of the comparison artifact or equivalent field-by-field analysis
-
-This repository is designed so that benchmark claims can be backed by inspectable run artifacts rather than only a headline score.
-
-## Fair Scoring Principles
-
-The benchmark is designed to answer two questions fairly:
-
-1. What level of scientist can the agent help on biomedical tasks?
-2. How reliably can the agent work inside Galaxy?
-
-To support those goals:
-
-- scientific-task scoring and Galaxy-operation scoring should be reported separately before any aggregate score
-- held-out test metrics should be preferred over train-only or validation-only metrics
-- threshold scoring should be used for optimization tasks where better performance should count as success
-- exact output matching should be reserved for fields that are genuinely deterministic
-- workflow provenance, upload mode, history navigation, retries, and recovery behavior should be judged from run artifacts, not only from final text
-- auditability should contribute to `galaxy_execution_score`, because an end-to-end benchmark is only trustworthy when the run trace can be inspected
-- missing metric provenance should reduce credit rather than being silently normalized to the benchmark-preferred split
-
-## Completion Checklist
-
-Before treating a run as complete, verify:
-
-- all required output files exist under the run directory
-- `result.json` is populated with the task-specific result fields
-- `reproduce_<experiment_name>.py` exists and is readable
-- `activity_log.jsonl` covers planning, execution, checks, revisions, and retries
-- `error.json` has a correct final status and summary counts
-- a comparison report exists under `results/` and was generated only after the ground-truth gate was satisfied
-
-## Hard Stop Conditions
-
-Stop and report a blocker if:
-
-- `GALAXY_API_KEY` is missing or empty
-- writing outside `outputs/` would be required
-- a required Galaxy job never reaches a usable terminal state and no safe fallback exists
-- the same failure signature repeats without a materially different corrective action
+Where older assets and the v0.3 spec disagree, use the v0.3 benchmark contract for new authoring and benchmark-methodology work.

@@ -1,202 +1,261 @@
-# Galaxy Agent Benchmark – PROJECT_SPEC
+# Galaxy Benchmark v0.3 – Project Specification
 
-Note: this document describes an internal benchmark-implementation scaffold. The canonical benchmark definition for publication and release is the Galaxy-only prompt-tier benchmark documented in the repository root README and the `experiments/` / `ground_truth/` assets.
+## 1. Purpose
 
-## 1. Overview
+Galaxy Benchmark v0.3 evaluates the combined performance of an agent and its harness on biomedical tasks, with special emphasis on how Galaxy Workbench changes that performance.
 
-This project implements a benchmark to evaluate AI agents in biomedical workflows using the Galaxy environment.
+The benchmark is designed to support four claims:
 
-The benchmark evaluates:
-- Task-solving capability
-- Sensitivity to prompt specificity
-- Effect of execution environment (Open vs Galaxy vs Galaxy+Skills)
-- Usability across user expertise levels
+1. whether Galaxy improves execution reliability relative to standalone execution
+2. whether agents can operate Galaxy coherently and reproducibly
+3. whether performance is robust to prompt variation
+4. whether agents can perform preprocessing and parameter configuration accurately enough for valid analysis
 
-The benchmark is structured around:
+## 2. Benchmark Philosophy
 
-**Task × Prompt × Environment**
+The benchmark should not reward hidden-pipeline imitation alone.
 
-## 2. Core Concepts
+It should instead distinguish:
 
-### Task
-A biomedical objective with:
-- dataset(s)
-- ground truth or acceptable solution(s)
-- complexity label
+- scientific usefulness of the result
+- adherence to an explicitly requested standard analysis path
+- operational competence inside Galaxy
 
-### Prompt Specificity
-Three variants per task:
-- vague (novice)
-- specific (intermediate)
-- very specific (expert)
+It should also expose the mechanisms underlying performance:
 
-### Environment
-Each run occurs in:
-- open
-- Galaxy
-- Galaxy + Skills
+- tool choice
+- workflow sequencing
+- parameterization
+- preprocessing
+- retry behavior
+- provenance capture
+- confidence calibration
 
-## 3. Benchmark Matrix
+## 3. Core Benchmark Unit
 
-For each task:
+The core unit is:
 
-**3 prompts × 3 environments = 9 runs**
+`task × prompt_variant × environment × agent`
 
-## 4. Task Specification
+### Prompt variants
+
+- `low_context`
+- `medium_context`
+- `high_context`
+
+### Environments
+
+- `open`: standalone execution baseline analogous to BioAgent-style execution
+- `galaxy`: Galaxy Workbench execution baseline
+- `galaxy_skills`: optional Galaxy execution with procedural support
+
+The primary scientific comparison is `open` versus `galaxy`.
+
+## 4. Study Aims And Endpoints
+
+### Aim 1. Galaxy effect on agent performance
+
+Primary endpoint:
+
+- `pipeline_completion_rate`
+
+Secondary endpoints:
+
+- final artifact validity
+- task success rate
+- failure mode profile
+
+### Aim 2. Mechanistic analysis of Galaxy interaction
+
+Primary metrics:
+
+- `tool_selection_accuracy`
+- `workflow_coherence`
+- `parameterization_accuracy`
+
+### Aim 3. Robustness and confidence under prompt variability
+
+Primary metrics:
+
+- `performance_consistency`
+- `output_agreement`
+- `confidence_calibration`
+
+### Aim 4. Preprocessing and configuration competence
+
+Primary metrics:
+
+- `preprocessing_accuracy`
+- `parameter_configuration_accuracy`
+- `result_quality`
+
+## 5. Run-Level Score Vector
+
+Each run preserves:
+
+- `scientific_solution_score`
+- `standard_analysis_score`
+- `galaxy_execution_score`
+
+These scores remain mandatory and separate.
+
+They are complemented by endpoint metrics that support benchmark-level reporting.
+
+## 6. Task Requirements
 
 Each task must include:
-- task_id
-- description
-- domain
-- datasets
-- ground_truth
-- acceptable_solutions
-- complexity (simple, complex, very_complex)
-- evaluation_spec
-- requires_iteration (bool)
-- iteration_budget (optional)
 
-## 5. Prompt Generation
+- `task_id`
+- `title`
+- `domain`
+- `scientist_help_band`
+- `galaxy_complexity_band`
+- `description`
+- `datasets`
+- `task_objective`
+- `required_final_artifacts`
+- `required_steps`
+- `preprocessing_requirements`
+- `parameter_targets`
+- `acceptable_tool_classes`
+- `acceptable_solution_families`
+- `human_baseline_protocol`
+- `confidence_query_policy`
+- `evaluation_spec`
+- `ground_truth_contract`
 
-Each task must generate:
-- vague_prompt
-- specific_prompt
-- very_specific_prompt
+Tasks should be designed so that:
 
-All prompts must represent the same task.
+- the same task survives across all prompt variants
+- the final artifact contract is explicit
+- multiple scientifically valid methods can receive credit when appropriate
+- Galaxy operations can be audited directly
 
-## 6. Environments
+## 7. Prompt Requirements
 
-Implement wrappers for:
-- Open environment
-- Galaxy environment
-- Galaxy + Skills environment
+Each task should have exactly three canonical prompt variants:
 
-Each environment must expose a common execution interface.
+- `low_context`
+- `medium_context`
+- `high_context`
 
-## 7. Run Execution
+Prompts must vary:
 
-Each run must store:
-- run_id
-- task_id
-- prompt_level
-- environment
-- agent_id
-- input_prompt
+- wording
+- structure
+- user sophistication
+- ambiguity level
+
+Prompts must not vary:
+
+- the underlying biomedical objective
+- attached inputs
+- hidden evaluation target
+
+## 8. Environment Requirements
+
+Each environment runner must return:
+
 - outputs
-- trace/logs
-- status
-- performance_score
-- component_scores
+- artifacts
+- trace manifests
+- timing
+- execution context
+- failure modes
+- confidence record if queried
 
-## 8. Scoring
+Galaxy environments must additionally preserve:
 
-### 8.1 Performance
-Perf(t,p,e) ∈ [0,1]
+- history IDs
+- invocation IDs
+- job IDs
+- dataset IDs
+- workflow IDs when applicable
+- parameter payloads or equivalent trace evidence
 
-Based on:
-- correctness
-- execution success
-- scientific validity
-- reproducibility
-- interpretation (if applicable)
+## 9. Run Artifact Contract
 
-Aggregate:
-Perf(t,e) = Σ w_p Perf(t,p,e)
+Each run must preserve immutable artifacts for:
 
-### 8.2 Robustness
-Measures stability across prompts:
-Robust(t,e) = mean(Perf(t,p,e)) - variance(Perf(t,p,e))
+- planning
+- reasoning
+- execution logs
+- error history
+- Galaxy trace snapshots
+- final outputs
+- attempt-specific outputs
+- field-level evaluation
+- score summary
+- artifact manifests
 
-### 8.3 Adaptability
-Galaxy effect:
-Adapt_G(t,p) = Perf(t,p,Galaxy) - Perf(t,p,Open)
+No benchmark-valid run may depend on ephemeral in-memory reasoning or unstored execution state.
 
-Skills effect:
-Adapt_S(t,p) = Perf(t,p,Galaxy+Skills) - Perf(t,p,Galaxy)
+## 10. Scoring Layers
 
-Aggregate across prompts.
+### 10.1 Run-level
 
-## 9. User-Level Confidence
+Mandatory:
 
-Derived from prompt specificity:
-- vague → novice
-- specific → intermediate
-- very specific → expert
+- three-score vector
+- operational metrics
+- confidence record
 
-ULC(p,e) = fraction of tasks where Perf(t,p,e) ≥ threshold
+### 10.2 Task-level
 
-## 10. Iterative Tasks
+Aggregate across prompt variants for each environment.
 
-For tasks requiring iteration:
-- run initial analysis
-- evaluate output
-- adjust parameters
-- rerun
-- track improvement
+### 10.3 Benchmark-level
 
-Store iteration traces.
+Aggregate across tasks and environments to report:
 
-## 11. Project Structure
-
-```text
-tasks/
-prompts/
-environments/
-agents/
-skills/
-evaluation/
-reports/
-schemas/
-examples/
-```
-
-## 12. Evaluation Pipeline
-
-1. Load tasks
-2. Generate prompts
-3. Run all combinations (task × prompt × environment)
-4. Compute run-level scores
-5. Aggregate:
-   - per task
-   - per environment
-   - per agent
-6. Compute:
-   - Performance
-   - Robustness
-   - Adaptability
-   - User-level confidence
-
-## 13. Outputs
-
-Per agent:
-- overall performance
+- environment performance
 - robustness
-- adaptability
-- user-level support
+- Galaxy effect
+- Skills effect
+- user support bands
+- confidence calibration
 
-Per task:
-- prompt breakdown
-- environment comparison
+## 11. Human-Level And Harness-Aware Framing
 
-## 14. Key Goal
+The benchmark should support comparison against:
 
-Measure:
-- What tasks agents can solve
-- How much prompt detail they require
-- Whether Galaxy improves reliability
-- Whether Skills improve usability
-- Which users can trust the agent
+- transparent heuristic baselines
+- strong agent baselines
+- optional human or analyst reference protocols
 
-## 15. Summary
+Reporting must clearly distinguish:
 
-This benchmark evaluates agents as scientific assistants by combining:
-- Task complexity
-- Prompt specificity
-- Execution environment
+- model capability
+- harness capability
+- environment effect
 
-to produce:
-- Performance
-- Robustness
-- Adaptability
-- User-level confidence
+## 12. Publication Readiness Requirements
+
+The benchmark must be able to support publication claims about:
+
+- scientific usefulness
+- operational competence
+- robustness
+- reproducibility
+- confidence calibration
+
+Publication-facing benchmark bundles should include:
+
+- benchmark version
+- task inventory
+- prompt inventory
+- environment definitions
+- scoring definitions
+- uncertainty reporting
+- failure taxonomy
+- dataset governance manifest
+
+## 13. Deprecated Concepts
+
+The following older patterns should not be expanded in v0.3:
+
+- prompt labels only as `vague/specific/very_specific` without contextual semantics
+- performance-only reporting without operational endpoints
+- overwrite-prone run outputs
+- scores with no field-level justification
+- benchmark claims that do not separate Galaxy competence from scientific answer quality

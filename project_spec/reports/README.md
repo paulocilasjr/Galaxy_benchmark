@@ -1,32 +1,46 @@
 # Reporting Requirements
 
-The reporting layer should emit:
+The reporting layer should support both scientific publication and engineering auditability.
 
-## Per-run outputs
+## Per-Run Outputs
+
 - run record JSON
-- component scores
-- performance score
-- execution mode and publication-eligibility flags
-- normalized execution context for Galaxy provenance
+- artifact manifest
+- evaluation manifest
+- field comparisons
+- score vector
+- operational metrics
+- confidence record
+- execution context
 - trace references
-- artifacts manifest
+- failure modes
 
-## Per-task outputs
+## Per-Task Outputs
+
 - prompt-level performance table
 - environment comparison
-- robustness score
+- robustness summary
+- output agreement summary
 - failure analysis
+- preprocessing and parameterization findings
 
-## Per-agent outputs
-- overall performance
+## Per-Agent Outputs
+
+- overall performance by environment
+- mean score-vector components
 - robustness by environment
-- adaptability to Galaxy
-- adaptability to Skills
-- user-level confidence
-- performance by complexity tier
+- Galaxy effect
+- Skills effect if used
+- confidence calibration
+- performance by scientist-help band
+- performance by Galaxy-complexity band
 
-## Suggested report files
-- `benchmark_summary.json`
-- `per_agent_summary.json`
-- `per_task_summary.json`
-- `per_run_records.jsonl`
+## Benchmark-Level Outputs
+
+- aggregate completion rate
+- aggregate operational metrics
+- aggregate score-vector summaries
+- uncertainty estimates
+- failure taxonomy
+- dataset governance references
+- publication eligibility filters

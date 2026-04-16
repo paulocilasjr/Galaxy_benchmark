@@ -1,11 +1,24 @@
 # Outputs
 
-`outputs/` is the writable run-artifact target during benchmark execution.
+`outputs/` is the only writable destination during benchmark execution.
 
-Repository policy:
+## v0.3 Run Layout
 
-- keep this directory itself tracked so benchmark runners have a stable destination
-- do not commit benchmark run artifacts here
-- the public blind release package must include only this placeholder directory, not scored runs
+Each run should create:
 
-For a benchmark execution, create a new timestamped subdirectory under `outputs/`.
+```text
+outputs/<timestamp>_<level>_<experiment>/
+|-- plan/
+|-- reasoning/
+|-- errors/
+|-- traces/
+|-- evaluations/
+`-- results/
+```
+
+## Policy
+
+- keep this directory tracked as a placeholder
+- do not commit live run artifacts in publication or blind-release branches
+- never overwrite a previous run directory
+- preserve attempt versions rather than replacing old files
