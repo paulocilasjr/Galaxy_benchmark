@@ -1,0 +1,33 @@
+# BioAgent Task 1 Initial Plan
+
+- Objective: run BioAgent `task_1` in Galaxy and produce a CSV with columns `pathway,5xFAD_pvalue,3xTG_AD_pvalue,PS3O1S_pvalue`.
+- Task prompt summary: compare differential expression signals across the 5xFAD, 3xTG-AD, and PS3O1S Alzheimer's mouse models and identify shared KEGG pathways.
+- Input datasets:
+  - OSF bundle from `https://osf.io/download/68b20d383e0a583200f9906f/`
+  - Expected to contain expression/count matrices and sample metadata for the three models, but exact file inventory is not yet confirmed.
+- Intended analysis path:
+  - Download and inspect the input bundle under this run directory.
+  - Create a dedicated Galaxy history for the run.
+  - Upload the task inputs into Galaxy.
+  - Identify the data layout and choose a Galaxy-compatible RNA-seq differential expression path.
+  - Run per-model differential expression analysis against the relevant controls.
+  - Run KEGG pathway enrichment for each model.
+  - Download the original Galaxy outputs used for scoring.
+  - Transform outputs only if needed to satisfy the prompt CSV format while preserving original Galaxy files unchanged.
+- Intended tool choices:
+  - Galaxy upload/fetch tools for staging.
+  - A differential expression tool path appropriate to the discovered input format, likely `DESeq2` or `edgeR` if raw count tables and sample groups are present.
+  - A pathway enrichment tool compatible with the differential expression result format, likely `goseq` or an equivalent KEGG-capable Galaxy tool.
+- Expected result files:
+  - Original downloaded Galaxy pathway result files for each model.
+  - Final combined CSV with the required prompt columns.
+  - Structured run/evaluation manifests under this run directory.
+- Anticipated risks:
+  - The OSF bundle may not contain directly usable count tables or may require preprocessing not obvious from the prompt.
+  - Galaxy tools or reference annotations needed for mouse KEGG enrichment may be unavailable or misconfigured on `usegalaxy.org`.
+  - Long-running jobs may require extended polling.
+  - The prompt uses `PS3O1S` while the task description text also references `PS301S`; naming may need verification from the dataset contents.
+- Fallback branches:
+  - If the initial DE tool cannot accept the discovered input shape, switch to another Galaxy-native differential expression path with the reason recorded.
+  - If KEGG enrichment is unavailable for one toolchain, use an alternative Galaxy-native enrichment tool that still produces auditable pathway p-values.
+  - If Galaxy execution fails for a stable platform reason, preserve evidence and stop rather than inventing off-Galaxy results.
