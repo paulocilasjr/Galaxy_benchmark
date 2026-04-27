@@ -180,20 +180,20 @@ def main() -> None:
                 "Write a compact helper CSV with full count, reduced count, and direction.",
             ],
         },
-        "ground_truth_result_evaluation": {
+        "transformed_ground_truth_result_evaluation": {
             "produced_value": direction,
             "expected_value": ground_truth["ideal"],
             "score": ground_truth_score,
         },
-        "galaxy_performance_evaluation": {
+        "agent_performance_in_galaxy_evaluation": {
             "checks": galaxy_checks,
             "score": galaxy_score,
         },
         "final_metrics": {
             "prompt_result_score": prompt_score,
             "transformed_prompt_result_score": transformed_score,
-            "ground_truth_result_score": ground_truth_score,
-            "galaxy_performance_score": galaxy_score,
+            "transformed_ground_truth_result_score": ground_truth_score,
+            "agent_performance_in_galaxy_score": galaxy_score,
         },
     }
 

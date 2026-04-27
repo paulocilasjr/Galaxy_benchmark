@@ -504,7 +504,7 @@ def evaluate_outputs(original_csv: Path, helper_csv: Path, history_id: str) -> d
             "transformation_type": "format_only",
             "notes": "Derived by filtering rows where No. isolates == 4, removing hypothetical protein annotations, and selecting/relabeling columns from the preserved Roary CSV.",
         },
-        "ground_truth_result_evaluation": {
+        "transformed_ground_truth_result_evaluation": {
             "score": (matched_items / compared_items) if compared_items else 0.0,
             "compared_items": compared_items,
             "matched_items": matched_items,
@@ -514,7 +514,7 @@ def evaluate_outputs(original_csv: Path, helper_csv: Path, history_id: str) -> d
             "reference_artifact": rel(ground_truth_csv),
             "comparison_rows_file": rel(comparison_rows_file),
         },
-        "galaxy_performance_score": {
+        "agent_performance_in_galaxy_score": {
             "score": max(galaxy_score, 0),
             "start": 100,
             "failure_count": len(failures),
@@ -532,7 +532,7 @@ def evaluate_outputs(original_csv: Path, helper_csv: Path, history_id: str) -> d
         ],
     }
     if not helper_csv.exists():
-        comparison["galaxy_performance_score"]["score"] = max(galaxy_score - 50, 0)
+        comparison["agent_performance_in_galaxy_score"]["score"] = max(galaxy_score - 50, 0)
     write_json(EVAL_DIR / "comparison.attempt_1.json", comparison)
     write_json(EVAL_DIR / "comparison.json", comparison)
     write_json(
@@ -540,8 +540,8 @@ def evaluate_outputs(original_csv: Path, helper_csv: Path, history_id: str) -> d
         {
             "prompt_result_score": comparison["prompt_result_evaluation"]["score"],
             "transformed_prompt_result_score": comparison["transformed_prompt_result_evaluation"]["score"],
-            "ground_truth_result_score": comparison["ground_truth_result_evaluation"]["score"],
-            "galaxy_performance_score": comparison["galaxy_performance_score"]["score"],
+            "transformed_ground_truth_result_score": comparison["transformed_ground_truth_result_evaluation"]["score"],
+            "agent_performance_in_galaxy_score": comparison["agent_performance_in_galaxy_score"]["score"],
         },
     )
     return comparison
@@ -570,7 +570,7 @@ def build_manifests(
             "metrics_summary_artifact": "evaluations/metrics_summary.json",
             "ground_truth_reference": "evaluations/ground_truth_reference.csv",
             "comparison_rows_artifact": "evaluations/ground_truth_row_comparison.json",
-            "ground_truth_score": comparison["ground_truth_result_evaluation"]["score"],
+            "ground_truth_score": comparison["transformed_ground_truth_result_evaluation"]["score"],
         },
     )
     write_json(
@@ -807,7 +807,7 @@ def run_pipeline() -> None:
         ],
         "job_ids": job_ids,
         "cluster_rows_kept": kept_rows,
-        "ground_truth_result_score": comparison["ground_truth_result_evaluation"]["score"],
+        "transformed_ground_truth_result_score": comparison["transformed_ground_truth_result_evaluation"]["score"],
     }
     write_json(RESULTS_DIR / "result.attempt_5.json", result_payload)
     write_json(RESULTS_DIR / "result.json", result_payload)

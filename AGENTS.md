@@ -108,6 +108,7 @@ Minimum expectation for every benchmark-valid run:
 - Galaxy trace captures
 - evaluation outputs
 - artifact manifests
+- root-level `experiment_summary.json`
 
 ## Required Run Layout
 
@@ -115,6 +116,7 @@ The expected benchmark run layout is:
 
 ```text
 outputs/<timestamp>_<level>_<experiment>/
+|-- experiment_summary.json
 |-- plan/
 |-- reasoning/
 |-- errors/
@@ -127,6 +129,7 @@ Required preservation rules:
 
 - `plan/saved.md` is the initial plan and should stay immutable
 - retries create `plan/saved.attempt_<N>.md`
+- `experiment_summary.json` records the experiment name, ground-truth paths, Galaxy tools used, final Galaxy result files and local paths, transformed Galaxy-derived outputs, and reader-facing answers for original prompt compliance, transformed prompt compliance, direct ground-truth matching, transformed ground-truth matching, and agent execution in Galaxy
 - `reasoning/reasoning.md` is append-only and may be supplemented by attempt-specific files
 - `errors/error.json` must preserve the full error history
 - `results/activity_log.jsonl` is append-only
@@ -142,7 +145,7 @@ Ground truth should support:
 
 - scientific scoring
 - standard-analysis scoring
-- Galaxy-execution scoring
+- agent-in-Galaxy execution scoring
 - endpoint metrics such as completion rate, tool choice accuracy, parameterization accuracy, preprocessing accuracy, and confidence calibration
 
 ## Review Standard

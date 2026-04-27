@@ -239,6 +239,7 @@ Each run must write a new immutable directory:
 
 ```text
 outputs/<timestamp>_<level>_<experiment>/
+|-- experiment_summary.json
 |-- plan/
 |   |-- saved.md
 |   `-- saved.attempt_<N>.md
@@ -271,6 +272,16 @@ outputs/<timestamp>_<level>_<experiment>/
     |-- attempt_manifest.json
     `-- reproduce_<experiment>.py
 ```
+
+Each completed run also writes `experiment_summary.json` at the run-directory root. This file is the reviewer-facing index for the run and records the experiment name, ground-truth files used for comparison, Galaxy tools used, final Galaxy result files and preserved local paths, transformed Galaxy-derived outputs used for comparison, and `Experiment_score` with `prompt_score`, `transformed_prompt_score`, `direct_ground_truth_match_score`, `transformed_ground_truth_match_score`, and `agent_performance_in_galaxy_score`.
+
+The run summary must answer four distinct questions:
+
+- whether the original Galaxy outputs satisfy the prompt requirements
+- whether agent-rearranged Galaxy outputs satisfy the prompt requirements
+- whether the original Galaxy outputs directly match the ground truth
+- whether an agent-rearranged Galaxy-derived output matches the ground truth
+- whether the agent successfully executed and recovered inside Galaxy
 
 ## Traceability And Immutability
 

@@ -20,7 +20,7 @@ This repository mixes benchmark assets, hidden scoring metadata, and implementat
 Changes to benchmark assets or scoring behavior should include:
 
 - a short rationale
-- expected effect on scientific scoring, standard-analysis scoring, and Galaxy-execution scoring
+- expected effect on scientific scoring, standard-analysis scoring, and agent-in-Galaxy execution scoring
 - whether historical results remain comparable
 - whether a benchmark version bump is required
 

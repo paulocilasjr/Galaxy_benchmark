@@ -29,4 +29,4 @@
   - `prompt_result_score = 0.0` because the original Galaxy outputs are separate KEGG TSVs rather than one prompt-shaped CSV.
   - `transformed_prompt_result_score = 1.0` because the derived helper CSV is a deterministic merge with the required columns.
   - `ground_truth_result_score = 0.425` using pathway-code matching plus per-branch p-value tolerance `<= 0.1`; 8 of 10 hidden reference pathways were present in the resumed Galaxy outputs.
-  - `galaxy_performance_score = 40` from the preserved history's six failed intermediate jobs before successful completion.
+  - `agent_performance_in_galaxy_score = 40` from the preserved history's six failed intermediate jobs before successful completion.
