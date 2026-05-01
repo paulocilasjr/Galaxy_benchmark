@@ -577,6 +577,178 @@ After result generation is complete:
 - write evaluation manifests
 - keep comparisons for every attempt if multiple attempts were evaluated
 
+## BixBench Evaluation Rules
+
+BixBench tasks are different from the other Galaxy-Bench tasks. They are final-answer benchmarks, not workflow-quality benchmarks.
+
+Use this section when executing tasks from:
+
+- `experiments/BixBench/task_<N>.json`
+
+### Required Galaxy Execution Environment
+
+All BixBench task analyses must be performed in Galaxy Project at `usegalaxy.org`.
+
+Do not perform the scientific analysis locally as the primary execution path. Local commands may only be used to:
+
+- inspect task metadata and allowed input file schemas before upload
+- prepare files for upload to Galaxy
+- preserve downloaded Galaxy outputs and trace artifacts
+- transform already-produced Galaxy outputs into the submitted-answer shape when allowed by this skill
+- evaluate the fixed submitted answer after the ground-truth access gate opens
+
+For BixBench, the submitted answer must be traceable to outputs generated through `usegalaxy.org`. Preserve the Galaxy history, dataset, job, and output evidence under `traces/galaxy/`, and record the Galaxy-derived files used to decide the answer under `results/`.
+
+### Ground-Truth Access Gate
+
+For BixBench tasks, the ground-truth file is hidden during task execution.
+
+The agent must not open, read, search, summarize, or otherwise use:
+
+- `ground_truth/BixBench/task_<N>.json`
+- any other task-related ground-truth file
+
+until all of the following are true:
+
+1. The agent has completed the analysis using only the prompt and allowed input files.
+2. The agent has written the final submitted answer into the run artifacts.
+3. The agent has recorded that final answer as if calling `submit_answer(answer="<final answer>")`.
+
+Only after this final answer is fixed may the evaluator open `ground_truth/BixBench/task_<N>.json` to score the run. Do not revise the submitted answer after opening ground truth.
+
+### Required BixBench Result Artifact
+
+For BixBench, `results/result.json` must include the final answer before evaluation, for example:
+
+```json
+{
+  "experiment": "BixBench/task_<N>",
+  "submitted_answer": "<final answer>",
+  "submit_answer_called": true,
+  "status": "submitted"
+}
+```
+
+The `submitted_answer` is the only scientific output that BixBench grades. Preserve any supporting analysis files separately, but do not use them as substitutes for the submitted answer.
+
+### Scoring Model
+
+BixBench scoring is binary:
+
+- `1.0` if the submitted answer is accepted
+- `0.0` if the submitted answer is not accepted
+
+BixBench does not grade:
+
+- intermediate reasoning
+- tool choice
+- code quality
+- number of preprocessing steps
+- Galaxy workflow elegance
+- partial scientific credit
+
+Those details should still be preserved for auditability, but they do not change the BixBench correctness score.
+
+### Verifier Behavior
+
+The ground-truth file contains the hidden reference answer under `ideal`, plus optional `distractors`, `hypothesis`, `eval_mode`, and related metadata. These fields are evaluator-only.
+
+For `eval_mode: "str_verifier"`:
+
+1. Compare `submitted_answer` with `ideal` exactly, ignoring case.
+2. If the exact case-insensitive comparison fails, use a semantic-equivalence grader to decide whether the submitted answer means the same thing as the ideal answer.
+3. The current BixBench semantic grader is `gpt-5-mini`.
+
+For `eval_mode: "range_verifier"`:
+
+1. Parse both `submitted_answer` and `ideal` as numeric values or numeric ranges.
+2. If no numeric distractors are available, accept answers within `1%` relative tolerance of the ideal value.
+3. If numeric distractors are available, accept only when the submitted value is closer to the ideal value than to every distractor value.
+
+If parsing fails or the answer is not semantically/numerically acceptable, score `0.0`.
+
+### BixBench Evaluation Artifacts
+
+After opening ground truth, write `evaluations/comparison.json` with a BixBench-specific record such as:
+
+```json
+{
+  "bixbench_answer_evaluation": {
+    "submitted_answer": "<final answer>",
+    "ideal": "<hidden ideal read after submission>",
+    "eval_mode": "str_verifier",
+    "accepted": true,
+    "score": 1.0,
+    "basis": [
+      "Case-insensitive exact match to ideal answer."
+    ]
+  },
+  "ground_truth_access": {
+    "opened_after_submit_answer": true,
+    "ground_truth_path": "ground_truth/BixBench/task_<N>.json"
+  }
+}
+```
+
+For BixBench, `evaluations/metrics_summary.json` must contain only:
+
+```json
+{
+  "bixbench_answer_score": 1.0,
+  "agent_performance_in_galaxy_score": 100.0
+}
+```
+
+Use `agent_performance_in_galaxy_score` only to report whether the agent successfully executed the required environment workflow. It must not override or inflate the binary BixBench answer score.
+
+### Mapping To `experiment_summary.json`
+
+For BixBench runs, `experiment_summary.json` uses a reduced BixBench-specific shape instead of the full Galaxy-Bench summary shape used by the other task categories. Keep only:
+
+```json
+{
+  "experiment": "bixbench_task_<N>",
+  "Ground_truth_path": [
+    "ground_truth/BixBench/task_<N>.json"
+  ],
+  "Galaxy_tools_used": [
+    "<Galaxy tool id or display name used for this experiment>"
+  ],
+  "Galaxy_results": {
+    "files": [
+      "<Galaxy file name or HID/name considered a final result for the task>"
+    ],
+    "path": [
+      "<path to the preserved result file in this run directory>"
+    ]
+  },
+  "Experiment_score": {
+    "ideal": "<value from ground truth>",
+    "Galaxy_answer": "<value extracted from Galaxy analysis>",
+    "direct_ground_truth_match_score": 1.0
+  }
+}
+```
+
+BixBench summary field rules:
+
+- Do not include `Transformed_galaxy_output` or `Evaluation_questions` in BixBench `experiment_summary.json`.
+- Do not include the non-BixBench prompt, transformed-prompt, transformed-ground-truth, or agent-execution score fields inside `Experiment_score`.
+- `Experiment_score.ideal` must be copied from the hidden ground-truth `ideal` field only after the ground-truth access gate opens.
+- `Experiment_score.Galaxy_answer` must be the fixed submitted answer extracted from preserved Galaxy analysis outputs before ground-truth access.
+- `Experiment_score.direct_ground_truth_match_score` must equal the BixBench binary answer score from `evaluations/comparison.json`.
+- `Ground_truth_path` must list `ground_truth/BixBench/task_<N>.json` only after evaluation has occurred; before evaluation, use an empty list.
+
+In short, the BixBench pipeline is:
+
+1. Agent receives question and files.
+2. Agent executes the analysis through `usegalaxy.org` without ground-truth access.
+3. Agent downloads and preserves the Galaxy outputs used to decide the answer.
+4. Agent fixes a final answer via `submit_answer(answer="...")` and records it.
+5. Evaluator opens ground truth.
+6. Evaluator compares the submitted answer with hidden `ideal` using the declared verifier.
+7. Score is `1.0` if accepted, otherwise `0.0`.
+
 ## Failure Recovery Protocol
 
 Never blind-retry.

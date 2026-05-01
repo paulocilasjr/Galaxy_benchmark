@@ -130,6 +130,7 @@ Required preservation rules:
 - `plan/saved.md` is the initial plan and should stay immutable
 - retries create `plan/saved.attempt_<N>.md`
 - `experiment_summary.json` records the experiment name, ground-truth paths, Galaxy tools used, final Galaxy result files and local paths, transformed Galaxy-derived outputs, and reader-facing answers for original prompt compliance, transformed prompt compliance, direct ground-truth matching, transformed ground-truth matching, and agent execution in Galaxy
+- For BixBench tasks only, `experiment_summary.json` uses the reduced BixBench schema documented in `SKILL.md`: `experiment`, `Ground_truth_path`, `Galaxy_tools_used`, `Galaxy_results`, and `Experiment_score` containing only `ideal`, `Galaxy_answer`, and `direct_ground_truth_match_score`
 - `reasoning/reasoning.md` is append-only and may be supplemented by attempt-specific files
 - `errors/error.json` must preserve the full error history
 - `results/activity_log.jsonl` is append-only
