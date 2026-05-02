@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Regenerate the BixBench score CSV and summary figure.
+"""Regenerate the original-run BixBench score CSV and summary figure.
 
 The script scans the repository's outputs/ directory for run directories with
-"bixbench" in the name, reads each run's experiment_summary.json, and writes:
+"bixbench" in the name, excluding parameter-rerun directories, reads each
+run's experiment_summary.json, and writes:
 
 - bixbench_scores.csv
 - bixbench_score_summary.png
@@ -195,6 +196,8 @@ def collect_latest_bixbench_runs() -> list[dict[str, object]]:
         if run_dir == SUMMARY_DIR:
             continue
         if "bixbench" not in run_dir.name.lower():
+            continue
+        if "paramrerun" in run_dir.name.lower():
             continue
 
         row = read_run_summary(run_dir)
