@@ -1,0 +1,25 @@
+# Unique Agent Workarounds
+
+Unique workaround entries extracted from `galaxy_limitation_run_classification.csv`.
+
+1. Non-Galaxy preparation created DESeq2/enrichment-ready inputs and intermediate files from public data; Galaxy DESeq2/g:Profiler were used where recorded, but local preparation materially shaped the analysis inputs and answer extraction. Runs: 1.
+2. Non-Galaxy preparation converted the workbook into a tidy differential-expression table and applied task-specific filtering/grouping structure; Galaxy query_tabular extracted the submitted tissue answer from that prepared table. Runs: 1.
+3. Non-Galaxy preparation parsed SCOGS/tree/alignment metrics into `task60_gene_metrics.tsv`; Galaxy query_tabular selected the submitted scalar from that prepared metrics table. Runs: 1.
+4. Non-Galaxy preparation built the log10(x+1) samples-by-genes matrix and computed or organized PCA variance-derived values; Galaxy PCA/query tools were used where recorded, with final extraction from a prepared variance table. Runs: 1.
+5. Non-Galaxy preparation produced task-specific BCG/adverse-event statistical result tables from public data; Galaxy query_tabular extracted the submitted answer from those prepared tables. Runs: 7.
+6. Non-Galaxy preparation parsed tree metric files and summarized treeness-related statistics into task-specific tables; Galaxy query_tabular extracted the submitted answer from those prepared tables. Runs: 6.
+7. Non-Galaxy preparation computed alignment/parsimony metrics and comparison statistics from public alignment files; Galaxy query_tabular extracted the submitted answer from the prepared table. Runs: 5.
+8. Non-Galaxy preparation computed RNA differential-expression summary/answer tables from public data; Galaxy query_tabular extracted the submitted answer from those prepared tables. Runs: 5.
+9. Non-Galaxy preparation derived a task-specific enrichment/DE answer table from public data using the recorded DESeq2/enrichGO parameter choices; Galaxy query_tabular extracted the fixed answer from that prepared table. Runs: 2.
+10. Non-Galaxy preparation derived BCG/adverse-event statistical model or contingency-test answer rows from public data using the recorded model/filter parameters; Galaxy query_tabular extracted the fixed answer from that prepared table. Runs: 7.
+11. Non-Galaxy preparation parsed tree/alignment-derived metrics into a task-specific metrics table using the recorded treeness/gap/RCV parameter choices; Galaxy query_tabular extracted the fixed answer from that prepared table. Runs: 7.
+12. Non-Galaxy preparation computed parsimony-informative-site metrics and comparison statistics from alignment files using the recorded gap/ambiguity handling; Galaxy query_tabular extracted the fixed answer from that prepared table. Runs: 5.
+13. Non-Galaxy preparation computed differential-expression summary/answer rows using the recorded normalization, testing, FDR, and log-fold-change parameters; Galaxy query_tabular extracted the fixed answer from that prepared table. Runs: 5.
+14. Non-Galaxy preparation filtered and summarized bad-vs-control differential-expression rows by tissue using the recorded thresholds; Galaxy query_tabular extracted the fixed answer from that prepared table. Runs: 1.
+15. Non-Galaxy preparation created a log10(x+1) samples-by-genes matrix and/or PCA variance summary table using the recorded PCA parameter choices; Galaxy tools performed PCA where recorded and query_tabular extracted the final scalar from the prepared/derived table. Runs: 1.
+16. Non-Galaxy preparation converted the swarming CSV into tab-delimited upload format without calculating the submitted answer; Galaxy awk performed the grouping/statistical calculation used for the submitted answer. Runs: 5.
+17. Non-Galaxy preparation converted the NeuN CSV into tab-delimited upload format without calculating the submitted answer; Galaxy awk performed the effect-size, power, Shapiro-Wilk W, or ANOVA interaction calculation used for the submitted answer. Runs: 5.
+18. Non-Galaxy preparation converted source Excel variant workbooks into a single tabular TSV and added cohort metadata from the Trio Status workbook; Galaxy awk performed the cohort/VAF filtering and proportion calculation used for the submitted answer. Runs: 2.
+19. Non-Galaxy preparation converted source Excel workbooks into a single tabular TSV and joined sample/cohort metadata to variant rows; Galaxy awk performed the filtering/counting/proportion calculation used for the submitted answer. Runs: 4.
+20. Non-Galaxy preparation aligned CRISPR gene-effect and expression matrices and computed a per-gene Spearman rho/p-value table because usegalaxy.org lacked a suitable generic Spearman/BH tool for these wide matrices; Galaxy awk performed the final selection/count/BH-percentage operation used for the submitted answer. Runs: 3.
+21. Non-Galaxy preparation converted the expression CSV into tab-delimited upload format without calculating the submitted answer; Galaxy awk computed skewness over the uploaded matrix values. Runs: 1.
