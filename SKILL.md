@@ -585,6 +585,10 @@ Use this section when executing tasks from:
 
 - `experiments/BixBench/task_<N>.json`
 
+The local BixBench task set is the 50-question verified subset from
+`phylobio/BixBench-Verified-50`; matching ground truth lives under
+`ground_truth/BixBench/task_<N>.json`.
+
 ### Required Galaxy Execution Environment
 
 All BixBench task analyses must be performed in Galaxy Project at `usegalaxy.org`.

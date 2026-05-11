@@ -275,7 +275,7 @@ outputs/<timestamp>_<level>_<experiment>/
 
 Each completed non-BixBench run also writes `experiment_summary.json` at the run-directory root. This file is the reviewer-facing index for the run and records the experiment name, ground-truth files used for comparison, Galaxy tools used, final Galaxy result files and preserved local paths, transformed Galaxy-derived outputs used for comparison, and `Experiment_score` with `prompt_score`, `transformed_prompt_score`, `direct_ground_truth_match_score`, `transformed_ground_truth_match_score`, and `agent_performance_in_galaxy_score`.
 
-BixBench runs use a reduced `experiment_summary.json` shape because they are final-answer benchmarks. For BixBench, keep only `experiment`, `Ground_truth_path`, `Galaxy_tools_used`, `Galaxy_results`, and `Experiment_score` with `ideal`, `Galaxy_answer`, and `direct_ground_truth_match_score`.
+BixBench runs use the 50-question verified subset from `phylobio/BixBench-Verified-50` and a reduced `experiment_summary.json` shape because they are final-answer benchmarks. For BixBench, keep only `experiment`, `Ground_truth_path`, `Galaxy_tools_used`, `Galaxy_results`, and `Experiment_score` with `ideal`, `Galaxy_answer`, and `direct_ground_truth_match_score`.
 
 The non-BixBench run summary must answer these distinct questions:
 

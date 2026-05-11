@@ -1,3 +1,0 @@
-2026-05-06T02:47:41Z Initialized run. CHIP spreadsheet schemas inspected locally; TSV preparation preserves rows/columns and adds sample status for Galaxy filtering.
-2026-05-06T02:47:41Z Prepared TSV for Galaxy upload from xlsx because no native Galaxy xlsx reader was found; no cohort filtering/counting/proportion calculation was performed locally.
-2026-05-06T02:48:55Z Selected awk condition for task 46: tolower($3)=="affected"; shared variant filter: non-reference zygosity, VAF < 0.3, in_chip true, exclude intron/intergenic/UTR/upstream/downstream SO terms; benign numerator is exact Classification == Benign.

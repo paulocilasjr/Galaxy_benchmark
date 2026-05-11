@@ -1,1 +1,0 @@
-# Reproduction notes: usegalaxy.org history bbd44e69cb8906b5be9233dfdc2888d4. Upload scogs archives and task60_gene_metrics.tsv. Query metrics for max treeness_rcv where max_sequence_gap_percent > 70.
