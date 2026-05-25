@@ -7,33 +7,45 @@ metadata:
 
 # Galaxy-Bench Executor
 
-Use this skill when the task is to execute benchmark experiments in this repository.
+Use this skill when executing benchmark experiments in this repository.
 
-## Core Principle
+## 1. Core Principle
 
-The run is not valid unless a third party can reconstruct:
+A run is benchmark-valid only if a third party can reconstruct, from saved artifacts:
 
 - what the agent planned before each attempt
-- what it reasoned and decided as it progressed
+- what the agent reasoned and decided during execution
 - what Galaxy executed
-- what failed
-- how the failure was interpreted and fixed
-- what outputs were produced
+- which tools, parameters, preprocessing steps, and outputs were used
+- what failed, how the failure was interpreted, and how it was fixed
+- what final outputs were produced
 - how those outputs were evaluated
 
-If that evidence is not stored in artifacts, it does not count.
+If evidence is not stored in artifacts, it does not count.
 
-## Write Boundary
+## 2. Write Boundary
 
-During execution, only write under:
+During benchmark execution, write only under the run directory:
 
 - `outputs/<timestamp>_<level>_<experiment>/`
 
-Never write benchmark-execution artifacts anywhere else.
+Do not write benchmark-execution artifacts anywhere else. Optional extra artifacts are allowed only inside the run directory.
 
-## Run Directory Contract
+## 3. Tools Boundary
 
-Every run must create:
+Galaxy is the required execution environment for Galaxy-mediated benchmark runs.
+
+The agent is not allowed to use Galaxy Interactive Tools at all.
+
+The use of AWK is not allowed unless the prompt explicitly states that AWK may be used.
+
+Local commands may be used only to support the benchmark contract, such as inspecting allowed task metadata, preparing files for Galaxy upload, preserving downloaded Galaxy outputs, transforming already-produced Galaxy outputs when allowed by this skill, reproducing the recorded workflow, and evaluating fixed outputs after the ground-truth access rules allow it.
+
+Do not perform the scientific analysis locally as the primary execution path for Galaxy runs or BixBench runs.
+
+## 4. Run Directory Contract
+
+Every run must create this directory shape:
 
 ```text
 outputs/<timestamp>_<level>_<experiment>/
@@ -67,21 +79,48 @@ outputs/<timestamp>_<level>_<experiment>/
     `-- reproduce_<experiment>.py
 ```
 
-Optional extra artifacts may be added, but only under these directories.
+Attempt-specific files are required when retries or separately evaluated attempts occur.
 
-## Artifact Requirements
+## 5. Artifact Requirements
 
-The necessary artifacts are:
+### Required Final Files
 
-### 0. `experiment_summary.json`
+A completed benchmark-valid run must include:
 
-Every run must write a root-level summary file after the run directory is created and update it before the run is declared complete:
+- `experiment_summary.json`
+- `plan/saved.md`
+- `reasoning/reasoning.md`
+- `errors/error.json`
+- `results/result.json`
+- `results/reproduce_<experiment>.py`
+- `results/run_record.json`
+- `results/artifacts_manifest.json`
+- `results/evaluation_manifest.json`
+- `results/activity_log.jsonl`
+- `evaluations/comparison.json`
+- `evaluations/metrics_summary.json`
+- original downloaded Galaxy output files used for evaluation, preserved unchanged
+
+Before declaring completion, verify that:
+
+- required outputs exist
+- `experiment_summary.json` points to the ground truth, Galaxy tools, original Galaxy result files, transformed outputs, and final scores
+- manifests reference all preserved artifacts
+- the activity log covers planning, execution, checks, retries, revisions, snapshots, and evaluation
+- Galaxy IDs referenced in results are preserved in traces
+- `errors/error.json` has a terminal status
+- no prior attempt artifact was overwritten
+- evaluation JSON explicitly shows the required metrics
+
+### `experiment_summary.json`
+
+Every non-BixBench run must write and maintain a root-level summary:
 
 - `outputs/<timestamp>_<level>_<experiment>/experiment_summary.json`
 
-This file is a compact index for downstream review. It does not replace the detailed evidence in `results/`, `evaluations/`, or `traces/`.
+This is the reviewer-facing index for the run. It does not replace detailed evidence in `results/`, `evaluations/`, or `traces/`.
 
-Required JSON shape:
+Required non-BixBench shape:
 
 ```json
 {
@@ -169,291 +208,127 @@ Required JSON shape:
 
 Field rules:
 
-- `Ground_truth_path` must list only ground-truth/reference files actually used by the evaluator.
-- `Galaxy_tools_used` must list the Galaxy tools that materially contributed to the completed task, including tool IDs when available.
-- `Galaxy_results.files` must identify the Galaxy history outputs considered final task results, preferably with HIDs or dataset IDs when available.
-- `Galaxy_results.path` must list the local preserved copies of those Galaxy outputs.
-- `Transformed_galaxy_output` must list only transformed helper files used for scoring or comparison; use an empty list if no transformed output was used.
-- `Experiment_score.prompt_score` maps to the prompt-requirement score for the original Galaxy outputs.
-- `Experiment_score.transformed_prompt_score` maps to prompt-requirement compliance after the agent rearranges preserved Galaxy outputs into a better prompt-shaped format.
-- `Experiment_score.direct_ground_truth_match_score` maps to direct item-level comparison between the original Galaxy output files and the ground truth.
-- `Experiment_score.transformed_ground_truth_match_score` maps to item-level comparison between the agent-rearranged Galaxy-derived output and the ground truth.
-- `Experiment_score.agent_performance_in_galaxy_score` maps to the agent's execution score in Galaxy.
-- Use `null` for a direct or transformed ground-truth score only when that comparison is not meaningful or was not performed, and explain why in `Evaluation_questions`.
-- `Evaluation_questions` must answer the benchmark questions in reader-facing language and include the relevant counts whenever available.
-- Prompt-score evidence must not be treated as ground-truth-match evidence. Prompt scores answer whether Galaxy output, before or after rearrangement, has the requested shape/content; ground-truth scores answer whether produced values matched the reference.
+- `Ground_truth_path` lists only ground-truth/reference files actually used by the evaluator.
+- `Galaxy_tools_used` lists Galaxy tools that materially contributed to the completed task, including tool IDs when available.
+- `Galaxy_results.files` identifies the Galaxy history outputs considered final task results, preferably with HIDs or dataset IDs.
+- `Galaxy_results.path` lists local preserved copies of those Galaxy outputs.
+- `Transformed_galaxy_output` lists only transformed helper files used for scoring or comparison; use an empty list if none were used.
+- `Evaluation_questions` answers the benchmark questions in reader-facing language and includes relevant counts whenever available.
 - Paths should be relative to the run directory unless an external reference path is required for auditability.
 
-### 1. `plan/`
+Score mapping:
 
-Before running the experiment in Galaxy, the agent must write the plan.
+- `prompt_score` maps to prompt-requirement compliance for original Galaxy outputs.
+- `transformed_prompt_score` maps to prompt-requirement compliance after reshaping preserved Galaxy outputs.
+- `direct_ground_truth_match_score` maps to direct item-level comparison between original Galaxy output files and ground truth.
+- `transformed_ground_truth_match_score` maps to item-level comparison between agent-rearranged Galaxy-derived output and ground truth.
+- `agent_performance_in_galaxy_score` maps to the agent's execution score in Galaxy.
+- Use `null` only when a direct or transformed ground-truth comparison is not meaningful or not performed, and explain why in `Evaluation_questions`.
+- Prompt-score evidence must not be treated as ground-truth-match evidence.
 
-Minimum contents:
+### `plan/`
+
+Before running the experiment in Galaxy, write `plan/saved.md` with:
 
 - experiment objective
 - input datasets
 - intended workflow steps
 - intended tool choices
 - expected result files
-- anticipated risks
+- anticipated risks and fallback branches
 
-If another run or retry is performed:
+For each retry, create `plan/saved.attempt_<N>.md` describing what changed and why the new attempt is being launched.
 
-- create a new plan file with the attempt number
-- describe what changed from the previous plan
-- explain why the new attempt is being launched
+### `reasoning/`
 
-Required files:
+Record decision-making during execution, not reconstructed afterward. Include:
 
-- `plan/saved.md`
-- `plan/saved.attempt_<N>.md`
-
-### 2. `reasoning/`
-
-All decision-making must be recorded here as the agent progresses so information is not lost.
-
-This includes:
-
-- tools considered and selected
+- tools considered, selected, and rejected
 - parameters considered and selected
 - preprocessing decisions
-- why a specific plan was chosen
-- errors encountered
-- how errors were interpreted
-- how errors were fixed
-- changes to the plan
+- assumptions, uncertainty, and confidence estimate or proxy before major milestones
+- why a plan was chosen
+- errors encountered and interpreted
+- root-cause analysis and fix strategy before each retry
+- changes between attempts
 - retries and stopping decisions
-- any important intermediate reasoning or judgments
 
-This file must be updated during execution, not reconstructed afterward.
+`reasoning/reasoning.md` is required. `reasoning/reasoning.attempt_<N>.md` is optional when an attempt-specific record is useful.
 
-Required files:
+### `errors/`
 
-- `reasoning/reasoning.md`
-- optionally `reasoning/reasoning.attempt_<N>.md` when an attempt-specific record is helpful
+`errors/error.json` must preserve the full error history. For each error, record:
 
-### 3. `errors/`
+- source
+- failed tool or workflow step
+- stable error signature
+- message
+- timestamp
+- whether it was fixed
+- what changed in response
 
-The error artifact must be a JSON file that records:
+Never blind-retry. For every failed attempt:
 
-- the source of the error
-- which tool or workflow step failed
-- the error message
-- when the error happened
-- whether the error was fixed
-- what was changed in response
+1. Snapshot failure evidence.
+2. Extract a stable error signature.
+3. Record the inferred root cause.
+4. Record the fix strategy.
+5. Log a `revise` record before retrying.
+6. Write new attempt artifacts.
 
-Required file:
+If the same signature repeats, change the failing mechanism or stop with a documented blocker.
 
-- `errors/error.json`
+### `traces/`
 
-### 4. `traces/`
-
-This directory stores Galaxy execution logs and all identifiers needed to track what happened in Galaxy.
-
-It should preserve, whenever available:
+Preserve structured Galaxy evidence under `traces/galaxy/` whenever available:
 
 - history names and IDs
-- dataset names and HIDs
-- job IDs
-- invocation IDs
-- workflow IDs
+- dataset names, IDs, HIDs, metadata, and states
+- job IDs, states, parameters, provenance, stdout, and stderr
+- invocation IDs and workflow IDs
 - tool IDs
 - state transitions and polling results
-- provenance and Galaxy metadata snapshots
+- Galaxy metadata snapshots
 
-This section must also include a script file that logs all commands the agent used to run the experiment.
+If a Galaxy object is important to execution, scoring, or debugging, snapshot it.
 
-The script log may be:
+Preserve local execution evidence under `traces/local/` or `results/`, including a command log or script log updated as the agent executes. `results/reproduce_<experiment>.py` remains the canonical replay script.
 
-- Python
-- Bash
-- another language
+Polling and wait policy:
 
-but it must be updated as the agent executes and should preserve the actual commands used.
+- When a Galaxy job or output dataset is active, wait for completion unless there is a clear terminal failure signature.
+- Start with `1 minute` between checks.
+- Keep the `1 minute` cadence until `6 minutes` total wait time has elapsed.
+- After `6 minutes`, increase to `15 minutes` between checks.
+- At each check, preserve timestamp, observed state, latest relevant `update_time`, and any newly available stdout/stderr or failure details.
+- Stop early only for terminal error state, a stable repeated blocker with preserved evidence, or documented resumption from an already preserved Galaxy state.
 
-Required trace expectations:
+### `results/`
 
-- structured Galaxy evidence under `traces/galaxy/`
-- command log or script log under `traces/local/` or `results/`
-- `results/reproduce_<experiment>.py` must remain present as the canonical replay script
+Store:
 
-### 5. `results/`
+- final structured result in `results/result.json`
+- attempt-specific result versions as `results/result.attempt_<N>.json`
+- downloaded Galaxy result files
+- supporting result artifacts
+- output formats produced
+- `results/run_record.json`
+- `results/artifacts_manifest.json`
+- `results/evaluation_manifest.json`
+- append-only `results/activity_log.jsonl`
+- canonical replay script `results/reproduce_<experiment>.py`
 
-This directory stores:
+Append JSONL activity records for `plan`, `execute`, `check`, `retry`, `revise`, `evaluate`, and `snapshot`. Each record should include relevant IDs, paths, parameters, and outcomes.
 
-- the final structured result
-- attempt-specific result versions
-- all output files produced as final results
-- downloaded result files from Galaxy
-- the output formats produced
+### `evaluations/`
 
-The agent should download the relevant Galaxy result artifacts and place them here.
+After result generation, write:
 
-Required files:
+- `evaluations/comparison.json`: detailed evaluation evidence, scoring logic, counts, and calculation notes
+- `evaluations/comparison.attempt_<N>.json`: attempt-specific comparisons when multiple attempts are evaluated
+- `evaluations/metrics_summary.json`: concise final metrics only
 
-- `results/result.json`
-- `results/result.attempt_<N>.json`
-- downloaded result files and supporting artifacts
-
-### 6. `evaluations/`
-
-The evaluation outputs must be split into two files with distinct purposes:
-
-- `evaluations/comparison.json`
-  This is the detailed evaluation record. It should contain the full evaluation evidence, the scoring logic, and the four required metrics with enough detail for auditability.
-- `evaluations/metrics_summary.json`
-  This is the concise summary file. It must contain only the four final metric values and no extra helper metrics or metadata fields.
-
-The required four metrics are:
-
-#### i. `prompt_result_evaluation`
-
-Read the prompt and evaluate whether the original Galaxy-produced output meets the prompt requirements.
-
-This score answers:
-
-> Does Galaxy generate outputs with the requirements from the prompt?
-
-It is based on the count of elements requested in the prompt and how many of those elements are present in the original Galaxy output. It is not a ground-truth comparison score.
-
-Examples of prompt requirements:
-
-- required file format
-- required headers
-- required output fields
-- required deliverable type
-
-Scoring rule:
-
-- count the number of prompt requirements checked
-- count the number of prompt requirements matched
-- score = `matches / checks`
-
-The `ground_truth` file has a key called `expected_outputs` written in plain text. Use it to understand what the prompt expects as a result, but do not treat prompt compliance as ground-truth matching.
-
-#### ii. `transformed_prompt_result_evaluation`
-
-Evaluate whether the agent-rearranged Galaxy output meets the prompt requirements.
-
-This score answers:
-
-> Does the Galaxy output, after rearrangement by the agent, satisfy the requirements from the prompt?
-
-This score is still a prompt-format/content compliance score, not a ground-truth match score. It should be used when the original Galaxy tool output contains the needed result but has a tool-native shape that does not directly match the requested deliverable.
-
-Rules:
-
-- the original Galaxy output file or files must still be preserved unchanged
-- any transformed file used for this metric must be stored separately
-- the transformed file may only be derived from the original downloaded Galaxy output file or files chosen as the evaluation target
-- this metric is only for prompt compliance after transformation; it does not replace original-output prompt scoring or ground-truth matching
-
-Scoring rule:
-
-- count the number of prompt requirements checked
-- count the number of prompt requirements matched by the transformed file
-- score = `matches / checks`
-
-#### iii. `direct_ground_truth_result_evaluation`
-
-Open the ground truth file referenced for the task and compare it directly to the original output file or files produced by Galaxy.
-
-This score answers:
-
-> Does the original Galaxy output match the ground truth in a direct comparison?
-
-The evaluator must:
-
-- read the ground-truth file
-- count the comparable reference elements
-- read the original downloaded Galaxy output file or files
-- count how many reference elements can be matched directly in those original files
-- report the percentage of matched elements
-
-The direct comparison target must be the original output file or files that Galaxy produced:
-
-- download the exact Galaxy output files used for evaluation
-- preserve those downloaded files unchanged under the run directory
-- do not modify, normalize, regenerate, rewrite, or synthesize a substitute file for this direct score
-
-If direct comparison is not meaningful because the original Galaxy format is incompatible with the ground-truth contract, record that explicitly and use `null` for the score rather than silently substituting a transformed helper file.
-
-#### iv. `transformed_ground_truth_result_evaluation`
-
-This compares a transformed or rearranged Galaxy-derived output against the ground truth.
-
-This score answers:
-
-> Does the Galaxy output, after rearrangement by the agent, match the ground truth in a direct comparison?
-
-This metric exists to remove output-format incompatibility when the scientific result is already present in the Galaxy output but not shaped like the ground-truth file.
-
-Rules:
-
-- the original Galaxy output file or files must still be preserved unchanged
-- any transformed file used for this metric must be stored separately
-- the transformed file may only be derived from the original downloaded Galaxy output file or files chosen as the evaluation target
-- this metric is for item-level ground-truth comparison after transformation; it does not replace prompt scoring or direct original-output ground-truth scoring
-
-Allowed transformations:
-
-- renaming columns
-- reordering rows or columns
-- selecting subsets of rows or columns
-- delimiter changes
-- file-format conversion
-- deterministic joins across original Galaxy output files when all scored values already exist in those original Galaxy outputs
-
-Disallowed transformations:
-
-- adding inferred or externally sourced annotations
-- recomputing scientific results outside the original Galaxy output content
-- filling missing values with guessed, inferred, or newly derived content
-- normalizing values through external mappings that are not already present in the original Galaxy output
-- creating scored values that are not directly traceable to the original Galaxy output file or files
-- forcing the transformed output to match the ground truth by introducing information that Galaxy did not actually produce
-
-Provenance requirements:
-
-- the transformed file must list the exact original Galaxy source file or files it was derived from
-- the evaluation record must state whether the transformation is `format-only` or `content-altering`
-- the evaluation record must explain the transformation steps succinctly enough for auditability
-
-Validity rule:
-
-- every scored value in the transformed file must be traceable to values already present in the original downloaded Galaxy output file or files
-- if any scored value is newly introduced rather than reshaped from the original Galaxy output, this metric is not valid for that run
-- if any content-altering transformation occurred, the evaluation must mark `transformed_ground_truth_result_evaluation` as invalid or not eligible instead of awarding a normal success score
-
-Scoring rule:
-
-- count the number of ground-truth items compared
-- count the number of transformed-output items that match
-- score = `matched_items / compared_items`
-
-The comparison should be item-level, not only file-level.
-
-#### v. `agent_performance_in_galaxy_score`
-
-This measures the agent’s setup and execution performance in Galaxy.
-
-This score answers:
-
-> Does the agent know how to execute the task in Galaxy to reach the result?
-
-The score is based on whether the agent reached the required output, how many errors occurred, whether the agent fixed those errors, and whether it stopped because it did not know how to move forward.
-
-Scoring rule:
-
-- start at `100`
-- if the required output was not achieved, deduct `50`
-- for each failure, deduct `10`
-- if the run fails completely with no output and no steps completed, score `0`
-
-The evaluation JSON should make the calculation explicit.
-
-Suggested fields for `evaluations/comparison.json`:
+For non-BixBench runs, `evaluations/comparison.json` should include:
 
 - `prompt_result_evaluation`
 - `transformed_prompt_result_evaluation`
@@ -462,27 +337,72 @@ Suggested fields for `evaluations/comparison.json`:
 - `agent_performance_in_galaxy_score`
 - `calculation_notes`
 
-Required rule for `evaluations/metrics_summary.json`:
+For non-BixBench runs, `evaluations/metrics_summary.json` must include only:
 
-- include only:
-  - `prompt_result_score`
-  - `transformed_prompt_result_score`
-  - `direct_ground_truth_result_score`
-  - `transformed_ground_truth_result_score`
-  - `agent_performance_in_galaxy_score`
-- do not include helper metrics such as overlap counts, revision markers, timestamps, or explanatory text
-- do not use the legacy label `galaxy_performance_score`; the benchmark is measuring the agent's capability to execute through Galaxy, not Galaxy platform performance
+- `prompt_result_score`
+- `transformed_prompt_result_score`
+- `direct_ground_truth_result_score`
+- `transformed_ground_truth_result_score`
+- `agent_performance_in_galaxy_score`
 
-## Immutability Rules
+Do not include helper metrics, overlap counts, revision markers, timestamps, explanatory text, or the legacy label `galaxy_performance_score`.
 
-- `saved.md` is the initial plan and must not be overwritten.
-- Every retry must create a new attempt-specific plan and result artifact.
+#### Evaluation Metric Rules
+
+`prompt_result_evaluation` answers whether original Galaxy-produced outputs meet prompt requirements, such as required format, headers, output fields, and deliverable type. Score by `matched_requirements / checked_requirements`. Use the ground-truth `expected_outputs` text only to understand the expected result contract; do not treat prompt compliance as ground-truth matching.
+
+`transformed_prompt_result_evaluation` answers whether agent-rearranged Galaxy output meets prompt requirements. It is still prompt compliance, not ground-truth matching, and it does not replace original-output prompt scoring. Preserve original Galaxy outputs unchanged; store transformed files separately; derive transformed files only from the original downloaded Galaxy outputs chosen as evaluation targets.
+
+`direct_ground_truth_result_evaluation` compares the original downloaded Galaxy output files directly to ground truth. Count comparable reference elements and item-level matches. Do not modify, normalize, regenerate, rewrite, or synthesize substitutes for this direct score. If direct comparison is not meaningful because formats are incompatible, record that and use `null`.
+
+`transformed_ground_truth_result_evaluation` compares a transformed Galaxy-derived output to ground truth. It exists only to remove output-format incompatibility when the scientific result is already present in the Galaxy output.
+
+Allowed transformed-output operations:
+
+- renaming columns
+- reordering rows or columns
+- selecting subsets of rows or columns
+- delimiter changes
+- file-format conversion
+- deterministic joins across original Galaxy outputs when all scored values already exist in those outputs
+
+Disallowed transformed-output operations:
+
+- adding inferred or externally sourced annotations
+- recomputing scientific results outside the original Galaxy output content
+- filling missing values with guessed, inferred, or newly derived content
+- normalizing values through external mappings not already present in the original Galaxy output
+- creating scored values not directly traceable to original Galaxy output files
+- forcing output to match ground truth by introducing information Galaxy did not produce
+
+For transformed ground-truth scoring:
+
+- list exact original Galaxy source files
+- state whether the transformation is `format-only` or `content-altering`
+- explain transformation steps
+- ensure every scored value is traceable to original Galaxy output values
+- mark the metric invalid or not eligible if content-altering transformation introduced scored values
+
+`agent_performance_in_galaxy_score` answers whether the agent knew how to execute the task in Galaxy to reach the result. Scoring rule:
+
+- start at `100`
+- deduct `50` if the required output was not achieved
+- deduct `10` for each failure
+- score `0` if the run fails completely with no output and no completed steps
+
+Make the calculation explicit in `evaluations/comparison.json`.
+
+## 6. Immutability Rules
+
+- `plan/saved.md` is the initial plan and must not be overwritten.
+- Every retry must create new attempt-specific plan, result, and comparison artifacts.
 - `reasoning/reasoning.md` is append-only.
 - `results/activity_log.jsonl` is append-only.
-- Do not replace or delete prior evaluation artifacts.
-- If a correction is needed, write a new versioned artifact and update manifests.
+- Do not replace or delete prior result, trace, or evaluation artifacts.
+- If correction is needed, write a new versioned artifact and update manifests.
+- Preserve Galaxy evidence snapshots and IDs.
 
-## Credential Gate
+## 7. Credential Gate
 
 Before any Galaxy action:
 
@@ -491,101 +411,17 @@ Before any Galaxy action:
 
 Do not print, log, or persist secret values.
 
-## Required Evidence Capture
+## 8. BixBench Evaluation Rules
 
-### Planning
-
-Record in `plan/`:
-
-- objective
-- dataset inventory
-- intended analysis path
-- expected outputs
-- likely risks
-- fallback branches
-
-### Reasoning
-
-Record in `reasoning/`:
-
-- tool discovery and selection rationale
-- rejected alternatives
-- parameter decisions
-- preprocessing decisions
-- assumptions and uncertainty
-- confidence estimate or proxy before major execution milestones
-- root-cause analysis after each failure
-- fix strategy before each retry
-- changes between attempts
-- stopping rationale
-
-### Activity Log
-
-Append JSONL entries for:
-
-- `plan`
-- `execute`
-- `check`
-- `retry`
-- `revise`
-- `evaluate`
-- `snapshot`
-
-Every record should include relevant IDs, paths, parameters, and outcomes.
-
-### Galaxy Trace Snapshots
-
-Store structured Galaxy evidence under `traces/galaxy/` whenever available:
-
-- history metadata
-- dataset metadata and HIDs
-- job state and provenance
-- workflow invocation state
-- stderr/stdout or equivalent failure messages
-
-If a Galaxy object is important to execution or debugging, snapshot it.
-
-### Polling And Wait Policy
-
-When a Galaxy job or output dataset is still active:
-
-- do not stop after a short ad hoc polling loop
-- wait for the job to complete unless there is a clear terminal failure signature
-- start with a sleep time of `1 minute` between checks
-- keep that `1 minute` polling cadence until `6 minutes` of total wait time have elapsed
-- after `6 minutes`, increase the sleep time to `15 minutes` between checks
-
-At each check, preserve:
-
-- the check timestamp
-- the observed state
-- the latest relevant `update_time`
-- any newly available stderr/stdout or other failure details
-
-Only stop waiting early if:
-
-- the job or dataset enters a terminal error state
-- there is a stable repeated blocker with preserved evidence
-- the run is being resumed from an already preserved Galaxy state with a documented reason
-
-### Evaluation
-
-After result generation is complete:
-
-- write comparison JSON artifacts
-- write metric summaries
-- write evaluation manifests
-- keep comparisons for every attempt if multiple attempts were evaluated
-
-## BixBench Evaluation Rules
-
-BixBench tasks are different from the other Galaxy-Bench tasks. They are final-answer benchmarks, not workflow-quality benchmarks.
-
-Use this section when executing tasks from:
+BixBench tasks are final-answer benchmarks, not workflow-quality benchmarks. Use this section for:
 
 - `experiments/BixBench/task_<N>.json`
 
-### Required Galaxy Execution Environment
+The local task set is the 50-question verified subset from `phylobio/BixBench-Verified-50`. Matching ground truth lives under:
+
+- `ground_truth/BixBench/task_<N>.json`
+
+### Required Galaxy Environment
 
 All BixBench task analyses must be performed in Galaxy Project at `usegalaxy.org`.
 
@@ -597,28 +433,26 @@ Do not perform the scientific analysis locally as the primary execution path. Lo
 - transform already-produced Galaxy outputs into the submitted-answer shape when allowed by this skill
 - evaluate the fixed submitted answer after the ground-truth access gate opens
 
-For BixBench, the submitted answer must be traceable to outputs generated through `usegalaxy.org`. Preserve the Galaxy history, dataset, job, and output evidence under `traces/galaxy/`, and record the Galaxy-derived files used to decide the answer under `results/`.
+The submitted answer must be traceable to outputs generated through `usegalaxy.org`. Preserve Galaxy history, dataset, job, and output evidence under `traces/galaxy/`, and record Galaxy-derived files used to decide the answer under `results/`.
 
 ### Ground-Truth Access Gate
 
-For BixBench tasks, the ground-truth file is hidden during task execution.
-
-The agent must not open, read, search, summarize, or otherwise use:
+For BixBench, the ground-truth file is hidden during task execution. The agent must not open, read, search, summarize, or otherwise use:
 
 - `ground_truth/BixBench/task_<N>.json`
 - any other task-related ground-truth file
 
 until all of the following are true:
 
-1. The agent has completed the analysis using only the prompt and allowed input files.
-2. The agent has written the final submitted answer into the run artifacts.
-3. The agent has recorded that final answer as if calling `submit_answer(answer="<final answer>")`.
+1. The agent completed the analysis using only the prompt and allowed input files.
+2. The agent wrote the final submitted answer into run artifacts.
+3. The agent recorded that final answer as if calling `submit_answer(answer="<final answer>")`.
 
-Only after this final answer is fixed may the evaluator open `ground_truth/BixBench/task_<N>.json` to score the run. Do not revise the submitted answer after opening ground truth.
+Only after this final answer is fixed may the evaluator open ground truth to score the run. Do not revise the submitted answer after opening ground truth.
 
-### Required BixBench Result Artifact
+### Required BixBench Result
 
-For BixBench, `results/result.json` must include the final answer before evaluation, for example:
+Before evaluation, `results/result.json` must include:
 
 ```json
 {
@@ -629,7 +463,7 @@ For BixBench, `results/result.json` must include the final answer before evaluat
 }
 ```
 
-The `submitted_answer` is the only scientific output that BixBench grades. Preserve any supporting analysis files separately, but do not use them as substitutes for the submitted answer.
+The `submitted_answer` is the only scientific output BixBench grades. Preserve supporting analysis files separately, but do not use them as substitutes for the submitted answer.
 
 ### Scoring Model
 
@@ -638,38 +472,31 @@ BixBench scoring is binary:
 - `1.0` if the submitted answer is accepted
 - `0.0` if the submitted answer is not accepted
 
-BixBench does not grade:
+BixBench does not grade intermediate reasoning, tool choice, code quality, preprocessing count, workflow elegance, or partial scientific credit. Preserve those details for auditability, but do not let them change the BixBench correctness score.
 
-- intermediate reasoning
-- tool choice
-- code quality
-- number of preprocessing steps
-- Galaxy workflow elegance
-- partial scientific credit
-
-Those details should still be preserved for auditability, but they do not change the BixBench correctness score.
+Use `agent_performance_in_galaxy_score` only to report whether the agent successfully executed the required environment workflow. It must not override or inflate the binary answer score.
 
 ### Verifier Behavior
 
-The ground-truth file contains the hidden reference answer under `ideal`, plus optional `distractors`, `hypothesis`, `eval_mode`, and related metadata. These fields are evaluator-only.
+The ground-truth file contains evaluator-only fields including `ideal`, and may include `distractors`, `hypothesis`, `eval_mode`, and related metadata.
 
 For `eval_mode: "str_verifier"`:
 
 1. Compare `submitted_answer` with `ideal` exactly, ignoring case.
-2. If the exact case-insensitive comparison fails, use a semantic-equivalence grader to decide whether the submitted answer means the same thing as the ideal answer.
+2. If that fails, use a semantic-equivalence grader to decide whether the submitted answer means the same thing as the ideal answer.
 3. The current BixBench semantic grader is `gpt-5-mini`.
 
 For `eval_mode: "range_verifier"`:
 
-1. Parse both `submitted_answer` and `ideal` as numeric values or numeric ranges.
+1. Parse `submitted_answer` and `ideal` as numeric values or numeric ranges.
 2. If no numeric distractors are available, accept answers within `1%` relative tolerance of the ideal value.
-3. If numeric distractors are available, accept only when the submitted value is closer to the ideal value than to every distractor value.
+3. If numeric distractors are available, accept only when the submitted value is closer to the ideal than to every distractor.
 
-If parsing fails or the answer is not semantically/numerically acceptable, score `0.0`.
+If parsing fails or the answer is not semantically or numerically acceptable, score `0.0`.
 
 ### BixBench Evaluation Artifacts
 
-After opening ground truth, write `evaluations/comparison.json` with a BixBench-specific record such as:
+After opening ground truth, write `evaluations/comparison.json`:
 
 ```json
 {
@@ -699,11 +526,9 @@ For BixBench, `evaluations/metrics_summary.json` must contain only:
 }
 ```
 
-Use `agent_performance_in_galaxy_score` only to report whether the agent successfully executed the required environment workflow. It must not override or inflate the binary BixBench answer score.
+### BixBench `experiment_summary.json`
 
-### Mapping To `experiment_summary.json`
-
-For BixBench runs, `experiment_summary.json` uses a reduced BixBench-specific shape instead of the full Galaxy-Bench summary shape used by the other task categories. Keep only:
+For BixBench runs, use this reduced shape:
 
 ```json
 {
@@ -730,72 +555,22 @@ For BixBench runs, `experiment_summary.json` uses a reduced BixBench-specific sh
 }
 ```
 
-BixBench summary field rules:
+BixBench summary rules:
 
-- Do not include `Transformed_galaxy_output` or `Evaluation_questions` in BixBench `experiment_summary.json`.
-- Do not include the non-BixBench prompt, transformed-prompt, transformed-ground-truth, or agent-execution score fields inside `Experiment_score`.
-- `Experiment_score.ideal` must be copied from the hidden ground-truth `ideal` field only after the ground-truth access gate opens.
-- `Experiment_score.Galaxy_answer` must be the fixed submitted answer extracted from preserved Galaxy analysis outputs before ground-truth access.
-- `Experiment_score.direct_ground_truth_match_score` must equal the BixBench binary answer score from `evaluations/comparison.json`.
-- `Ground_truth_path` must list `ground_truth/BixBench/task_<N>.json` only after evaluation has occurred; before evaluation, use an empty list.
+- Keep only `experiment`, `Ground_truth_path`, `Galaxy_tools_used`, `Galaxy_results`, and `Experiment_score`.
+- Do not include `Transformed_galaxy_output` or `Evaluation_questions`.
+- Do not include non-BixBench prompt, transformed-prompt, transformed-ground-truth, or agent-execution score fields inside `Experiment_score`.
+- Copy `Experiment_score.ideal` from hidden ground truth only after the ground-truth access gate opens.
+- Set `Experiment_score.Galaxy_answer` to the fixed submitted answer extracted from preserved Galaxy analysis outputs before ground-truth access.
+- Set `Experiment_score.direct_ground_truth_match_score` equal to the binary answer score from `evaluations/comparison.json`.
+- Before evaluation, `Ground_truth_path` must be an empty list; after evaluation, list `ground_truth/BixBench/task_<N>.json`.
 
-In short, the BixBench pipeline is:
+The BixBench pipeline is:
 
 1. Agent receives question and files.
 2. Agent executes the analysis through `usegalaxy.org` without ground-truth access.
-3. Agent downloads and preserves the Galaxy outputs used to decide the answer.
+3. Agent downloads and preserves Galaxy outputs used to decide the answer.
 4. Agent fixes a final answer via `submit_answer(answer="...")` and records it.
 5. Evaluator opens ground truth.
 6. Evaluator compares the submitted answer with hidden `ideal` using the declared verifier.
 7. Score is `1.0` if accepted, otherwise `0.0`.
-
-## Failure Recovery Protocol
-
-Never blind-retry.
-
-For every failed attempt:
-
-1. Snapshot the failure evidence.
-2. Extract a stable error signature.
-3. Record the inferred root cause.
-4. Record the fix strategy.
-5. Log a `revise` record before launching the retry.
-6. Write new attempt artifacts instead of overwriting old ones.
-
-If the same signature repeats:
-
-- do not continue with superficial parameter sweeps
-- change the failing mechanism or stop with a documented blocker
-
-## Required Final Files
-
-A benchmark-valid completed run must end with:
-
-- `experiment_summary.json`
-- `plan/saved.md`
-- `reasoning/reasoning.md`
-- `errors/error.json`
-- `results/result.json`
-- `results/reproduce_<experiment>.py`
-- `results/run_record.json`
-- `results/artifacts_manifest.json`
-- `results/evaluation_manifest.json`
-- `results/activity_log.jsonl`
-- `evaluations/comparison.json`
-- `evaluations/metrics_summary.json`
-- the original downloaded Galaxy output file used for evaluation, preserved unchanged
-
-Attempt-specific variants must exist when retries happened.
-
-## Completion Requirements
-
-Before declaring the run complete, verify:
-
-- required outputs exist
-- `experiment_summary.json` exists and points to the ground truth, Galaxy tools, original Galaxy result files, transformed outputs, and final scores
-- manifests reference all preserved artifacts
-- activity log covers planning, execution, checks, retries, revisions, and evaluation
-- Galaxy IDs referenced in result artifacts are preserved in traces
-- final `errors/error.json` status is terminal
-- no prior attempt artifact was overwritten
-- evaluation JSON explicitly shows the four requested evaluation metrics

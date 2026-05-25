@@ -1,1 +1,0 @@
-# Reproduction notes: usegalaxy.org history bbd44e69cb8906b53742fb3ebc8c7c4d. Upload log10(x+1) samples-by-genes matrix; run sklearn_pca full components; compute component score variances from Galaxy PCA output; upload variance table; query PC1 percent_variance.

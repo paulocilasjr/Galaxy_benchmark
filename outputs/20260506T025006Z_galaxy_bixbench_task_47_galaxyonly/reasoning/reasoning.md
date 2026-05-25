@@ -1,4 +1,0 @@
-2026-05-06T02:50:06Z Initialized run. CHIP spreadsheet schemas inspected locally; TSV preparation preserves rows/columns and adds sample status for Galaxy filtering.
-2026-05-06T02:50:06Z Prepared TSV for Galaxy upload from xlsx because no native Galaxy xlsx reader was found; no cohort filtering/counting/proportion calculation was performed locally.
-2026-05-06T02:51:20Z Selected awk condition for task 47: tolower($3)=="unaffected" && tolower($2)!="mother" && tolower($2)!="father"; shared variant filter: non-reference zygosity, VAF < 0.3, in_chip true, exclude intron/intergenic/UTR/upstream/downstream SO terms; benign numerator is exact Classification == Benign.
-2026-05-06T02:52:00Z Local orchestration stopped before submit_answer. Ground truth gate remains unopened for task 47 in this interrupted run.

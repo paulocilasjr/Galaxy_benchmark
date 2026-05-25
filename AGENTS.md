@@ -1,164 +1,96 @@
-# Galaxy Benchmark Codex Guide
+# Galaxy Benchmark Agent Guide
 
-Read this file first when working in this repository.
+Read this file first when you enter the repository. Its purpose is orientation only: it explains what this project is, where the important files live, and which document to read next.
 
-Then use:
+## What This Project Is
 
-- [README.md](/Users/4475918/Projects/Galaxy_benchmark/README.md) for the benchmark definition
-- [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md) when executing benchmark runs
-- [project_spec/PROJECT_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/PROJECT_SPEC.md) when changing benchmark structure or implementation scaffolding
+Galaxy Benchmark evaluates whether an agent can turn a biomedical analysis request into a scientifically useful, auditable Galaxy-based execution.
 
-## Repository Mission
+The benchmark is designed to test more than final-answer correctness. It also evaluates whether the agent can:
 
-Galaxy Benchmark evaluates the combined capability of an agent and its harness to:
+- understand a realistic biomedical task
+- choose Galaxy-compatible tools and parameters
+- execute through Galaxy with preserved provenance
+- recover from failures without losing evidence
+- produce outputs that can be compared fairly against ground truth
+- preserve enough artifacts for a reviewer to audit the run later
 
-- interpret a biomedical request
-- map it to Galaxy-compatible operations
-- execute with auditable provenance
-- recover from failure
-- produce a scientifically useful result
+The repository supports Nature Methods-tier evaluation claims, so changes should improve scientific realism, fairness, auditability, reproducibility, or reviewer clarity.
 
-The benchmark is intended to support Nature Methods-tier evaluation claims. That means every benchmark change should improve at least one of:
+## Where To Go Next
 
-- scientific realism
-- evaluation fairness
-- execution auditability
-- reproducibility
-- reviewer-facing clarity
+- Use [README.md](/Users/4475918/Projects/Galaxy_benchmark/README.md) to understand the benchmark definition, aims, task design, and evaluation model.
+- Use [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md) when executing any benchmark task. It contains the rules, run layout, artifact contract, tool boundaries, credential gate, scoring details, and BixBench-specific procedure.
+- Use task files under `experiments/` to find the prompt and allowed inputs for a run.
+- Use files under `ground_truth/` only when the evaluation procedure permits it. BixBench ground truth is hidden until the submitted answer is fixed, as specified in `SKILL.md`.
+- Use `outputs/` only for benchmark execution artifacts.
 
-## High-Level Questions
+If the user asks you to execute a benchmark task, read `SKILL.md` before taking any Galaxy or local execution action.
 
-When authoring or revising the benchmark, preserve the ability to answer:
-
-1. How much does Galaxy Workbench improve agent performance compared with standalone execution?
-2. How competently does the agent manipulate Galaxy itself?
-3. How robust is the agent to prompt variability?
-4. How well does the agent handle preprocessing, parameterization, and reproducibility-critical setup?
-5. How well calibrated is the agent’s stated or inferred confidence?
-
-## What To Preserve
-
-Keep these existing strengths:
-
-- realistic end-to-end biomedical tasks
-- multiple prompt variants for the same underlying task
-- hidden reference answers and evaluator metadata
-- explicit run artifacts
-- separate reporting of scientific and operational performance
-- strong emphasis on failure recovery and traceability
-
-## What To Tighten In v0.3
-
-Prefer changes that add:
-
-- explicit primary and secondary endpoints
-- mechanistic metrics for Galaxy interaction
-- confidence-calibration support
-- preprocessing and parameter-configuration scoring
-- immutable versioned run artifacts
-- reviewer-readable methodology and reporting language
-
-Avoid changes that:
-
-- collapse the benchmark to a single opaque score
-- reward hidden-pipeline imitation when not scientifically justified
-- reduce artifact traceability
-- allow destructive overwrites of benchmark evidence
-
-## Authoring vs Execution
-
-### Benchmark authoring
-
-You may edit:
-
-- `README.md`
-- `AGENTS.md`
-- `SKILL.md`
-- `docs/`
-- `project_spec/`
-- `experiments/`
-- `ground_truth/`
-- `dataset/`
-- source code and tools supporting the benchmark
-
-### Benchmark execution
-
-When the task is to run experiments, follow [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md) and only write under `outputs/`.
-
-## Immutable Artifact Policy
-
-This repository now assumes a lossless trace model.
-
-If a run is executed:
-
-- never overwrite a previous plan, result, comparison, or reproduction artifact
-- keep append-only logs where appropriate
-- create versioned attempt artifacts for retries
-- preserve Galaxy evidence snapshots and IDs
-- preserve evaluation artifacts that justify each score
-
-Minimum expectation for every benchmark-valid run:
-
-- initial plan
-- updated reasoning after each material decision
-- structured error envelope
-- append-only activity log
-- canonical result plus attempt versions
-- reproduction script
-- Galaxy trace captures
-- evaluation outputs
-- artifact manifests
-- root-level `experiment_summary.json`
-
-## Required Run Layout
-
-The expected benchmark run layout is:
+## Repository Layout
 
 ```text
-outputs/<timestamp>_<level>_<experiment>/
-|-- experiment_summary.json
-|-- plan/
-|-- reasoning/
-|-- errors/
-|-- traces/
-|-- evaluations/
-`-- results/
+.
+|-- AGENTS.md
+|-- README.md
+|-- SKILL.md
+|-- dataset/
+|-- experiments/
+|   |-- low_context/
+|   |-- medium_context/
+|   |-- high_context/
+|   |-- BioAgent/
+|   `-- BixBench/
+|-- ground_truth/
+|   |-- GalaxyBench/
+|   |-- BioAgent/
+|   `-- BixBench/
+|-- outputs/
+`-- scripts/
 ```
 
-Required preservation rules:
+Key directories:
 
-- `plan/saved.md` is the initial plan and should stay immutable
-- retries create `plan/saved.attempt_<N>.md`
-- `experiment_summary.json` records the experiment name, ground-truth paths, Galaxy tools used, final Galaxy result files and local paths, transformed Galaxy-derived outputs, and reader-facing answers for original prompt compliance, transformed prompt compliance, direct ground-truth matching, transformed ground-truth matching, and agent execution in Galaxy
-- For BixBench tasks only, `experiment_summary.json` uses the reduced BixBench schema documented in `SKILL.md`: `experiment`, `Ground_truth_path`, `Galaxy_tools_used`, `Galaxy_results`, and `Experiment_score` containing only `ideal`, `Galaxy_answer`, and `direct_ground_truth_match_score`
-- `reasoning/reasoning.md` is append-only and may be supplemented by attempt-specific files
-- `errors/error.json` must preserve the full error history
-- `results/activity_log.jsonl` is append-only
-- `results/result.json` is the latest canonical output, while older attempts remain as `result.attempt_<N>.json`
-- `evaluations/` stores all field comparisons and score summaries
-- `traces/` stores Galaxy and local execution evidence
+- `dataset/`: local datasets used by GalaxyBench-style tasks.
+- `experiments/low_context`, `experiments/medium_context`, `experiments/high_context`: prompt variants for the same underlying GalaxyBench tasks.
+- `experiments/BioAgent`: BioAgent-derived benchmark tasks and metadata.
+- `experiments/BixBench`: BixBench task prompts and allowed input references.
+- `ground_truth/`: evaluator/reference material. Treat it as controlled access, not general context.
+- `outputs/`: immutable run directories created during benchmark execution.
+- `scripts/`: helper scripts for repository maintenance or evaluation support.
 
-## Ground Truth Discipline
+## Task Families
 
-Do not leak hidden evaluator or reference-answer details into public prompts.
+GalaxyBench tasks use prompt variants across low, medium, and high context. They emphasize Galaxy workflow execution, output preservation, and multi-part scoring against prompt requirements and ground truth.
 
-Ground truth should support:
+BioAgent tasks provide biomedical benchmark cases with their own experiment metadata and ground-truth metrics.
 
-- scientific scoring
-- standard-analysis scoring
-- agent-in-Galaxy execution scoring
-- endpoint metrics such as completion rate, tool choice accuracy, parameterization accuracy, preprocessing accuracy, and confidence calibration
+BixBench tasks are final-answer benchmarks. They still require Galaxy execution evidence, but the scientific score is binary and based on a fixed submitted answer. Do not open BixBench ground truth until the access gate in `SKILL.md` allows it.
 
-## Review Standard
+## How To Approach Work
 
-When revising the benchmark, assume reviewers will ask:
+For benchmark execution:
 
-- Is the benchmark scientifically meaningful?
+1. Read this file for orientation.
+2. Read the relevant experiment file under `experiments/`.
+3. Read `SKILL.md` completely enough to follow the execution contract.
+4. Create all execution artifacts only under a new `outputs/<timestamp>_<level>_<experiment>/` directory.
+
+For benchmark authoring or maintenance:
+
+- Keep prompts realistic and scientifically meaningful.
+- Preserve separate scientific, prompt-compliance, ground-truth, and Galaxy-execution evaluation concepts.
+- Avoid changes that collapse evidence into a single opaque score.
+- Do not weaken traceability, versioning, or ground-truth discipline.
+
+## Reviewer Lens
+
+When changing this repository, assume reviewers will ask:
+
+- Is the task scientifically meaningful?
 - Is the scoring fair to valid alternative solutions?
-- Is Galaxy actually being evaluated rather than merely used?
-- Is the benchmark reproducible?
-- Are prompts realistic?
-- Are the claims about robustness and confidence supported by design?
-- Can failures be audited after the fact?
+- Is Galaxy being evaluated as an execution environment, not merely mentioned?
+- Can the run be reproduced and audited from preserved artifacts?
+- Are failures, retries, tool choices, parameters, and outputs visible after the fact?
 
-Good benchmark changes answer those questions in the repository artifacts themselves, not only in prose explanations.
+Good changes make those answers clear in repository artifacts, not only in prose.
