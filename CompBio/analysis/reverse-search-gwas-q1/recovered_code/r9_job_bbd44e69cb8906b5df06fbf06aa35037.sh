@@ -1,0 +1,2 @@
+set -eu
+python "/jetstream2/scratch/main/jobs/79289452/inputs/dataset_fbad7b37-01e0-4b09-ae79-aa817cf83d92.dat" "/jetstream2/scratch/main/jobs/79289452/inputs/dataset_987c2f36-f84e-4c06-ba22-0b139615144c.dat" 5 > report.tsv

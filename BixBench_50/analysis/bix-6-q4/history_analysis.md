@@ -317,6 +317,73 @@ The per-feature output also reports a two-sided correlation-test P-value of `0.0
 
 **Data-integrity check:** final input identifiers, row order, and numeric values match the original extracted replicate data after excluding headers. All ranks are preserved.
 
+## Why the routes differ, and whether the code is the same
+
+### One statistical objective, several preparation routes
+
+All runs target the same quantity: the Spearman correlation between chronic round 1 S1 and S2 MAGeCK P-values, matched by RefSeq identifier. They select the same worksheet and columns. The main procedural difference is how each run makes those columns acceptable to the correlation tool.
+
+The input columns have different names (`Chronic Round1 S1` and `Chronic Round1 S2`), whereas Feature-wise Correlation Tests matches features by name when headers are enabled. The alternative routes resolve that interface requirement in different ways:
+
+| Successful route | Replicates | What changes | What remains equivalent |
+|---|---|---|---|
+| Rename S2 to the S1 label | ChatGPT5.5 R2; ChatGPT5.6 sol R1; DeepSeekV4ProViacodex R2 and R3 | Different text/regex tools change the S2 header to `Chronic Round1 S1`. | The two distinct replicate vectors remain intact; the shared label enables the same installed Spearman tool. |
+| Rename both columns to a neutral label | ChatGPT5.6 sol R3; CodexGPT-5.6 luna R1 and R3 | Text replacement, column regex replacement, or table-aware renaming creates `Pvalue`, `chronic_round1`, or `pvalue`. | The tool matches one common feature. Luna R3 introduces two negligible numeric serialization changes, but all ranks remain identical. |
+| Remove headers and use positional feature matching | ChatGPT5.5 R3; ChatGPT5.6 sol R2; CodexGPT-5.6 luna R2; DeepSeekV4ProViacodex R1 | Remove beginning or inverted text search eliminates the headers; correlation runs with both header flags disabled. | The P-values are interpreted as `column_2`, and identifiers still align observations. |
+| Calculate Spearman with custom Python | ChatGPT5.5 R1 | A script parses the two original Cut outputs and explicitly calculates correlation of averaged ranks. | It targets the same statistic and matched observations, but uses a different implementation and emits no significance-test P-value. |
+
+The unsuccessful attempts also distinguish the routes. Sol R2/R3 tried rebuilding headers before choosing their successful routes; Luna R1/R3 encountered incomplete replacement/rename parameters; ChatGPT5.5 R1 encountered both parsing and runtime dependency failures. Consequently, two runs can end with the same tool and answer while having different execution sequences and recovery costs.
+
+These observations support a comparison of tool selection, parameterization, and recovery behavior. They do not reveal why a model internally preferred one route, nor do they demonstrate different biological hypotheses or different target statistics.
+
+### Tool configuration is different from writing a new analysis program
+
+**The histories do not contain 12 independently generated Spearman programs.** Eleven final calculations invoke the same recorded installed tool identifier and version:
+
+`toolshed.g2.bx.psu.edu/repos/goeckslab/featurewise_correlation/featurewise_correlation/0.1.0+galaxy3`
+
+For those runs, the visible variation consists of selected preprocessing tools, their parameters, input dataset paths, and header flags. Galaxy records executable commands for these jobs, but a command produced by an installed tool wrapper is not evidence that the model authored the underlying Python implementation. The recorded tool/version is shared; the full commands are not literally identical because dataset paths and some arguments differ. This audit did not hash the installed source code across execution environments, so it does not claim byte-for-byte identity of every runtime copy.
+
+ChatGPT5.5 R1 is the exception: its history contains three custom tool IDs with embedded Python execution. Version 1 fails on Python syntax, version 2 fails importing SciPy because a shared library is missing, and version 3 succeeds with only the Python standard library. The recovered [spearman.py](spearman.py) is the successful version 3 implementation. The job records establish that custom code was executed, but do not independently establish its authorship or how it was composed in the original conversation.
+
+| Comparison level | Same or different? | Evidence-based interpretation |
+|---|---|---|
+| Source measurements and selected columns | Same | The extracted worksheets have identical hashes; all runs select columns 1/6 and 1/7. |
+| Preparation commands and tool choices | Different | Header removal, text replacement, regex replacement, and table-aware renaming are all observed. |
+| Final installed statistical tool | Same recorded tool/version in 11 runs | Different inputs and header settings feed the same packaged calculation. |
+| Custom implementation | Different in ChatGPT5.5 R1 | Standard-library code computes Pearson correlation of averaged ranks rather than invoking the installed feature-wise tool. |
+| Final statistic and matched population | Equivalent within floating-point precision | All runs return approximately 0.020971 from 23,726 matched identifiers. |
+| Output scope | Different | Installed-tool outputs include test P-values and a summary; the custom output contains only rho and n. |
+
+### Why different routes give the same answer
+
+Spearman correlation depends on the ranks of paired values. A header rename or removal does not alter those ranks, provided the parser retains the observations and matches the same identifiers. Here, the final-input checks confirm identical identifier sets and row order and preserved ranks across all 12 histories. The two tiny numeric rewrites in Luna R3 also preserve ranks. The custom implementation handles ties with average ranks and reproduces the installed-tool coefficient to floating-point precision.
+
+Thus, the agreement in answers is explained by equivalent input pairing and rank information. It does not imply identical generated code, identical execution histories, or independent invention of the statistical algorithm.
+
+## Common source history and the independence of the experiments
+
+### What the input provenance establishes
+
+The Excel and Reactome inputs originate in one [common source history](https://usegalaxy.org/histories/view?id=bbd44e69cb8906b5c47f24ce45de0539). The original Excel fetch job was created on June 26, 2026 at `02:11:13.132448`, and the Reactome fetch job at `02:11:16.627301` (timestamps as returned by Galaxy).
+
+| Input | Original job | Underlying dataset ID shared by all 12 histories | Shared dataset UUID |
+|---|---|---|---|
+| MAGeCK Excel workbook | [Excel fetch job](https://usegalaxy.org/api/jobs/bbd44e69cb8906b5e0fd53b27ee44272?full=true) | `f9cad7b01a47213550eef939aee3c2b2` | `eb1302fc-d90a-4061-b3eb-bd37d0ce6e9c` |
+| Reactome GMT | [Reactome fetch job](https://usegalaxy.org/api/jobs/bbd44e69cb8906b5a01499313c05117e?full=true) | `f9cad7b01a472135fb851166233dfe8f` | `51659a34-4210-4e99-bfcf-40e9fc4d85ca` |
+
+Each analyzed history has a different history-entry ID for each input, but those entries reference the same underlying dataset ID, UUID, and creating job. This establishes reuse of the original uploaded datasets, rather than a separate upload of identical file contents for each replicate. Identical checksums alone would not establish reuse; the shared dataset and job provenance does.
+
+The inspected records do not establish whether the setup copied the entire source history or copied individual datasets into each destination history. They also do not identify who performed that setup. The supported description is that the analyzed histories reuse inputs originating from a common source history.
+
+### How to describe these runs
+
+> The 12 runs used separate Galaxy histories initialized with shared input datasets originating from one source history. Each run subsequently executed its own recorded data preparation and correlation jobs. The runs therefore assess analysis execution from preloaded inputs; they do not demonstrate independent end-to-end execution of input uploading. Model and replicate assignments were supplied by the experiment organizer.
+
+Shared source inputs can provide an identical starting point for a comparison of analysis behavior. However, the stated requirement for these experiments is that each replicate upload its own files. **These histories do not satisfy that independent-upload requirement.** Their distinct downstream job IDs establish separate recorded analysis executions, but do not establish independent conversations, absence of shared context, or full experimental independence.
+
+For an end-to-end protocol that includes uploading, each replicate should start with an empty history, upload the source files through its own upload job(s), record the resulting provenance, and execute downstream tools using those newly created inputs. Matching content checksums would verify equivalent source data, while distinct upload-job provenance would verify separate ingestion. Uploading files after an existing analysis has finished would not change the provenance of its original inputs or retroactively satisfy the requirement.
+
 ## Cross-model interpretation and limits
 
 1. **The scientific result is consistent.** All 12 histories yield ρ ≈ 0.021, a very weak positive rank association. The 11 installed-tool results report a small test P-value, but statistical significance with 23,726 pairs should not be confused with strong replicate agreement. These test P-values are distinct from the MAGeCK P-values being correlated.
