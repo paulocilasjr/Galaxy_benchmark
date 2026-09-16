@@ -1,0 +1,1 @@
+perl '/cvmfs/main.galaxyproject.org/galaxy/tools/filters/CreateInterval.pl' 'chr19' 44907186 44907187 'G_to_A' plus '/corral4/main/jobs/079/158/79158450/outputs/dataset_8c825f7c-6af9-4200-8169-3691ecd58483.dat'

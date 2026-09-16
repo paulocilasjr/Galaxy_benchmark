@@ -1,0 +1,1 @@
+bedtools intersect -a '/jetstream2/scratch/main/jobs/79346547/inputs/dataset_37fda57a-450e-42e1-a678-cadd29ffc488.dat'  -b '/jetstream2/scratch/main/jobs/79346547/inputs/dataset_10b0a4ec-bf24-4253-a486-99bbcb663849.dat'      -wo          > '/jetstream2/scratch/main/jobs/79346547/outputs/dataset_245d8e0d-aa5c-4bd4-9dec-e51ef41f6d88.dat'
