@@ -1,0 +1,68 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5bd86920d6aa1f1ef",
+  "history_id": "bbd44e69cb8906b5fa6c9e7c9c9ef2cc",
+  "tool_id": "kegg-ora-deseq2-same-direction-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T18:45:45.000411",
+  "update_time": "2026-07-15T18:46:25.188460",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'RSCRIPT'\nsuppressPackageStartupMessages(library(DESeq2))\n\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 3) stop('expected three RDS inputs')\nnames(args) <- c('97', '98', '99')\n\nlfc_threshold <- 1.5\npadj_threshold <- 0.05\norganism <- 'pau'\n\nread_result <- function(path) {\n  x <- readRDS(path)\n  df <- as.data.frame(x)\n  df$gene_id <- rownames(df)\n  if (!'log2FoldChange' %in% names(df)) stop('missing log2FoldChange column')\n  df\n}\n\nres <- lapply(args, read_result)\ncommon_genes <- Reduce(intersect, lapply(res, function(d) d$gene_id))\n\nlink_url <- sprintf('https://rest.kegg.jp/link/pathway/%s', organism)\npathway_url <- sprintf('https://rest.kegg.jp/list/pathway/%s', organism)\nlinks <- read.delim(link_url, header = FALSE, sep = '\\t', stringsAsFactors = FALSE, col.names = c('gene', 'pathway'))\nlinks$gene_id <- sub('^[^:]+:', '', links$gene)\nlinks$pathway_id <- sub('^path:', '', links$pathway)\nlinks <- unique(links[, c('gene_id', 'pathway_id')])\n\npnames <- read.delim(pathway_url, header = FALSE, sep = '\\t', stringsAsFactors = FALSE, col.names = c('pathway', 'pathway_name'))\npnames$pathway_id <- sub('^path:', '', pnames$pathway)\npnames <- pnames[, c('pathway_id', 'pathway_name')]\n\nuniverse <- sort(intersect(common_genes, unique(links$gene_id)))\nif (length(universe) == 0) stop('empty mapped universe')\nlinks_u <- links[links$gene_id %in% universe, , drop = FALSE]\npathway_genes <- split(links_u$gene_id, links_u$pathway_id)\npathway_genes <- lapply(pathway_genes, unique)\npathway_ids <- names(pathway_genes)\n\nora_one <- function(foreground, strain, direction) {\n  foreground <- sort(intersect(unique(foreground), universe))\n  N <- length(universe)\n  K <- length(foreground)\n  rows <- lapply(pathway_ids, function(pid) {\n    genes <- pathway_genes[[pid]]\n    n <- length(genes)\n    hits <- intersect(foreground, genes)\n    q <- length(hits)\n    p <- if (K == 0 || q == 0) 1 else phyper(q - 1, n, N - n, K, lower.tail = FALSE)\n    data.frame(strain = strain, direction = direction, pathway_id = pid,\n               universe_size = N, foreground_size = K, pathway_size = n,\n               overlap = q, pvalue = p, genes = paste(hits, collapse = ','),\n               stringsAsFactors = FALSE)\n  })\n  out <- do.call(rbind, rows)\n  out$padj <- p.adjust(out$pvalue, method = 'BH')\n  out <- merge(out, pnames, by = 'pathway_id', all.x = TRUE, sort = FALSE)\n  out[order(out$padj, out$pvalue, out$pathway_id), c('strain','direction','pathway_id','pathway_name','universe_size','foreground_size','pathway_size','overlap','pvalue','padj','genes')]\n}\n\nall_ora <- list()\nfor (strain in names(res)) {\n  df <- res[[strain]]\n  df <- df[df$gene_id %in% universe & !is.na(df$log2FoldChange), , drop = FALSE]\n  all_ora[[paste(strain, 'up', sep = '_')]] <- ora_one(df$gene_id[df$log2FoldChange > lfc_threshold], strain, 'up')\n  all_ora[[paste(strain, 'down', sep = '_')]] <- ora_one(df$gene_id[df$log2FoldChange < -lfc_threshold], strain, 'down')\n}\nora <- do.call(rbind, all_ora)\nwrite.table(ora, file = 'ora_results.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\n\nsig_sets <- list()\nfor (direction in c('up','down')) {\n  sig_sets[[direction]] <- lapply(names(res), function(strain) {\n    unique(ora$pathway_id[ora$strain == strain & ora$direction == direction & ora$padj < padj_threshold])\n  })\n  names(sig_sets[[direction]]) <- names(res)\n}\ncommon_up <- Reduce(intersect, sig_sets[['up']])\ncommon_down <- Reduce(intersect, sig_sets[['down']])\ncommon_same <- sort(unique(c(common_up, common_down)))\nsummary <- data.frame(metric = c('organism','lfc_threshold','padj_threshold','universe_size','common_up_count','common_down_count','unique_same_direction_count','common_up_ids','common_down_ids'),\n                      value = c(organism, lfc_threshold, padj_threshold, length(universe), length(common_up), length(common_down), length(common_same), paste(sort(common_up), collapse = ','), paste(sort(common_down), collapse = ',')),\n                      stringsAsFactors = FALSE)\nwrite.table(summary, file = 'summary.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\nwriteLines(as.character(length(common_same)), 'final_count.txt')\nRSCRIPT\nRscript analysis.R \"/jetstream2/scratch/main/jobs/78544578/inputs/dataset_3befb64c-2dc2-42e8-bb42-5da6503eb574.dat\" \"/jetstream2/scratch/main/jobs/78544578/inputs/dataset_3704146e-14f7-44cd-9fa6-256d0d887343.dat\" \"/jetstream2/scratch/main/jobs/78544578/inputs/dataset_a7c411e0-9d0a-4d64-b0a2-4034e50f92f8.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "res97": {
+      "id": "f9cad7b01a472135978fcb7f54bbb79f",
+      "src": "hda",
+      "uuid": "3befb64c-2dc2-42e8-bb42-5da6503eb574"
+    },
+    "res98": {
+      "id": "f9cad7b01a47213562651e478d56c331",
+      "src": "hda",
+      "uuid": "3704146e-14f7-44cd-9fa6-256d0d887343"
+    },
+    "res99": {
+      "id": "f9cad7b01a47213506964b362c9fc3cd",
+      "src": "hda",
+      "uuid": "a7c411e0-9d0a-4d64-b0a2-4034e50f92f8"
+    }
+  },
+  "outputs": {
+    "ora_results": {
+      "id": "f9cad7b01a4721356ca491a0a81b4f41",
+      "src": "hda",
+      "uuid": "22ddadfb-abb3-49e1-af65-ce6106805faa"
+    },
+    "summary": {
+      "id": "f9cad7b01a472135bbb5c8cba4a2f284",
+      "src": "hda",
+      "uuid": "1ca242d0-8f9a-4618-97a1-46c289e0f6a0"
+    },
+    "final_count": {
+      "id": "f9cad7b01a4721353157b6b54cded691",
+      "src": "hda",
+      "uuid": "82cb3a28-ce0a-49dc-9278-8edc6a68cfe1"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess
+p='inputs/pone.0150501.s002.xls'
+sh=xlrd.open_workbook(p).sheet_by_index(0)
+# Emit a TSV in memory to R, with literal NAN for missing cells.
+lines=['\\t'.join(str(x) for x in sh.row_values(1))]
+for r in range(2,sh.nrows):
+    vals=sh.row_values(r)
+    out=[]
+    for x in vals:
+        if isinstance(x,str): out.append(x)
+        else: out.append('' if x is None else repr(x))
+    lines.append('\\t'.join(out))
+r_code=r'''
+d <- read.delim(file(\"stdin\"), header=TRUE, sep=\"\\\\t\", check.names=FALSE, na.strings=c(\"NAN\",\"\"), quote=\"\", comment.char=\"\")
+P <- d[, grep(\""'^P_", names(d)), drop=FALSE]
+C <- d[, grep("''^C_", names(d)), drop=FALSE]
+calc <- function(test, equal=FALSE) {
+  raw <- vapply(seq_len(nrow(d)), function(i) {
+    x <- as.numeric(P[i,]); y <- as.numeric(C[i,]);
+    if (test == "welch") t.test(x,y,var.equal=FALSE)$p.value
+    else if (test == "pooled") t.test(x,y,var.equal=TRUE)$p.value
+    else if (test == "paired") t.test(x,y,paired=TRUE)$p.value
+    else if (test == "wilcox") wilcox.test(x,y,exact=FALSE)$p.value
+  }, numeric(1))
+  b <- p.adjust(raw, method="bonferroni")
+  by <- p.adjust(raw, method="BY")
+  cat(test, "raw finite", sum(is.finite(raw)), "Bonf", sum(b <= .05, na.rm=TRUE), "BY", sum(by <= .05, na.rm=TRUE), "'"\\n\")
+  # print values around thresholds
+  cat(\"min raw\", min(raw, na.rm=TRUE), \"min Bonf\", min(b,na.rm=TRUE), \"min BY\", min(by,na.rm=TRUE), \"\\n\")
+  invisible(list(raw=raw,b=b,by=by))
+}
+for (test in c(\"welch\",\"pooled\",\"paired\",\"wilcox\")) calc(test)
+'''
+res=subprocess.run(['Rscript','--vanilla','-e',r_code],input='\\n'.join(lines).encode(),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+print(res.stdout.decode())
+print(res.stderr.decode())
+PY"

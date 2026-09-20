@@ -1,0 +1,75 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, os
+from collections import defaultdict
+
+meta_path='inputs/GeneMetaInfo_Zenodo.csv'
+annot_path='inputs/Sample_annotated_Zenodo.csv'
+counts_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+celltypes=['CD4','CD8','CD14','CD19']
+
+# Protein-coding gene lengths keyed by gene symbol / first column.
+length={}
+with open(meta_path, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        gene=row[''] or row.get('Geneid','')
+        if row['gene_biotype']=='protein_coding' and row['Length']"'!='"'':
+            length[gene]=float(row['Length'])
+
+sample_to_cell={}
+with open(annot_path, newline='') as f:
+    for row in csv.DictReader(f):
+        sample_to_cell[row['sample']]=row['celltype']
+
+stats={ct:{'n':0,'sx':0.0,'sy':0.0,'sxx':0.0,'syy':0.0,'sxy':0.0} for ct in celltypes}
+col_idxs={ct:[] for ct in celltypes}
+processed=0
+matched=0
+
+with open(counts_path, newline='') as f:
+    reader=csv.reader(f)
+    header=next(reader)
+    for i,sample in enumerate(header[1:], start=1):
+        ct=sample_to_cell.get(sample)
+        if ct in col_idxs:
+            col_idxs[ct].append(i)
+    counts_n={ct:len(col_idxs[ct]) for ct in celltypes}
+    print('selected sample counts', counts_n)
+    for row in reader:
+        processed += 1
+        gene=row[0]
+        x=length.get(gene)
+        if x is None:
+            continue
+        matched += 1
+        for ct in celltypes:
+            idxs=col_idxs[ct]
+            # Average expression for this gene in this cell type.
+            y=sum(float(row[i]) for i in idxs)/len(idxs)
+            st=stats[ct]
+            st['n'] += 1
+            st['sx'] += x
+            st['sy'] += y
+            st['sxx'] += x*x
+            st['syy'] += y*y
+            st['sxy'] += x*y
+
+print('processed rows', processed, 'matched protein_coding rows', matched)
+results={}
+for ct in celltypes:
+    st=stats[ct]
+    n=st['n']
+    num=n*st['sxy'] - st['sx']*st['sy']
+    denx=n*st['sxx'] - st['sx']*st['sx']
+    deny=n*st['syy'] - st['sy']*st['sy']
+    r=num/math.sqrt(denx*deny)
+    results[ct]=r
+    print(ct, 'n=', n, 'pearson=', format(r, '.15g'), 'abs=', format(abs(r), '.15g'))
+weakest=min(results, key=lambda ct: abs(results[ct]))
+print('weakest', weakest)
+
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w', newline='') as f:
+    f.write(weakest+'\\n')
+PY
+printf 'answer.txt: '; cat codex_output/answer.txt"

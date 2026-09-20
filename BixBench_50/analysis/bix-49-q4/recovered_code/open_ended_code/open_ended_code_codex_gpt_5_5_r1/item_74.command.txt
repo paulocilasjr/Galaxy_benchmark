@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+import re, csv
+p='inputs/Issy_ASXL1_blood_coldata_gender.xlsx'
+out='/workspace/tmp/coldata.tsv'
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+with ZipFile(p) as z:
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    shared=[]
+    for si in root.findall('a:si', ns):
+        shared.append(''.join((t.text or '') for t in si.iter('{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t')))
+    sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    rows=[]
+    for row in sheet.findall('.//a:sheetData/a:row', ns):
+        vals={}
+        for c in row.findall('a:c', ns):
+            ref=c.attrib.get('r','')
+            m=re.match(r'([A-Z]+)([0-9]+)', ref)
+            if not m: continue
+            col=m.group(1)
+            t=c.attrib.get('t')
+            v=c.find('a:v', ns)
+            val='' if v is None else (v.text or '')
+            if t=='s' and val"'!='"'': val=shared[int(val)]
+            vals[col]=val
+        if vals:
+            rows.append(vals)
+headers=[rows[0].get(chr(ord('A')+i),'') for i in range(6)]
+records=[]
+for row in rows[1:]:
+    rec=[row.get(chr(ord('A')+i),'') for i in range(6)]
+    if rec[0]: records.append(rec)
+with open(out,'w',newline='') as f:
+    w=csv.writer(f, delimiter='\\t')
+    w.writerow(headers)
+    w.writerows(records)
+print(out)
+print(len(records))
+PY
+TMPDIR=/workspace/tmp Rscript - <<'RS'
+.libPaths(c('/workspace/Rlib', .libPaths()))
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(apeglm))
+counts <- read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, row.names=1, check.names=FALSE)
+coldata <- read.table('/workspace/tmp/coldata.tsv', header=TRUE, sep='\\t', stringsAsFactors=FALSE, check.names=FALSE)
+rownames(coldata) <- coldata"'$sample
+common <- intersect(coldata$sample, colnames(counts))
+if (length(common) == 0) stop('"'no matched samples')
+counts <- counts[, common, drop=FALSE]
+coldata <- coldata[common, , drop=FALSE]
+stopifnot(identical(colnames(counts), rownames(coldata)))
+count_mat <- as.matrix(counts)
+storage.mode(count_mat) <- 'integer'
+coldata"'$sex <- factor(coldata$sex)
+coldata$condition <- relevel(factor(coldata$condition), ref='"'Control')
+dds <- DESeqDataSetFromMatrix(countData=count_mat, colData=coldata, design=~ sex + condition)
+dds <- DESeq(dds)
+print(resultsNames(dds))
+res <- results(dds, name='condition_ASXL1_vs_Control', alpha=0.05)
+shr <- lfcShrink(dds, coef='condition_ASXL1_vs_Control', res=res, type='apeglm')
+ans <- sum("'!is.na(shr$padj) & shr$padj < 0.05)
+cat('"'matched_samples', length(common), '\\n')
+cat('unmatched_count_samples', paste(setdiff(colnames(read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, nrows=1, check.names=FALSE)[-1]), coldata"'$sample), collapse='"','), '\\n')
+cat('answer', ans, '\\n')
+dir.create('codex_output', showWarnings=FALSE)
+writeLines(as.character(ans), 'codex_output/answer.txt')
+RS
+cat codex_output/answer.txt"

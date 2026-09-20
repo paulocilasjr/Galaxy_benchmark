@@ -1,0 +1,65 @@
+/bin/bash -c "python3 - <<'PY'
+import subprocess, zipfile, xml.etree.ElementTree as ET, math, statistics
+# load res via R output
+rscript=r'''
+for (f in c('/workspace/inputs/res_1vs97.rds','/workspace/inputs/res_1vs98.rds')) {
+ con<-gzfile(f,'rb'); x<-unserialize(con); close(con); y<-unclass(x); ld<-attr(y,'listData'); rn<-attr(y,'rownames')
+ cat('###FILE', basename(f), '\\n')
+ for (i in seq_along(rn)) cat(rn[i], ld"'$log2FoldChange[i], ld$padj[i], '"'\\n', sep='\\t')
+}
+'''
+out=subprocess.run(['Rscript','-e',rscript],capture_output=True,text=True,check=True).stdout
+files={}; cur=None
+for line in out.splitlines():
+ if line.startswith('###FILE'): cur=line.split()[1]; files[cur]={}; continue
+ p=line.split('\\t');
+ if len(p)>=3: files[cur][p[0]]=(float(p[1]),float(p[2]))
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(fn):
+ with zipfile.ZipFile(fn) as z: root=ET.fromstring(z.read('word/document.xml'))
+ t=root.find('.//w:tbl',ns)
+ d={}
+ for tr in t.findall('w:tr',ns)[2:]:
+  cells=[''.join(x.text or '' for x in c.findall('.//w:t',ns)) for c in tr.findall('w:tc',ns)]
+  if len(cells)>=4 and cells[0]:
+   def f(s):
+    s=s.strip()
+    return None if s in ('','-') else float(s)
+   d[cells[0]]={'rhlR':f(cells[1]),'rhlI':f(cells[2])}
+ return d
+tables={'HCD':parse('/workspace/ppat.1006504.s012.docx'),'biofilm':parse('/workspace/ppat.1006504.s013.docx')}
+
+def linreg_scale(xs,ys):
+ n=len(xs); mx=sum(xs)/n; my=sum(ys)/n
+ cov=sum((x-mx)*(y-my) for x,y in zip(xs,ys)); var=sum((x-mx)**2 for x in xs)
+ return cov/var if var else 0
+
+for fname,res in files.items():
+ print('\\nFILE',fname)
+ for cond,tab in tables.items():
+  for col in ['rhlR','rhlI']:
+   xs=[];ys=[]
+   signs=[]
+   for gene,v in tab.items():
+    if v[col] is None or gene not in res: continue
+    reslfc=res[gene][0]
+    # table likely WT/mutant, so compare res mutant/WT to -table
+    ys.append(-v[col]); xs.append(reslfc)
+    signs.append((reslfc>0)==((-v[col])>0))
+   if len(xs)<5: continue
+   n=len(xs); mx=sum(xs)/n; my=sum(ys)/n
+   cov=sum((a-mx)*(b-my) for a,b in zip(xs,ys))/n; sdx=math.sqrt(sum((a-mx)**2 for a in xs)/n); sdy=math.sqrt(sum((b-my)**2 for b in ys)/n)
+   r=cov/(sdx*sdy) if sdx*sdy else 0
+   # spearman
+   def rank(vals):
+    order=sorted(range(len(vals)),key=lambda i:vals[i]); ranks=[0]*len(vals)
+    for rank,i in enumerate(order): ranks[i]=rank
+    return ranks
+   rx=rank(xs); ry=rank(ys); mr=(n-1)/2; covr=sum((a-mr)*(b-mr) for a,b in zip(rx,ry))/n; varr=sum((a-mr)**2 for a in rx)/n
+   rho=covr/varr if varr else 0
+   b=linreg_scale(xs,ys)
+   print(f' {cond:8s} {col:5s} n={n:3d} sign_agree={sum(signs)/n:.3f} pearson={r:.3f} spearman={rho:.3f} slope(ys~xs)={b:.3f}')
+   # selected PA14_35160
+   if 'PA14_35160' in tab and 'PA14_35160' in res:
+    print('    PA14_35160 table',tab['PA14_35160'][col],'res',res['PA14_35160'][0], 'negtable', -tab['PA14_35160'][col] if tab['PA14_35160'][col] is not None else None)
+PY"

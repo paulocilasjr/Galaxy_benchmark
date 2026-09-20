@@ -1,0 +1,129 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import xlrd
+import numpy as np
+from scipy import stats
+import math
+
+wb = xlrd.open_workbook('inputs/pone.0150501.s002.xls')
+sh = wb.sheet_by_name('RAW DATA')
+
+# Extract all data
+p_values_raw = []
+p_values_mw = []  # Mann-Whitney
+p_values_gmn = []  # global median normalization + t-test
+miRNA_names = []
+
+for r in range(2, sh.nrows):
+    name = sh.cell_value(r, 0)
+    miRNA_names.append(name)
+    
+    patient_vals = []
+    for c in range(1, 11):
+        val = sh.cell_value(r, c)
+        if val != 'NAN' and not (isinstance(val, float) and math.isnan(val)):
+            patient_vals.append(float(val))
+    
+    control_vals = []
+    for c in range(11, 21):
+        val = sh.cell_value(r, c)
+        if val != 'NAN' and not (isinstance(val, float) and math.isnan(val)):
+            control_vals.append(float(val))
+    
+    if len(patient_vals) >= 2 and len(control_vals) >= 2:
+        # Welch t-test
+        t_stat, p_val = stats.ttest_ind(patient_vals, control_vals, equal_var=False)
+        p_values_raw.append(p_val)
+        
+        # Mann-Whitney U test
+        u_stat, p_mw = stats.mannwhitneyu(patient_vals, control_vals, alternative='two-sided')
+        p_values_mw.append(p_mw)
+        
+        # Global median normalization approach
+        all_vals = patient_vals + control_vals
+        grand_median = np.median(all_vals)
+        patient_norm = [v - grand_median for v in patient_vals]
+        control_norm = [v - grand_median for v in control_vals]
+        t_stat3, p_gmn = stats.ttest_ind(patient_norm, control_norm, equal_var=False)
+        p_values_gmn.append(p_gmn)
+    else:
+        p_values_raw.append(1.0)
+        p_values_mw.append(1.0)
+        p_values_gmn.append(1.0)
+
+m = len(p_values_raw)
+
+c_m = sum(1.0 / i for i in range(1, m + 1))
+
+for label, p_vals in [("Raw Ct t-test", p_values_raw), 
+                       ("Mann-Whitney U", p_values_mw),
+                       ("Global median norm t-test", p_values_gmn)]:
+    # Bonferroni
+    bonf_adj = [min(p * m, 1.0) for p in p_vals]
+    bonf_sig = sum(1 for p in bonf_adj if p <= 0.05)
+    
+    # BY
+    p_sorted = sorted([(p, i) for i, p in enumerate(p_vals)], key=lambda x: x[0])
+    by_adj = [1.0] * m
+    min_q = 1.0
+    for i in range(m - 1, -1, -1):
+        j = i + 1
+        q = (m * c_m / j) * p_sorted[i][0]
+        if q < min_q:
+            min_q = q
+        by_adj[p_sorted[i][1]] = min(min_q, 1.0)
+    by_sig = sum(1 for p in by_adj if p <= 0.05)
+    
+    print(f"\n{label}:")
+    print(f"  Bonferroni significant: {bonf_sig}")
+    print(f"  BY significant: {by_sig}")
+    print(f"  Ratio: {bonf_sig}:{by_sig}")
+    print(f"  Min p: {min(p_vals):.6e}")
+
+# ============================================
+# Also try per-sample mean normalization (delta Ct method)
+# For each sample, subtract the mean Ct across all miRNAs
+print("\n\n=== Per-sample mean normalization ===")
+
+# Build data matrix
+data_matrix = np.full((sh.nrows - 2, 20), np.nan)
+for r in range(2, sh.nrows):
+    for c in range(1, 21):
+        val = sh.cell_value(r, c)
+        if val != 'NAN' and not (isinstance(val, float) and math.isnan(val)):
+            data_matrix[r-2, c-1] = float(val)
+
+# Per-sample mean normalization
+sample_means = np.nanmean(data_matrix, axis=0)
+data_norm = data_matrix - sample_means[np.newaxis, :]
+
+p_vals_psn = []
+for r_idx in range(data_norm.shape[0]):
+    pat = data_norm[r_idx, 0:10]
+    ctrl = data_norm[r_idx, 10:20]
+    pat = pat[~np.isnan(pat)]
+    ctrl = ctrl[~np.isnan(ctrl)]
+    if len(pat) >= 2 and len(ctrl) >= 2:
+        t_stat, p_val = stats.ttest_ind(pat, ctrl, equal_var=False)
+        p_vals_psn.append(p_val)
+    else:
+        p_vals_psn.append(1.0)
+
+bonf_adj = [min(p * m, 1.0) for p in p_vals_psn]
+bonf_sig = sum(1 for p in bonf_adj if p <= 0.05)
+
+p_sorted = sorted([(p, i) for i, p in enumerate(p_vals_psn)], key=lambda x: x[0])
+by_adj = [1.0] * m
+min_q = 1.0
+for i in range(m - 1, -1, -1):
+    j = i + 1
+    q = (m * c_m / j) * p_sorted[i][0]
+    if q < min_q:
+        min_q = q
+    by_adj[p_sorted[i][1]] = min(min_q, 1.0)
+by_sig = sum(1 for p in by_adj if p <= 0.05)
+
+print(f"Bonferroni significant: {bonf_sig}")
+print(f"BY significant: {by_sig}")
+print(f"Ratio: {bonf_sig}:{by_sig}")
+print(f"Min p: {min(p_vals_psn):.6e}")
+PYEOF

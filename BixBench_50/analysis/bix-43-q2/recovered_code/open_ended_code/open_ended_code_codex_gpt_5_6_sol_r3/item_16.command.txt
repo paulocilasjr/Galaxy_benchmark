@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+c=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+c=c.loc[c.gt(10).any(axis=1)]
+m=pd.read_csv('inputs/sample_layout.csv')
+m['sample']=m.SampleID.str.replace('-','_',regex=False)
+m=m.set_index('sample')
+g=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+m=m.loc[m.Group.isin(g),['Group']]
+m['Group']=pd.Categorical(m.Group,categories=g)
+dds=DeseqDataSet(counts=c.loc[:,m.index].T,metadata=m,design='~Group',n_cpus=4,quiet=True)
+dds.deseq2()
+ds=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=0.05,n_cpus=4,quiet=True)
+ds.summary()
+r=ds.results_df
+r=r[(r.padj<=.05)&(r.log2FoldChange.abs()>=.5)&(r.baseMean>=10)]
+a=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t').set_index('ENSG')
+fg=r.join(a).gene_name.dropna().drop_duplicates().tolist()
+e=gp.enrichr(gene_list=fg,gene_sets='Reactome_2022',organism='human',outdir=None,no_plot=True)
+v=e.results.loc[e.results.Term.eq('TP53 Regulates Transcription Of Cell Cycle Genes R-HSA-6791312'),'Odds Ratio'].iloc[0]
+print(len(fg),repr(v),format(float(v),'.17g'),flush=True)
+PY"

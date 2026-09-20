@@ -1,0 +1,56 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import subprocess
+import os
+import sys
+from scipy import stats
+
+phykit = "/workspace/venv/bin/phykit"
+
+def get_rcv_scores(msa_dir):
+    scores = []
+    errors = []
+    for fname in sorted(os.listdir(msa_dir)):
+        if not fname.endswith('.mafft'):
+            continue
+        fpath = os.path.join(msa_dir, fname)
+        try:
+            result = subprocess.run(
+                [phykit, 'rcv', fpath],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                errors.append((fname, result.stderr.strip()))
+                continue
+            rcv_val = float(result.stdout.strip())
+            scores.append((fname.replace('.faa.mafft', ''), rcv_val))
+        except Exception as e:
+            errors.append((fname, str(e)))
+    return scores, errors
+
+print("Computing animal RCV scores...")
+animal_scores, animal_errs = get_rcv_scores("/workspace/tmp_animals")
+print(f"  Got {len(animal_scores)} scores, {len(animal_errs)} errors")
+
+print("Computing fungal RCV scores...")
+fungal_scores, fungal_errs = get_rcv_scores("/workspace/tmp_fungi")
+print(f"  Got {len(fungal_scores)} scores, {len(fungal_errs)} errors")
+
+if animal_errs:
+    print(f"Animal errors (first 5): {animal_errs[:5]}")
+if fungal_errs:
+    print(f"Fungal errors (first 5): {fungal_errs[:5]}")
+
+# Print summary stats
+animal_vals = [s[1] for s in animal_scores]
+fungal_vals = [s[1] for s in fungal_scores]
+
+print(f"\nAnimal RCV: n={len(animal_vals)}, mean={sum(animal_vals)/len(animal_vals):.4f}, min={min(animal_vals):.4f}, max={max(animal_vals):.4f}")
+print(f"Fungal RCV: n={len(fungal_vals)}, mean={sum(fungal_vals)/len(fungal_vals):.4f}, min={min(fungal_vals):.4f}, max={max(fungal_vals):.4f}")
+
+# Mann-Whitney U test
+stat, p_value = stats.mannwhitneyu(animal_vals, fungal_vals, alternative='two-sided')
+print(f"\nMann-Whitney U test: statistic={stat}, p-value={p_value}")
+
+# Also print with more precision
+print(f"p-value (full precision): {p_value:.15e}")
+PYEOF

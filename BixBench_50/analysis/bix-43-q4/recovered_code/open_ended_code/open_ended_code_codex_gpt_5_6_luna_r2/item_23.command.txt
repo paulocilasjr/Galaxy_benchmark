@@ -1,0 +1,50 @@
+/bin/bash -lc "cat > /workspace/run_pydeseq2.py <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy
+
+base='/workspace/inputs'
+counts=pd.read_csv(base+'/counts_raw_unfiltered.csv', index_col=0)
+layout=pd.read_csv(base+'/sample_layout.csv')
+# map count matrix columns to layout SampleID's 3-1/9-1 style, using underscore in count columns
+layout['count_col']=layout['SampleID'].str.replace('-','_',regex=False)
+keep=layout['Group'].isin(['DMSO','Cisplatin_IC50_CBD_IC50'])
+lay=layout.loc[keep].copy()
+lay['condition']=lay['Group'].map({'DMSO':'DMSO','Cisplatin_IC50_CBD_IC50':'CBD_cisplatin'})
+# pydeseq2 samples x genes
+cts=counts[lay['count_col'].tolist()].T
+cts.index=lay['SampleID'].tolist()
+# ensure integer and remove all-zero genes
+cts=cts.loc[:,cts.sum(axis=0)>0].astype(int)
+meta=lay.set_index('SampleID')[['condition']]
+print('counts',cts.shape,'meta',meta,sep='\\n')
+print('library',cts.sum(axis=1).to_dict())
+# Keep group order and explicit control reference in contrast.
+dds=DeseqDataSet(counts=cts, metadata=meta, design_factors='condition', refit_cooks=True, n_cpus=2)
+dds.deseq2()
+stat=DeseqStats(dds, contrast=['condition','CBD_cisplatin','DMSO'], alpha=0.05, cooks_filter=True, independent_filter=True)
+stat.summary()
+res=stat.results_df.copy()
+print('res shape',res.shape)
+print(res.head())
+# mapping
+m=pd.read_csv(base+'/ensg_to_gene_name.tsv',sep='\\t')
+gmap=dict(zip(m.ENSG,m.gene_name))
+res['gene_name']=[gmap.get(g) for g in res.index]
+res['padj']=res['padj'].astype(float)
+res['log2FoldChange']=res['log2FoldChange'].astype(float)
+deg=res[(res.padj<0.05)&(res.log2FoldChange.abs()>=0.5)&res.gene_name.notna()].copy()
+print('DEGs',len(deg),'unique symbols',deg.gene_name.nunique())
+print('DEGs target-related')
+lib=gseapy.get_library(name='Reactome_2022',organism='Human')
+target=[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes')][0]
+path=set(lib[target])
+print('path',target,'n',len(path))
+print(deg[deg.gene_name.isin(path)][['gene_name','baseMean','log2FoldChange','pvalue','padj']].sort_values('gene_name').to_string(index=False))
+print('overlap',deg.gene_name.isin(path).sum(), '/',len(path),'unique overlap',len(set(deg.gene_name)&path))
+# print all DEG names count
+print('top degs')
+print(deg.sort_values('padj')[['gene_name','log2FoldChange','pvalue','padj']].head(30).to_string(index=False))
+PY
+python /workspace/run_pydeseq2.py"

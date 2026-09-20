@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, csv
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau').read().decode().splitlines()
+listp=set(l.split('\\t')[0] for l in urllib.request.urlopen('https://rest.kegg.jp/list/pathway/pau').read().decode().splitlines() if l.strip())
+g2p=defaultdict(set)
+for l in link:
+ if '\\t' not in l:continue
+ g,p=l.split('\\t'); g=g.split(':')[1]; p=p[5:]
+ if p in listp:g2p[g].add(p)
+p2g=defaultdict(set)
+for g,ps in g2p.items():
+ for p in ps:p2g[p].add(g)
+db=set(g2p)
+data={}
+for f in ['tmp/res_1vs97.csv','tmp/res_1vs98.csv','tmp/res_1vs99.csv']:
+ with open(f) as fh:data[f]={r['gene']:float(r['log2FoldChange']) for r in csv.DictReader(fh)}
+
+def run(mn,mx):
+ sets={}
+ for f,vals in data.items():
+  for d,comp in [('up',lambda x:x>1.5),('down',lambda x:x<-1.5)]:
+   genes=set(g for g,l in vals.items() if comp(l))&db; n=len(genes); rows=[]
+   for p in p2g:
+    K=len(p2g[p])
+    if K<mn or K>mx:continue
+    k=len(genes&p2g[p])
+    if k==0:continue
+    pv=hypergeom.sf(k-1,len(db),K,n); rows.append((p,pv))
+   if rows:
+    padj=multipletests([x[1] for x in rows],method='fdr_bh')[1]
+    sets[(f,d)]={p for (p,pv),pa in zip(rows,padj) if pa<.05}
+   else:sets[(f,d)]=set()
+ files=list(data)
+ up=set.intersection(sets[(files[0],'up')],sets[(files[1],'up')],sets[(files[2],'up')])
+ down=set.intersection(sets[(files[0],'down')],sets[(files[1],'down')],sets[(files[2],'down')])
+ print('min',mn,'max',mx,'up',len(up),'down',len(down),'union',len(up|down))
+for mn in [1,2,5,10,15]:run(mn,500)
+run(10,1000); run(10,500)
+PY"

@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b501d83da4b07273ca",
+  "history_id": "bbd44e69cb8906b5dd2921cb6976d16b",
+  "tool_id": "codex_logit_age_response_20260715_v5",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T04:24:03.169629",
+  "update_time": "2026-07-15T04:24:22.687130",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'RSCRIPT'\nargs <- commandArgs(trailingOnly = TRUE)\ninfile <- args[[1]]\noutfile <- args[[2]]\nxml_unescape <- function(x) {\n  x <- gsub('&lt;', '<', x, fixed = TRUE)\n  x <- gsub('&gt;', '>', x, fixed = TRUE)\n  x <- gsub('&quot;', '\"', x, fixed = TRUE)\n  x <- gsub('&apos;', \"'\", x, fixed = TRUE)\n  x <- gsub('&amp;', '&', x, fixed = TRUE)\n  x\n}\nworkdir <- tempfile('xlsx_')\ndir.create(workdir)\nutils::unzip(infile, files = c('xl/sharedStrings.xml', 'xl/worksheets/sheet1.xml'), exdir = workdir)\nread_zip_text <- function(member) paste(readLines(file.path(workdir, member), warn = FALSE), collapse = '')\nextract_matches <- function(pattern, text) {\n  m <- gregexpr(pattern, text, perl = TRUE)[[1]]\n  if (identical(m, -1L)) character(0) else regmatches(text, list(m))[[1]]\n}\nextract_capture <- function(pattern, text) {\n  m <- regexec(pattern, text, perl = TRUE)\n  hit <- regmatches(text, m)[[1]]\n  if (length(hit) < 2L) '' else hit[[2]]\n}\nextract_attr <- function(node, attr) extract_capture(paste0(attr, '=\"([^\"]+)\"'), node)\nstrip_tags <- function(x) gsub('<[^>]+>', '', x, perl = TRUE)\nshared_xml <- read_zip_text('xl/sharedStrings.xml')\nsi_nodes <- extract_matches('<si[^>]*>.*?</si>', shared_xml)\nshared <- vapply(si_nodes, function(si) {\n  t_nodes <- extract_matches('<t[^>]*>.*?</t>', si)\n  xml_unescape(paste(strip_tags(t_nodes), collapse = ''))\n}, character(1), USE.NAMES = FALSE)\nsheet_xml <- read_zip_text('xl/worksheets/sheet1.xml')\ncell_nodes <- extract_matches('<c[[:space:]][^>]*/>|<c[[:space:]][^>]*>.*?</c>', sheet_xml)\ncol_to_int <- function(s) {\n  letters <- strsplit(s, '', fixed = TRUE)[[1]]\n  as.integer(sum((match(letters, LETTERS)) * 26 ^ rev(seq_along(letters) - 1L)))\n}\nrefs <- vapply(cell_nodes, extract_attr, character(1), attr = 'r', USE.NAMES = FALSE)\nif (any(!nzchar(refs))) stop('Some cell references were not parsed')\nrow_nums <- as.integer(gsub('[A-Z]+', '', refs))\ncol_labs <- gsub('[0-9]+', '', refs)\ncol_nums <- vapply(col_labs, col_to_int, integer(1), USE.NAMES = FALSE)\nvalues <- vapply(cell_nodes, function(cell) {\n  ctype <- extract_attr(cell, 't')\n  v <- extract_capture('<v[^>]*>(.*?)</v>', cell)\n  if (!nzchar(v) && grepl('<t[^>]*>', cell, perl = TRUE)) {\n    v <- xml_unescape(paste(strip_tags(extract_matches('<t[^>]*>.*?</t>', cell)), collapse = ''))\n  }\n  if (identical(ctype, 's') && nzchar(v)) return(shared[as.integer(v) + 1L])\n  xml_unescape(v)\n}, character(1), USE.NAMES = FALSE)\nmat <- matrix('', nrow = max(row_nums), ncol = max(col_nums))\nfor (i in seq_along(values)) mat[row_nums[i], col_nums[i]] <- values[i]\nheaders <- make.names(mat[1, ], unique = TRUE)\ndat <- as.data.frame(mat[-1, , drop = FALSE], stringsAsFactors = FALSE)\nnames(dat) <- headers\nage_col <- grep('^Age$', names(dat), value = TRUE)\neff_col <- grep('^Efficacy$', names(dat), value = TRUE)\nif (length(age_col) != 1L || length(eff_col) != 1L) {\n  writeLines(c('error\\tCould not identify Age and Efficacy columns', paste('headers', paste(names(dat)[1:min(12, length(names(dat)))], collapse=','), sep='\\t')), outfile)\n  quit(status = 1)\n}\nage <- suppressWarnings(as.numeric(dat[[age_col]]))\neff <- toupper(trimws(dat[[eff_col]]))\ny <- ifelse(eff %in% c('CR', 'PR'), 1, ifelse(eff %in% c('SD', 'PD'), 0, NA))\nmodel_dat <- data.frame(y = y, age = age)\nmodel_dat <- model_dat[complete.cases(model_dat), , drop = FALSE]\nif (nrow(model_dat) < 2L || length(unique(model_dat$y)) != 2L) stop('Insufficient complete binary response data')\nfit <- glm(y ~ age, data = model_dat, family = binomial(link = 'logit'))\ncoefs <- summary(fit)$coefficients\nanswer <- unname(coef(fit)['age'])\ncounts <- table(factor(model_dat$y, levels = c(0, 1)))\nraw_eff_counts <- paste(names(table(eff)), as.integer(table(eff)), sep=':', collapse=',')\nlines <- c(\n  paste('estimand', 'logit responder(CR_or_PR) versus nonresponder(SD_or_PD), predictor Age', sep='\\t'),\n  paste('raw_efficacy_counts', raw_eff_counts, sep='\\t'),\n  paste('n_complete', nrow(model_dat), sep='\\t'),\n  paste('n_nonresponders', unname(counts[['0']]), sep='\\t'),\n  paste('n_responders', unname(counts[['1']]), sep='\\t'),\n  paste('intercept', format(coef(fit)[['(Intercept)']], digits=17, scientific=TRUE), sep='\\t'),\n  paste('age', format(answer, digits=17, scientific=TRUE), sep='\\t'),\n  paste('age_se', format(coefs['age', 'Std. Error'], digits=17, scientific=TRUE), sep='\\t')\n)\nwriteLines(lines, outfile)\nRSCRIPT\nRscript analysis.R \"/jetstream2/scratch/main/jobs/78533542/inputs/dataset_2e06cb32-2182-4455-8f4c-430e160588df.dat\" result.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "workbook": {
+      "id": "f9cad7b01a472135a9dfc85a24456440",
+      "src": "hda",
+      "uuid": "2e06cb32-2182-4455-8f4c-430e160588df"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a472135fd2865ff049d7398",
+      "src": "hda",
+      "uuid": "439cd5da-3be9-4638-b4ed-127ab3b510a6"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

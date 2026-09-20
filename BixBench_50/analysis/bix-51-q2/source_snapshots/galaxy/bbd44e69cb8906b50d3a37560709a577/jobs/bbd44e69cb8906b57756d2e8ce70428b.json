@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b57756d2e8ce70428b",
+  "history_id": "bbd44e69cb8906b50d3a37560709a577",
+  "tool_id": "bmi-pr-logit-aic-v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-02T10:59:44.159601",
+  "update_time": "2026-08-02T11:00:33.924904",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78866982/inputs/dataset_2e06cb32-2182-4455-8f4c-430e160588df.dat\" > aic.tsv <<'PY'\nimport re\nimport sys\nimport zipfile\nimport xml.etree.ElementTree as ET\n\nimport numpy as np\nimport statsmodels\nimport statsmodels.api as sm\n\nif not getattr(statsmodels, \"__version__\", \"\"):\n    raise RuntimeError(\"statsmodels import/version check failed\")\n\ninput_path = sys.argv[1]\nmain_ns = \"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"\nns = {\"m\": main_ns}\n\ndef column_index(cell_ref):\n    letters = re.match(r\"[A-Z]+\", cell_ref).group(0)\n    idx = 0\n    for ch in letters:\n        idx = idx * 26 + (ord(ch) - 64)\n    return idx - 1\n\nwith zipfile.ZipFile(input_path, \"r\") as workbook:\n    shared_root = ET.fromstring(workbook.read(\"xl/sharedStrings.xml\"))\n    shared_strings = []\n    for si in shared_root.findall(\"m:si\", ns):\n        shared_strings.append(\"\".join(t.text or \"\" for t in si.iter(\"{%s}t\" % main_ns)))\n\n    sheet_root = ET.fromstring(workbook.read(\"xl/worksheets/sheet1.xml\"))\n    sheet_rows = {}\n    for row in sheet_root.findall(\".//m:sheetData/m:row\", ns):\n        row_number = int(row.get(\"r\"))\n        values = {}\n        for cell in row.findall(\"m:c\", ns):\n            value_node = cell.find(\"m:v\", ns)\n            if value_node is None or value_node.text is None:\n                value = None\n            elif cell.get(\"t\") == \"s\":\n                value = shared_strings[int(value_node.text)]\n            else:\n                value = value_node.text\n            values[column_index(cell.get(\"r\"))] = value\n        sheet_rows[row_number] = values\n\nheader = sheet_rows.get(1, {})\nheader_names = {value: idx for idx, value in header.items() if value is not None}\nif \"Efficacy\" not in header_names or \"BMI\" not in header_names:\n    raise RuntimeError(\"Required Efficacy and BMI headers were not found\")\nefficacy_col = header_names[\"Efficacy\"]\nbmi_col = header_names[\"BMI\"]\n\nrecords = []\nrows_seen = 0\nrows_excluded = 0\nfor row_number in sorted(k for k in sheet_rows if k > 1):\n    row = sheet_rows[row_number]\n    efficacy = row.get(efficacy_col)\n    bmi_raw = row.get(bmi_col)\n    if efficacy is None and bmi_raw is None:\n        continue\n    rows_seen += 1\n    if efficacy is None or bmi_raw is None or str(bmi_raw).strip() == \"\":\n        rows_excluded += 1\n        continue\n    if efficacy not in (\"PR\", \"SD\", \"PD\"):\n        raise RuntimeError(\"Unexpected efficacy category: %r\" % (efficacy,))\n    records.append((1 if efficacy == \"PR\" else 0, float(bmi_raw)))\n\nif not records:\n    raise RuntimeError(\"No complete Efficacy/BMI observations were found\")\ny = np.asarray([r[0] for r in records], dtype=float)\nbmi = np.asarray([r[1] for r in records], dtype=float)\nX = sm.add_constant(bmi, has_constant=\"add\")\nresult = sm.Logit(y, X).fit(disp=False, maxiter=200)\n\nprint(\"metric\\tvalue\")\nprint(\"AIC\\t%.17g\" % float(result.aic))\nprint(\"response\\tPR_vs_nonPR\")\nprint(\"predictor\\tBMI\")\nprint(\"model\\tLogit(PR==1) ~ 1 + BMI\")\nprint(\"n_rows_seen\\t%d\" % rows_seen)\nprint(\"n_rows_used\\t%d\" % int(result.nobs))\nprint(\"n_rows_excluded\\t%d\" % rows_excluded)\nprint(\"log_likelihood\\t%.17g\" % float(result.llf))\nprint(\"parameter_count\\t%d\" % len(result.params))\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a472135cc59edd51524690c",
+      "src": "hda",
+      "uuid": "2e06cb32-2182-4455-8f4c-430e160588df"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a472135182fb822d25ff869",
+      "src": "hda",
+      "uuid": "4311709c-a86a-420c-976f-8d6108650f01"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from pathlib import Path
+import re, openpyxl
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+def col(ref): return ''.join(ch for ch in ref if ch.isalpha())
+def read_rows(path):
+ with ZipFile(path) as z:
+  strings=[''.join(t.text or '' for t in si.iter(NS+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall(NS+'si')]
+  root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+  for row in root.find(NS+'sheetData').findall(NS+'row')[2:]:
+   d={}
+   for c in row.findall(NS+'c'):
+    v=c.find(NS+'v')
+    if v is None: continue
+    x=v.text
+    if c.attrib.get('t')=='s': x=strings[int(x)]
+    d[col(c.attrib['r'])]=x
+   yield d
+meta=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+carrier={str(r[0]).strip() for r in meta.iter_rows(min_row=2,values_only=True) if r[3]=='Carrier'}
+coding={'synonymous_variant','missense_variant','inframe_insertion','inframe_deletion','frameshift_variant','stop_gained','stop_lost','start_lost','coding_sequence_variant'}
+num=den=exact_all=exact_coding=seen=0
+for path in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+ token=re.search(r'CHIP_(.+)\\.xlsx"'$'"',path.name).group(1); m=re.match(r'\\d+',token); sample=m.group(0) if m else token
+ if sample not in carrier: continue
+ seen+=1
+ for row in read_rows(path):
+  try:vaf=float(row['J'])
+  except (KeyError,TypeError,ValueError):continue
+  if vaf==0.3: exact_all+=1
+  if vaf<0.3 and row.get('N') in coding:
+   den+=1
+   if row['N']=='synonymous_variant':num+=1
+  if vaf==0.3 and row.get('N') in coding:exact_coding+=1
+assert seen==19
+assert exact_coding==0
+assert (num,den)==(30,41)
+print(f'carrier_workbooks={seen} exact_VAF_0.3_all={exact_all} exact_VAF_0.3_coding={exact_coding} numerator={num} denominator={den} fraction={num/den:.17g}')
+PY"

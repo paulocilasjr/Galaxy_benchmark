@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request
+from pathlib import Path
+# parse RDS? Use R to output gene lists to temporary files? Simpler use subprocess Rscript to write up genes
+import subprocess, json
+# Rscript writes up gene list to /workspace/tmp/up_glu.txt and all universe
+r = '''
+f <- '/workspace/inputs/res_GluFevsGluFePlus.rds'
+x <- readRDS(f); a <- attributes(x); rn <- a"'$rownames; ld <- a$listData
+up <- rn[ld$log2FoldChange >= 1.5 & ld$padj < 0.05]
+allg <- rn
+writeLines(up, '"'/workspace/tmp/up_glu.txt')
+writeLines(allg, '/workspace/tmp/all_glu.txt')
+cat('nup', length(up), 'nall', length(allg), '\\\\n')
+'''
+subprocess.run(['Rscript','-e',r], check=True)
+up = Path('/workspace/tmp/up_glu.txt').read_text().splitlines()
+allg = Path('/workspace/tmp/all_glu.txt').read_text().splitlines()
+print('up', len(up), 'all', len(allg), up[:10])
+# fetch pathway genes
+data=urllib.request.urlopen('https://rest.kegg.jp/link/pau/path:pau02010', timeout=30).read().decode().splitlines()
+path_genes=[]
+for line in data:
+    # path:pau02010\\tpau:PA14_...
+    p = line.split('\\t')
+    if len(p)==2:
+        path_genes.append(p[1].split(':',1)[1])
+path_set=set(path_genes)
+print('path genes raw',len(path_genes),'unique',len(path_set))
+inter=[g for g in up if g in path_set]
+print('intersection',len(inter))
+print(inter)
+# check all universe intersection maybe enrichment inputs
+all_inter=sum(1 for g in allg if g in path_set)
+print('all universe in pathway', all_inter)
+PY"

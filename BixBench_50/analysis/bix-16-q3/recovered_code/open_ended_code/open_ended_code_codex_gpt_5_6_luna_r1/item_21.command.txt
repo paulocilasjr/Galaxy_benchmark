@@ -1,0 +1,98 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.local_packages python3 - <<'PY'
+import csv, collections, time, math
+import numpy as np
+from scipy.stats import rankdata
+
+cp='inputs/CRISPRGeneEffect.csv'
+ep='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def read_header_ids(path):
+    with open(path, newline='', encoding='utf-8', errors='replace') as f:
+        rd=csv.reader(f)
+        header=next(rd)
+        ids=[row[0] for row in rd]
+    return header, ids
+
+def feature_id(x):
+    p=x.rfind('(')
+    return x[p+1:-1] if p >= 0 and x.endswith(')') else x
+
+def load_shared(path, cols, row_to_shared, n_shared, n_pairs):
+    out=np.full((n_shared,n_pairs),np.nan,dtype=np.float32)
+    hits=0; missing=0; rows=0
+    with open(path,newline='',encoding='utf-8',errors='replace') as f:
+        rd=csv.reader(f)
+        header=next(rd)
+        for row in rd:
+            rows+=1
+            target=row_to_shared.get(row[0])
+            if target is None: continue
+            vals=np.fromiter((float(row[j]) if row[j] not in ('','NA','NaN','nan') else np.nan for j in cols),dtype=np.float32,count=n_pairs)
+            out[target,:]=vals
+            hits+=1; missing+=int(np.isnan(vals).sum())
+    if hits "'!= n_shared:
+        raise RuntimeError(f'"'{path}: expected {n_shared} shared rows, loaded {hits}')
+    return out,rows,missing
+
+start=time.time()
+ch,cids=read_header_ids(cp)
+eh,eids=read_header_ids(ep)
+e_row={x:i for i,x in enumerate(eids)}
+shared_ids=[x for x in cids if x in e_row]
+shared_idx={x:i for i,x in enumerate(shared_ids)}
+e_row_to_shared={x:shared_idx[x] for x in shared_ids}
+# Pair by stable Entrez ID; exact label takes precedence for expression duplicate IDs.
+e_id_cols=collections.defaultdict(list); e_label_col={}
+for j,x in enumerate(eh[1:],1):
+    e_id_cols[feature_id(x)].append(j); e_label_col[x]=j
+pairs=[]
+for cj,x in enumerate(ch[1:],1):
+    fid=feature_id(x)
+    if fid in e_id_cols:
+        ej=e_label_col.get(x,e_id_cols[fid][0])
+        pairs.append((cj,ej,x,eh[ej],fid,x==eh[ej]))
+assert len({p[0] for p in pairs})==len(pairs)
+assert len({p[1] for p in pairs})==len(pairs)
+ccols=[p[0] for p in pairs]; ecols=[p[1] for p in pairs]
+exact=np.array([p[5] for p in pairs],dtype=bool)
+p=len(pairs); n=len(shared_ids)
+print('shared_models',n,'feature_pairs',p,'exact_label_pairs',int(exact.sum()),flush=True)
+t=time.time(); C,cr,cmiss=load_shared(cp,ccols,shared_idx,n,p); print('loaded_CRISPR',C.shape,'rows',cr,'missing',cmiss,'sec',round(time.time()-t,2),flush=True)
+t=time.time(); E,er,emiss=load_shared(ep,ecols,e_row_to_shared,n,p); print('loaded_expression',E.shape,'rows',er,'missing',emiss,'sec',round(time.time()-t,2),flush=True)
+print('total_load_sec',round(time.time()-start,2),flush=True)
+# Rank and correlate in blocks to keep peak memory bounded.
+complete=np.isfinite(C).all(axis=0) & np.isfinite(E).all(axis=0)
+bio=np.full(p,np.nan,dtype=np.float64); valid_n=np.zeros(p,dtype=np.int32)
+block=512
+t=time.time()
+for s in range(0,p,block):
+    z=min(p,s+block)
+    local=np.flatnonzero(complete[s:z])
+    if local.size:
+        cc=C[:,s+local]; ee=E[:,s+local]
+        rc=rankdata(cc,axis=0,method='average'); re=rankdata(ee,axis=0,method='average')
+        rc-=rc.mean(axis=0); re-=re.mean(axis=0)
+        den=np.sqrt(np.sum(rc*rc,axis=0)*np.sum(re*re,axis=0))
+        bio[s+local]=-np.sum(rc*re,axis=0)/den
+        valid_n[s+local]=n
+    for j in np.flatnonzero(~complete[s:z])+s:
+        ok=np.isfinite(C[:,j]) & np.isfinite(E[:,j])
+        nv=int(ok.sum()); valid_n[j]=nv
+        if nv>=2:
+            rc=rankdata(C[ok,j],method='average'); re=rankdata(E[ok,j],method='average')
+            rc-=rc.mean(); re-=re.mean()
+            den=math.sqrt(float(np.sum(rc*rc)*np.sum(re*re)))
+            if den: bio[j]=-float(np.sum(rc*re))/den
+print('rank_sec',round(time.time()-t,2),'complete_features',int(complete.sum()),'incomplete_features',int((~complete).sum()),flush=True)
+finite=np.isfinite(bio)
+count_id=int(np.sum(finite & (bio>=0.6)))
+count_exact=int(np.sum(finite & exact & (bio>=0.6)))
+print('finite',int(finite.sum()),'valid_n_range',int(valid_n[finite].min()),int(valid_n[finite].max()),'count_ID_match',count_id,'count_exact_label',count_exact,flush=True)
+ordidx=np.flatnonzero(finite)[np.argsort(-bio[finite])[:20]]
+print('TOP')
+for j in ordidx:
+ print(pairs[j][2], 'expr=',pairs[j][3], 'essentiality_rho=',repr(float(bio[j])), 'exact=',bool(exact[j]), 'n=',int(valid_n[j]))
+print('THRESHOLD_NEAR')
+for j in np.flatnonzero(finite & (bio>=0.55) & (bio<=0.65)):
+ print(pairs[j][2],repr(float(bio[j])),bool(exact[j]),int(valid_n[j]))
+PY"

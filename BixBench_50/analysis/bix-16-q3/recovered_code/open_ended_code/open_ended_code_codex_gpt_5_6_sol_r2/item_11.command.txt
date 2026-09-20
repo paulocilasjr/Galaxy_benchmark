@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+import csv,re,time
+from collections import Counter
+import pandas as pd, numpy as np
+from scipy.stats import rankdata, spearmanr
+ge_fn='inputs/CRISPRGeneEffect.csv'
+ex_fn='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def header(fn):
+    with open(fn,newline='') as f: return next(csv.reader(f))
+ge_h=header(ge_fn); ex_h=header(ex_fn)
+def parse(x):
+    m=re.fullmatch(r'(.*) \\((\\d+)\\)',x); return m.group(1),int(m.group(2))
+ge_by_id={parse(x)[1]:x for x in ge_h[1:]}
+ex_ids=[parse(x)[1] for x in ex_h[1:]]
+ex_counts=Counter(ex_ids)
+ex_by_id={parse(x)[1]:x for x in ex_h[1:] if ex_counts[parse(x)[1]]==1}
+ids=sorted(set(ge_by_id)&set(ex_by_id))
+print('unambiguous shared IDs',len(ids),flush=True)
+t=time.time()
+ge_cols=['']+[ge_by_id[i] for i in ids]
+ex_cols=['']+[ex_by_id[i] for i in ids]
+ge=pd.read_csv(ge_fn,usecols=ge_cols,index_col=0,dtype=np.float32)
+print('loaded gene effect',ge.shape,'seconds',round(time.time()-t,1),flush=True)
+t=time.time()
+ex=pd.read_csv(ex_fn,usecols=ex_cols,index_col=0,dtype=np.float32)
+print('loaded expression',ex.shape,'seconds',round(time.time()-t,1),flush=True)
+# normalize columns to stable IDs and align observations
+ge.columns=[parse(x)[1] for x in ge.columns]
+ex.columns=[parse(x)[1] for x in ex.columns]
+shared=ge.index.intersection(ex.index,sort=False)
+ge=ge.loc[shared,ids]
+ex=ex.loc[shared,ids]
+print('aligned',len(shared),'models',len(ids),'genes')
+print('missing GE',int(ge.isna().to_numpy().sum()),'EX',int(ex.isna().to_numpy().sum()),flush=True)
+G=ge.to_numpy(copy=False); X=ex.to_numpy(copy=False)
+rhos=np.empty(len(ids),dtype=np.float64)
+chunk=512
+t=time.time()
+for a in range(0,len(ids),chunk):
+    b=min(a+chunk,len(ids)); g=G[:,a:b]; x=X[:,a:b]
+    for j in range(b-a):
+        ok=np.isfinite(g[:,j]) & np.isfinite(x[:,j])
+        # biological positive-going essentiality = - gene effect
+        if ok.sum()<2:
+            rhos[a+j]=np.nan
+        else:
+            rhos[a+j]=spearmanr(x[ok,j],-g[ok,j]).statistic
+    if a==0 or b==len(ids) or b%4096==0: print('correlated',b,flush=True)
+print('correlation seconds',round(time.time()-t,1))
+finite=np.isfinite(rhos)
+print('finite',int(finite.sum()),'rho>=0.6',int(np.sum(rhos>=0.6)),'rho rawGE>=0.6',int(np.sum(rhos<=-0.6)))
+# exact-label overlap sensitivity subset from same matrices when ID-selected and same exact names
+same_ids=[i for i in ids if ge_by_id[i]==ex_by_id[i]]
+pos=np.array([ids.index(i) for i in same_ids])
+print('exact-label subset genes',len(same_ids),'rho>=0.6',int(np.sum(rhos[pos]>=0.6)))
+order=np.argsort(np.nan_to_num(rhos,nan=-999))[::-1][:20]
+print('top20')
+for k in order: print(ge_by_id[ids[k]],repr(float(rhos[k])))
+PY"

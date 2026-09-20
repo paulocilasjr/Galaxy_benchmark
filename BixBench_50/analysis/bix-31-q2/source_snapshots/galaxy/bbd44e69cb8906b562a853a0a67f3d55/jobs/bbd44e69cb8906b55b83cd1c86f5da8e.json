@@ -1,0 +1,68 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b55b83cd1c86f5da8e",
+  "history_id": "bbd44e69cb8906b562a853a0a67f3d55",
+  "tool_id": "pydeseq2_sex_m_vs_f_batch_covariate_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T18:21:01.298538",
+  "update_time": "2026-07-15T18:24:40.966934",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > run_pydeseq2.py <<'PY'\nimport json\nimport os\nimport sys\nimport warnings\n\nimport numpy as np\nimport pandas as pd\nimport pydeseq2\nfrom pydeseq2.dds import DeseqDataSet\nfrom pydeseq2.ds import DeseqStats\n\ncounts_path, metadata_path, gene_meta_path, results_path, answer_path, info_path = sys.argv[1:]\n\ncounts_gene_by_sample = pd.read_csv(counts_path, index_col=0)\nmetadata = pd.read_csv(metadata_path)\ngene_meta = pd.read_csv(gene_meta_path, index_col=0)\n\nif not counts_gene_by_sample.index.is_unique:\n    raise ValueError(\"Gene IDs in count matrix are not unique\")\nif not counts_gene_by_sample.columns.is_unique:\n    raise ValueError(\"Sample IDs in count matrix are not unique\")\nif \"sample\" not in metadata.columns or \"sex\" not in metadata.columns or \"batch\" not in metadata.columns:\n    raise ValueError(\"Metadata must contain sample, sex, and batch columns\")\nmetadata = metadata.set_index(\"sample\", drop=False)\nif not metadata.index.is_unique:\n    raise ValueError(\"Sample IDs in metadata are not unique\")\n\nmissing_meta = sorted(set(counts_gene_by_sample.columns) - set(metadata.index))\nmissing_counts = sorted(set(metadata.index) - set(counts_gene_by_sample.columns))\nif missing_meta or missing_counts:\n    raise ValueError({\"missing_meta\": missing_meta[:10], \"missing_counts\": missing_counts[:10]})\n\nmetadata = metadata.loc[counts_gene_by_sample.columns].copy()\nif set(metadata[\"sex\"].astype(str).unique()) != {\"F\", \"M\"}:\n    raise ValueError(\"Sex levels are not exactly F and M\")\nmetadata[\"sex\"] = pd.Categorical(metadata[\"sex\"].astype(str), categories=[\"F\", \"M\"])\nbatch_values = metadata[\"batch\"].astype(str)\ndef batch_key(x):\n    try:\n        return (0, int(x))\n    except ValueError:\n        return (1, x)\nbatch_levels = sorted(batch_values.unique(), key=batch_key)\nmetadata[\"batch\"] = pd.Categorical(batch_values, categories=batch_levels)\n\ncounts = counts_gene_by_sample.T\n# PyDESeq2 validates non-negative integer-valued counts and casts to int internally.\n# Check integer-valued input explicitly so no lossy correction is hidden.\ncounts_numeric = counts.apply(pd.to_numeric)\narr = counts_numeric.to_numpy(dtype=np.float64, copy=False)\nif not np.isfinite(arr).all():\n    raise ValueError(\"Counts contain non-finite values\")\nif (arr < 0).any():\n    raise ValueError(\"Counts contain negative values\")\nif not np.allclose(arr, np.rint(arr), rtol=0, atol=1e-8):\n    raise ValueError(\"Counts are not integer-valued\")\ncounts_numeric = counts_numeric.astype(np.int64)\n\nif \"FAM138A\" not in counts_numeric.columns:\n    raise ValueError(\"FAM138A is absent from the count matrix\")\nif \"FAM138A\" not in gene_meta.index:\n    warnings.warn(\"FAM138A is absent from gene metadata\", UserWarning)\n\nslots = os.environ.get(\"GALAXY_SLOTS\")\ntry:\n    n_cpus = max(1, int(slots)) if slots else None\nexcept ValueError:\n    n_cpus = None\n\ndds = DeseqDataSet(\n    counts=counts_numeric,\n    metadata=metadata[[\"batch\", \"sex\"]],\n    design=\"~ batch + sex\",\n    n_cpus=n_cpus,\n    quiet=False,\n)\ndds.deseq2()\nstat_res = DeseqStats(\n    dds,\n    contrast=[\"sex\", \"M\", \"F\"],\n    n_cpus=n_cpus,\n    quiet=False,\n)\nstat_res.summary()\ncoeffs = [str(c) for c in stat_res.LFC.columns]\npreferred = [\"sex[T.M]\", \"sex_M_vs_F\", \"sex_M_vs_F\"]\ncoeff = None\nfor candidate in preferred:\n    if candidate in coeffs:\n        coeff = candidate\n        break\nif coeff is None:\n    candidates = [c for c in coeffs if c != \"Intercept\" and \"sex\" in c and \"M\" in c]\n    if len(candidates) == 1:\n        coeff = candidates[0]\nif coeff is None:\n    raise ValueError({\"message\": \"Could not identify sex M vs F coefficient\", \"coefficients\": coeffs})\nstat_res.lfc_shrink(coeff=coeff)\n\nres = stat_res.results_df.copy()\nres.index.name = \"gene\"\nres[\"pass_abs_lfc_gt_0_5_baseMean_gt_10\"] = (res[\"log2FoldChange\"].abs() > 0.5) & (res[\"baseMean\"] > 10)\nres.to_csv(results_path, sep=\"\\t\")\n\ntarget = res.loc[\"FAM138A\"]\nwith open(answer_path, \"w\") as out:\n    out.write(format(float(target[\"log2FoldChange\"]), \".15g\") + \"\\n\")\n\ninfo = {\n    \"pydeseq2_version\": pydeseq2.__version__,\n    \"design\": \"~ batch + sex\",\n    \"contrast\": [\"sex\", \"M\", \"F\"],\n    \"sex_categories\": list(metadata[\"sex\"].cat.categories),\n    \"batch_categories\": list(metadata[\"batch\"].cat.categories),\n    \"lfc_shrink_coeff\": coeff,\n    \"lfc_coefficients\": coeffs,\n    \"n_samples\": int(counts_numeric.shape[0]),\n    \"n_genes\": int(counts_numeric.shape[1]),\n    \"target\": {\n        \"gene\": \"FAM138A\",\n        \"baseMean\": None if pd.isna(target[\"baseMean\"]) else float(target[\"baseMean\"]),\n        \"log2FoldChange\": None if pd.isna(target[\"log2FoldChange\"]) else float(target[\"log2FoldChange\"]),\n        \"lfcSE\": None if pd.isna(target[\"lfcSE\"]) else float(target[\"lfcSE\"]),\n        \"stat\": None if pd.isna(target[\"stat\"]) else float(target[\"stat\"]),\n        \"pvalue\": None if pd.isna(target[\"pvalue\"]) else float(target[\"pvalue\"]),\n        \"padj\": None if pd.isna(target[\"padj\"]) else float(target[\"padj\"]),\n        \"passes_filter\": bool(target[\"pass_abs_lfc_gt_0_5_baseMean_gt_10\"]),\n    },\n}\nwith open(info_path, \"w\") as out:\n    json.dump(info, out, indent=2, sort_keys=True)\nPY\npython run_pydeseq2.py \"/jetstream2/scratch/main/jobs/78544344/inputs/dataset_d4c351a9-51fe-41e0-be48-3700d1431fc8.dat\" \"/jetstream2/scratch/main/jobs/78544344/inputs/dataset_487b6c89-1b24-4064-b3fb-89ec1cb0aaa9.dat\" \"/jetstream2/scratch/main/jobs/78544344/inputs/dataset_fbc3090a-6588-41fd-bbb2-b39a0f0f8eaa.dat\" pydeseq2_results.tsv fam138a_answer.txt run_info.json",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a4721354a1be4bf2c533561",
+      "src": "hda",
+      "uuid": "d4c351a9-51fe-41e0-be48-3700d1431fc8"
+    },
+    "metadata": {
+      "id": "f9cad7b01a4721359e3c8011853d7357",
+      "src": "hda",
+      "uuid": "487b6c89-1b24-4064-b3fb-89ec1cb0aaa9"
+    },
+    "gene_meta": {
+      "id": "f9cad7b01a47213505de0750f876a37c",
+      "src": "hda",
+      "uuid": "fbc3090a-6588-41fd-bbb2-b39a0f0f8eaa"
+    }
+  },
+  "outputs": {
+    "results": {
+      "id": "f9cad7b01a472135b8be352399f36d85",
+      "src": "hda",
+      "uuid": "218aa6e2-fec1-48cd-810d-6b40d1294b39"
+    },
+    "answer": {
+      "id": "f9cad7b01a472135a4013edeca801a5a",
+      "src": "hda",
+      "uuid": "529c83e5-7736-4a77-afb8-31098dd01abc"
+    },
+    "run_info": {
+      "id": "f9cad7b01a4721359cde1f793943697c",
+      "src": "hda",
+      "uuid": "01a62d7b-fac2-4e56-bb2c-2fa590ad7963"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "Using None as control genes, passed at DeseqDataSet initialization\nLog2 fold change & Wald test p-value: sex M vs F\n                baseMean  log2FoldChange  ...    pvalue      padj\nDDX11L1        38.009637       -0.095466  ...  0.386799  0.754084\nWASH7P       2246.376356       -0.039277  ...  0.338233  0.721480\nMIR6859-1      35.470762        0.011472  ...  0.832689  0.950550\nMIR1302-2HG     1.963240       -0.068978  ...  0.565981  0.857861\nMIR1302-2       0.000000             NaN  ...       NaN       NaN\n...                  ...             ...  ...       ...       ...\nAC233755.2     50.094394       -0.463567  ...  0.086202  0.408482\nAC233755.1     91.914904       -0.382759  ...  0.136785  0.502946\nAC240274.1    956.137863       -0.041119  ...  0.275322  0.668745\nAC213203.2      0.141895       -0.120285  ...  0.867337       NaN\nAC213203.1      0.198880       -0.401537  ...  0.282370       NaN\n\n[59453 rows x 6 columns]\nShrunk log2 fold change & Wald test p-value: sex[T.M]\n                baseMean  log2FoldChange  ...    pvalue      padj\nDDX11L1        38.009637       -0.047178  ...  0.386799  0.754084\nWASH7P       2246.376356       -0.034297  ...  0.338233  0.721480\nMIR6859-1      35.470762        0.009096  ...  0.832689  0.950550\nMIR1302-2HG     1.963240       -0.029576  ...  0.565981  0.857861\nMIR1302-2       0.000000             NaN  ...       NaN       NaN\n...                  ...             ...  ...       ...       ...\nAC233755.2     50.094394       -0.069152  ...  0.086202  0.408482\nAC233755.1     91.914904       -0.067348  ...  0.136785  0.502946\nAC240274.1    956.137863       -0.036589  ...  0.275322  0.668745\nAC213203.2      0.141895       -0.001497  ...  0.867337       NaN\nAC213203.1      0.198880       -0.083383  ...  0.282370       NaN\n\n[59453 rows x 6 columns]\n",
+  "tool_stderr": "Fitting size factors...\n... done in 1.50 seconds.\n\nFitting dispersions...\n... done in 22.62 seconds.\n\nFitting dispersion trend curve...\n... done in 0.97 seconds.\n\nFitting MAP dispersions...\n... done in 30.53 seconds.\n\nFitting LFCs...\n... done in 19.25 seconds.\n\nCalculating cook's distance...\n... done in 2.28 seconds.\n\nReplacing 348 outlier genes.\n\nFitting dispersions...\n... done in 0.24 seconds.\n\nFitting MAP dispersions...\n... done in 0.24 seconds.\n\nFitting LFCs...\n... done in 0.28 seconds.\n\nRunning Wald tests...\n... done in 5.97 seconds.\n\nFitting MAP LFCs...\n/usr/local/lib/python3.14/site-packages/pydeseq2/utils.py:1088: RuntimeWarning: overflow encountered in exp\n  counts - (counts + size) / (1 + size * np.exp(-xbeta - offset))\n/usr/local/lib/python3.14/site-packages/pydeseq2/utils.py:1088: RuntimeWarning: overflow encountered in exp\n  counts - (counts + size) / (1 + size * np.exp(-xbeta - offset))\n... done in 36.74 seconds.\n\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "Using None as control genes, passed at DeseqDataSet initialization\nLog2 fold change & Wald test p-value: sex M vs F\n                baseMean  log2FoldChange  ...    pvalue      padj\nDDX11L1        38.009637       -0.095466  ...  0.386799  0.754084\nWASH7P       2246.376356       -0.039277  ...  0.338233  0.721480\nMIR6859-1      35.470762        0.011472  ...  0.832689  0.950550\nMIR1302-2HG     1.963240       -0.068978  ...  0.565981  0.857861\nMIR1302-2       0.000000             NaN  ...       NaN       NaN\n...                  ...             ...  ...       ...       ...\nAC233755.2     50.094394       -0.463567  ...  0.086202  0.408482\nAC233755.1     91.914904       -0.382759  ...  0.136785  0.502946\nAC240274.1    956.137863       -0.041119  ...  0.275322  0.668745\nAC213203.2      0.141895       -0.120285  ...  0.867337       NaN\nAC213203.1      0.198880       -0.401537  ...  0.282370       NaN\n\n[59453 rows x 6 columns]\nShrunk log2 fold change & Wald test p-value: sex[T.M]\n                baseMean  log2FoldChange  ...    pvalue      padj\nDDX11L1        38.009637       -0.047178  ...  0.386799  0.754084\nWASH7P       2246.376356       -0.034297  ...  0.338233  0.721480\nMIR6859-1      35.470762        0.009096  ...  0.832689  0.950550\nMIR1302-2HG     1.963240       -0.029576  ...  0.565981  0.857861\nMIR1302-2       0.000000             NaN  ...       NaN       NaN\n...                  ...             ...  ...       ...       ...\nAC233755.2     50.094394       -0.069152  ...  0.086202  0.408482\nAC233755.1     91.914904       -0.067348  ...  0.136785  0.502946\nAC240274.1    956.137863       -0.036589  ...  0.275322  0.668745\nAC213203.2      0.141895       -0.001497  ...  0.867337       NaN\nAC213203.1      0.198880       -0.083383  ...  0.282370       NaN\n\n[59453 rows x 6 columns]\n",
+  "stderr": "Fitting size factors...\n... done in 1.50 seconds.\n\nFitting dispersions...\n... done in 22.62 seconds.\n\nFitting dispersion trend curve...\n... done in 0.97 seconds.\n\nFitting MAP dispersions...\n... done in 30.53 seconds.\n\nFitting LFCs...\n... done in 19.25 seconds.\n\nCalculating cook's distance...\n... done in 2.28 seconds.\n\nReplacing 348 outlier genes.\n\nFitting dispersions...\n... done in 0.24 seconds.\n\nFitting MAP dispersions...\n... done in 0.24 seconds.\n\nFitting LFCs...\n... done in 0.28 seconds.\n\nRunning Wald tests...\n... done in 5.97 seconds.\n\nFitting MAP LFCs...\n/usr/local/lib/python3.14/site-packages/pydeseq2/utils.py:1088: RuntimeWarning: overflow encountered in exp\n  counts - (counts + size) / (1 + size * np.exp(-xbeta - offset))\n/usr/local/lib/python3.14/site-packages/pydeseq2/utils.py:1088: RuntimeWarning: overflow encountered in exp\n  counts - (counts + size) / (1 + size * np.exp(-xbeta - offset))\n... done in 36.74 seconds.\n\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

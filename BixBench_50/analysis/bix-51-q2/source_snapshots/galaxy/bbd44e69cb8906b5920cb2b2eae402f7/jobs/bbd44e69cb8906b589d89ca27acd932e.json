@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b589d89ca27acd932e",
+  "history_id": "bbd44e69cb8906b5920cb2b2eae402f7",
+  "tool_id": "codex-logistic-pr-aic-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-03T06:11:24.426453",
+  "update_time": "2026-08-03T06:12:21.989462",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.py <<'PY'\nimport math\nimport re\nimport sys\nimport zipfile\nimport xml.etree.ElementTree as ET\n\nimport numpy as np\nimport statsmodels.api as sm\n\nNS = \"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"\nCELL_RE = re.compile(r\"^([A-Z]+)([0-9]+)$\")\n\ndef cell_value(cell, shared):\n    kind = cell.attrib.get(\"t\")\n    if kind == \"inlineStr\":\n        return \"\".join((node.text or \"\") for node in cell.iter(f\"{{{NS}}}t\"))\n    value_node = cell.find(f\"{{{NS}}}v\")\n    if value_node is None:\n        return None\n    raw = value_node.text\n    if kind == \"s\":\n        return shared[int(raw)]\n    if kind == \"b\":\n        return raw == \"1\"\n    return raw\n\ndef read_rows(path):\n    with zipfile.ZipFile(path) as workbook:\n        shared = []\n        if \"xl/sharedStrings.xml\" in workbook.namelist():\n            root = ET.fromstring(workbook.read(\"xl/sharedStrings.xml\"))\n            for item in root.findall(f\"{{{NS}}}si\"):\n                shared.append(\"\".join((node.text or \"\") for node in item.iter(f\"{{{NS}}}t\")))\n        sheet = ET.fromstring(workbook.read(\"xl/worksheets/sheet1.xml\"))\n        rows = {}\n        for row in sheet.findall(f\".//{{{NS}}}row\"):\n            row_number = int(row.attrib[\"r\"])\n            values = {}\n            for cell in row.findall(f\"{{{NS}}}c\"):\n                ref = cell.attrib[\"r\"]\n                col = re.match(r\"^([A-Z]+)\", ref).group(1)\n                values[col] = cell_value(cell, shared)\n            if values:\n                rows[row_number] = values\n        return rows\n\ndef main():\n    rows = read_rows(sys.argv[1])\n    header = rows.get(1, {})\n    by_name = {str(value).strip(): col for col, value in header.items() if value is not None}\n    if \"Efficacy\" not in by_name or \"BMI\" not in by_name:\n        raise RuntimeError(\"required Efficacy and BMI columns are missing\")\n    efficacy_col = by_name[\"Efficacy\"]\n    bmi_col = by_name[\"BMI\"]\n    x_values = []\n    y_values = []\n    for row_number in sorted(rows):\n        if row_number == 1:\n            continue\n        row = rows[row_number]\n        if row.get(\"A\") in (None, \"\"):\n            continue\n        efficacy = row.get(efficacy_col)\n        bmi = row.get(bmi_col)\n        if efficacy in (None, \"\") or bmi in (None, \"\"):\n            continue\n        try:\n            bmi_value = float(bmi)\n        except (TypeError, ValueError) as exc:\n            raise RuntimeError(f\"non-numeric BMI at worksheet row {row_number}\") from exc\n        x_values.append(bmi_value)\n        y_values.append(1.0 if str(efficacy).strip().upper() == \"PR\" else 0.0)\n    if not x_values or len(set(y_values)) != 2:\n        raise RuntimeError(\"invalid complete-case PR indicator\")\n    design = sm.add_constant(np.asarray(x_values, dtype=float), has_constant=\"add\")\n    fitted = sm.GLM(\n        np.asarray(y_values, dtype=float),\n        design,\n        family=sm.families.Binomial(),\n    ).fit()\n    aic = float(fitted.aic)\n    if not math.isfinite(aic):\n        raise RuntimeError(\"fitted AIC is not finite\")\n    pr_count = int(sum(y_values))\n    with open(\"result.tsv\", \"w\", encoding=\"utf-8\") as output:\n        output.write(\"metric\\tvalue\\n\")\n        output.write(f\"aic\\t{aic:.17g}\\n\")\n        output.write(f\"effective_n\\t{len(y_values)}\\n\")\n        output.write(f\"pr_count\\t{pr_count}\\n\")\n        output.write(f\"non_pr_count\\t{len(y_values) - pr_count}\\n\")\n        output.write(\"model\\tBinomial logistic regression: PR indicator ~ BMI\\n\")\n        output.write(f\"statsmodels_version\\t{sm.__version__}\\n\")\n\nif __name__ == \"__main__\":\n    main()\nPY\npython analysis.py \"/jetstream2/scratch/main/jobs/78877846/inputs/dataset_2e06cb32-2182-4455-8f4c-430e160588df.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a4721355ea812d4091186f9",
+      "src": "hda",
+      "uuid": "2e06cb32-2182-4455-8f4c-430e160588df"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a472135af2ec039de276737",
+      "src": "hda",
+      "uuid": "0a8481d5-864b-4744-bd75-8411eadecfe8"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "/usr/local/lib/python3.13/site-packages/statsmodels/tools/tools.py:6: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.3.5)\n  import scipy.linalg\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "/usr/local/lib/python3.13/site-packages/statsmodels/tools/tools.py:6: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.3.5)\n  import scipy.linalg\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

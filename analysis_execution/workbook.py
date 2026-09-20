@@ -19,7 +19,7 @@ P = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 URL = re.compile(r"https?://[^\s<>\])]+")
 REP = re.compile(r"(?:replicate[ _-]*)?(\d+)$", re.I)
 TASK = re.compile(r"^(?:bix[-_]\d+[-_]q\d+|[a-z][a-z0-9_-]*[-_]q\d+|wf[_-]\d+[_a-z0-9-]*)$", re.I)
-KNOWN = {"bixbench": "bixbench", "bix": "bixbench", "compbio": "compbio", "compbiobench": "compbio", "iwc": "iwc"}
+KNOWN = {"bixbench": "bixbench", "bix": "bixbench", "bixbench-verified-50": "bixbench", "compbio": "compbio", "compbiobench": "compbio", "iwc": "iwc"}
 
 
 @dataclass(frozen=True)
@@ -106,9 +106,9 @@ def read_rows(path: Path):
 
 def _condition(value: str) -> str | None:
     x = re.sub(r"[^a-z]", "", value.lower())
-    if x in {"galaxyapi", "galaxy", "galaxystrictskills", "galaxyskills"}:
+    if x in {"galaxyapi", "galaxy", "galaxystrictskills", "galaxyskills", "galaxyapicodewithskills"}:
         return "galaxy"
-    if x in {"opencoded", "openendedcode", "anycode", "anycodenongalaxyskills", "unconstrainedcode"}:
+    if x in {"opencoded", "openendedcode", "openendedcodewithskills", "anycode", "anycodenongalaxyskills", "unconstrainedcode"}:
         return "open_ended_code"
     return None
 
@@ -155,7 +155,14 @@ def huggingface_source(url: str) -> tuple[str, str, str]:
 def load_inventory(path: Path) -> list[RunLink]:
     result = []
     seen = set()
-    for sheet, number, raw in read_rows(path):
+    workbook_rows = list(read_rows(path))
+    data_sheets = {sheet for sheet, _, raw in workbook_rows
+                   if {"benchmark", "task", "model", "condition", "replicate"} <= {str(v).strip().lower() for v in raw}}
+    if not data_sheets:
+        raise ValueError("No worksheet has benchmark/task/model/condition/replicate headers")
+    for sheet, number, raw in workbook_rows:
+        if sheet not in data_sheets:
+            continue
         values = [str(v).strip() for v in raw]
         bench_idx = next((i for i, v in enumerate(values) if v.lower() in KNOWN), None)
         if bench_idx is None:

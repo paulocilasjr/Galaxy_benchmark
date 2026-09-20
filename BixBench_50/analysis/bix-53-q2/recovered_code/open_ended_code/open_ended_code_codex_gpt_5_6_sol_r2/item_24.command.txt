@@ -1,0 +1,22 @@
+/bin/bash -lc "Rscript - <<'RS'
+.libPaths(c('/workspace/.r-lib',.libPaths()))
+suppressPackageStartupMessages(library(DESeq2))
+counts_df <- read.csv('inputs/count.csv', check.names=FALSE)
+cts <- as.matrix(counts_df[,-1]); storage.mode(cts) <- 'integer'; rownames(cts) <- counts_df"'$geneID
+run_de <- function(samples) {
+  condition <- factor(ifelse(grepl('"'"'^KL'"', samples),'KL','WL'), levels=c('WL','KL'))
+  dds <- DESeqDataSetFromMatrix(cts[,samples,drop=FALSE], data.frame(condition,row.names=samples), ~condition)
+  dds <- DESeq(dds, quiet=TRUE)
+  raw <- results(dds, name='condition_KL_vs_WL')
+  shr <- as.data.frame(lfcShrink(dds, coef='condition_KL_vs_WL', res=raw, type='apeglm', quiet=TRUE))
+  sig <- with(shr, "'!is.na(pvalue) & pvalue < .05 & !is.na(log2FoldChange) & abs(log2FoldChange) > 1 & !is.na(baseMean) & baseMean > 10)
+  sig_padj <- with(shr, !is.na(padj) & padj < .05 & !is.na(log2FoldChange) & abs(log2FoldChange) > 1 & !is.na(baseMean) & baseMean > 10)
+  c(n=sum(sig),up=sum(sig & shr$log2FoldChange>1),down=sum(sig & shr$log2FoldChange< -1),padj=sum(sig_padj))
+}
+full <- run_de(c('"'KL1','KL2','KL3','WL1','WL2','WL3'))
+reduced <- run_de(c('KL1','KL2','WL1','WL2'))
+cat('apeglm_version',as.character(packageVersion('apeglm')),'\\n')
+cat('full',paste(full,collapse=' '),'\\n')
+cat('reduced',paste(reduced,collapse=' '),'\\n')
+cat('difference',unname(reduced['n']-full['n']),'\\n')
+RS"

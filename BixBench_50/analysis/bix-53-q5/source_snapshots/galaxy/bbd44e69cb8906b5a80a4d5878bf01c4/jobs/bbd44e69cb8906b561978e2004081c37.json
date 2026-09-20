@@ -1,0 +1,76 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b561978e2004081c37",
+  "history_id": "bbd44e69cb8906b5a80a4d5878bf01c4",
+  "tool_id": "oxidative_gseapy_deseq2_v1",
+  "state": "error",
+  "exit_code": 127,
+  "create_time": "2026-07-15T21:29:02.998771",
+  "update_time": "2026-07-15T21:38:37.063079",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\nexport MPLCONFIGDIR=\"$PWD/mplconfig\"\nexport PYTHONUSERBASE=\"$PWD/python_user\"\nmkdir -p \"$MPLCONFIGDIR\" \"$PYTHONUSERBASE\"\npython -m pip install --user --no-cache-dir gseapy==1.3.0 mygene==3.2.2\ncat > run_deseq.R <<'RSCRIPT'\nsuppressPackageStartupMessages({\n  library(DESeq2)\n})\nargs <- commandArgs(trailingOnly=TRUE)\ninfile <- args[1]\ncounts_df <- read.csv(infile, check.names=FALSE, stringsAsFactors=FALSE)\nif (ncol(counts_df) < 3) stop(\"Expected gene ID plus count columns\")\ngene_ids <- counts_df[[1]]\ncounts <- as.matrix(counts_df[, -1, drop=FALSE])\nrownames(counts) <- gene_ids\nstorage.mode(counts) <- \"integer\"\nsamples <- colnames(counts)\ncondition <- sub(\"[0-9]+$\", \"\", samples)\ncondition <- factor(condition, levels=c(\"WL\", \"KL\"))\nif (any(is.na(condition)) || length(levels(droplevels(condition))) != 2) {\n  stop(paste(\"Could not infer exactly two conditions from sample names:\", paste(samples, collapse=\",\")))\n}\ncoldata <- data.frame(row.names=samples, condition=condition)\ndds <- DESeqDataSetFromMatrix(countData=counts, colData=coldata, design=~ condition)\ndds <- DESeq(dds)\nres <- results(dds, contrast=c(\"condition\", \"KL\", \"WL\"))\nshr <- lfcShrink(dds, contrast=c(\"condition\", \"KL\", \"WL\"), res=res, type=\"normal\")\nout <- as.data.frame(shr)\nout <- cbind(geneID=rownames(out), out)\nout <- out[, c(\"geneID\", \"baseMean\", \"log2FoldChange\", \"lfcSE\", \"stat\", \"pvalue\", \"padj\")]\nwrite.table(out, file=\"deseq2_shrunken_results.tsv\", sep=\"\\t\", quote=FALSE, row.names=FALSE, na=\"\")\nfg <- out[!is.na(out$pvalue) & out$pvalue < 0.05 & !is.na(out$log2FoldChange) & abs(out$log2FoldChange) > 1 & !is.na(out$baseMean) & out$baseMean > 10, , drop=FALSE]\nwrite.table(fg, file=\"filtered_de_genes.tsv\", sep=\"\\t\", quote=FALSE, row.names=FALSE, na=\"\")\nwriteLines(fg$geneID, con=\"filtered_ensembl_ids.txt\")\nRSCRIPT\nRscript run_deseq.R \"/jetstream2/scratch/main/jobs/78546782/inputs/dataset_d64fbfc4-2b3c-4a71-be02-6151f5fcb6be.dat\"\ncat > run_enrich.py <<'PYSCRIPT'\nimport sys\nimport pandas as pd\nimport mygene\nimport gseapy as gp\n\nfg = pd.read_csv('filtered_de_genes.tsv', sep='\\t')\nids = [str(x).split('.')[0] for x in fg['geneID'].dropna().tolist()]\nmg = mygene.MyGeneInfo()\nrecords = mg.querymany(ids, scopes='ensembl.gene', fields='symbol', species='mouse', as_dataframe=False, verbose=False)\nsymbol_by_id = {}\nfor rec in records:\n    q = str(rec.get('query', '')).split('.')[0]\n    sym = rec.get('symbol')\n    if q and sym and not rec.get('notfound') and q not in symbol_by_id:\n        symbol_by_id[q] = sym\nsymbols = []\nseen = set()\nfor gid in ids:\n    sym = symbol_by_id.get(gid)\n    if sym and sym not in seen:\n        seen.add(sym)\n        symbols.append(sym)\nwith open('filtered_mouse_symbols.txt', 'w') as handle:\n    for sym in symbols:\n        handle.write(sym + '\\n')\nif not symbols:\n    raise RuntimeError('No filtered Ensembl IDs mapped to mouse symbols')\nenr = gp.enrichr(gene_list=symbols, gene_sets='WikiPathways_2019_Mouse', organism='mouse', outdir=None, cutoff=1.0)\nres = enr.results.copy()\nif res is None or res.empty:\n    raise RuntimeError('GSEApy returned no enrichment results')\n# Match the Galaxy GSEApy wrapper default ranking: P-value, adjusted P-value, then combined score.\nascending = [True, True, False]\nres = res.sort_values(['P-value', 'Adjusted P-value', 'Combined Score'], ascending=ascending, kind='mergesort')\nres.to_csv('gseapy_enrichr_results.tsv', sep='\\t', index=False)\ntop20 = res.head(20).copy()\ntop20.to_csv('top20_pathways.tsv', sep='\\t', index=False)\noxidative = top20['Term'].astype(str).str.contains('oxidative', case=False, regex=False).sum()\nfraction = oxidative / 20.0\nwith open('answer.txt', 'w') as handle:\n    handle.write(f'{fraction:.1f}\\n')\nwith open('workflow_summary.tsv', 'w') as handle:\n    handle.write('metric\\tvalue\\n')\n    handle.write(f'filtered_de_gene_rows\\t{len(fg)}\\n')\n    handle.write(f'mapped_unique_symbols\\t{len(symbols)}\\n')\n    handle.write(f'enrichment_terms\\t{len(res)}\\n')\n    handle.write(f'oxidative_top20_count\\t{oxidative}\\n')\n    handle.write(f'fraction\\t{fraction:.1f}\\n')\nPYSCRIPT\npython run_enrich.py",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "count_csv": {
+      "id": "f9cad7b01a47213570b731588f413f82",
+      "src": "hda",
+      "uuid": "d64fbfc4-2b3c-4a71-be02-6151f5fcb6be"
+    }
+  },
+  "outputs": {
+    "answer": {
+      "id": "f9cad7b01a47213520ec857407e51217",
+      "src": "hda",
+      "uuid": "b70ba285-2250-4c96-8271-076c97da974c"
+    },
+    "top20_pathways": {
+      "id": "f9cad7b01a47213596329637d95e3f31",
+      "src": "hda",
+      "uuid": "138f2d6f-1032-453b-829e-0ee0d8a782ba"
+    },
+    "gseapy_results": {
+      "id": "f9cad7b01a47213554a49fa11b78dfbf",
+      "src": "hda",
+      "uuid": "d82635ff-8b76-4c28-8048-8ace2d57591e"
+    },
+    "filtered_de_genes": {
+      "id": "f9cad7b01a472135d622000e7862a121",
+      "src": "hda",
+      "uuid": "4f7d6023-72c9-4a37-acfe-d7c537478dc7"
+    },
+    "workflow_summary": {
+      "id": "f9cad7b01a472135cff06b7c4c65d524",
+      "src": "hda",
+      "uuid": "c4db0af2-0f14-4584-82b2-1ef99ef36a5f"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "/jetstream2/scratch/main/jobs/78546782/tool_script.sh: line 27: python: command not found\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "/jetstream2/scratch/main/jobs/78546782/tool_script.sh: line 27: python: command not found\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 127 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 127
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

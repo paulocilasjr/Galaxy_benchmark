@@ -1,0 +1,35 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) { x <- readRDS(f); data.frame(gene=slot(x,'rownames'), lfc=slot(x,'listData')[[\"log2FoldChange\"]], padj=slot(x,'listData')[[\"padj\"]], stringsAsFactors=FALSE) }
+res <- lapply(c('97'='inputs/res_1vs97.rds','98'='inputs/res_1vs98.rds','99'='inputs/res_1vs99.rds'), read_res)
+ln <- readLines('https://rest.kegg.jp/link/pathway/pau', warn=FALSE)
+parts <- strsplit(ln, '\\t')
+map <- data.frame(gene=sub('"'^pau:'"', '', vapply(parts, "'`[`, '"'', 1)), path=sub('"'^path:'"', '', vapply(parts, "'`[`, '"'', 2)), stringsAsFactors=FALSE)
+ora_all <- function(fg, universe, minGS=10, maxGS=500) {
+  universe <- intersect(unique(universe), unique(map"'$gene)); fg <- intersect(unique(fg), universe)
+  term2genes <- split(map$gene[map$gene %in% universe], map$path[map$gene %in% universe]); term2genes <- lapply(term2genes, unique)
+  sizes <- vapply(term2genes, length, integer(1)); term2genes <- term2genes[sizes >= minGS & sizes <= maxGS]
+  N <- length(universe); n <- length(fg)
+  out <- do.call(rbind, lapply(names(term2genes), function(path) {
+    genes <- term2genes[[path]]; M <- length(genes); k <- length(intersect(fg, genes))
+    data.frame(path=path, M=M, k=k, pvalue=phyper(k-1, M, N-M, n, lower.tail=FALSE))
+  }))
+  out <- out[out$k > 0,]; out$padj <- p.adjust(out$pvalue, '"'BH'); out
+}
+sets <- list()
+for (s in names(res)) for (dir in c('up','down','abs')) {
+  d <- res[[s]]
+  fg <- switch(dir, up=d"'$gene[d$lfc>1.5], down=d$gene[d$lfc< -1.5], abs=d$gene[abs(d$lfc)>1.5])
+  a <- ora_all(fg, d$gene)
+  for (field in c('"'pvalue','padj')) for (cut in c(0.05,0.1)) {
+    key <- paste(field,cut,dir,sep='_')
+    sets[[key]][[s]] <- a"'$path[a[[field]] < cut]
+  }
+}
+for (key in names(sets)) {
+  if (grepl('"'_abs"'$'"', key)) { inter <- Reduce(intersect, sets[[key]]); cat(key, length(inter), paste(inter, collapse=','), '\\n') }
+  else {
+    # wait until per direction complete
+    inter <- Reduce(intersect, sets[[key]]); cat(key, length(inter), paste(inter, collapse=','), '\\n')
+  }
+}
+RS"

@@ -1,0 +1,60 @@
+/bin/bash -lc "unzip -t inputs/scogs_animals.zip >/dev/null && python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+AA=set('ACDEFGHIKLMNPQRSTVWY')
+
+def fasta(b):
+    rec=[]; h=None; chunks=[]
+    for line in b.decode().splitlines():
+        line=line.strip()
+        if not line: continue
+        if line[0]=='>':
+            if h is not None: rec.append((h,''.join(chunks)))
+            h=line[1:].split()[0]; chunks=[]
+        else: chunks.append(line)
+    if h is not None: rec.append((h,''.join(chunks)))
+    return rec
+
+def canonical(cols):
+    # Gaps are missing; a site is PI iff at least two observed amino acids
+    # each occur at least twice.
+    return sum(sum(v >= 2 for v in Counter(x for x in col if x in AA).values()) >= 2
+               for col in cols)
+
+def equivalent(cols):
+    # Independent formulation for these alignments: with <=4 taxa, count
+    # only gap-free columns whose residue pattern has a 2/2 split.
+    n=0
+    for col in cols:
+        if '-' in col: continue
+        c=Counter(col)
+        if sorted(c.values()) == [2,2]: n += 1
+    return n
+
+rows=[]
+with ZipFile('inputs/scogs_animals.zip') as z:
+    names=z.namelist()
+    aln=[n for n in names if n.endswith('.faa.mafft')]
+    assert len(aln)==241 and len(set(aln))==241
+    for fn in aln:
+        rec=fasta(z.read(fn))
+        assert len({h for h,_ in rec})==len(rec)
+        lengths={len(s) for _,s in rec}
+        assert len(lengths)==1, (fn,lengths)
+        bad=set(''.join(s for _,s in rec))-AA-{'-'}
+        assert not bad, (fn,bad)
+        cols=list(zip(*(s for _,s in rec)))
+        a=canonical(cols); b=equivalent(cols) if len(rec)==4 else 0
+        assert a==b, (fn,len(rec),a,b)
+        rows.append((a,fn,len(rec),len(cols)))
+rows.sort(reverse=True)
+assert rows[0][0]==29
+assert sum(x[0]==29 for x in rows)==2
+print('validated_alignments',len(rows))
+print('max_pi_sites',rows[0][0])
+print('max_alignment',rows[0][1])
+print('max_alignment_taxa',rows[0][2])
+print('max_alignment_length',rows[0][3])
+print('ties',[x[1] for x in rows if x[0]==rows[0][0]])
+print('top5',rows[:5])
+PY"

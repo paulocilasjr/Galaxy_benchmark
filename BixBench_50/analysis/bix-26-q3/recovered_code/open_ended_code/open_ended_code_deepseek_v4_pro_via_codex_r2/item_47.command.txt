@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'EOF'
+import rdata,numpy as np,requests,warnings,math
+warnings.filterwarnings('ignore')
+obj=rdata.read_rds('inputs/res_GluFevsGluFePlus.rds')
+rows=obj.rownames; lfc=np.asarray(obj.listData['log2FoldChange']); padj=np.asarray(obj.listData['padj'])
+up=set(rows[(lfc>1.5)&(padj<.05)])
+r=requests.get('https://rest.kegg.jp/link/pau/pathway',timeout=120)
+path2genes={}; gene2paths={}
+for line in r.text.strip().split('\\n'):
+ path,gene=line.split('\\t')
+ pid=path.split(':')[1]; gid=gene.split(':')[1]
+ path2genes.setdefault(pid,set()).add(gid)
+ gene2paths.setdefault(gid,set()).add(pid)
+universe=set(gene2paths)
+n=len(up&universe); N=len(universe)
+print('universe',N,'query mapped',n)
+r=requests.get('https://rest.kegg.jp/list/pathway/pau',timeout=60)
+path_names={}
+for line in r.text.strip().split('\\n'):
+ pid,name=line.split('\\t',1); path_names[pid.split(':')[1]]=name.split(' - ',1)[0]
+rows_res=[]
+for pid,gs in path2genes.items():
+ K=len(gs); k=len(up&gs)
+ if K<10 or K>500 or k==0: continue
+ def comb(a,b): return math.comb(a,b) if 0<=b<=a else 0
+ p=sum(comb(K,i)*comb(N-K,n-i) for i in range(k,min(K,n)+1))/comb(N,n)
+ rows_res.append([p,pid,k,K,path_names.get(pid,pid)])
+rows_res.sort()
+m=len(rows_res); qs=[]
+prev=1
+for i,(p,*rest) in enumerate(rows_res):
+ q=min(p*m/(i+1),prev) if i>0 else p*m
+ prev=q; qs.append(q)
+print('n tested',m)
+for i,(p,pid,k,K,name) in enumerate(rows_res):
+ if pid=='02010' or name.startswith('ABC'):
+  print(i,pid,name,k,K,p,qs[i],qs[i]<.05)
+print('top20')
+for i,(p,pid,k,K,name) in enumerate(rows_res[:20]): print(i,pid,name,k,K,p,qs[i])
+EOF"

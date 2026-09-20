@@ -1,0 +1,53 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+import gc
+
+# Load data
+counts_df = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+
+annot = annot.set_index('sample')
+annot = annot.loc[counts_df.columns]
+annot['batch'] = annot['batch'].astype(str)
+annot['sex'] = annot['sex'].astype(str)
+
+# Minimal prefiltering: remove genes with essentially no reads (DESeq2 standard practice)
+# FAM138A has 292 total reads, keep threshold low enough
+row_sums = counts_df.sum(axis=1)
+keep = row_sums >= 5
+print(f"Keeping {keep.sum()} / {len(keep)} genes (total count >= 5)")
+counts_filtered = counts_df.loc[keep]
+
+# Free memory
+del counts_df, row_sums
+gc.collect()
+
+from pydeseq2.dds import DeseqDataSet
+
+counts_int = counts_filtered.T.round().astype(int)
+
+dds = DeseqDataSet(
+    counts=counts_int,
+    metadata=annot,
+    design_factors="batch + sex",
+    refit_cooks=False,
+    n_cpus=1,
+)
+
+del counts_int, counts_filtered
+gc.collect()
+
+print("Starting deseq2 fitting...")
+dds.deseq2()
+
+print(f"\nResults shape: {dds.results_df.shape}")
+print(f"Results columns: {dds.results_df.columns.tolist()}")
+print(f"\nFAM138A in results: {'FAM138A' in dds.results_df.index}")
+
+if 'FAM138A' in dds.results_df.index:
+    print(f"FAM138A results:\n{dds.results_df.loc['FAM138A']}")
+PYEOF
+

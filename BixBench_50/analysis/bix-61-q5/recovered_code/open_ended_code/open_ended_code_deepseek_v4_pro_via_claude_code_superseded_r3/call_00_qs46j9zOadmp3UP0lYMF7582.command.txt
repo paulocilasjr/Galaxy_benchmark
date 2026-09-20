@@ -1,0 +1,80 @@
+python3 << 'PYEOF'
+# Fixed Ts/Tv counting: exclude * alleles (spanning deletions)
+vcf_path = "/workspace/inputs/SRR35233585_raw_variants.vcf"
+f = open(vcf_path, 'r')
+
+transitions = {('A','G'), ('G','A'), ('C','T'), ('T','C')}
+VALID_BASES = set('ACGT')
+
+# All alleles
+ts_all = 0
+tv_all = 0
+# First ALT only
+ts_first = 0
+tv_first = 0
+# Site-level (multiallelic counts as one site)
+ts_site = 0
+tv_site = 0
+
+star_allele_count = 0
+mixed_indel_snv = 0
+
+for line in f:
+    if line.startswith('#'):
+        continue
+    fields = line.strip().split('\t')
+    if len(fields) < 5:
+        continue
+    ref = fields[3]
+    alt_field = fields[4]
+    
+    # Only count sites where REF is a single valid base
+    if len(ref) != 1 or ref not in VALID_BASES:
+        continue
+    
+    alts = alt_field.split(',')
+    
+    # Filter to valid SNV alleles (single valid base, not *)
+    snv_alts = [a for a in alts if len(a) == 1 and a in VALID_BASES]
+    
+    if not snv_alts:
+        continue
+    
+    # All-allele counting
+    for a in snv_alts:
+        if (ref, a) in transitions:
+            ts_all += 1
+        else:
+            tv_all += 1
+    
+    # First ALT only
+    if snv_alts[0] == alts[0]:  # first valid SNV is the first ALT
+        if (ref, snv_alts[0]) in transitions:
+            ts_first += 1
+        else:
+            tv_first += 1
+    # (if first alt was *, skip this record for first-ALT counting)
+    
+    # Site-level: if any ALT is Ts, count as Ts; else Tv
+    # (for pure SNV sites only)
+    is_ts = any((ref, a) in transitions for a in snv_alts)
+    is_tv = any((ref, a) not in transitions for a in snv_alts)
+    if is_ts and is_tv:
+        # Mixed multiallelic - unusual, count both
+        ts_site += 1
+        tv_site += 1
+    elif is_ts:
+        ts_site += 1
+    elif is_tv:
+        tv_site += 1
+
+f.close()
+
+print(f"All-allele:     Ts={ts_all}, Tv={tv_all}, Ts/Tv={ts_all/tv_all:.4f} -> {round(ts_all/tv_all, 2)}")
+print(f"First-ALT only: Ts={ts_first}, Tv={tv_first}, Ts/Tv={ts_first/tv_first:.4f} -> {round(ts_first/tv_first, 2)}")
+print(f"Site-level:     Ts={ts_site}, Tv={tv_site}, Ts/Tv={ts_site/tv_site:.4f} -> {round(ts_site/tv_site, 2)}")
+
+# Compare with bcftools
+print(f"\nbcftools all:   Ts=48234, Tv=18865, Ts/Tv=2.5567 -> 2.56")
+print(f"bcftools 1st:   Ts=48205, Tv=18838, Ts/Tv=2.5584 -> 2.56")
+PYEOF

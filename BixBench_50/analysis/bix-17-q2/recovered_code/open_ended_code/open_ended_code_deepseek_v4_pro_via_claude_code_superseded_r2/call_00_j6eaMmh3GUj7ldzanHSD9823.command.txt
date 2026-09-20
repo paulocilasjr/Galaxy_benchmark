@@ -1,0 +1,104 @@
+/tmp/myenv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import os, glob, re
+
+# 1. Read Trio Status
+trio = pd.read_excel('inputs/230215_Trio_Status.xlsx')
+# Clean Sample IDs (strip whitespace)
+trio['Sample ID'] = trio['Sample ID'].astype(str).str.strip()
+
+# 2. Identify BLM mutation carriers
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+print(f"Total BLM carriers in trio file: {len(carriers)}")
+print("Carrier samples:")
+for _, row in carriers.iterrows():
+    print(f"  Sample ID={row['Sample ID']}, Status={row['Status']}")
+
+# 3. Build mapping: Trio Sample ID -> CHIP file path
+chip_files = glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+chip_map = {}  # sample_id -> filepath
+for f in chip_files:
+    basename = os.path.basename(f)
+    # Extract identifier: 230209_Exome_GRCh38_CHIP_<ID>.xlsx
+    identifier = basename.replace('230209_Exome_GRCh38_CHIP_', '').replace('.xlsx', '')
+    # Parse: could be "179-P1" or "SRR5456220"
+    if '-' in identifier and not identifier.startswith('SRR'):
+        # Numeric ID like "179-P1" -> sample ID is "179"
+        sample_id = identifier.split('-')[0]
+    else:
+        # SRR ID
+        sample_id = identifier
+    chip_map[sample_id] = f
+
+print(f"\nTotal CHIP files: {len(chip_files)}")
+print(f"Unique sample IDs in CHIP files: {len(chip_map)}")
+
+# 4. For each carrier, find CHIP file and count somatic CHIP variants
+# Exclusion SO terms
+exclude_so = {
+    'intron_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+carrier_counts = []
+carriers_without_data = []
+
+for _, carrier_row in carriers.iterrows():
+    sample_id = str(carrier_row['Sample ID']).strip()
+    
+    if sample_id not in chip_map:
+        print(f"\nWARNING: Sample {sample_id} (BLM {carrier_row['BLM Mutation Status']}) has no CHIP file")
+        carriers_without_data.append(sample_id)
+        continue
+    
+    fpath = chip_map[sample_id]
+    df = pd.read_excel(fpath)
+    
+    # Column indices (consistent across files)
+    zyg_col = df.columns[4]     # Zygosity
+    vaf_col = df.columns[9]     # Variant Allele Freq
+    so_col = df.columns[13]     # Sequence Ontology
+    gene_col = df.columns[12]   # Gene Names
+    
+    # Skip sub-header row: where zygosity column has the text "Zygosity"
+    # or SO column has "Sequence Ontology (Combined)"
+    data_df = df[df[zyg_col] != 'Zygosity'].copy()
+    # Also skip rows where SO is the header text
+    data_df = data_df[data_df[so_col] != 'Sequence Ontology (Combined)']
+    
+    # Convert VAF to numeric
+    data_df['VAF_num'] = pd.to_numeric(data_df[vaf_col], errors='coerce')
+    
+    # Apply filters:
+    # 1. VAF < 0.3 and not NaN
+    # 2. Zygosity != Reference
+    # 3. Sequence Ontology not intronic, intergenic, UTR
+    # 4. Not intergenic (check SO for intergenic_variant - though not seen)
+    
+    filtered = data_df[
+        (data_df['VAF_num'].notna()) &
+        (data_df['VAF_num'] < 0.3) &
+        (data_df[zyg_col] != 'Reference') &
+        (~data_df[so_col].isin(exclude_so)) &
+        (~data_df[so_col].str.contains('intergenic', case=False, na=False))
+    ]
+    
+    count = len(filtered)
+    carrier_counts.append(count)
+    print(f"  Sample {sample_id}: {count} somatic CHIP variants (total data rows: {len(data_df)})")
+
+print(f"\n=== RESULTS ===")
+print(f"Carriers with data: {len(carrier_counts)}")
+print(f"Carriers without data: {len(carriers_without_data)}")
+if carriers_without_data:
+    print(f"  Missing: {carriers_without_data}")
+print(f"Counts: {sorted(carrier_counts)}")
+if carrier_counts:
+    median_val = np.median(carrier_counts)
+    print(f"Median: {median_val}")
+    print(f"Mean: {np.mean(carrier_counts):.2f}")
+PYEOF
+

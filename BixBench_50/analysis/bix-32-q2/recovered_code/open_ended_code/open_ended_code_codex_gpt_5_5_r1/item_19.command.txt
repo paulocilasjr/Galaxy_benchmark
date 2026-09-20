@@ -1,0 +1,66 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) {
+  x <- readRDS(f)
+  data.frame(gene=slot(x,'rownames'), lfc=slot(x,'listData')[[\"log2FoldChange\"]], padj=slot(x,'listData')[[\"padj\"]], stringsAsFactors=FALSE)
+}
+files <- c('97'='inputs/res_1vs97.rds','98'='inputs/res_1vs98.rds','99'='inputs/res_1vs99.rds')
+res <- lapply(files, read_res)
+# KEGG link pathway -> pau genes
+ln <- readLines('https://rest.kegg.jp/link/pathway/pau', warn=FALSE)
+parts <- strsplit(ln, '\\t')
+map <- data.frame(gene=sub('"'^pau:'"', '', vapply(parts, "'`[`, '"'', 1)), path=sub('"'^path:'"', '', vapply(parts, "'`[`, '"'', 2)), stringsAsFactors=FALSE)
+# Names for display only
+pl <- readLines('https://rest.kegg.jp/list/pathway/pau', warn=FALSE)
+pp <- strsplit(pl, '\\t')
+path_names <- setNames(vapply(pp, "'`[`, '"'', 2), vapply(pp, "'`[`, '"'', 1))
+ora <- function(fg, universe, minGS=10, maxGS=500, padjCut=0.05) {
+  universe <- intersect(unique(universe), unique(map"'$gene))
+  fg <- intersect(unique(fg), universe)
+  term2genes <- split(map$gene[map$gene %in% universe], map$path[map$gene %in% universe])
+  term2genes <- lapply(term2genes, unique)
+  sizes <- vapply(term2genes, length, integer(1))
+  keep <- sizes >= minGS & sizes <= maxGS
+  term2genes <- term2genes[keep]
+  N <- length(universe); n <- length(fg)
+  out <- data.frame(path=names(term2genes), M=vapply(term2genes, length, integer(1)), k=0L, pvalue=NA_real_, stringsAsFactors=FALSE)
+  for (i in seq_along(term2genes)) {
+    k <- length(intersect(fg, term2genes[[i]])); M <- length(term2genes[[i]])
+    out$k[i] <- k
+    out$pvalue[i] <- phyper(k-1, M, N-M, n, lower.tail=FALSE)
+  }
+  out <- out[out$k > 0, , drop=FALSE]
+  out$padj <- p.adjust(out$pvalue, method='"'BH')
+  out"'$qvalue <- out$padj # qvalue package not available; p.adjust is significance field used here
+  out <- out[order(out$padj, out$pvalue, out$path),]
+  sig <- out[out$padj < padjCut,]
+  attr(sig, '"'N') <- N; attr(sig, 'n') <- n; attr(sig, 'tested') <- nrow(out); attr(sig, 'all') <- out
+  sig
+}
+run_variant <- function(minGS=10, maxGS=500, use_padj_gene=FALSE, padjCut=0.05) {
+  sigs <- list()
+  for (strain in names(res)) {
+    d <- res[[strain]]
+    universe <- d"'$gene
+    up <- d$gene[d$lfc > 1.5 & (!use_padj_gene | d$padj < 0.05)]
+    down <- d$gene[d$lfc < -1.5 & (!use_padj_gene | d$padj < 0.05)]
+    sigs[[paste0(strain,'"'_up')]] <- ora(up, universe, minGS=minGS, maxGS=maxGS, padjCut=padjCut)
+    sigs[[paste0(strain,'_down')]] <- ora(down, universe, minGS=minGS, maxGS=maxGS, padjCut=padjCut)
+    cat(strain, 'fg up/down', length(up), length(down), 'mapped', length(intersect(up,map"'$gene)), length(intersect(down,map$gene)), '"'sig up/down', nrow(sigs[[paste0(strain,'_up')]]), nrow(sigs[[paste0(strain,'_down')]]), '\\n')
+    cat('  up:', paste(sigs[[paste0(strain,'_up')]]"'$path, collapse='"','), '\\n')
+    cat('  down:', paste(sigs[[paste0(strain,'_down')]]"'$path, collapse='"','), '\\n')
+  }
+  upint <- Reduce(intersect, lapply(c('97_up','98_up','99_up'), function(nm) sigs[[nm]]"'$path))
+  downint <- Reduce(intersect, lapply(c('"'97_down','98_down','99_down'), function(nm) sigs[[nm]]"'$path))
+  cat('"'INTERSECT up', length(upint), paste(upint, collapse=','), '\\n')
+  cat('INTERSECT down', length(downint), paste(downint, collapse=','), '\\n')
+  cat('TOTAL', length(union(upint, downint)), '\\n')
+  invisible(sigs)
+}
+cat('Mapping rows', nrow(map), 'pathways', length(unique(map"'$path)), '"'genes mapped in universe', length(intersect(res[[1]]"'$gene, map$gene)), '"'\\n')
+cat('--- default clusterProfiler-like min10 max500 padj<.05 ---\\n')
+sigs <- run_variant(10,500,FALSE,0.05)
+cat('--- no max, min1 padj<.05 ---\\n')
+run_variant(1,Inf,FALSE,0.05)
+cat('--- min10 no max padj<.05 ---\\n')
+run_variant(10,Inf,FALSE,0.05)
+RS"

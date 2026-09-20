@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+from collections import Counter
+from zipfile import ZipFile
+
+
+def fasta(data):
+    records = []
+    name = None
+    seq = []
+    for line in data.decode('ascii').splitlines():
+        if line.startswith('>'):
+            if name is not None:
+                records.append((name, ''.join(seq)))
+            name = line[1:].split()[0]
+            seq = []
+        elif line.strip():
+            seq.append(line.strip())
+    if name is not None:
+        records.append((name, ''.join(seq)))
+    return records
+
+
+def counts(zip_path):
+    out = []
+    with ZipFile(zip_path) as z:
+        names = sorted(n for n in z.namelist() if n.endswith('.faa.mafft'))
+        assert names, zip_path
+        for name in names:
+            recs = fasta(z.read(name))
+            lengths = {len(s) for _, s in recs}
+            assert len(lengths) == 1, (name, lengths)
+            site_count = 0
+            for col in zip(*(s for _, s in recs)):
+                states = Counter(col)
+                if sum(n >= 2 for n in states.values()) >= 2:
+                    site_count += 1
+            out.append(site_count)
+    return out
+
+animals = counts('inputs/scogs_animals.zip')
+fungi = counts('inputs/scogs_fungi.zip')
+all_counts = animals + fungi
+ordered = sorted(enumerate(all_counts), key=lambda p: p[1])
+ranks = [0] * len(all_counts)
+i = 0
+while i < len(ordered):
+    j = i + 1
+    while j < len(ordered) and ordered[j][1] == ordered[i][1]:
+        j += 1
+    average_rank = (i + 1 + j) / 2.0
+    for k in range(i, j):
+        ranks[ordered[k][0]] = average_rank
+    i = j
+n1 = len(animals)
+n2 = len(fungi)
+rank_sum = sum(ranks[:n1])
+u_rank = rank_sum - n1 * (n1 + 1) / 2.0
+u_pair = sum(1.0 if a > f else 0.5 if a == f else 0.0 for a in animals for f in fungi)
+print('n_animals', n1, 'n_fungi', n2)
+print('animal_sum', sum(animals), 'fungi_sum', sum(fungi))
+print('animal_zero', animals.count(0), 'fungi_zero', fungi.count(0))
+print('rank_sum_animals', rank_sum)
+print('u_from_ranks', u_rank)
+print('u_from_pairs', u_pair)
+assert u_rank == u_pair == 6397.0
+PY"

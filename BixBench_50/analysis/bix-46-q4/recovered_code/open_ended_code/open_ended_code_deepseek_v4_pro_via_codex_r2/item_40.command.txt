@@ -1,0 +1,84 @@
+/bin/bash -c "python3 - <<'PY'
+import subprocess, zipfile, xml.etree.ElementTree as ET, io, math, re
+
+rscript=r'''
+for (f in c('/workspace/inputs/res_1vs97.rds','/workspace/inputs/res_1vs98.rds')) {
+  con<-gzfile(f,'rb'); x<-unserialize(con); close(con); y<-unclass(x)
+  ld<-attr(y,'listData'); rn<-attr(y,'rownames')
+  cat('\\n###FILE', basename(f), '\\n')
+  cat('gene\\tbaseMean\\tlog2FoldChange\\tlfcSE\\tstat\\tpvalue\\tpadj\\n')
+  for (i in seq_along(rn)) cat(rn[i], ld"'$baseMean[i], ld$log2FoldChange[i], ld$lfcSE[i], ld$stat[i], ld$pvalue[i], ld$padj[i], '"'\\n', sep='\\t')
+}
+'''
+proc=subprocess.run(['Rscript','-e',rscript],capture_output=True,text=True,check=True)
+print('R out lines',len(proc.stdout.splitlines()),'stderr',proc.stderr[:200])
+files={}
+cur=None
+for line in proc.stdout.splitlines():
+    if line.startswith('###FILE'):
+        cur=line.split()[1]; files[cur]={}
+        nextline=False
+        continue
+    parts=line.split('\\t')
+    if parts[0]=='gene':
+        continue
+    if len(parts)>=7:
+        files[cur][parts[0]]={'baseMean':float(parts[1]),'log2FoldChange':float(parts[2]),'lfcSE':float(parts[3]),'stat':float(parts[4]),'pvalue':float(parts[5]),'padj':float(parts[6])}
+
+# parse docx tables
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse_docx(fn):
+    with zipfile.ZipFile(fn) as z: root=ET.fromstring(z.read('word/document.xml'))
+    table=root.find('.//w:tbl',ns)
+    rows=[]
+    for tr in table.findall('w:tr',ns):
+        texts=[''.join(x.text or '' for x in c.findall('.//w:t',ns)) for c in tr.findall('w:tc',ns)]
+        rows.append(texts)
+    # skip header rows 0 and 1 (2nd has rhlR/rhlI)
+    data={}
+    for r in rows[2:]:
+        if len(r)>=4 and r[0]:
+            gene=r[0]
+            def conv(s):
+                s=s.strip()
+                if s=='-' or s=='': return None
+                # maybe weird '-2.003' yes
+                return float(s)
+            data[gene]={'rhlR':conv(r[1]),'rhlI':conv(r[2])}
+    return data
+
+for fn,key in [('/workspace/ppat.1006504.s012.docx','HCD'),('/workspace/ppat.1006504.s013.docx','biofilm')]:
+    tab=parse_docx(fn)
+    print('\\n=== table',key,'n genes',len(tab))
+    for reskey in files:
+        vals=[]; diff=[]
+        for gene,d in tab.items():
+            if gene in files[reskey]:
+                lfc=files[reskey][gene]['log2FoldChange']
+                for col in ['rhlR','rhlI']:
+                    if d[col] is not None:
+                        vals.append((d[col],lfc)); diff.append((gene,col,d[col],lfc))
+        print('file',reskey,'matched',len(vals))
+        if vals:
+            # correlations raw and abs
+            def corr(pairs, key):
+                xs=[x[key] for x in pairs]; ys=[x['lfc'] for x in pairs]
+                n=len(xs); mx=sum(xs)/n; my=sum(ys)/n
+                cov=sum((a-mx)*(b-my) for a,b in zip(xs,ys))/n
+                sx=math.sqrt(sum((a-mx)**2 for a in xs)/n); sy=math.sqrt(sum((b-my)**2 for b in ys)/n)
+                return cov/(sx*sy) if sx*sy else 0
+            pairs=[]
+            for gene,d in tab.items():
+                if gene not in files[reskey]: continue
+                lfc=files[reskey][gene]['log2FoldChange']
+                for col in ['rhlR','rhlI']:
+                    if d[col] is not None: pairs.append({'gene':gene,'col':col,'val':d[col],'lfc':lfc})
+            print(' raw corr',corr(pairs,'val'))
+            for col in ['rhlR','rhlI']:
+                pp=[p for p in pairs if p['col']==col]
+                print('  col',col,'n',len(pp),'corr val/lfc',corr(pp,'val'),'corr val/(-lfc)',corr([dict(p,lfc=-p['lfc']) for p in pp],'val'))
+            # print selected genes
+            for gene in ['PA14_35160','PA14_09540','PA14_39960','PA14_51380','PA14_19100']:
+                if gene in tab and gene in files[reskey]:
+                    print(gene, tab[gene], files[reskey][gene]['log2FoldChange'])
+PY"

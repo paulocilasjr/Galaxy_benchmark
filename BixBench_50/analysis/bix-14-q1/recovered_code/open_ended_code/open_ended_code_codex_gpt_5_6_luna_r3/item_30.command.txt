@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+# Show the low-VAF splice-region calls to make the coding-scope choice explicit.
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from pathlib import Path
+import re,openpyxl
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+def col(ref):return ''.join(c for c in ref if c.isalpha())
+def rows(p):
+ with ZipFile(p) as z:
+  ss=[''.join(t.text or '' for t in si.iter(NS+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall(NS+'si')]
+  root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+  for row in root.find(NS+'sheetData').findall(NS+'row')[2:]:
+   d={}
+   for c in row.findall(NS+'c'):
+    v=c.find(NS+'v')
+    if v is None:continue
+    x=v.text
+    if c.attrib.get('t')=='s':x=ss[int(x)]
+    d[col(c.attrib['r'])]=x
+   yield d
+meta=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+carrier={str(r[0]).strip() for r in meta.iter_rows(min_row=2,values_only=True) if r[3]=='Carrier'}
+for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+ tok=re.search(r'CHIP_(.+)\\.xlsx"'$'"',p.name).group(1);m=re.match(r'\\d+',tok);sid=m.group(0) if m else tok
+ if sid not in carrier:continue
+ for r in rows(p):
+  try:v=float(r.get('J'))
+  except:continue
+  if v<.3 and r.get('N')=='splice_region_variant':print(sid,v,r.get('A'),r.get('B'),r.get('M'),r.get('R'))
+PY"

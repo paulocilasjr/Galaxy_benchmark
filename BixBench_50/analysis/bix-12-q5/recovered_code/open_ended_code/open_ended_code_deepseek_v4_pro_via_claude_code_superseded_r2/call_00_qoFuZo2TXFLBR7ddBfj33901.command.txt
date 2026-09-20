@@ -1,0 +1,81 @@
+python3 -c "
+import zipfile
+from collections import Counter
+
+def parse_fasta(text):
+    entries = []
+    current_header = None
+    current_seq = []
+    for line in text.split('\\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            if current_header is not None:
+                entries.append((current_header, ''.join(current_seq)))
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_header is not None:
+        entries.append((current_header, ''.join(current_seq)))
+    return entries
+
+def count_parsimony_informative_sites(sequences):
+    '''Count columns that are parsimony informative.
+    A site is parsimony informative if:
+    - At least 2 different character states (amino acids)
+    - Each character state appears in at least 2 sequences
+    Gaps (-, .), ambiguous characters (X, ?) are excluded from counting
+    as character states.'''
+    if not sequences:
+        return 0
+    
+    seqlen = len(sequences[0])
+    for s in sequences:
+        if len(s) != seqlen:
+            raise ValueError(f'Sequences have different lengths')
+    
+    count = 0
+    for i in range(seqlen):
+        col = [s[i] for s in sequences]
+        counter = Counter(col)
+        # Remove gaps and ambiguous characters from the state count
+        for gap_char in ['-', '.', '?', 'X']:
+            counter.pop(gap_char, None)
+        
+        # Need at least 2 different character states
+        if len(counter) < 2:
+            continue
+        
+        # Each state must appear in at least 2 sequences
+        if all(v >= 2 for v in counter.values()):
+            count += 1
+    
+    return count
+
+# Read and verify the max gene
+with zipfile.ZipFile('inputs/scogs_animals.zip') as z:
+    # Verify the top candidate
+    with z.open('1428854at2759.faa.mafft') as f:
+        content = f.read().decode('utf-8')
+    entries = parse_fasta(content)
+    seqs = [s for _, s in entries]
+    pis = count_parsimony_informative_sites(seqs)
+    print(f'Gene 1428854at2759: {pis} PIS, {len(seqs)} seqs, {len(seqs[0])} cols')
+    
+    # Show some example informative columns
+    seqlen = len(seqs[0])
+    informative_cols = []
+    for i in range(seqlen):
+        col = [s[i] for s in seqs]
+        counter = Counter(col)
+        for gap_char in ['-', '.', '?', 'X']:
+            counter.pop(gap_char, None)
+        if len(counter) >= 2 and all(v >= 2 for v in counter.values()):
+            informative_cols.append((i, col, counter))
+    
+    print(f'\\nFirst 5 informative columns:')
+    for i, col, counter in informative_cols[:5]:
+        print(f'  Position {i}: {col}, counts: {dict(counter)}')
+"

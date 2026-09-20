@@ -1,0 +1,36 @@
+/bin/bash -lc "cat > /workspace/tmp/run_deseq2_138.R <<'RS'
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(readxl)
+})
+print(paste(\"R\", getRversion(), \"DESeq2\", as.character(packageVersion(\"DESeq2\")), \"apeglm\", as.character(packageVersion(\"apeglm\"))))
+counts <- read.table(\"/workspace/inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt\",
+                     header=TRUE, sep=\"\", check.names=FALSE, row.names=1, stringsAsFactors=FALSE)
+coldata_raw <- as.data.frame(read_excel(\"/workspace/inputs/Issy_ASXL1_blood_coldata_gender.xlsx\"))
+coldata_raw"'$sample <- as.character(coldata_raw$sample)
+rownames(coldata_raw) <- coldata_raw$sample
+common <- intersect(coldata_raw$sample, colnames(counts))
+counts <- counts[, common, drop=FALSE]
+coldata <- coldata_raw[common, , drop=FALSE]
+coldata$condition <- factor(coldata$condition, levels=c("Control", "ASXL1"))
+coldata$sex <- factor(coldata$sex, levels=c("F", "M"))
+stopifnot(all(rownames(coldata) == colnames(counts)))
+dds <- DESeqDataSetFromMatrix(countData=counts, colData=coldata, design=~sex+condition)
+dds <- DESeq(dds, quiet=TRUE)
+print(resultsNames(dds))
+res <- results(dds, alpha=0.05, contrast=c("condition","ASXL1","Control"))
+shrink <- lfcShrink(dds, res=res, coef="condition_ASXL1_vs_Control", type="apeglm")
+print(summary(res))
+print(summary(shrink))
+print(all.equal(res$padj, shrink$padj))
+cat("not NA padj:", sum(!is.na(shrink$padj)), "'"\\n\")
+cat(\"significant padj<0.05:\", sum(shrink"'$padj < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"pvalue<0.05:\", sum(shrink"'$pvalue < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"filterThreshold:\", metadata(res)"'$filterThreshold, "'"\\n\")
+# top table for sanity
+print(head(shrink[order(shrink"'$padj), c("baseMean","log2FoldChange","pvalue","padj")], 10))
+saveRDS(list(dds=dds, res=res, shrink=shrink), "/workspace/tmp/deseq2_results_138.rds")
+writeLines(as.character(sum(shrink$padj < 0.05, na.rm=TRUE)), "/workspace/tmp/significant_count_138.txt")
+RS
+/workspace/tmp/mamba/bin/micromamba run -p /workspace/tmp/r42-env Rscript /workspace/tmp/run_deseq2_138.R'

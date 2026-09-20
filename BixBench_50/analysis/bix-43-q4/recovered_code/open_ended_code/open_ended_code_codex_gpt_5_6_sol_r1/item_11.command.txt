@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout['count_id']=layout.SampleID.str.replace('-','_',regex=False)
+groups=['DMSO','Cisplatin_IC50_CBD_IC50']
+meta=layout.loc[layout.Group.isin(groups),['count_id','Group']].set_index('count_id')
+meta.columns=['condition']
+sel=meta.index.tolist()
+counts=counts.loc[:,sel].T
+print('shape',counts.shape,'all-zero genes',int((counts.sum(axis=0)==0).sum()),flush=True)
+# PyDESeq2/DESeq2 cannot estimate genes with zero counts in every selected sample.
+counts=counts.loc[:,counts.sum(axis=0)>0]
+print('fitted genes',counts.shape[1], 'samples',meta.index.tolist(),flush=True)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~condition',refit_cooks=True,n_cpus=4,quiet=False)
+dds.deseq2()
+st=DeseqStats(dds,contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=0.05,n_cpus=4,quiet=False)
+st.summary()
+res=st.results_df
+sig=res[(res.padj<0.05)&(res.log2FoldChange.abs()>=0.5)]
+print('RESULT_ROWS',len(res),'PADJ_NONNA',res.padj.notna().sum(),'DEGS',len(sig),'UP',sum(sig.log2FoldChange>0),'DOWN',sum(sig.log2FoldChange<0),flush=True)
+ann=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+mapdict=dict(zip(ann.ENSG,ann.gene_name))
+genes=pd.Index(sig.index).map(mapdict).dropna().unique().tolist()
+print('MAPPED_UNIQUE',len(genes),'EXAMPLES',genes[:20],flush=True)
+import gseapy as gp
+enr=gp.enrichr(gene_list=genes,gene_sets='Reactome_2022',organism='Human',outdir=None,verbose=True)
+hit=enr.results[enr.results.Term.eq('TP53 Regulates Transcription Of Cell Cycle Genes')]
+print('TARGET\\n',hit.to_string(index=False),flush=True)
+print('TARGET_CONTAINS\\n',enr.results[enr.results.Term.str.contains('TP53 Regulates Transcription Of Cell Cycle Genes',case=False,na=False)].to_string(index=False),flush=True)
+PY"

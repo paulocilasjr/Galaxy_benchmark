@@ -1,0 +1,56 @@
+/bin/bash -c "python -u - <<'PY'
+import pandas as pd, numpy as np, time, resource, gc
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+def rss_gb():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024/1024
+print('loading', flush=True)
+t=time.time()
+meta=pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample')
+counts=pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv',index_col=0)
+counts=counts.astype(np.int32)
+counts=counts.T
+meta=meta.loc[counts.index]
+meta['batch']='b'+meta['batch'].astype(str)
+print('counts', counts.shape, 'load rss_gb', rss_gb(), flush=True)
+dds=DeseqDataSet(counts=counts, metadata=meta, design='~ batch + sex', n_cpus=4, quiet=True, low_memory=True, refit_cooks=False)
+print('DDS init rss_gb', rss_gb(), flush=True)
+dds.fit_size_factors()
+print('size factors rss_gb', rss_gb(), flush=True)
+dds.fit_genewise_dispersions()
+print('genewise rss_gb', rss_gb(), flush=True)
+dds.fit_dispersion_trend()
+print('trend rss_gb', rss_gb(), flush=True)
+dds.fit_dispersion_prior()
+print('prior rss_gb', rss_gb(), flush=True)
+dds.fit_MAP_dispersions()
+print('MAP rss_gb', rss_gb(), flush=True)
+dds.fit_LFC()
+print('LFC rss_gb', rss_gb(), flush=True)
+# Free large intermediate arrays not needed for target extraction.
+for key in ['_mu_LFC','_hat_diagonals']:
+    if key in dds.obsm:
+        del dds.obsm[key]
+for key in list(dds.layers.keys()):
+    if key in ['normed_counts','_mu_hat']:
+        del dds.layers[key]
+gc.collect()
+print('after cleanup rss_gb', rss_gb(), flush=True)
+stat=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=4, quiet=True, cooks_filter=False, independent_filter=False)
+print('stats init rss_gb', rss_gb(), flush=True)
+stat.run_wald_test()
+print('wald rss_gb', rss_gb(), flush=True)
+coeff='sex[T.M]'
+print('LFC cols', stat.LFC.columns.tolist(), flush=True)
+print('unshrunk FAM138A natural LFC', float(stat.LFC.loc['FAM138A', coeff]), 'SE', float(stat.SE.loc['FAM138A']), flush=True)
+stat.lfc_shrink(coeff=coeff)
+print('shrink rss_gb', rss_gb(), flush=True)
+natural=float(stat.LFC.loc['FAM138A', coeff])
+lfc=natural/np.log(2)
+baseMean=float(stat.base_mean.loc['FAM138A'])
+print('FAM138A log2FoldChange', repr(lfc))
+print('FAM138A baseMean', repr(baseMean))
+print('FAM138A natural LFC', repr(natural))
+print('FAM138A shrunken SE', repr(float(stat.SE.loc['FAM138A'])))
+PY"

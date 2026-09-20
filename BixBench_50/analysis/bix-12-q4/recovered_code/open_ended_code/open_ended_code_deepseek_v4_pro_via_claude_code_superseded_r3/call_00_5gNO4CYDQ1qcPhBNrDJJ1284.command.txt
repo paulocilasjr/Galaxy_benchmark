@@ -1,0 +1,116 @@
+PYTHONPATH=/tmp/scipy_pkg python3 -c "
+import zipfile
+from collections import Counter
+import numpy as np
+
+def parse_fasta(text):
+    seqs = {}
+    current_header = None
+    current_seq = []
+    for line in text.strip().split('\n'):
+        if line.startswith('>'):
+            if current_header is not None:
+                seqs[current_header] = ''.join(current_seq)
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line.strip())
+    if current_header is not None:
+        seqs[current_header] = ''.join(current_seq)
+    return seqs
+
+def parsimony_informative_sites(seqs):
+    if not seqs:
+        return 0, 0
+    seq_list = list(seqs.values())
+    if not seq_list:
+        return 0, 0
+    alignment_length = len(seq_list[0])
+    informative = 0
+    for pos in range(alignment_length):
+        column = [s[pos] for s in seq_list]
+        counts = Counter(c for c in column if c != '-')
+        chars_with_min2 = [c for c, cnt in counts.items() if cnt >= 2]
+        if len(chars_with_min2) >= 2:
+            informative += 1
+    return informative, alignment_length
+
+animal_zip = zipfile.ZipFile('/workspace/inputs/scogs_animals.zip')
+fungi_zip = zipfile.ZipFile('/workspace/inputs/scogs_fungi.zip')
+
+animal_mafft = {f for f in animal_zip.namelist() if f.endswith('.mafft')}
+fungi_mafft = {f for f in fungi_zip.namelist() if f.endswith('.mafft')}
+common = sorted(animal_mafft & fungi_mafft)
+
+animal_pct = []
+fungi_pct = []
+
+for fname in common:
+    animal_text = animal_zip.read(fname).decode('utf-8')
+    fungi_text = fungi_zip.read(fname).decode('utf-8')
+    
+    animal_seqs = parse_fasta(animal_text)
+    fungi_seqs = parse_fasta(fungi_text)
+    
+    a_info, a_len = parsimony_informative_sites(animal_seqs)
+    f_info, f_len = parsimony_informative_sites(fungi_seqs)
+    
+    if a_len > 0:
+        animal_pct.append(100.0 * a_info / a_len)
+    if f_len > 0:
+        fungi_pct.append(100.0 * f_info / f_len)
+
+animal_zip.close()
+fungi_zip.close()
+
+# Manual trace of MWU
+n1, n2 = len(animal_pct), len(fungi_pct)
+combined = [(v, 0) for v in animal_pct] + [(v, 1) for v in fungi_pct]
+combined.sort(key=lambda t: t[0])
+
+# Assign ranks with tie correction
+ranks = [0] * len(combined)
+i = 0
+while i < len(combined):
+    j = i
+    while j < len(combined) and combined[j][0] == combined[i][0]:
+        j += 1
+    avg_rank = (i + j + 1) / 2.0
+    for k in range(i, j):
+        ranks[k] = avg_rank
+    i = j
+
+# R1 = sum of ranks for group 0 (animals)
+R1 = sum(ranks[k] for k in range(len(combined)) if combined[k][1] == 0)
+R2 = sum(ranks[k] for k in range(len(combined)) if combined[k][1] == 1)
+
+print(f'R1 (animals rank sum): {R1}')
+print(f'R2 (fungi rank sum): {R2}')
+print(f'n1 = {n1}, n2 = {n2}')
+print(f'n1*(n1+1)/2 = {n1*(n1+1)/2}')
+print(f'n2*(n2+1)/2 = {n2*(n2+1)/2}')
+
+# U1: using formula U1 = n1*n2 + n1*(n1+1)/2 - R1
+U1 = n1 * n2 + n1 * (n1 + 1) / 2 - R1
+# U2: using formula U2 = n1*n2 + n2*(n2+1)/2 - R2
+U2 = n1 * n2 + n2 * (n2 + 1) / 2 - R2
+
+print(f'U1 = n1*n2 + n1*(n1+1)/2 - R1 = {n1*n2} + {n1*(n1+1)/2} - {R1} = {U1}')
+print(f'U2 = n1*n2 + n2*(n2+1)/2 - R2 = {n1*n2} + {n2*(n2+1)/2} - {R2} = {U2}')
+print(f'U1 + U2 = {U1 + U2} (should equal n1*n2 = {n1*n2})')
+print(f'min(U1, U2) = {min(U1, U2)}')
+
+# Also compute U the manual pair-counting way
+# U1 = number of (animal, fungi) pairs where animal > fungi, counting 0.5 for ties
+pairs_animal_gt_fungi = 0
+for a in animal_pct:
+    for f in fungi_pct:
+        if a > f:
+            pairs_animal_gt_fungi += 1
+        elif a == f:
+            pairs_animal_gt_fungi += 0.5
+
+print(f'Pairs where animal > fungi (with ties 0.5): {pairs_animal_gt_fungi}')
+print(f'Pairs where fungi > animal: {n1*n2 - pairs_animal_gt_fungi}')
+"
+

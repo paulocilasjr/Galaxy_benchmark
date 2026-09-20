@@ -1,0 +1,87 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from collections import Counter
+
+sample_file='inputs/Sample_annotated_Zenodo.csv'
+meta_file='inputs/GeneMetaInfo_Zenodo.csv'
+count_file='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+
+# Sample scope is defined by the supplied annotation.
+with open(sample_file, newline='') as f:
+    samples=list(csv.DictReader(f))
+cd14=[r['sample'] for r in samples if r['celltype']=='CD14']
+
+# Metadata keyed by the count-matrix row identifier.
+meta={}
+with open(meta_file, newline='') as f:
+    for r in csv.DictReader(f):
+        key=r['']
+        if key in meta:
+            raise RuntimeError('duplicate metadata key '+key)
+        meta[key]=(r['Geneid'], r['Length'], r['gene_biotype'])
+
+with open(count_file, newline='') as f:
+    rd=csv.reader(f)
+    header=next(rd)
+    pos={name:i for i,name in enumerate(header[1:])}
+    cdidx=[i+1 for i,name in enumerate(header[1:]) if name in set(cd14)]
+    if len(cdidx)"'!=len(cd14):
+        raise RuntimeError((len(cdidx),len(cd14)))
+    cdset=set(cd14)
+    nrows=0; nmeta=0; nprotein=0; nselected=0; badrows=[]
+    # Welford/Pébay online accumulators for stable Pearson r of length vs total CD14 count.
+    n=0; mx=0.0; my=0.0; c=0.0; m2x=0.0; m2y=0.0
+    # Also track fsum inputs for an independent calculation.
+    xs=[]; ys=[]
+    for row in rd:
+        nrows += 1
+        gid=row[0]
+        m=meta.get(gid)
+        if m is None:
+            badrows.append((gid,'"'missing_meta'))
+            continue
+        nmeta += 1
+        geneid, length_s, biotype=m
+        if biotype "'!= '"'protein_coding':
+            continue
+        nprotein += 1
+        if not length_s:
+            badrows.append((gid,'missing_length'))
+            continue
+        try:
+            length=float(length_s)
+            total=sum(int(row[i]) for i in cdidx)
+        except Exception as e:
+            badrows.append((gid,str(e)))
+            continue
+        if total < 10:
+            continue
+        nselected += 1
+        # Mean expression = total / number of CD14 samples; fixed positive divisor leaves r unchanged.
+        y=total / len(cdidx)
+        n += 1
+        dx=length-mx
+        mx += dx/n
+        dy=y-my
+        my += dy/n
+        c += dx*(y-my)
+        m2x += dx*(length-mx)
+        m2y += dy*(y-my)
+        xs.append(length); ys.append(y)
+
+r=c/math.sqrt(m2x*m2y)
+# Independent direct centered calculation using math.fsum.
+meanx=math.fsum(xs)/len(xs); meany=math.fsum(ys)/len(ys)
+ssx=math.fsum((x-meanx)**2 for x in xs)
+ssy=math.fsum((y-meany)**2 for y in ys)
+cc=math.fsum((x-meanx)*(y-meany) for x,y in zip(xs,ys))
+r2=cc/math.sqrt(ssx*ssy)
+print('CD14 samples:',len(cdidx))
+print('count matrix columns:',len(header)-1)
+print('count rows:',nrows,'metadata rows joined:',nmeta)
+print('protein_coding:',nprotein,'selected total>=10:',nselected)
+print('mean length:',meanx,'mean expression:',meany)
+print('r_welford:',repr(r))
+print('r_fsum:',repr(r2),'difference:',r-r2)
+print('bad rows:',len(badrows),badrows[:3])
+PY"

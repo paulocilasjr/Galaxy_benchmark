@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections, math, os
+
+def chrom_sort_key(x):
+    s=str(x)
+    return (0, int(s)) if s.isdigit() else (1, s)
+
+age='inputs/JD_AgeRelated_CpG_noMT_Final.csv'
+lengths_file='inputs/JD_Chromosome_Length.csv'
+lengths={}
+with open(lengths_file, newline='') as f:
+    r=csv.DictReader(f)
+    chrom_key=r.fieldnames[0]
+    for row in r:
+        lengths[row[chrom_key]]=int(row['Length'])
+
+filtered=set()
+all_sites=set()
+obs=fobs=0
+with open(age, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        obs += 1
+        site=(row['Chromosome'], row['StartPosition'])
+        all_sites.add(site)
+        m=float(row['MethylationPercentage'])
+        if m > 90 or m < 10:
+            fobs += 1
+            filtered.add(site)
+
+counts=collections.Counter(chrom for chrom, start in filtered)
+missing=sorted(set(counts)-set(lengths), key=chrom_sort_key)
+if missing:
+    raise SystemExit(f'missing chromosome lengths: {missing}')
+
+densities={chrom: count/lengths[chrom] for chrom, count in counts.items() if count > 0}
+mean_density=sum(densities.values())/len(densities)
+
+print('obs', obs)
+print('all_unique_sites', len(all_sites))
+print('filtered_obs', fobs)
+print('filtered_unique_sites', len(filtered))
+print('chromosomes_with_filtered', len(densities))
+print('chrom\\tcount\\tlength\\tdensity')
+for c in sorted(densities, key=chrom_sort_key):
+    print(f'{c}\\t{counts[c]}\\t{lengths[c]}\\t{densities[c]:.17g}')
+print('mean_density', format(mean_density, '.17g'))
+
+# Sanity-check alternate interpretation: filter by per-site mean methylation.
+site_m=collections.defaultdict(list)
+with open(age, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        site_m[(row['Chromosome'], row['StartPosition'])].append(float(row['MethylationPercentage']))
+mean_filtered=[s for s, vals in site_m.items() if (sum(vals)/len(vals) > 90 or sum(vals)/len(vals) < 10)]
+counts2=collections.Counter(c for c, s in mean_filtered)
+dens2={c: count/lengths[c] for c, count in counts2.items() if count > 0}
+print('alt_site_mean_filtered_unique_sites', len(mean_filtered))
+print('alt_site_mean_chromosomes', len(dens2))
+print('alt_site_mean_density', 'nan' if not dens2 else format(sum(dens2.values())/len(dens2), '.17g'))
+
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', newline='') as f:
+    f.write(format(mean_density, '.17g') + '\\n')
+PY
+printf 'answer.txt: '; cat codex_output/answer.txt"

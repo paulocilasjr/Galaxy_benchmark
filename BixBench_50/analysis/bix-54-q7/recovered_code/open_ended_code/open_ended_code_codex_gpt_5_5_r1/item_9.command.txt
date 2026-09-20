@@ -1,0 +1,42 @@
+/bin/bash -lc "mkdir -p codex_output
+Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+parse_p <- function(r) {
+  parts <- strsplit(r, ':', fixed=TRUE)
+  vapply(parts, function(x) {
+    nums <- as.numeric(x)
+    nums[1] / sum(nums)
+  }, numeric(1))
+}
+# Model the full observed 287/98 response curve: pure 98 and pure 287 are endpoints.
+d <- subset(d, StrainNumber %in% c('98', '287', '287_98'))
+d"'$p287 <- ifelse(d$StrainNumber == '"'98', 0,
+                 ifelse(d"'$StrainNumber == '"'287', 1, parse_p(d"'$Ratio)))
+models <- list(
+  quadratic = lm(Area ~ poly(p287, 2, raw=TRUE), data=d),
+  cubic = lm(Area ~ poly(p287, 3, raw=TRUE), data=d),
+  ns4 = lm(Area ~ ns(p287, df=4), data=d)
+)
+aics <- vapply(models, AIC, numeric(1))
+best_name <- names(which.min(aics))
+best <- models[[best_name]]
+domain <- range(d$p287)
+pred <- function(x) as.numeric(predict(best, newdata=data.frame(p287=x)))
+# Search every grid interval so a non-unimodal spline cannot hide a local maximum.
+grid <- seq(domain[1], domain[2], length.out=1001)
+vals <- vapply(grid, pred, numeric(1))
+candidates_x <- c(domain, grid[which.max(vals)])
+for (i in seq_len(length(grid) - 1)) {
+  opt <- optimize(function(x) -pred(x), interval=c(grid[i], grid[i+1]), tol=1e-12)
+  candidates_x <- c(candidates_x, opt$minimum)
+}
+candidates_y <- vapply(candidates_x, pred, numeric(1))
+answer <- max(candidates_y)
+cat('"'best_model=', best_name, '\\n', sep='')
+cat('AIC=', paste(names(aics), signif(aics, 8), sep=':', collapse=' '), '\\n', sep='')
+cat('p_opt=', candidates_x[which.max(candidates_y)], '\\n', sep='')
+cat('answer=', format(answer, digits=12, scientific=FALSE), '\\n', sep='')
+writeLines(format(answer, digits=12, scientific=FALSE, trim=TRUE), 'codex_output/answer.txt')
+RS
+printf 'answer.txt: '; cat codex_output/answer.txt; printf '\\n'"

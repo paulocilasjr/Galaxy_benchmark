@@ -1,0 +1,53 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import csv, time, warnings
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata
+
+warnings.filterwarnings('ignore')
+cris_path='inputs/CRISPRGeneEffect.csv'; expr_path='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+def read_header(path):
+    with open(path,newline='') as f:return next(csv.reader(f))[1:]
+def symbol(x): return x.rsplit(' (',1)[0]
+def load_pair():
+    cr_all=read_header(cris_path); ex_all=read_header(expr_path)
+    cr_by={symbol(x):x for x in cr_all}; ex_by={symbol(x):x for x in ex_all}
+    syms=[symbol(x) for x in cr_all if symbol(x) in ex_by]
+    cr_cols=[cr_by[s] for s in syms]; ex_cols=[ex_by[s] for s in syms]
+    cr=pd.read_csv(cris_path,index_col=0,usecols=['Unnamed: 0']+cr_cols,dtype={x:np.float32 for x in cr_cols})
+    ex=pd.read_csv(expr_path,index_col=0,usecols=['Unnamed: 0']+ex_cols,dtype={x:np.float32 for x in ex_cols})
+    common=cr.index.intersection(ex.index)
+    cr=cr.loc[common,cr_cols]
+    ex=ex.loc[common,ex_cols]
+    # reorder the expression matrix to the CRISPR symbol order and use arrays
+    ex=ex.rename(columns={ex_by[s]:cr_by[s] for s in syms})[cr_cols]
+    return syms, cr.to_numpy(dtype=np.float64), ex.to_numpy(dtype=np.float64), common
+
+t0=time.time(); syms,y,x,models=load_pair(); print('loaded',x.shape,'sec',round(time.time()-t0,1),flush=True)
+# y is raw gene effect; essentiality_strength is -y. Since negation flips r,
+# rank x against y and negate the coefficient for the requested coordinate.
+g=x.shape[1]; rraw=np.full(g,np.nan); ns=np.zeros(g,dtype=int)
+t=time.time()
+for j in range(g):
+    mask=np.isfinite(y[:,j]) & np.isfinite(x[:,j])
+    n=int(mask.sum()); ns[j]=n
+    if n>=2:
+        rx=rankdata(x[mask,j],method='average')
+        ry=rankdata(y[mask,j],method='average')
+        rx-=rx.mean(); ry-=ry.mean()
+        den=np.sqrt(np.dot(rx,rx)*np.dot(ry,ry))
+        if den>0: rraw[j]=np.dot(rx,ry)/den
+    if (j+1)%4000==0: print('processed',j+1,'/',g,'sec',round(time.time()-t,1),flush=True)
+# Requested coordinate: positive-going essentiality = - raw gene effect.
+ressential=-rraw
+finite=np.isfinite(ressential)
+idx=np.where(finite)[0]
+order=idx[np.argsort(ressential[idx])]
+print('compute sec',round(time.time()-t,1),flush=True)
+print('TOP essentiality negative (symbol, r, n; ascending):')
+for j in order[:20]: print(syms[j],repr(float(ressential[j])),int(ns[j]))
+print('TOP raw gene-effect negative (for contrast):')
+order2=idx[np.argsort(rraw[idx])]
+for j in order2[:10]: print(syms[j],repr(float(rraw[j])),int(ns[j]))
+print('raw max / requested min',syms[order2[-1]],repr(float(rraw[order2[-1]])),syms[order[0]],repr(float(ressential[order[0]])))
+PY"

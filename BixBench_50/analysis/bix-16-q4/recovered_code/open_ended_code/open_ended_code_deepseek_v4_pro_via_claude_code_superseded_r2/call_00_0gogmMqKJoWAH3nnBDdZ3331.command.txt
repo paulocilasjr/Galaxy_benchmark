@@ -1,0 +1,81 @@
+/workspace/venv/bin/python3 -c "
+import csv
+import numpy as np
+from scipy import stats
+
+# Load data for a few random genes to verify
+# First get the common genes list
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    h = next(csv.reader(f))
+    c_genes = h[1:]
+
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    h = next(csv.reader(f))
+    e_genes = h[1:]
+
+cg_map = {g: i for i, g in enumerate(c_genes)}
+eg_map = {g: i for i, g in enumerate(e_genes)}
+common = sorted(set(cg_map) & set(eg_map))
+
+# Get common cell lines
+cc_lines = set()
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    r = csv.reader(f); next(r)
+    for row in r: cc_lines.add(row[0])
+ec_lines = set()
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    r = csv.reader(f); next(r)
+    for row in r: ec_lines.add(row[0])
+common_lines = sorted(cc_lines & ec_lines)
+
+# Read data for a few genes
+import random
+random.seed(42)
+test_genes = random.sample(common, 5)
+
+for gene in test_genes:
+    ci = cg_map[gene]
+    ei = eg_map[gene]
+    
+    expr_vals = []
+    effect_vals = []
+    
+    # Read expression
+    with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+        r = csv.reader(f); next(r)
+        for row in r:
+            if row[0] in common_lines_set := set(common_lines):
+                expr_vals.append(float(row[ei+1]))
+    
+    # Read effect
+    with open('inputs/CRISPRGeneEffect.csv') as f:
+        r = csv.reader(f); next(r)
+        for row in r:
+            if row[0] in common_lines_set:
+                val = row[ci+1].strip()
+                effect_vals.append(float(val) if val else np.nan)
+    
+    expr = np.array(expr_vals)
+    effect = np.array(effect_vals)
+    
+    valid = ~np.isnan(expr) & ~np.isnan(effect)
+    x = expr[valid]
+    y = effect[valid]
+    
+    # My method
+    rx = stats.rankdata(x)
+    ry = stats.rankdata(y)
+    rc = rx - np.mean(rx)
+    rd = ry - np.mean(ry)
+    my_rho = np.dot(rc, rd) / np.sqrt(np.dot(rc, rc) * np.dot(rd, rd))
+    my_rho = np.clip(my_rho, -1+1e-15, 1-1e-15)
+    my_t = my_rho * np.sqrt((len(x)-2)/(1-my_rho**2))
+    my_p = 2 * stats.t.sf(abs(my_t), len(x)-2)
+    
+    # Scipy method
+    sc_rho, sc_p = stats.spearmanr(x, y)
+    
+    print(f'{gene}: n={len(x)}, my rho={my_rho:.6f} scipy rho={sc_rho:.6f}, '
+          f'my p={my_p:.6e} scipy p={sc_p:.6e}, '
+          f'rho diff={abs(my_rho-sc_rho):.2e}, p diff={abs(my_p-sc_p):.2e}')
+" 2>&1

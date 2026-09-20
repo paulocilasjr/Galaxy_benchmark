@@ -1,0 +1,91 @@
+cd /workspace
+python3 << 'EOF'
+import json, statistics
+
+with open('/workspace/codex_output/results.json') as f:
+    results = json.load(f)
+
+# Check tree topologies - do they all recover monophyletic animals and fungi?
+n_monophyletic_both = 0
+n_monophyletic_animals = 0
+n_monophyletic_fungi = 0
+n_total = 0
+
+for r in results:
+    leaves = r['leaves']
+    animal_leaves = [l for l in leaves if l.startswith('Animals')]
+    fungi_leaves = [l for l in leaves if l.startswith('Fungi')]
+    
+    # Check if all animals appear together (closer to each other than to fungi)
+    # and vice versa. We can check this by looking at mean distances.
+    n_total += 1
+    
+    # For each animal, check if mean distance to other animals < mean distance to fungi
+    all_mono_animals = True
+    for a in animal_leaves:
+        animal_others = [l for l in animal_leaves if l != a]
+        if animal_others:
+            mean_animal = sum(r['all_means'].get(a, 0) for _ in [1])  # approximate
+            # Better: use the within vs cross means
+            within = r['within_means'].get(a)
+            cross = r['cross_means'].get(a)
+            if within is not None and cross is not None and within > cross:
+                all_mono_animals = False
+                break
+    
+    all_mono_fungi = True
+    for f in fungi_leaves:
+        within = r['within_means'].get(f)
+        cross = r['cross_means'].get(f)
+        if within is not None and cross is not None and within > cross:
+            all_mono_fungi = False
+            break
+    
+    if all_mono_animals:
+        n_monophyletic_animals += 1
+    if all_mono_fungi:
+        n_monophyletic_fungi += 1
+    if all_mono_animals and all_mono_fungi:
+        n_monophyletic_both += 1
+
+print(f"Total trees: {n_total}")
+print(f"Monophyletic animals: {n_monophyletic_animals}/{n_total}")
+print(f"Monophyletic fungi: {n_monophyletic_fungi}/{n_total}")
+print(f"Both monophyletic: {n_monophyletic_both}/{n_total}")
+
+# Check for any failed trees
+if n_monophyletic_both < n_total:
+    print(f"\nNon-monophyletic trees: {n_total - n_monophyletic_both}")
+
+# Distribution of ratios (fungi_median/animal_median) per gene
+gene_ratios = []
+for r in results:
+    av = [v for k, v in r['all_means'].items() if k.startswith('Animals')]
+    fv = [v for k, v in r['all_means'].items() if k.startswith('Fungi')]
+    if av and fv:
+        gene_ratios.append(statistics.median(fv) / statistics.median(av))
+
+print(f"\nPer-gene ratio distribution:")
+print(f"  Min: {min(gene_ratios):.4f}")
+print(f"  Q1: {sorted(gene_ratios)[len(gene_ratios)//4]:.4f}")
+print(f"  Median: {statistics.median(gene_ratios):.4f}")
+print(f"  Q3: {sorted(gene_ratios)[3*len(gene_ratios)//4]:.4f}")
+print(f"  Max: {max(gene_ratios):.4f}")
+print(f"  Mean: {statistics.mean(gene_ratios):.4f}")
+
+# Check species composition
+from collections import Counter
+animal_species = Counter()
+fungi_species = Counter()
+for r in results:
+    for sp in r['leaves']:
+        if sp.startswith('Animals'):
+            animal_species[sp] += 1
+        else:
+            fungi_species[sp] += 1
+print(f"\nSpecies presence:")
+for sp, count in sorted(animal_species.items()):
+    print(f"  {sp}: {count}/{n_total}")
+for sp, count in sorted(fungi_species.items()):
+    print(f"  {sp}: {count}/{n_total}")
+EOF

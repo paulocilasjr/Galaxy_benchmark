@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, time
+import numpy as np,pandas as pd
+from scipy import stats
+
+def h(f):
+    with open(f,newline='') as x:return next(csv.reader(x))
+crh=h('inputs/CRISPRGeneEffect.csv'); exh=h('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'); es=set(exh[1:]); genes=[g for g in crh[1:] if g in es]
+cu=[0]+[i for i,g in enumerate(crh) if i and g in es]; ep={g:i for i,g in enumerate(exh)}; eu=[0]+[ep[g] for g in genes]; dt={g:np.float64 for g in genes}
+cr=pd.read_csv('inputs/CRISPRGeneEffect.csv',usecols=cu,index_col=0,dtype=dt); ex=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv',usecols=eu,index_col=0,dtype=dt); ids=cr.index.intersection(ex.index); a=cr.loc[ids,genes].to_numpy(); b=ex.loc[ids,genes].to_numpy()
+# Compare direct scipy spearmanr with the vectorized rank/t approximation on selected genes.
+sel=[0,1,100,1000,5000,10000,15000,17675]
+for j in sel:
+    m=np.isfinite(a[:,j]) & np.isfinite(b[:,j]); x=a[m,j]; y=b[m,j]
+    direct=stats.spearmanr(x,y,nan_policy='omit')
+    rx=stats.rankdata(x); ry=stats.rankdata(y); r=np.corrcoef(rx,ry)[0,1]; p=2*stats.t.sf(abs(r*np.sqrt((len(x)-2)/(1-r*r))),len(x)-2)
+    print(j,genes[j],len(x),'r diff',float(r-direct.statistic),'p direct',float(direct.pvalue),'p t',float(p),'p diff',float(p-direct.pvalue))
+# Precision check on a random-ish set: compute ranks after float32 conversion and compare r.
+maxrd=0; maxpd=0; changed=0
+for j in sel:
+    m=np.isfinite(a[:,j]) & np.isfinite(b[:,j]);
+    def calc(x,y):
+        return np.corrcoef(stats.rankdata(x),stats.rankdata(y))[0,1]
+    r64=calc(a[m,j],b[m,j]); r32=calc(a[m,j].astype(np.float32),b[m,j].astype(np.float32)); maxrd=max(maxrd,abs(r64-r32)); changed += r64"'!=r32
+print('"'float32 selected max abs r difference',maxrd,'changed',changed)
+PY"

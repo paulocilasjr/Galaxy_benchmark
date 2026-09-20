@@ -1,0 +1,102 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+from phykit.services.tree.lb_score import LBScore
+
+# Run the simple Newick parser
+result = LBScore._calculate_simple_newick_lb_components(
+    "/workspace/temp/996662at2759.faa.mafft.clipkit.treefile"
+)
+tips, avg_dist, avg_PDis = result
+print("Tips:", tips)
+print("avg_dist:", avg_dist)
+print("avg_PDis:", avg_PDis)
+
+# Now compute LB scores
+LBis = LBScore.calculate_lb_score_per_taxa(avg_PDis, avg_dist)
+print("LBis:", LBis)
+
+# Check the denominator
+tip_set = set(tips)
+tip_count = len(tips)
+for tip in tips:
+    denom = LBScore._historical_other_taxa_denominator(tip, tip_set, tip_count)
+    print(f"  {tip}: denominator={denom}, distance_sum/distance_sums_by_node cannot check here")
+
+# Let's also check the distance sums
+# Actually let me trace through _calculate_simple_newick_lb_components more carefully
+# Let me also check what _scan_simple_newick_tree returns
+root = LBScore._scan_simple_newick_tree("/workspace/temp/996662at2759.faa.mafft.clipkit.treefile")
+print("\nRoot:", root)
+
+# Traverse the tree
+tips2 = []
+nodes = []
+stack = [root]
+while stack:
+    node = stack.pop()
+    nodes.append(node)
+    children = node["children"]
+    if children:
+        for child in reversed(children):
+            stack.append(child)
+    else:
+        tips2.append(node["name"])
+
+print("Tips from traversal:", tips2)
+
+# Now compute subtree info
+tip_count = len(tips2)
+subtree_tip_counts = {}
+subtree_distance_sums = {}
+for node in reversed(nodes):
+    children = node["children"]
+    node_id = id(node)
+    if children:
+        child_tip_count = 0
+        child_distance_sum = 0.0
+        for child in children:
+            child_id = id(child)
+            child_count = subtree_tip_counts[child_id]
+            child_tip_count += child_count
+            child_distance_sum += (
+                subtree_distance_sums[child_id]
+                + child["length"] * child_count
+            )
+        subtree_tip_counts[node_id] = child_tip_count
+        subtree_distance_sums[node_id] = child_distance_sum
+    else:
+        subtree_tip_counts[node_id] = 1
+        subtree_distance_sums[node_id] = 0.0
+
+# Total pairwise distance
+total_pairwise_distance = 0.0
+distance_sums_by_node = {id(root): subtree_distance_sums[id(root)]}
+stack = [root]
+while stack:
+    node = stack.pop()
+    parent_distance_sum = distance_sums_by_node[id(node)]
+    for child in node["children"]:
+        child_id = id(child)
+        child_count = subtree_tip_counts[child_id]
+        branch_length = child["length"]
+        total_pairwise_distance += (
+            branch_length
+            * child_count
+            * (tip_count - child_count)
+        )
+        distance_sums_by_node[child_id] = (
+            parent_distance_sum
+            + branch_length * (tip_count - 2 * child_count)
+        )
+        stack.append(child)
+
+avg_dist2 = total_pairwise_distance / (tip_count * (tip_count - 1) / 2)
+print(f"\ntotal_pairwise_distance: {total_pairwise_distance}")
+print(f"avg_dist2: {avg_dist2}")
+
+for tip in tips2:
+    # Find the node for this tip
+    for node in nodes:
+        if not node["children"] and node["name"] == tip:
+            print(f"  {tip}: distance_sum={distance_sums_by_node[id(node)]}")
+            break
+PYEOF

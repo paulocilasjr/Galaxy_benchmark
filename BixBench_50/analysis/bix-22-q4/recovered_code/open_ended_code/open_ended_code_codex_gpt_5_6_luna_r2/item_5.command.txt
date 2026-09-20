@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from pathlib import Path
+from collections import Counter
+import numpy as np
+from scipy.stats import pearsonr
+base=Path('/workspace/inputs')
+# Read metadata keyed by the shared first-column gene label.
+meta={}
+with (base/'GeneMetaInfo_Zenodo.csv').open(newline='') as f:
+    for row in csv.DictReader(f):
+        meta[row['']]=(row['Geneid'], float(row['Length']), row['gene_biotype'])
+# Select samples from annotations, then map to count-file columns.
+with (base/'Sample_annotated_Zenodo.csv').open(newline='') as f:
+    ann=list(csv.DictReader(f))
+cd14=[r['sample'] for r in ann if r['celltype']=='CD14']
+with (base/'BatchCorrectedReadCounts_Zenodo.csv').open(newline='') as f:
+    rd=csv.reader(f)
+    header=next(rd)
+    idx={s:i for i,s in enumerate(header)}
+    missing=[s for s in cd14 if s not in idx]
+    if missing: raise RuntimeError(f'missing CD14 count columns: {missing}')
+    cd14_idx=[idx[s] for s in cd14]
+    all_idx=list(range(1,len(header)))
+    x=[]; y=[]; total_cd14=[]; total_all=[]; genes=[]
+    for row in rd:
+        label=row[0]
+        geneid,length,biotype=meta[label]
+        vals=[int(row[i]) for i in cd14_idx]
+        s=sum(vals)
+        if biotype=='protein_coding' and s>=10:
+            x.append(length); y.append(s/len(vals)); total_cd14.append(s); genes.append(label)
+        total_all.append(sum(int(row[i]) for i in all_idx))
+# Candidate A exact requested scope.
+x=np.asarray(x,dtype=np.float64); y=np.asarray(y,dtype=np.float64)
+print('CD14 samples',len(cd14),'protein-coding expressed genes',len(x))
+print('length range filtered',x.min(),x.max(),'mean range',y.min(),y.max(),'total range',min(total_cd14),max(total_cd14))
+print('pearson numpy',np.corrcoef(x,y)[0,1])
+print('pearson scipy',pearsonr(x,y))
+# Direct centered formula for independent confirmation.
+xc=x-x.mean(); yc=y-y.mean()
+print('pearson direct',float(np.dot(xc,yc)/math.sqrt(np.dot(xc,xc)*np.dot(yc,yc))))
+# Alternative all-sample threshold, to quantify semantic sensitivity without accepting it.
+# Re-read efficiently, preserving all counts only for protein coding rows; totals list was collected for all rows but align with row order.
+# Just report the all-sample threshold candidate by a second pass.
+with (base/'BatchCorrectedReadCounts_Zenodo.csv').open(newline='') as f:
+    rd=csv.reader(f); header2=next(rd); allx=[]; ally=[]
+    for row in rd:
+        label=row[0]; geneid,length,biotype=meta[label]
+        if biotype=='protein_coding':
+            vals=[int(row[i]) for i in cd14_idx]
+            if sum(int(row[i]) for i in all_idx)>=10:
+                allx.append(length); ally.append(sum(vals)/len(vals))
+print('all-sample threshold candidate',len(allx),float(np.corrcoef(np.asarray(allx,float),np.asarray(ally,float))[0,1]))
+PY"

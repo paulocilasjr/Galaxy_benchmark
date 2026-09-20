@@ -1,0 +1,56 @@
+/bin/bash -c "python3 - <<'PY'
+# Use R output aligned by gene; compute summary metrics for mapping cases
+import subprocess, zipfile, xml.etree.ElementTree as ET, math, statistics
+rscript=r'''
+for (f in c('/workspace/inputs/res_1vs97.rds','/workspace/inputs/res_1vs98.rds')) { con<-gzfile(f,'rb'); x<-unserialize(con); close(con); y<-unclass(x); ld<-attr(y,'listData'); rn<-attr(y,'rownames'); cat('###FILE',basename(f),'\\n'); for(i in seq_along(rn)) cat(rn[i],ld"'$log2FoldChange[i],ld$padj[i],'"'\\n',sep='\\t') }
+'''
+out=subprocess.run(['Rscript','-e',rscript],capture_output=True,text=True,check=True).stdout
+res={};cur=None
+for line in out.splitlines():
+ if line.startswith('###FILE'):cur=line.split()[1];res[cur]={};continue
+ p=line.split('\\t');
+ if len(p)>=3:res[cur][p[0]]=(float(p[1]),float(p[2]))
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(fn):
+ with zipfile.ZipFile(fn) as z:root=ET.fromstring(z.read('word/document.xml'))
+ t=root.find('.//w:tbl',ns);d={}
+ for tr in t.findall('w:tr',ns)[2:]:
+  cells=[''.join(x.text or '' for x in c.findall('.//w:t',ns)) for c in tr.findall('w:tc',ns)]
+  if len(cells)>=4 and cells[0]:
+   def f(s):
+    s=s.strip();return None if s in ('','-') else float(s)
+   d[cells[0]]={'rhlR':f(cells[1]),'rhlI':f(cells[2])}
+ return d
+tabs={'HCD':parse('/workspace/ppat.1006504.s012.docx'),'biofilm':parse('/workspace/ppat.1006504.s013.docx')}
+
+def metrics(rfcs, table_vals):
+ xs=[];ys=[];signs=[];se=[]
+ for g,t in table_vals.items():
+  if t is None or g not in rfcs:continue
+  lfc=rfcs[g][0]; expected=-t
+  xs.append(lfc);ys.append(expected);signs.append((lfc>0)==(expected>0));se.append((lfc-expected)**2)
+ n=len(xs); mx=sum(xs)/n;my=sum(ys)/n
+ cov=sum((x-mx)*(y-my) for x,y in zip(xs,ys))/n;sdx=math.sqrt(sum((x-mx)**2 for x in xs)/n);sdy=math.sqrt(sum((y-my)**2 for y in ys)/n)
+ r=cov/(sdx*sdy) if sdx*sdy else 0
+ # rank corr
+ def ranks(v):
+  order=sorted(range(len(v)),key=lambda i:v[i]);r=[0]*len(v)
+  for rank,i in enumerate(order):r[i]=rank
+  return r
+ rx=ranks(xs);ry=ranks(ys);mr=(n-1)/2;covr=sum((a-mr)*(b-mr) for a,b in zip(rx,ry))/n;varr=sum((a-mr)**2 for a in rx)/n;rho=covr/varr if varr else 0
+ slope=cov/sdx**2 if sdx else 0
+ return {'n':n,'sign':sum(signs)/n,'r':r,'rho':rho,'slope':slope,'rmse':math.sqrt(sum(se)/n)}
+
+cases=[
+ ('HCD 97=rhlR 98=rhlI','HCD','rhlR','rhlI'),
+ ('HCD 97=rhlI 98=rhlR','HCD','rhlI','rhlR'),
+ ('biofilm 97=rhlR 98=rhlI','biofilm','rhlR','rhlI'),
+ ('biofilm 97=rhlI 98=rhlR','biofilm','rhlI','rhlR'),
+]
+print(f\"{'case':28s} {'res97':40s} {'res98':40s}\")
+for name,cond,c97,c98 in cases:
+ m1=metrics(res['res_1vs97.rds'],{g:d[c97] for g,d in tabs[cond].items()})
+ m2=metrics(res['res_1vs98.rds'],{g:d[c98] for g,d in tabs[cond].items()})
+ def fmt(m): return f\"n={m['n']:3d} sign={m['sign']:.2f} r={m['r']:.2f} rho={m['rho']:.2f} slope={m['slope']:.2f} rmse={m['rmse']:.2f}\"
+ print(f'{name:28s} {fmt(m1):40s} {fmt(m2):40s}')
+PY"

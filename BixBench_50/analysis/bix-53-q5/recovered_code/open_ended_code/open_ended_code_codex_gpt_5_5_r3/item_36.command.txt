@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import pandas as pd
+import numpy as np
+import mygene
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts0 = pd.read_csv('inputs/count.csv')
+counts = counts0.set_index('geneID').T.astype(int)
+metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in counts.index]}, index=counts.index)
+
+# DESeq2-style model with KL reference; abs(LFC) makes foreground independent of contrast sign.
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', ref_level=['condition', 'KL'], n_cpus=1, quiet=True)
+dds.deseq2()
+st = DeseqStats(dds, contrast=['condition', 'WL', 'KL'], alpha=0.05, n_cpus=1, quiet=True)
+st.summary()
+st.lfc_shrink(coeff='condition[T.WL]')
+res = st.results_df.copy()
+fg_mask = (res['pvalue'] < 0.05) & (res['log2FoldChange'].abs() > 1) & (res['baseMean'] > 10)
+bg_mask = res['pvalue'].notna() & (res['baseMean'] > 10)
+fg_ids = res.index[fg_mask].tolist()
+bg_ids = res.index[bg_mask].tolist()
+print('foreground_ensembl', len(fg_ids), 'background_ensembl', len(bg_ids), flush=True)
+
+mg = mygene.MyGeneInfo()
+all_ids = sorted(set(fg_ids) | set(bg_ids))
+records = mg.querymany(all_ids, scopes='ensembl.gene', fields='symbol', species='mouse', as_dataframe=False, verbose=False)
+map_id_symbol = {}
+for r in records:
+    if r.get('notfound') or 'symbol' not in r:
+        continue
+    q = r['query']
+    if q not in map_id_symbol:
+        map_id_symbol[q] = str(r['symbol']).upper()
+fg_symbols = sorted({map_id_symbol[g] for g in fg_ids if g in map_id_symbol})
+bg_symbols = sorted({map_id_symbol[g] for g in bg_ids if g in map_id_symbol})
+print('foreground_symbols', len(fg_symbols), 'background_symbols', len(bg_symbols), flush=True)
+
+lib = gp.get_library(name='WikiPathways_2019_Mouse', organism='Mouse')
+lib_upper = {term: sorted({str(g).upper() for g in genes}) for term, genes in lib.items()}
+print('library_terms', len(lib_upper), 'fg_overlap', len(set(fg_symbols) & set().union(*map(set, lib_upper.values()))), flush=True)
+
+enr = gp.enrich(gene_list=fg_symbols, gene_sets=lib_upper, background=bg_symbols, outdir=None, no_plot=True, cutoff=1.0, verbose=False)
+rs = enr.results.copy()
+# GSEApy local enrich currently returns a table sorted by adjusted p-value, but make it explicit.
+rs = rs.sort_values(['Adjusted P-value', 'P-value', 'Term'], kind='mergesort').reset_index(drop=True)
+top20 = rs.head(20)
+print(top20[['Term','P-value','Adjusted P-value','Overlap']].to_string(index=False), flush=True)
+oxidative = top20['Term'].str.contains('oxidative', case=False, na=False).sum()
+fraction = oxidative / 20
+print('oxidative_count', oxidative, 'fraction', fraction, flush=True)
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', encoding='ascii') as f:
+    f.write(f'{fraction:.1f}\\n')
+PY"

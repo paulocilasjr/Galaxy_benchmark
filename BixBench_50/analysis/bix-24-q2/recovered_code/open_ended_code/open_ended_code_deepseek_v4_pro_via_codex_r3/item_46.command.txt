@@ -1,0 +1,54 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, gseapy, re, json, warnings
+warnings.filterwarnings('ignore')
+# load DE files and map symbols
+from pathlib import Path
+files={
+'pairwise_no_filter':'/workspace/tmp/deseq2_pairwise_6samples.tsv',
+'pairwise_total6_ge10':'/workspace/tmp/deseq2_pairwise_total6_ge10.tsv',
+'all_groups_no_filter':'/workspace/tmp/deseq2_cbd_vs_dmso.tsv',
+}
+# symbol mapping cache from earlier? do mygene per file quickly
+import mygene
+mg=mygene.MyGeneInfo()
+lib='GO_Biological_Process_2023'
+gs=gseapy.get_library(name=lib, organism='human')
+print('lib terms', len(gs), 'sample', list(gs.items())[0])
+# background all genes in library (unique)
+bg=sorted({g for genes in gs.values() for g in genes})
+print('bg size', len(bg))
+metab_re=re.compile(r'metabol|glycol|glucose|carbohydrate|lipid|fatty acid|cholesterol|oxidative|energy|gluconeogen|monosaccharide|hexose', re.I)
+for name,path in files.items():
+    res=pd.read_csv(path,sep='\\t',index_col=0)
+    sig=res[(res.padj<0.05)&(res.log2FoldChange.abs()>0.5)]
+    ids=sig.index.tolist()
+    out=mg.querymany(ids, scopes='ensembl.gene', fields='symbol', species='human', verbose=False)
+    syms=[]
+    for d in out:
+        s=d.get('symbol')
+        if isinstance(s,list): s=s[0] if s else None
+        if s: syms.append(s)
+    # map direction
+    mp={d.get('query'): (d.get('symbol')[0] if isinstance(d.get('symbol'),list) else d.get('symbol')) for d in out if d.get('symbol')}
+    sig=sig.copy(); sig['symbol']=[mp.get(i) for i in sig.index]; sig=sig.dropna(subset=['symbol'])
+    up=sig[sig.log2FoldChange>0]['symbol'].tolist(); down=sig[sig.log2FoldChange<0]['symbol'].tolist()
+    print('\\n===',name,'DEG',len(sig),'up',len(up),'down',len(down))
+    for direction, genes in [('up',up),('down',down)]:
+        genes=[g for g in genes if g in bg]
+        try:
+            er=gseapy.enrich(gene_list=genes, gene_sets=gs, background=bg, outdir=None, no_plot=True, verbose=False)
+            df=er.res2d.copy()
+            # adjusted p column maybe 'Adjusted P-value' in custom? inspect
+            print(direction, 'res2d cols', df.columns.tolist())
+            # normalize cols
+            pcol=[c for c in df.columns if 'Adjusted' in c][0]
+            termcol=[c for c in df.columns if c.lower()=='term'][0]
+            df[pcol]=pd.to_numeric(df[pcol],errors='coerce')
+            sigdf=df[df[pcol]<0.05]
+            print(direction, 'total sig terms',len(sigdf))
+            metab=sigdf[sigdf[termcol].str.contains(metab_re,regex=True,na=False)]
+            print(direction, 'metabolic sig terms',len(metab))
+            print(metab[[termcol,pcol,'Overlap','Genes']].head(20).to_string(index=False))
+        except Exception as e:
+            print(direction,'ERR',type(e).__name__,e)
+PY"

@@ -1,0 +1,50 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, os
+from scipy.stats import spearmanr
+from scipy.stats import rankdata
+import warnings
+warnings.filterwarnings('ignore')
+
+t0=time.time()
+print('loading...', flush=True)
+ce=pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0)
+ex=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0)
+print('loaded', time.time()-t0, flush=True)
+
+common_idx=ce.index.intersection(ex.index)
+common_cols=ce.columns.intersection(ex.columns)
+print('shared models', len(common_idx), 'shared genes', len(common_cols), flush=True)
+X=ex.loc[common_idx, common_cols].to_numpy(dtype=np.float32)
+Yraw=ce.loc[common_idx, common_cols].to_numpy(dtype=np.float32)
+Y=-Yraw  # essentiality = -gene effect, positive-going
+print('matrices', X.shape, 'X nan', np.isnan(X).sum(), 'Y nan', np.isnan(Y).sum(), flush=True)
+
+n=len(common_cols)
+count=0
+finite_non_nan=0
+valid_low=[]
+for j in range(n):
+    x=X[:,j]
+    y=Y[:,j]
+    mask=np.isfinite(y) & np.isfinite(x)
+    k=int(mask.sum())
+    if k < 2:
+        continue
+    try:
+        rho=spearmanr(x[mask], y[mask]).statistic
+    except Exception:
+        rho=np.nan
+    if np.isfinite(rho):
+        finite_non_nan += 1
+        if rho >= 0.6:
+            count += 1
+
+print('computed genes', finite_non_nan, 'count >=0.6', count, 'skipped low valid', n-finite_non_nan, flush=True)
+print('total elapsed', time.time()-t0, flush=True)
+
+# Save answer
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w') as f:
+    f.write(str(count)+'\\n')
+print('wrote codex_output/answer.txt', flush=True)
+PY"

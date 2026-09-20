@@ -1,0 +1,73 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, math, re
+from math import comb
+from collections import defaultdict
+# input sets
+allg=set(open('tmp/allgenes.txt').read().split())
+up=set(open('tmp/upgenes.txt').read().split())
+# link
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau',timeout=30).read().decode()
+pairs=[]
+for l in link.splitlines():
+    parts=l.split('\\t')
+    if len(parts)==2:
+        g=parts[0].split(':')[-1]; p=parts[1].split(':')[-1]
+        pairs.append((g,p))
+# path list names
+plist=urllib.request.urlopen('https://rest.kegg.jp/list/pathway/pau',timeout=30).read().decode()
+path_ids=set(l.split('\\t')[0].replace('path:','') for l in plist.splitlines() if '\\t' in l)
+# only path ids in list
+pairs=[(g,p) for g,p in pairs if p in path_ids]
+path2genes=defaultdict(set)
+for g,p in pairs: path2genes[p].add(g)
+extID={g for g,p in pairs}
+print('extID',len(extID),'paths with pairs',len(path2genes))
+input_genes=up & extID
+print('input mapped',len(input_genes), 'missing', len(up-extID))
+N=len(extID); n=len(input_genes)
+rows=[]
+for p,genes in path2genes.items():
+    gs=genes & extID
+    M=len(gs)
+    if M<10 or M>500: continue
+    k=len(input_genes & gs)
+    # p upper tail
+    pval=sum(comb(M,i)*comb(N-M,n-i) for i in range(k,min(M,n)+1))/comb(N,n) if k<=n and n<=N else 1
+    rows.append(dict(path=p,M=M,k=k,p=pval))
+# sort
+rows.sort(key=lambda r:r['p'])
+# BH all filtered pathways
+m=len(rows)
+print('filtered pathways',m)
+for i,r in enumerate(rows):
+    r['rank']=i+1
+    r['bh_all']=min(r['p']*m/(i+1),1)
+    # enforce monotonic
+    r['bh_all']=min(r['bh_all'],1)
+# monotonic bh descending
+for i in range(m-2,-1,-1):
+    rows[i]['bh_all']=min(rows[i]['bh_all'],rows[i+1]['bh_all'])
+# BH count>0
+pos=[r for r in rows if r['k']>0]
+mp=len(pos)
+for i,r in enumerate(pos):
+    r['rank_pos']=i+1
+    r['bh_pos']=r['p']*mp/(i+1)
+for i in range(len(pos)-2,-1,-1):
+    pos[i]['bh_pos']=min(pos[i]['bh_pos'],pos[i+1]['bh_pos'])
+pos_by=pos
+# print ABC
+for r in rows:
+    if r['path']=='pau02010':
+        print('ABC row all',r)
+for r in pos:
+    if r['path']=='pau02010':
+        print('ABC row pos',r)
+print('\\nTop 20 all-BH:')
+for r in rows[:20]: print(r['path'],r['M'],r['k'],r['p'],r['bh_all'])
+print('\\nTop 20 pos-BH:')
+for r in pos[:20]: print(r['path'],r['M'],r['k'],r['p'],r.get('bh_pos'))
+# all pathways p<=.05 adjusted?
+print('sig bh_all',sum(r['bh_all']<0.05 for r in rows), 'ABC sig?', [r['bh_all'] for r in rows if r['path']=='pau02010'])
+print('sig bh_pos',sum(r['bh_pos']<0.05 for r in pos), 'ABC sig?', [r['bh_pos'] for r in pos if r['path']=='pau02010'])
+PY"

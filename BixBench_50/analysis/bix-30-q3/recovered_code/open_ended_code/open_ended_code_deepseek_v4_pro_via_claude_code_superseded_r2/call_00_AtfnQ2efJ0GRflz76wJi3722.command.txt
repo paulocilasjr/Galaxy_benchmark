@@ -1,0 +1,63 @@
+source /workspace/venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+df = pd.read_excel('inputs/pone.0150501.s002.xls')
+
+# Extract all numeric data
+data = df.iloc[1:, 1:].apply(pd.to_numeric, errors='coerce')
+mir_names = df.iloc[1:, 0].values
+
+# Global mean normalization: for each sample, subtract the mean Ct of all detected miRNAs
+sample_means = data.mean(axis=0)
+delta_ct = data.subtract(sample_means, axis=1)
+
+print('Sample means (global normalization):')
+for col, mean_val in zip(data.columns, sample_means):
+    print(f'  {col}: {mean_val:.4f}')
+
+# Now run t-tests on delta_ct values
+p_values = []
+for i in range(delta_ct.shape[0]):
+    p_vals = delta_ct.iloc[i, 0:10].dropna().values.astype(float)
+    c_vals = delta_ct.iloc[i, 10:20].dropna().values.astype(float)
+    
+    if len(p_vals) < 2 or len(c_vals) < 2:
+        continue
+    
+    t_stat, p_val = stats.ttest_ind(p_vals, c_vals, equal_var=False)
+    p_values.append(p_val)
+
+p_values = np.array(p_values)
+n_tests = len(p_values)
+print(f'\nTotal miRNAs tested: {n_tests}')
+
+# P-value distribution
+for threshold in [0.001, 0.01, 0.05, 0.1]:
+    count = np.sum(p_values <= threshold)
+    print(f'  p <= {threshold}: {count}')
+
+# Bonferroni
+bonf_p = np.minimum(p_values * n_tests, 1.0)
+bonf_sig = np.sum(bonf_p <= 0.05)
+print(f'\nBonferroni significant: {bonf_sig}')
+
+# Benjamini-Yekutieli
+sorted_idx = np.argsort(p_values)
+sorted_p = p_values[sorted_idx]
+harmonic = np.sum(1.0 / np.arange(1, n_tests + 1))
+
+by_p = np.ones(n_tests)
+for i in range(n_tests):
+    rank = i + 1
+    by_p[i] = min(sorted_p[i] * n_tests * harmonic / rank, 1.0)
+
+for i in range(n_tests - 2, -1, -1):
+    by_p[i] = min(by_p[i], by_p[i + 1])
+
+by_sig = np.sum(by_p <= 0.05)
+print(f'Benjamini-Yekutieli significant: {by_sig}')
+print(f'Ratio: {bonf_sig}:{by_sig}')
+"
+

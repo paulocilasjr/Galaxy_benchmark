@@ -1,0 +1,22 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['count_col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+keep=(counts>10).any(axis=1); counts=counts.loc[keep]
+wanted=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+sel=layout[layout.Group.isin(wanted)].copy(); sel['Group']=pd.Categorical(sel.Group,categories=wanted,ordered=True); sel=sel.sort_values(['Group','SampleID'])
+cols=sel.count_col.tolist(); metadata=sel.set_index('count_col')[['Group']]; counts=counts[cols].T
+print('start',counts.shape,flush=True)
+dds=DeseqDataSet(counts=counts,metadata=metadata,design_factors='Group',refit_cooks=True,n_cpus=1,quiet=True)
+print('dds',flush=True); dds.deseq2(); print('deseq done',flush=True)
+s= DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=.05,quiet=True); print('stats',flush=True); s.summary(); print('summary done',flush=True)
+r=s.results_df
+print('RESULT',r.shape, r.columns.tolist(),flush=True)
+d=r.loc[r.padj.notna()&(r.padj<=.05)&(r.log2FoldChange.abs()>=.5)&(r.baseMean>=10)]
+print('NDE',len(d),flush=True)
+print(d[['baseMean','log2FoldChange','pvalue','padj']].sort_values('padj').head(20).to_string(),flush=True)
+PY"

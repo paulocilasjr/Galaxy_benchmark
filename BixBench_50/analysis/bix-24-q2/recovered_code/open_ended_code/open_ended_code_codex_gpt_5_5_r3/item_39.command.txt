@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import mygene, gseapy as gp
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+sel = layout[layout['Group'].isin(['DMSO','CBD_IC50'])].copy()
+cols = sel['col'].tolist()
+counts_sub = counts[cols].T
+counts_sub.index = cols
+counts_sub = counts_sub.loc[:, counts_sub.sum(axis=0) > 0]
+meta = sel.set_index('col')[['Group']].rename(columns={'Group':'condition'})
+meta['condition'] = pd.Categorical(meta['condition'], categories=['DMSO','CBD_IC50'])
+dds = DeseqDataSet(counts=counts_sub, metadata=meta, design='~condition', ref_level=['condition','DMSO'], quiet=True, n_cpus=4)
+dds.deseq2()
+st = DeseqStats(dds, contrast=['condition','CBD_IC50','DMSO'], alpha=0.05, quiet=True, n_cpus=4)
+st.summary()
+res = st.results_df.replace([np.inf, -np.inf], np.nan).copy()
+up_ids = res.index[(res['padj'] < 0.05) & (res['log2FoldChange'] > 0.5)].tolist()
+down_ids = res.index[(res['padj'] < 0.05) & (res['log2FoldChange'] < -0.5)].tolist()
+univ_ids = res.index[res['padj'].notna()].tolist()
+print('DE counts up/down/universe', len(up_ids), len(down_ids), len(univ_ids), flush=True)
+mg = mygene.MyGeneInfo()
+all_ids = list(dict.fromkeys(univ_ids + up_ids + down_ids))
+rows = mg.querymany(all_ids, scopes='ensembl.gene', fields='symbol,entrezgene,name', species='human', as_dataframe=False, verbose=False, returnall=False)
+map_symbol = {}
+for r in rows:
+    if r.get('notfound') or 'symbol' not in r:
+        continue
+    sym = r['symbol']
+    if isinstance(sym, list): sym = sym[0]
+    map_symbol[r['query']] = str(sym)
+
+def ids_to_symbols(ids):
+    return sorted(set(map_symbol[i] for i in ids if i in map_symbol))
+up_syms = ids_to_symbols(up_ids)
+down_syms = ids_to_symbols(down_ids)
+univ_syms = ids_to_symbols(univ_ids)
+print('mapped symbols up/down/univ', len(up_syms), len(down_syms), len(univ_syms), flush=True)
+for lib in ['GO_Biological_Process_2026','GO_Biological_Process_2025','GO_Biological_Process_2023']:
+    print('\\nLIB', lib, flush=True)
+    for label, genes in [('up', up_syms), ('down', down_syms)]:
+        enr = gp.enrichr(gene_list=genes, gene_sets=lib, organism='human', background=univ_syms, outdir=None, no_plot=True, cutoff=1, verbose=False)
+        df = enr.results.copy()
+        adjcol = 'Adjusted P-value'
+        if df.empty:
+            print(label, 'empty results')
+            continue
+        sig = df[df[adjcol] < 0.05].sort_values(adjcol)
+        met = sig[sig['Term'].str.contains('metabolic|metabolism|biosynthetic|catabolic', case=False, regex=True)]
+        print(label, 'sig_terms', len(sig), 'metabolic_terms', len(met))
+        print(sig[['Term', adjcol, 'Overlap']].head(15).to_string(index=False))
+        if len(met):
+            print('MET TOP')
+            print(met[['Term', adjcol, 'Overlap']].head(15).to_string(index=False))
+PY"

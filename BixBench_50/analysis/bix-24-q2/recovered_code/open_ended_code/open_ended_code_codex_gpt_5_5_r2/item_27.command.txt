@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from gprofiler import GProfiler
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+meta = pd.read_csv('inputs/sample_layout.csv')
+meta['sample'] = meta['SampleID'].str.replace('-', '_', regex=False)
+meta = meta.set_index('sample')
+# Use all samples in the one-factor design; contrast CBD against vehicle DMSO.
+counts_t = counts.T
+counts_t.index = counts_t.index.astype(str)
+counts_t = counts_t.loc[meta.index]
+meta = meta.loc[counts_t.index, ['Group']].copy()
+print('counts_t', counts_t.shape)
+print(meta['Group'].value_counts().to_string())
+
+dds = DeseqDataSet(counts=counts_t, metadata=meta, design='~ Group', ref_level=['Group','DMSO'], n_cpus=4, quiet=False)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['Group','CBD_IC50','DMSO'], alpha=0.05, n_cpus=4, quiet=False)
+stat.summary()
+res = stat.results_df.copy()
+print(res.head())
+print(res.columns)
+# Filter valid tested genes
+res_valid = res.dropna(subset=['padj','log2FoldChange'])
+sig = res_valid[(res_valid['padj'] < 0.05) & (res_valid['log2FoldChange'].abs() > 0.5)]
+up = sig[sig['log2FoldChange'] > 0].index.astype(str).tolist()
+down = sig[sig['log2FoldChange'] < 0].index.astype(str).tolist()
+universe = res_valid.index.astype(str).tolist()
+print('valid_universe', len(universe), 'sig', len(sig), 'up', len(up), 'down', len(down))
+print('top up', sig.sort_values('log2FoldChange', ascending=False).head(5)[['log2FoldChange','padj']].to_string())
+print('top down', sig.sort_values('log2FoldChange').head(5)[['log2FoldChange','padj']].to_string())
+
+gp = GProfiler(return_dataframe=True)
+for name, genes in [('up', up), ('down', down)]:
+    if not genes:
+        print(name, 'no genes')
+        continue
+    enr = gp.profile(organism='hsapiens', query=genes, sources=['GO:BP'], user_threshold=0.05, background=universe, no_evidences=False)
+    if enr is None or len(enr)==0:
+        print(name, 'no enrichment')
+        continue
+    print('\\nENR', name, 'terms', len(enr))
+    cols=['native','name','p_value','term_size','query_size','intersection_size']
+    print(enr[cols].head(25).to_string(index=False))
+    met = enr[enr['name'].str.contains('metabolic|metabolism|catabolic|biosynthetic|glycol|oxidative|respir|mitochond|lipid|fatty|amino acid|carbohydrate|nucleotide|protein', case=False, regex=True, na=False)]
+    print('METLIKE', name, len(met))
+    print(met[cols].head(30).to_string(index=False))
+PY"

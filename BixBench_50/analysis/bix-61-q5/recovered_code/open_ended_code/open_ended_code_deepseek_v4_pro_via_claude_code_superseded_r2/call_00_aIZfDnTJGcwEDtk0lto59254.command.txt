@@ -1,0 +1,86 @@
+python3 << 'EOF'
+# Precise Ts/Tv computation, handling edge cases like bcftools
+# Exclude * alleles (symbolic spanning deletion alleles)
+# Count only single-nucleotide substitutions where both REF and ALT are single ACGT nucleotides
+
+transitions = 0
+transversions = 0
+total_snps = 0
+skipped_star = 0
+skipped_non_acgt = 0
+
+valid_bases = set('ACGT')
+
+with open('/workspace/inputs/SRR35233585_raw_variants.vcf') as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts = line.strip().split('\t')
+        ref = parts[3]
+        alt_field = parts[4]
+        
+        # Only count records where REF is a single nucleotide
+        if len(ref) != 1 or ref not in valid_bases:
+            continue
+        
+        for a in alt_field.split(','):
+            # Skip non-SNP alleles
+            if len(a) != 1:
+                continue
+            if a == '*':
+                skipped_star += 1
+                continue
+            if a not in valid_bases:
+                skipped_non_acgt += 1
+                continue
+            
+            # This is a SNP
+            total_snps += 1
+            pair = ref + a
+            if pair in ('AG', 'GA', 'CT', 'TC'):
+                transitions += 1
+            else:
+                transversions += 1
+
+print(f"Transitions: {transitions}")
+print(f"Transversions: {transversions}")
+print(f"Total SNPs: {total_snps}")
+print(f"Skipped * alleles: {skipped_star}")
+print(f"Skipped non-ACGT alleles: {skipped_non_acgt}")
+if transversions > 0:
+    ratio = transitions / transversions
+    print(f"Ts/Tv: {ratio:.6f}")
+    print(f"Ts/Tv (rounded to 2 decimal places): {round(ratio, 2)}")
+
+# Also site-level (1st ALT only)
+ts_site = 0
+tv_site = 0
+with open('/workspace/inputs/SRR35233585_raw_variants.vcf') as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts = line.strip().split('\t')
+        ref = parts[3]
+        alt_field = parts[4]
+        
+        if len(ref) != 1 or ref not in valid_bases:
+            continue
+        
+        # Get first valid SNP allele
+        for a in alt_field.split(','):
+            if len(a) == 1 and a in valid_bases and a != '*':
+                pair = ref + a
+                if pair in ('AG', 'GA', 'CT', 'TC'):
+                    ts_site += 1
+                else:
+                    tv_site += 1
+                break  # Only first ALT
+
+print(f"\nSite-level (first ALT only):")
+print(f"Transitions: {ts_site}")
+print(f"Transversions: {tv_site}")
+if tv_site > 0:
+    ratio_site = ts_site / tv_site
+    print(f"Ts/Tv: {ratio_site:.6f}")
+    print(f"Ts/Tv (rounded to 2 decimal places): {round(ratio_site, 2)}")
+EOF

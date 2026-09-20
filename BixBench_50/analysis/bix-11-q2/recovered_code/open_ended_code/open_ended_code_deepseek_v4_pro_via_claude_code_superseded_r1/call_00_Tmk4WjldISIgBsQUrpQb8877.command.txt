@@ -1,0 +1,282 @@
+python3 << 'PYEOF'
+import os, math
+
+os.chdir('/workspace/tmp')
+
+def parse_fasta(filepath):
+    seqs = {}
+    current_header = None
+    current_seq = []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if current_header is not None:
+                    seqs[current_header] = ''.join(current_seq)
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            seqs[current_header] = ''.join(current_seq)
+    return seqs
+
+def p_distance(seq1, seq2):
+    n_diff = 0
+    n_compared = 0
+    for a, b in zip(seq1, seq2):
+        if a == '-' and b == '-':
+            continue
+        n_compared += 1
+        if a != b:
+            n_diff += 1
+    if n_compared == 0:
+        return 0.0
+    return n_diff / n_compared
+
+def compute_patristic(tree_str):
+    s = tree_str.strip().rstrip(';')
+    nodes = []
+    i = 0
+    
+    def parse_node():
+        nonlocal i
+        node = {'children': [], 'length': 0.0, 'name': None}
+        node_id = len(nodes)
+        nodes.append(node)
+        
+        if s[i] == '(':
+            i += 1
+            while True:
+                child_id = parse_node()
+                nodes[node_id]['children'].append(child_id)
+                if s[i] == ',':
+                    i += 1
+                elif s[i] == ')':
+                    i += 1
+                    break
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        else:
+            j = i
+            while j < len(s) and s[j] not in ':),;':
+                j += 1
+            nodes[node_id]['name'] = s[i:j]
+            i = j
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        
+        return node_id
+    
+    root = parse_node()
+    
+    parent = {}
+    dist_to_root = {}
+    
+    def dfs(node_id, d):
+        dist_to_root[node_id] = d
+        for child_id in nodes[node_id]['children']:
+            parent[child_id] = node_id
+            dfs(child_id, d + nodes[child_id]['length'])
+    
+    dfs(root, 0)
+    parent[root] = None
+    
+    # Find leaf nodes
+    leaf_to_nid = {}
+    for nid, node in enumerate(nodes):
+        if node['name'] is not None:
+            leaf_to_nid[node['name']] = nid
+    
+    leaf_names = sorted(leaf_to_nid.keys())
+    
+    # Build ancestor sets for each leaf
+    leaf_ancestors = {}
+    for name, nid in leaf_to_nid.items():
+        ancestors = set()
+        p = nid
+        while p is not None:
+            ancestors.add(p)
+            p = parent.get(p)
+        leaf_ancestors[name] = ancestors
+    
+    patristic = {}
+    for i in range(len(leaf_names)):
+        for j in range(i+1, len(leaf_names)):
+            n1, n2 = leaf_names[i], leaf_names[j]
+            nid1, nid2 = leaf_to_nid[n1], leaf_to_nid[n2]
+            anc1, anc2 = leaf_ancestors[n1], leaf_ancestors[n2]
+            common = anc1 & anc2
+            lca = max(common, key=lambda x: dist_to_root.get(x, 0))
+            d = dist_to_root[nid1] + dist_to_root[nid2] - 2 * dist_to_root[lca]
+            patristic[(n1, n2)] = d
+    
+    return patristic, leaf_names
+
+def parse_mldist(filepath):
+    with open(filepath) as f:
+        n = int(f.readline().strip())
+        order = []
+        matrix = []
+        for i in range(n):
+            parts = f.readline().strip().split()
+            order.append(parts[0])
+            matrix.append([float(x) for x in parts[1:]])
+    return order, matrix
+
+def compute_r2(y, x):
+    """R² from linear regression y ~ x with intercept."""
+    n = len(y)
+    if n < 3:
+        return 0.0
+    mean_y = sum(y) / n
+    mean_x = sum(x) / n
+    
+    # slope = sum((x_i - mean_x)*(y_i - mean_y)) / sum((x_i - mean_x)^2)
+    ss_xx = sum((xi - mean_x)**2 for xi in x)
+    ss_xy = sum((xi - mean_x)*(yi - mean_y) for xi, yi in zip(x, y))
+    ss_yy = sum((yi - mean_y)**2 for yi in y)
+    
+    if ss_xx == 0 or ss_yy == 0:
+        return 0.0
+    
+    slope = ss_xy / ss_xx
+    intercept = mean_y - slope * mean_x
+    ss_res = sum((yi - (slope * xi + intercept))**2 for xi, yi in zip(x, y))
+    r2 = 1.0 - ss_res / ss_yy
+    return r2
+
+# Compute all approaches
+all_faa = set()
+for f in os.listdir('.'):
+    if f.endswith('.faa') and '.mafft' not in f:
+        all_faa.add(f.replace('.faa', ''))
+
+tree_genes = set()
+for f in os.listdir('.'):
+    if f.endswith('.treefile'):
+        tree_genes.add(f.replace('.faa.mafft.clipkit.treefile', ''))
+
+print(f"Total genes: {len(all_faa)}, with trees: {len(tree_genes)}")
+
+# Approach 1: R²(tree ~ uncorrected, with intercept)
+r2_tree_uncorr = {}
+# Approach 2: R²(tree ~ ML, with intercept)  
+r2_tree_ml = {}
+# Approach 3: 1 - sum((ML-tree)^2) / sum(ML^2)
+treeness_ml_origin = {}
+# Approach 4: R²(ML ~ uncorrected, with intercept)
+r2_ml_uncorr = {}
+
+for gene_id in sorted(tree_genes):
+    aln_file = f"{gene_id}.faa.mafft.clipkit"
+    tree_file = f"{gene_id}.faa.mafft.clipkit.treefile"
+    mldist_file = f"{gene_id}.faa.mafft.clipkit.mldist"
+    
+    if not all(os.path.exists(f) for f in [aln_file, tree_file, mldist_file]):
+        continue
+    
+    seqs = parse_fasta(aln_file)
+    species_list = sorted(seqs.keys())
+    
+    # Uncorrected p-distances
+    uncorr = []
+    pairs = []
+    for i in range(len(species_list)):
+        for j in range(i+1, len(species_list)):
+            d = p_distance(seqs[species_list[i]], seqs[species_list[j]])
+            uncorr.append(d)
+            pairs.append((species_list[i], species_list[j]))
+    
+    # Tree patristic distances
+    tree_str = open(tree_file).read().strip()
+    patristic, leaf_names = compute_patristic(tree_str)
+    
+    # ML distances
+    mldist_order, mldist_matrix = parse_mldist(mldist_file)
+    
+    # Match distances
+    tree_dist = []
+    ml_dist = []
+    for (sp1, sp2) in pairs:
+        td = patristic.get((sp1, sp2))
+        if td is None:
+            td = patristic.get((sp2, sp1))
+        if td is None:
+            continue
+        
+        # Find ML distance
+        md = None
+        for mi in range(len(mldist_order)):
+            for mj in range(mi+1, len(mldist_order)):
+                if (mldist_order[mi] == sp1 and mldist_order[mj] == sp2) or \
+                   (mldist_order[mi] == sp2 and mldist_order[mj] == sp1):
+                    md = mldist_matrix[mi][mj]
+                    break
+            if md is not None:
+                break
+        
+        if md is not None:
+            tree_dist.append(td)
+            ml_dist.append(md)
+    
+    if len(tree_dist) < 3:
+        continue
+    
+    # Approach 1: R² tree ~ uncorrected
+    r2_tree_uncorr[gene_id] = compute_r2(tree_dist, uncorr)
+    
+    # Approach 2: R² tree ~ ML
+    r2_tree_ml[gene_id] = compute_r2(tree_dist, ml_dist)
+    
+    # Approach 3: through origin ML
+    ss_res = sum((ml - tr)**2 for ml, tr in zip(ml_dist, tree_dist))
+    ss_tot = sum(ml**2 for ml in ml_dist)
+    treeness_ml_origin[gene_id] = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    
+    # Approach 4: R² ML ~ uncorrected
+    r2_ml_uncorr[gene_id] = compute_r2(ml_dist, uncorr)
+
+# Print distributions
+for label, values in [
+    ("R²(tree ~ uncorrected)", r2_tree_uncorr),
+    ("R²(tree ~ ML)", r2_tree_ml),
+    ("1 - sum((ML-tree)²)/sum(ML²)", treeness_ml_origin),
+    ("R²(ML ~ uncorrected)", r2_ml_uncorr),
+]:
+    vals = list(values.values())
+    if not vals:
+        continue
+    mean_v = sum(vals) / len(vals)
+    sorted_v = sorted(vals)
+    median_v = sorted_v[len(sorted_v)//2]
+    above_006 = sum(1 for v in vals if v > 0.06)
+    
+    # All genes
+    above_006_all = above_006
+    pct = 100 * above_006_all / len(all_faa)
+    
+    print(f"\n{label}:")
+    print(f"  n={len(vals)}, mean={mean_v:.4f}, median={median_v:.4f}, min={min(vals):.4f}, max={max(vals):.4f}")
+    print(f"  >0.06: {above_006}/{len(vals)} of genes with trees = {100*above_006/len(vals):.1f}%")
+    print(f"  >0.06: {above_006_all}/{len(all_faa)} of all genes = {pct:.1f}%")
+    
+    # Distribution
+    bins = [0.0, 0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    for b in bins:
+        c = sum(1 for v in vals if v > b)
+        print(f"  >{b:.2f}: {c} ({100*c/len(vals):.1f}%)")
+
+PYEOF

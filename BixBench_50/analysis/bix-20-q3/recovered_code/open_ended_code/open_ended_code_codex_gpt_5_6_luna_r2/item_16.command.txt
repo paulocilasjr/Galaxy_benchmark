@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+from collections import Counter
+
+base=Path('inputs')
+wb=load_workbook(base/'230215_Trio_Status.xlsx',read_only=True,data_only=True)
+ws=wb.active; ws.reset_dimensions(); rows=list(ws.iter_rows(values_only=True))
+headers=[str(x).strip() if x is not None else None for x in rows[0]]
+status=[]
+for row in rows[1:]:
+ d=dict(zip(headers,row)); sid=str(d.get('Sample ID')).strip() if d.get('Sample ID') is not None else ''
+ if str(d.get('BLM Mutation Status')).strip()=='Carrier': status.append(sid)
+wb=load_workbook(base/'230214_Schenz_et_al_2022_CHIP_Genes.xlsx',read_only=True,data_only=True)
+ws=wb.active; ws.reset_dimensions(); genes={str(r[0]).strip() for r in ws.iter_rows(values_only=True) if r and r[0]}
+parsed=[]
+for p in sorted((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+ suffix=p.stem.split('_CHIP_',1)[1]
+ sid=suffix.split('-',1)[0] if suffix[0].isdigit() else suffix
+ wb=load_workbook(p,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions(); it=ws.iter_rows(values_only=True); next(it); h=[x.strip() if isinstance(x,str) else x for x in next(it)]; data=[dict(zip(h,row)) for row in it]
+ parsed.append((sid,data,p.name))
+print('variant files',len(parsed),'sample IDs unique',len({s for s,_,_ in parsed}),'carrier files',sum(s in status for s,_,_ in parsed),'missing carriers',sorted(set(status)-{s for s,_,_ in parsed}))
+carrier=[(s,d) for s,d,_ in parsed if s in status]
+allrows=[dict(r,Sample=s) for s,rs in carrier for r in rs]
+print('carrier rows',len(allrows), 'per sample',Counter(r['Sample'] for r in allrows))
+for col in ['Zygosity','In_CHIP','Match','Sequence Ontology (Combined)','Effect (Combined)','Classification','Variant Allele Freq','Gene Names','Filter']:
+ c=Counter(str(r.get(col)) for r in allrows); print('\\n',col, len(c),c.most_common(40))
+
+def yes(v): return str(v).strip().lower()=='true'
+def num(v):
+ try:return float(v)
+ except:return None
+cand=[r for r in allrows if yes(r.get('In_CHIP')) and num(r.get('Variant Allele Freq')) is not None and num(r.get('Variant Allele Freq'))<.3]
+print('\\nIn_CHIP+VAF<.3 count',len(cand),'samples',Counter(r['Sample'] for r in cand))
+for col in ['Zygosity','Sequence Ontology (Combined)','Effect (Combined)','Classification','Gene Names','Variant Allele Freq']:
+ c=Counter(str(r.get(col)) for r in cand); print('\\nCAND',col,len(c),c.most_common(50))
+print('\\nCandidate rows:')
+for r in cand:
+ print(r['Sample'],r.get('Chr:Pos'),r.get('Ref/Alt'),r.get('Gene Names'),r.get('Sequence Ontology (Combined)'),r.get('Effect (Combined)'),r.get('Zygosity'),r.get('Variant Allele Freq'),repr(r.get('Classification')),r.get('In_CHIP'))
+PY"

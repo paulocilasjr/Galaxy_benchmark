@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import time, pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+print('loading', flush=True)
+t=time.time()
+counts=pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+layout=pd.read_csv('/workspace/inputs/sample_layout.csv')
+ann=pd.read_csv('/workspace/inputs/ensg_to_gene_name.tsv', sep='\\t')
+layout['sid']=layout['SampleID'].str.replace('-','_')
+sel=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+meta=layout[layout['Group'].isin(sel)].set_index('sid')
+# prefilter on all 30 samples: counts greater than 10 in at least one sample
+keep=(counts > 10).any(axis=1)
+print('prefilter genes', int(keep.sum()), flush=True)
+sub=counts.loc[keep, meta.index].T.astype(int)
+meta=meta[['Group']].rename(columns={'Group':'group'})
+print('sub shape', sub.shape, flush=True)
+dds=DeseqDataSet(counts=sub, metadata=meta, design='~group', quiet=True, n_cpus=4)
+print('dds created', time.time()-t, flush=True)
+dds.deseq2()
+print('deseq2 done', time.time()-t, flush=True)
+st=DeseqStats(dds, contrast=['group','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05, quiet=True, n_cpus=4)
+st.summary(quiet=True)
+print('stats done', time.time()-t, flush=True)
+res=st.results_df.copy()
+print(res.shape)
+print(res.head())
+# filter criteria
+mask=(res['padj']<=0.05)&(res['log2FoldChange'].abs()>=0.5)&(res['baseMean']>=10)
+deg=res[mask]
+print('DEG count', len(deg))
+print(deg.head())
+print(deg.tail())
+# save to workspace tmp for next step (internal, not audit)
+deg.to_csv('/workspace/tmp/deg_full.csv')
+deg[['baseMean','log2FoldChange','padj']].to_csv('/workspace/tmp/deg_meta.csv')
+PY"

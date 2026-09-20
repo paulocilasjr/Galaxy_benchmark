@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import pydeseq2
+
+print('pydeseq2',pydeseq2.__version__)
+counts_all = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['count_id'] = layout['SampleID'].str.replace('-', '_', regex=False)
+print('counts original', counts_all.shape, 'unique_genes', counts_all.index.is_unique, 'samples_match', set(layout.count_id)==set(counts_all.columns))
+keep = (counts_all > 10).any(axis=1)
+counts_all = counts_all.loc[keep]
+print('genes after >10 in >=1/30', counts_all.shape[0])
+related = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+meta = layout.loc[layout.Group.isin(related), ['count_id','Group']].set_index('count_id')
+counts = counts_all.loc[:, meta.index].T.astype(int)
+meta['Group'] = pd.Categorical(meta['Group'], categories=related)
+print('fit counts',counts.shape)
+print(meta.Group.value_counts(sort=False).to_string())
+
+dds = DeseqDataSet(counts=counts, metadata=meta, design='~Group', refit_cooks=True, n_cpus=1)
+dds.deseq2()
+st = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05, cooks_filter=True, independent_filter=True, n_cpus=1)
+st.summary()
+res=st.results_df
+sig=res[(res.padj<=0.05)&(res.log2FoldChange.abs()>=0.5)&(res.baseMean>=10)].copy()
+print('result rows',len(res),'finite padj',res.padj.notna().sum(),'sig',len(sig),'up',(sig.log2FoldChange>0).sum(),'down',(sig.log2FoldChange<0).sum())
+print(sig.sort_values('padj').head(20).to_string())
+# map
+mapping=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t',dtype=str)
+print('mapping',mapping.shape,'ENSG unique',mapping.ENSG.is_unique,'symbols missing',mapping.gene_name.isna().sum())
+fg=(pd.DataFrame({'ENSG':sig.index}).merge(mapping,on='ENSG',how='left'))
+print('foreground mapped rows',fg.gene_name.notna().sum(),'unique symbols',fg.gene_name.dropna().nunique(),'unmapped',fg.gene_name.isna().sum())
+print('symbols',','.join(fg.gene_name.dropna().drop_duplicates().tolist()))
+# preserve data to /tmp only for next invocation
+res.to_pickle('/tmp/deseq_results.pkl')
+fg.to_pickle('/tmp/foreground.pkl')
+PY"

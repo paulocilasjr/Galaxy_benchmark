@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_raw = pd.read_csv('inputs/count.csv')
+assert counts_raw.columns.tolist() == ['geneID','KL1','KL2','KL3','WL1','WL2','WL3']
+counts_raw = counts_raw.set_index('geneID')
+assert not counts_raw.index.duplicated().any()
+
+def run(samples, label):
+    counts = counts_raw[samples].T.astype(int)
+    metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in samples]}, index=samples)
+    dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', ref_level=['condition','WL'], quiet=True, n_cpus=1)
+    dds.deseq2()
+    stat = DeseqStats(dds, contrast=['condition','KL','WL'], alpha=0.05, quiet=True, n_cpus=1)
+    stat.summary()
+    print(label, 'coefficients:', list(dds.varm['LFC'].columns) if 'LFC' in dds.varm else 'no varm LFC')
+    # coefficient name from the stats object/result columns/API
+    print(label, 'stats contrast idx?', getattr(stat, 'contrast', None), 'coeff?', getattr(stat, 'contrast_idx', None))
+    print(label, 'results columns before:', stat.results_df.columns.tolist())
+    print(label, stat.results_df.head(2).to_string())
+    # Try likely coefficient names.
+    for coeff in ['condition_KL_vs_WL', 'condition[T.KL]', 'condition_KL_vs_WL']:
+        try:
+            st2 = stat
+            st2.lfc_shrink(coeff=coeff)
+            print(label, 'shrink coeff used:', coeff)
+            break
+        except Exception as e:
+            last = e
+    else:
+        raise last
+    res = st2.results_df.copy()
+    sig = res[(res['baseMean'] > 10) & (res['pvalue'] < 0.05) & (res['log2FoldChange'].abs() > 1)]
+    print(label, 'n_sig', int(sig.shape[0]))
+    print(label, 'res cols after:', res.columns.tolist())
+    print(label, 'p nonna', int(res['pvalue'].notna().sum()), 'padj nonna', int(res['padj'].notna().sum()))
+    return int(sig.shape[0])
+
+full = run(['KL1','KL2','KL3','WL1','WL2','WL3'], 'full')
+reduced = run(['KL1','KL2','WL1','WL2'], 'reduced')
+direction = 'increase' if reduced > full else 'decrease' if reduced < full else 'no change'
+print('RESULT', full, reduced, direction)
+PY"

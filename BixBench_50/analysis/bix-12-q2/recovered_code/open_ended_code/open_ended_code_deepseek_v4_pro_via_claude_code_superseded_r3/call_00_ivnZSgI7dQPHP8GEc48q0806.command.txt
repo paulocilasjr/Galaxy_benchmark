@@ -1,0 +1,103 @@
+cat > /workspace/verify_pis2.py << 'PYEOF'
+from collections import Counter
+
+def parse_fasta_alignment(filepath):
+    records = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_header is not None:
+                    records.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            records.append((current_header, ''.join(current_seq)))
+    return records
+
+# Focus on the high-PIS alignment and find actual PIS columns
+fp = '/workspace/tmp_fungi/1445102at2759.faa.mafft'
+records = parse_fasta_alignment(fp)
+seqs = [seq for _, seq in records]
+aln_len = len(seqs[0])
+gap_chars = set('-Xx.?*')
+
+print("PIS columns in highest-PIS alignment (1445102at2759.faa.mafft):")
+print("=" * 60)
+
+pis_cols = []
+for i in range(aln_len):
+    column = [seq[i] for seq in seqs]
+    valid = [c.upper() for c in column if c not in gap_chars]
+    counts = Counter(valid)
+    is_pis = len(counts) >= 2 and all(c >= 2 for c in counts.values())
+    if is_pis:
+        pis_cols.append((i, ''.join(column), dict(counts)))
+
+for col_idx, col_str, cnt in pis_cols[:15]:
+    print(f"Col {col_idx:4d}: {col_str}  counts={cnt}")
+
+print(f"\nTotal PIS columns: {len(pis_cols)}")
+print(f"Alignment length: {aln_len}")
+print(f"Percentage: {len(pis_cols)/aln_len*100:.2f}%")
+
+# Now also double-check the median calculation
+# Re-run the full calculation with more precision
+import os
+
+mafft_dir = '/workspace/tmp_fungi'
+files = sorted([f for f in os.listdir(mafft_dir) if f.endswith('.mafft')])
+
+percentages = []
+for fname in files:
+    fp = os.path.join(mafft_dir, fname)
+    records = parse_fasta_alignment(fp)
+    seqs = [seq for _, seq in records]
+    aln_len = len(seqs[0])
+    
+    pis_count = 0
+    for i in range(aln_len):
+        column = [seq[i] for seq in seqs]
+        valid = [c.upper() for c in column if c not in gap_chars]
+        counts = Counter(valid)
+        if len(counts) >= 2 and all(c >= 2 for c in counts.values()):
+            pis_count += 1
+    
+    percentages.append((pis_count / aln_len) * 100.0)
+
+percentages.sort()
+n = len(percentages)
+
+print(f"\n{'='*60}")
+print(f"FULL RESULTS:")
+print(f"Number of alignments: {n}")
+
+if n % 2 == 1:
+    median = percentages[n // 2]
+else:
+    median = (percentages[n // 2 - 1] + percentages[n // 2]) / 2.0
+
+print(f"Median (50th percentile): {median}")
+print(f"Q1 (25th percentile): {percentages[n//4]}")
+print(f"Q3 (75th percentile): {percentages[3*n//4]}")
+print(f"Min: {percentages[0]}")
+print(f"Max: {percentages[-1]}")
+
+# Show distribution
+print(f"\nPercentile distribution:")
+for p in [0, 5, 10, 25, 50, 75, 90, 95, 100]:
+    idx = min(int(p/100 * n), n-1)
+    print(f"  {p}th: {percentages[idx]:.4f}%")
+
+# Check for zero-PIS alignments
+zeros = sum(1 for p in percentages if p == 0)
+print(f"\nAlignments with 0% PIS: {zeros}")
+
+PYEOF
+python3 /workspace/verify_pis2.py

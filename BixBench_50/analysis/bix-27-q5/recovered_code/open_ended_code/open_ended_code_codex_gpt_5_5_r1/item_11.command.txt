@@ -1,0 +1,50 @@
+/bin/bash -lc "python - <<'PY'
+import csv
+from collections import Counter
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+expr_path=Path('inputs/ROSMAP_genexp_ad.csv')
+meta_path=Path('inputs/ROSMAP_meta_ad.csv')
+with expr_path.open(newline='') as f:
+    header=next(csv.reader(f))
+expr_ids=np.array(header[1:], dtype=object)
+counts=Counter(expr_ids)
+collided={sid for sid,n in counts.items() if n>1}
+keep=np.array([sid not in collided for sid in expr_ids])
+
+# Read expression values only; preserve column order from the file header above.
+df=pd.read_csv(expr_path, index_col=0)
+X_gene_sample=df.to_numpy(dtype=np.float64)
+print('raw genes x columns', X_gene_sample.shape)
+print('header sample ids total/unique', len(expr_ids), len(counts))
+print('collided IDs/columns removed', len(collided), int((~keep).sum()))
+X=X_gene_sample[:, keep].T
+print('fitted samples x genes before filters', X.shape)
+print('missing values', int(np.isnan(X).sum()))
+if np.isnan(X).any():
+    raise SystemExit('missing values present')
+if (X < 0).any():
+    print('negative values min', np.nanmin(X))
+    raise SystemExit('negative values before log10 pseudocount')
+X=np.log10(X+1.0)
+vars_=X.var(axis=0, ddof=1)
+nonzero=vars_>0
+print('zero variance genes removed', int((~nonzero).sum()))
+X=X[:, nonzero]
+Xc=X-X.mean(axis=0)
+# Exact SVD. PCA explained_variance_ratio_ for PC1 is s1"'^2 / sum(all s''^2).
+s=np.linalg.svd(Xc, full_matrices=False, compute_uv=False)
+ratio=(s[0]**2)/np.sum(s**2)
+print('"'rank singular values', len(s), 'requested components', 100)
+print('pc1_fraction', format(ratio, '.17g'))
+print('pc1_percent', format(ratio*100, '.17g'))
+
+# Also compute all-columns diagnostic but do not use for answer.
+Xall=np.log10(X_gene_sample.T+1.0)
+Xall=Xall[:, Xall.var(axis=0, ddof=1)>0]
+Xallc=Xall-Xall.mean(axis=0)
+sall=np.linalg.svd(Xallc, full_matrices=False, compute_uv=False)
+print('diagnostic_all_columns_pc1_percent', format((sall[0]**2/np.sum(sall**2))*100, '.17g'))
+PY"

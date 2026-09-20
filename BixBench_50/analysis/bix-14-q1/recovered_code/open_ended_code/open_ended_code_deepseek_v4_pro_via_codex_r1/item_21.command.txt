@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, glob, os, re, collections, math
+status_file='/workspace/inputs/230215_Trio_Status.xlsx'
+wb=openpyxl.load_workbook(status_file, data_only=True); ws=wb.active
+status={}
+for row in ws.iter_rows(min_row=2, values_only=True):
+    sid=row[0]
+    if sid is None: continue
+    s=str(sid).strip()
+    status[s]={'status':str(row[1]).strip() if row[1] is not None else '', 'blm':str(row[3]).strip() if row[3] is not None else ''}
+wb.close()
+files=sorted(glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+def match_file(sid, fn):
+    b=os.path.basename(fn)
+    name=b.replace('230209_Exome_GRCh38_CHIP_','').replace('.xlsx','')
+    if sid.startswith('SRR'):
+        return name.startswith(sid)
+    # numeric id may have suffix -P1 etc
+    m=re.match(r'"'^('"\\d+)(?:[-_].*)?"'$'"', name)
+    return bool(m) and m.group(1)==sid
+carrier_files=[]; affected_files=[]; unaff_files=[]; unmatched=[]
+for sid, info in status.items():
+    ms=[f for f in files if match_file(sid,f)]
+    if info['blm']=='Carrier':
+        carrier_files += ms
+    elif info['blm']=='Affected':
+        affected_files += ms
+    elif info['blm']=='Unaffected':
+        unaff_files += ms
+    else:
+        print('other',sid,info)
+    if not ms:
+        unmatched.append((sid,info))
+print('statuses',len(status),'files',len(files),'unmatched',unmatched)
+print('carrier status count',sum(1 for v in status.values() if v['blm']=='Carrier'),'files',len(carrier_files),'unique',len(set(carrier_files)))
+print('affected files',len(affected_files),'unaff files',len(unaff_files))
+print('carrier filenames:')
+for f in carrier_files: print(os.path.basename(f))
+
+CODING={'synonymous_variant','missense_variant','splice_region_variant','stop_gained','stop_lost','start_lost','frameshift_variant','inframe_insertion','inframe_deletion'}
+def read_counts(fileset):
+    rows=[]; counts=collections.Counter(); missing=0; total=0
+    for f in fileset:
+        wb=openpyxl.load_workbook(f, read_only=False, data_only=True); ws=wb.active
+        n=0
+        for r in ws.iter_rows(min_row=3, values_only=True):
+            vaf=r[9]; so=r[13]
+            if vaf is None:
+                missing+=1
+                continue
+            try:
+                v=float(vaf)
+            except Exception as e:
+                print('bad vaf',f,r[0],repr(vaf),e); continue
+            if v < 0.3:
+                total+=1; n+=1
+                s=str(so) if so is not None else ''
+                coding=any(term in s for term in CODING)
+                counts['vaf_lt']+=1
+                if coding: counts['coding']+=1
+                if 'synonymous_variant' in s: counts['syn']+=1
+                if coding and 'synonymous_variant' in s: counts['coding_syn']+=1
+        wb.close()
+    return counts,missing,total
+for label,fs in [('carrier',carrier_files),('affected',affected_files),('unaff',unaff_files)]:
+    c,m,t=read_counts(fs)
+    print('\\n',label,'files',len(fs),'vaf<.3 rows',t,'missing vaf rows',m)
+    print(c,'fraction coding denominator', c['coding_syn']/c['coding'] if c['coding'] else None)
+    print('naive syn/all vaf<.3', c['syn']/c['vaf_lt'] if c['vaf_lt'] else None)
+PY"

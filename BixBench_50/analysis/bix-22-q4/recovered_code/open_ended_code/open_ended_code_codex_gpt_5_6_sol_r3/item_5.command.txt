@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import pearsonr
+sample_path='inputs/Sample_annotated_Zenodo.csv'
+count_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+meta_path='inputs/GeneMetaInfo_Zenodo.csv'
+samp=pd.read_csv(sample_path,dtype=str)
+cd14=samp.loc[samp.celltype.eq('CD14'),'sample'].tolist()
+# first unnamed column is gene key
+counts=pd.read_csv(count_path,usecols=lambda c: c=='Unnamed: 0' or c in set(cd14),index_col=0)
+meta=pd.read_csv(meta_path,index_col=0)
+print('shape counts',counts.shape,'CD14 selected',len(cd14),'column order exact set',set(counts.columns)==set(cd14))
+print('dtypes unique',counts.dtypes.astype(str).value_counts().to_dict())
+arr=counts.to_numpy(dtype=np.float64)
+print('missing',np.isnan(arr).sum(),'min',arr.min(),'max',arr.max(),'negative',np.sum(arr<0),'noninteger',np.sum(arr"'!=np.round(arr)))
+print('"'meta aligned?', counts.index.equals(meta.index), 'unique idx',counts.index.is_unique,meta.index.is_unique)
+prot=meta.gene_biotype.eq('protein_coding').to_numpy()
+length=meta.Length.to_numpy(dtype=np.float64)
+total=arr.sum(axis=1)
+mean=arr.mean(axis=1)
+keep=prot & (total>=10)
+x=length[keep]; y=mean[keep]
+r1,p=pearsonr(x,y)
+r2=np.corrcoef(x,y)[0,1]
+# direct centered-dot formula
+r3=np.dot(x-x.mean(),y-y.mean())/np.sqrt(np.dot(x-x.mean(),x-x.mean())*np.dot(y-y.mean(),y-y.mean()))
+print('MAIN n',keep.sum(),'r scipy',repr(float(r1)),'p',p,'numpy',repr(float(r2)),'direct',repr(float(r3)))
+print('protein total',prot.sum(),'excluded threshold',np.sum(prot & (total<10)),'total exactly 10',np.sum(prot & (total==10)))
+print('x mean/sd',x.mean(),x.std(ddof=1),'y mean/sd',y.mean(),y.std(ddof=1))
+# Key plausible alternatives for interpretation sensitivity
+all_cols=pd.read_csv(count_path,index_col=0)
+all_total=all_cols.sum(axis=1).to_numpy(dtype=float)
+variants={
+'exact protein, CD14 total>=10': prot&(total>=10),
+'exact protein, all-sample total>=10':prot&(all_total>=10),
+'exact protein, CD14 mean>=10':prot&(mean>=10),
+'exact protein, CD14 total>10':prot&(total>10),
+'biotype contains protein_coding, CD14 total>=10':meta.gene_biotype.str.contains('protein_coding',regex=False).to_numpy()&(total>=10),
+}
+for label,k in variants.items():
+ print(label, 'n',int(k.sum()),'r',repr(float(np.corrcoef(length[k],mean[k])[0,1])))
+PY"

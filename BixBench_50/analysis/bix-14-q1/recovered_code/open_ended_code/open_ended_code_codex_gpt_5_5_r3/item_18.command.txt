@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+import re
+
+def norm_sample(x):
+    if x is None: return None
+    if isinstance(x,(int,float)) and float(x).is_integer(): return str(int(x))
+    return str(x).strip()
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+ws=wb.active; rows=list(ws.iter_rows(values_only=True)); idx={h:i for i,h in enumerate(rows[0]) if h}
+carrier=[norm_sample(r[idx['Sample ID']]) for r in rows[1:] if norm_sample(r[idx['Sample ID']]) and r[idx['BLM Mutation Status']]=='Carrier']
+file_by_id={re.search(r'CHIP_(.+)\\.xlsx"'$'"', p.name).group(1).split('-')[0]:p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+coding={'synonymous_variant','missense_variant','frameshift_variant','inframe_insertion','inframe_deletion','stop_gained','stop_lost','start_lost','protein_altering_variant'}
+obs=[]
+for sid in carrier:
+    p=file_by_id.get(sid)
+    if not p: continue
+    wb=load_workbook(p,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True); next(it); hdr=next(it); col={h:i for i,h in enumerate(hdr) if h}
+    for r in it:
+        if not r or r[0] is None: continue
+        v=r[col['Variant Allele Freq']]
+        if v is None: continue
+        try: vf=float(v)
+        except: continue
+        if vf<0.3 and r[col['Sequence Ontology (Combined)']] in coding:
+            key=(r[col['Chr:Pos']], r[col['Ref/Alt']], r[col['Gene Names']], r[col['Sequence Ontology (Combined)']], r[col['HGVS c. (Clinically Relevant)']], r[col['HGVS p. (Clinically Relevant)']])
+            obs.append((sid,key,vf,r[col['Sequence Ontology (Combined)']]))
+print('obs den',len(obs),'num',sum(so=='synonymous_variant' for _,_,_,so in obs),'frac',sum(so=='synonymous_variant' for _,_,_,so in obs)/len(obs))
+keys={key for _,key,_,_ in obs}
+print('unique den',len(keys),'num',sum(key[3]=='synonymous_variant' for key in keys),'frac',sum(key[3]=='synonymous_variant' for key in keys)/len(keys))
+print('unique counts by so',Counter(key[3] for key in keys))
+print('unique coding VAF<0.3:')
+for key in sorted(keys): print(key)
+PY"

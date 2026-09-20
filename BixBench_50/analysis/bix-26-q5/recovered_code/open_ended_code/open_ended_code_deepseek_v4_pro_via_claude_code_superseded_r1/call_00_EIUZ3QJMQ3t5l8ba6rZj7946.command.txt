@@ -1,0 +1,121 @@
+export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:$PYTHONPATH"
+python3 << 'PYEOF'
+import re
+import requests
+import time
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# Read gene lists
+with open("/tmp/de_iron.txt") as f:
+    iron_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/de_innate.txt") as f:
+    innate_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/all_genes.txt") as f:
+    all_genes = [l.strip() for l in f if l.strip()]
+
+def fetch_kegg(url):
+    for i in range(5):
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200:
+                return r.text
+            time.sleep(3)
+        except:
+            time.sleep(3)
+    return None
+
+link_text = fetch_kegg("https://rest.kegg.jp/link/pau/pathway")
+lines = [l for l in link_text.strip().split('\n') if l]
+
+pw2genes = {}
+for line in lines:
+    parts = line.strip().split('\t')
+    if len(parts) >= 2:
+        pw = parts[0].strip()
+        gene = parts[1].strip()
+        if pw not in pw2genes:
+            pw2genes[pw] = set()
+        pw2genes[pw].add(gene)
+
+pw_text = fetch_kegg("https://rest.kegg.jp/list/pathway/pau")
+pw_name = {}
+for line in pw_text.strip().split('\n'):
+    if not line: continue
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pid = parts[0].strip()
+        name = re.sub(r'\s+-\s+Pseudomonas aeruginosa.*', '', parts[1].strip())
+        pw_name['path:' + pid] = name
+
+def to_kegg(gene):
+    return f"pau:{gene}"
+
+all_kegg_genes = set()
+for genes in pw2genes.values():
+    all_kegg_genes.update(genes)
+
+# FINAL APPROACH: Universe = tested genes with KEGG annotation, min size = 3
+universe = set(to_kegg(g) for g in all_genes) & all_kegg_genes
+iron_fg = set(to_kegg(g) for g in iron_de) & all_kegg_genes
+innate_fg = set(to_kegg(g) for g in innate_de) & all_kegg_genes
+
+print(f"Final universe: {len(universe)}")
+print(f"Iron FG: {len(iron_fg)}")
+print(f"Innate FG: {len(innate_fg)}")
+
+# Build pathways
+pathways = {}
+for pw, genes in pw2genes.items():
+    genes_in_universe = genes & universe
+    if len(genes_in_universe) >= 3:
+        pathways[pw] = genes_in_universe
+
+def do_ora(fg, universe, pathways):
+    results = {}
+    N = len(universe)
+    n = len(fg)
+    for pw, pw_genes in pathways.items():
+        a = len(pw_genes & fg)
+        if a == 0:
+            continue
+        b = len(pw_genes) - a
+        c = n - a
+        d = N - a - b - c
+        _, pv = fisher_exact([[a, b], [c, d]], alternative='two-sided')
+        results[pw] = {'name': pw_name.get(pw, pw), 'count': a, 'pw_size': len(pw_genes), 'pvalue': pv}
+    pvals = [r['pvalue'] for r in results.values()]
+    pw_list = list(results.keys())
+    if pvals:
+        _, padj, _, _ = multipletests(pvals, method='fdr_bh')
+        for i, pw in enumerate(pw_list):
+            results[pw]['padj'] = padj[i]
+    return results
+
+iron_res = do_ora(iron_fg, universe, pathways)
+innate_res = do_ora(innate_fg, universe, pathways)
+
+iron_sig = {pw: r for pw, r in iron_res.items() if r['padj'] < 0.05}
+innate_sig = {pw: r for pw, r in innate_res.items() if r['padj'] < 0.05}
+
+iron_only = set(iron_sig.keys()) - set(innate_sig.keys())
+
+print(f"\nAll iron significant pathways ({len(iron_sig)}):")
+for pw, r in sorted(iron_sig.items(), key=lambda x: x[1]['padj']):
+    in_innate = "SIG" if pw in innate_sig else "not sig"
+    print(f"  {r['name']}: padj={r['padj']:.2e}, {r['count']}/{r['pw_size']}, innate={in_innate}")
+
+print(f"\nAll innate significant pathways ({len(innate_sig)}):")
+for pw, r in sorted(innate_sig.items(), key=lambda x: x[1]['padj']):
+    print(f"  {r['name']}: padj={r['padj']:.2e}, {r['count']}/{r['pw_size']}")
+
+print(f"\n=== Iron-only pathways ({len(iron_only)}) ===")
+for pw in sorted(iron_only):
+    r = iron_res[pw]
+    innate_r = innate_res.get(pw)
+    innate_padj = f"{innate_r['padj']:.2e}" if innate_r else "N/A (0 DE genes)"
+    print(f"  {pw} {r['name']}: iron_padj={r['padj']:.2e}, innate_padj={innate_padj}")
+
+print(f"\n=== FINAL ANSWER: {len(iron_only)} ===")
+PYEOF
+

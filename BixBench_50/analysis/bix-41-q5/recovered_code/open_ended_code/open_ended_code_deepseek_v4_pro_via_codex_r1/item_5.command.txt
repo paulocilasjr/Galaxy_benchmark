@@ -1,0 +1,58 @@
+/bin/bash -c "python3 - <<'PY'
+import csv, math, statistics
+rows=list(csv.DictReader(open('/workspace/inputs/Swarm_2.csv')))
+data=[(r['StrainNumber'],r['Ratio'],float(r['Area']),float(r['Circularity'])) for r in rows]
+s1=[(a,c) for sn,ratio,a,c in data if sn=='1']
+sm=[(a,c) for sn,ratio,a,c in data if sn=='287_98']
+ratios=[]
+for sn,ratio,a,c in data:
+    if sn=='287_98' and ratio not in ratios: ratios.append(ratio)
+# preserve order
+ratios=sorted(set(ratio for sn,ratio,a,c in data if sn=='287_98'), key=lambda x: int(x.split(':')[0]) if ':' in x else 0)
+print(ratios)
+def mean(vals): return tuple(sum(x)/len(x) for x in zip(*vals))
+ms1=mean(s1); print('s1',ms1)
+groups={r:mean([(a,c) for sn,rr,a,c in data if sn=='287_98' and rr==r]) for r in ratios}
+for r,m in groups.items(): print(r,m)
+# distances
+def eu(a,b,w): return math.sqrt(sum(w[i]*(a[i]-b[i])**2 for i in range(2)))
+print('\\nraw')
+for r,m in groups.items(): print(r, eu(ms1,m,[1,1]))
+# zscore on group means (all ratio groups including s1? define each mixed ratio and strain1)
+# all groups: strain 1 + each mixed ratio.  Also pure 98 and 287 perhaps not relevant.
+all_means={'1':ms1, **groups}
+# function z over group means
+for scope_name, groups_dict in [
+ ('mixed+s1', all_means),
+ ('mixedonly', groups),
+]:
+    vals=list(groups_dict.values())
+    mu=tuple(sum(v[i] for v in vals)/len(vals) for i in range(2))
+    sd=tuple(math.sqrt(sum((v[i]-mu[i])**2 for v in vals)/len(vals)) for i in range(2))
+    print('\\n',scope_name,'mu sd',mu,sd)
+    for r,m in groups.items():
+        z1=[(ms1[i]-mu[i])/sd[i] for i in range(2)]
+        zr=[(m[i]-mu[i])/sd[i] for i in range(2)]
+        print(r, math.sqrt(sum((z1[i]-zr[i])**2 for i in range(2))), zr)
+# zscore individual observations scope mixed only
+obs=[v for k,v in groups.items() for _ in range(3)] # actually means no.
+obs_mixed=[(a,c) for sn,ratio,a,c in data if sn=='287_98']
+obs_all=[(a,c) for sn,ratio,a,c in data if sn=='287_98' or sn=='1']
+for scope,obs in [('mixedobs',obs_mixed),('allobs',obs_all)]:
+    n=len(obs); mu=tuple(sum(x[i] for x in obs)/n for i in range(2)); sd=tuple(math.sqrt(sum((x[i]-mu[i])**2 for x in obs)/n) for i in range(2))
+    print('\\n',scope,'mu sd',mu,sd)
+    ds=[]
+    for r,m in groups.items():
+        z1=[(ms1[i]-mu[i])/sd[i] for i in range(2)]; zr=[(m[i]-mu[i])/sd[i] for i in range(2)]
+        ds.append((math.sqrt(sum((z1[i]-zr[i])**2 for i in range(2))),r,zr))
+    for d in sorted(ds): print(d)
+# minmax observations
+for scope,obs in [('mixedobs',obs_mixed),('allobs',obs_all)]:
+    mn=tuple(min(x[i] for x in obs) for i in range(2)); mx=tuple(max(x[i] for x in obs) for i in range(2))
+    print('\\nminmax',scope,mn,mx)
+    ds=[]
+    for r,m in groups.items():
+        norm1=[(ms1[i]-mn[i])/(mx[i]-mn[i]) for i in range(2)]; normr=[(m[i]-mn[i])/(mx[i]-mn[i]) for i in range(2)]
+        ds.append((math.sqrt(sum((norm1[i]-normr[i])**2 for i in range(2))),r,normr))
+    for d in sorted(ds): print(d)
+PY"

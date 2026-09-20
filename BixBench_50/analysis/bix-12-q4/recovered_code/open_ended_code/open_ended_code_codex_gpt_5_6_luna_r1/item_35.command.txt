@@ -1,0 +1,53 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, collections
+
+def percentages(path):
+    vals=[]
+    with zipfile.ZipFile(path) as z:
+        for name in z.namelist():
+            if not name.endswith('.mafft'):
+                continue
+            seqs=[]; current=None
+            for line in z.read(name).decode().splitlines():
+                if line.startswith('>'):
+                    if current is not None:
+                        seqs.append(''.join(current))
+                    current=[]
+                elif current is not None:
+                    current.append(line.strip())
+            if current is not None:
+                seqs.append(''.join(current))
+            if len(seqs) "'!= 4:
+                continue
+            lengths={len(s) for s in seqs}
+            assert len(lengths)==1, (name,lengths)
+            L=next(iter(lengths)); pi=0
+            for column in zip(*seqs):
+                counts=collections.Counter(aa for aa in column if aa != '"'-')
+                if sum(n >= 2 for n in counts.values()) >= 2:
+                    pi += 1
+            vals.append((100.0*pi/L, name, pi, L))
+    return vals
+
+a=percentages('inputs/scogs_animals.zip')
+f=percentages('inputs/scogs_fungi.zip')
+assert len(a)==22 and len(f)==211
+av=[x[0] for x in a]; fv=[x[0] for x in f]
+# Pairwise definition of U for animals: animal wins if its value is larger; ties half.
+u=sum((x > y) + 0.5*(x == y) for x in av for y in fv)
+# Rank-sum verification with average ranks.
+combined=sorted([(x, 'a') for x in av] + [(y, 'f') for y in fv])
+ranks=[]; i=0
+while i < len(combined):
+    j=i+1
+    while j < len(combined) and combined[j][0] == combined[i][0]:
+        j += 1
+    ranks.extend([((i+1)+j)/2.0] * (j-i))
+    i=j
+rank_sum=sum(r for r, (_,g) in zip(ranks, combined) if g=='a')
+u2=rank_sum-len(av)*(len(av)+1)/2.0
+print('animals_n',len(av),'fungi_n',len(fv))
+print('animal_pi_percent_range',min(av),max(av),'fungi_pi_percent_range',min(fv),max(fv))
+print('U_pairwise_animals',u,'U_rank_sum_animals',u2,'U_fungi',len(av)*len(fv)-u)
+print('animal_rank_sum',rank_sum)
+PY"

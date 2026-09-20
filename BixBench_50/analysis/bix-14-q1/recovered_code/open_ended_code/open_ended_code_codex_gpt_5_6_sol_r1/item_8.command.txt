@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter,defaultdict
+import re
+base=Path('inputs')
+# carrier IDs
+ws=load_workbook(base/'230215_Trio_Status.xlsx',read_only=True,data_only=True).active
+carrier_ids={str(r[0]).strip() for r in ws.iter_rows(min_row=2,values_only=True) if r[3]=='Carrier'}
+files=[]
+for p in (base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+    m=re.search(r'CHIP_(["'^-.]+)'"',p.name)
+    if m and m.group(1) in carrier_ids: files.append(p)
+print('carrier ids',sorted(carrier_ids,key=int))
+print('matched',len(files),sorted(re.search(r'CHIP_(["'^-.]+)'"',p.name).group(1) for p in files))
+print('missing',sorted(carrier_ids-{re.search(r'CHIP_(["'^-.]+)'"',p.name).group(1) for p in files}))
+
+counts={k:Counter() for k in ['zygosity','so','effect','filter','vaf_type']}
+selected=[]
+for p in sorted(files):
+    wb=load_workbook(p,read_only=True,data_only=True); sh=wb.active; sh.reset_dimensions(); it=sh.iter_rows(values_only=True)
+    next(it); hdr=next(it); idx={v:i for i,v in enumerate(hdr) if v is not None}
+    sid=re.search(r'CHIP_(["'^-.]+)'"',p.name).group(1)
+    for row in it:
+        z=row[idx['Zygosity']]; so=row[idx['Sequence Ontology (Combined)']]; ef=row[idx['Effect (Combined)']]; filt=row[idx['Filter']]; vaf=row[idx['Variant Allele Freq']]
+        counts['zygosity'][z]+=1; counts['so'][so]+=1; counts['effect'][ef]+=1; counts['filter'][filt]+=1; counts['vaf_type'][type(vaf).__name__]+=1
+        if vaf is not None:
+            try: vf=float(vaf)
+            except: continue
+            if vf<0.3:
+                selected.append((sid,row[idx['Chr:Pos']],row[idx['Ref/Alt']],z,vf,row[idx['Gene Names']],so,ef,filt))
+print('\\nCOUNTS')
+for k,c in counts.items(): print(k,c)
+print('\\nVAF<.3 n=',len(selected),'effect=',Counter(x[7] for x in selected),'zygosity=',Counter(x[3] for x in selected),'filter=',Counter(x[8] for x in selected))
+print('SO among VAF<.3')
+for k,v in Counter(x[6] for x in selected).most_common(): print(v,repr(k))
+print('\\nCoding candidates:')
+for x in selected:
+    if x[7]=='Coding': print(x)
+PY"

@@ -1,0 +1,30 @@
+/bin/bash -c "python3 - <<'PY'
+# quick using previous logic for res98 with rhlR
+import subprocess, zipfile, xml.etree.ElementTree as ET, statistics
+rscript=r'''
+for (f in c('/workspace/inputs/res_1vs97.rds','/workspace/inputs/res_1vs98.rds')) { con<-gzfile(f,'rb'); x<-unserialize(con); close(con); y<-unclass(x); ld<-attr(y,'listData'); rn<-attr(y,'rownames'); cat('###FILE',basename(f),'\\n'); for(i in seq_along(rn)) cat(rn[i],ld"'$log2FoldChange[i],'"'\\n',sep='\\t') }
+'''
+out=subprocess.run(['Rscript','-e',rscript],capture_output=True,text=True,check=True).stdout
+res={};cur=None
+for line in out.splitlines():
+ if line.startswith('###FILE'):cur=line.split()[1];res[cur]={};continue
+ p=line.split('\\t');
+ if len(p)>=2:res[cur][p[0]]=float(p[1])
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(fn,col):
+ with zipfile.ZipFile(fn) as z:root=ET.fromstring(z.read('word/document.xml'))
+ t=root.find('.//w:tbl',ns);d={}
+ for tr in t.findall('w:tr',ns)[2:]:
+  cells=[''.join(x.text or '' for x in c.findall('.//w:t',ns)) for c in tr.findall('w:tc',ns)]
+  if len(cells)>=4 and cells[0]:
+   s=cells[col].strip();d[cells[0]]=None if s in ('','-') else float(s)
+ return d
+h=parse('/workspace/ppat.1006504.s012.docx',1);b=parse('/workspace/ppat.1006504.s013.docx',1)
+honly=[];bonly=[]
+for g,t in h.items():
+ if t is not None and b.get(g) is None:honly.append(g)
+for g,t in b.items():
+ if t is not None and h.get(g) is None:bonly.append(g)
+for label,rfcs in [('res97 rhlR',res['res_1vs97.rds']),('res98 rhlR',res['res_1vs98.rds'])]:
+ print(label,'Honly meanabs',statistics.mean([abs(rfcs[g]) for g in honly if g in rfcs]),'n',sum(g in rfcs for g in honly),'Bonly meanabs',statistics.mean([abs(rfcs[g]) for g in bonly if g in rfcs]),'n',sum(g in rfcs for g in bonly))
+PY"

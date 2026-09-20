@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import gc
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+header = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', nrows=0).columns
+sample_cols = list(header[1:])
+dtypes = {c: np.int32 for c in sample_cols}
+raw = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0, dtype=dtypes)
+samples = raw.columns.copy()
+counts = raw.T.copy()
+del raw; gc.collect()
+metadata = pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample').loc[samples, ['batch', 'sex']].copy()
+metadata['batch'] = pd.Categorical(metadata['batch'].astype(str))
+metadata['sex'] = pd.Categorical(metadata['sex'].astype(str), categories=['F', 'M'])
+print('counts', counts.shape, counts.dtypes.iloc[0], 'metadata', metadata.shape, flush=True)
+
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~ batch + sex', quiet=False, n_cpus=1, low_memory=True)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=['sex', 'M', 'F'], quiet=False, n_cpus=1)
+stat_res.summary()
+print('coef names', list(dds.varm['LFC'].columns), flush=True)
+print('pre', stat_res.results_df.loc[['FAM138A']].to_string(), flush=True)
+coeff_candidates = [c for c in dds.varm['LFC'].columns if 'sex' in str(c) and ('M' in str(c) or 'T.M' in str(c))]
+coeff = coeff_candidates[0] if len(coeff_candidates) == 1 else 'sex[T.M]'
+print('shrinking', coeff, flush=True)
+stat_res.lfc_shrink(coeff=coeff)
+row = stat_res.results_df.loc['FAM138A']
+print('post', stat_res.results_df.loc[['FAM138A']].to_string(), flush=True)
+print('ANSWER', row['log2FoldChange'], flush=True)
+PY"

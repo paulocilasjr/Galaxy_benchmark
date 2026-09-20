@@ -1,0 +1,29 @@
+/bin/bash -c "/workspace/tools/envs/deseq/bin/Rscript - <<'RS'
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(apeglm))
+coldata <- as.data.frame(read_excel('inputs/Issy_ASXL1_blood_coldata_gender.xlsx'))
+counts <- read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, row.names=1, check.names=FALSE, sep='')
+counts <- counts[, coldata"'$sample, drop=FALSE]
+coldata$condition <- factor(coldata$condition, levels=c('"'Control','ASXL1'))
+coldata"'$sex <- factor(coldata$sex, levels=c('"'F','M'))
+dds <- DESeqDataSetFromMatrix(countData=counts, colData=coldata, design=~ sex + condition)
+dds <- DESeq(dds)
+for (alpha in c(0.05,0.1)) {
+  res <- results(dds, name='condition_ASXL1_vs_Control', alpha=alpha)
+  resL <- lfcShrink(dds, coef='condition_ASXL1_vs_Control', res=res, type='apeglm')
+  gtf <- read.csv('inputs/gencode.v31.primary_assembly.genes.csv', stringsAsFactors=FALSE)
+  # unique gene rows
+  gtf <- gtf["'!duplicated(gtf$gene_id),]
+  rownames(gtf) <- gtf$gene_id
+  gt <- gtf[rownames(resL), '"'gene_type']
+  cat('alpha',alpha,'all sig',sum(resL"'$padj < .05,na.rm=TRUE),'"'\\n')
+  for (ty in c('protein_coding','lncRNA','pseudogene','processed_pseudogene','transcribed_unprocessed_pseudogene')) {
+    cat(ty, sum(resL"'$padj < .05 & gt==ty,na.rm=TRUE),'"'of type total',sum(gt==ty,na.rm=TRUE),'nonNA sig type',sum(resL"'$padj < .05 & !is.na(gt) & gt==ty,na.rm=TRUE),'"'\\n')
+  }
+  # lfc threshold variants
+  for (l in c(0,0.5,1,1.5,2)) {
+    cat('lfc threshold abs>',l,'sig',sum(resL"'$padj<.05 & abs(resL$log2FoldChange)>l, na.rm=TRUE),'"'\\n')
+  }
+}
+RS"

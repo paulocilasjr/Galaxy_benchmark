@@ -1,0 +1,42 @@
+/bin/bash -c "/opt/agent-venv/bin/python - <<'PY'
+import pandas as pd, mygene, json, time
+sig=pd.read_csv('/workspace/tmp/sig_genes.tsv', sep='\\t')
+print('sig rows', len(sig))
+ids=sig['geneID'].tolist()
+mg=mygene.MyGeneInfo()
+out=[]
+chunk=500
+for i in range(0,len(ids),chunk):
+    sub=ids[i:i+chunk]
+    for attempt in range(3):
+        try:
+            r=mg.querymany(sub, scopes='ensembl.gene', fields='symbol,name', species='mouse', verbose=False)
+            out.extend(r)
+            break
+        except Exception as e:
+            print('retry', attempt, e)
+            time.sleep(2)
+    else:
+        raise RuntimeError('mygene failed')
+print('responses', len(out))
+# Parse robustly
+rows=[]
+for item in out:
+    q=item.get('query')
+    sym=item.get('symbol')
+    if isinstance(sym, list): sym=sym[0] if sym else None
+    if not q: continue
+    rows.append({'geneID':q, 'symbol':sym, 'name':item.get('name')})
+ann=pd.DataFrame(rows)
+# keep first occurrence per gene, non-null symbol, non-duplicate symbol
+ann=ann.drop_duplicates(subset='geneID', keep='first')
+print('mapped ids', len(ann), 'unique symbols', ann['symbol'].nunique())
+m=sig.merge(ann, on='geneID', how='left')
+print('merged with symbol', m['symbol'].notna().sum(), 'null', m['symbol'].isna().sum())
+# print some missing
+print('missing first 20:', m.loc[m['symbol'].isna(),'geneID'].head(20).tolist())
+# deduplicate symbols: first sorted by padj
+m2=m.dropna(subset=['symbol']).sort_values('padj').drop_duplicates(subset='symbol', keep='first')
+print('unique gene list for enrichr', len(m2))
+m2[['geneID','symbol','padj','log2FoldChange']].to_csv('/workspace/tmp/sig_symbols.tsv', sep='\\t', index=False)
+PY"

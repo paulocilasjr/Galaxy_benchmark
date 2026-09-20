@@ -1,0 +1,76 @@
+/bin/bash -lc "python - <<'PY'
+from itertools import combinations
+from statistics import median
+from zipfile import ZipFile
+
+with ZipFile('inputs/scogs_fungi.zip') as z:
+    nw = z.read('981902at2759.faa.mafft.clipkit.treefile').decode().strip()
+print('tree:', nw)
+
+# Minimal Newick parser returning (name, branch_length, children).
+pos = 0
+def parse_subtree():
+    global pos
+    if nw[pos] == '(':
+        pos += 1
+        children = [parse_subtree()]
+        while nw[pos] == ',':
+            pos += 1
+            children.append(parse_subtree())
+        assert nw[pos] == ')'
+        pos += 1
+        name = ''
+    else:
+        start = pos
+        while pos < len(nw) and nw[pos] not in ',():;':
+            pos += 1
+        name = nw[start:pos]
+        children = []
+    length = 0.0
+    if pos < len(nw) and nw[pos] == ':':
+        pos += 1
+        start = pos
+        while pos < len(nw) and nw[pos] not in ',();':
+            pos += 1
+        length = float(nw[start:pos])
+    return name, length, children
+
+root = parse_subtree()
+assert nw[pos] == ';'
+
+def leaves(node, prefix=0.0):
+    name, edge, children = node
+    here = prefix + edge
+    if not children:
+        return {name: here}
+    out = {}
+    for c in children:
+        out.update(leaves(c, here))
+    return out
+
+# Compute path distance by recursive pairwise tree traversal.
+def pair_distances(node):
+    name, edge, children = node
+    if not children:
+        return {name: 0.0}, {}
+    all_leaves = {}
+    dists = {}
+    for child in children:
+        child_leaves, child_dists = pair_distances(child)
+        # Distances inside child are measured from its leaves to each other.
+        dists.update(child_dists)
+        shifted = {k: v + child[1] for k, v in child_leaves.items()}
+        for k1, v1 in all_leaves.items():
+            for k2, v2 in shifted.items():
+                dists[tuple(sorted((k1, k2)))] = v1 + v2
+        all_leaves.update(shifted)
+    return all_leaves, dists
+
+_, dists = pair_distances(root)
+vals = sorted(dists.values())
+for pair, d in sorted(dists.items()):
+    print(pair, f'{d:.10f}')
+print('sorted:', [f'{x:.10f}' for x in vals])
+print('n:', len(vals))
+print('median:', f'{median(vals):.10f}')
+PY"

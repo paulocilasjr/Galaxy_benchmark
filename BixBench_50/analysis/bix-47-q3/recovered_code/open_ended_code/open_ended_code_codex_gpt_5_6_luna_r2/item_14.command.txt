@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+from collections import Counter, defaultdict
+from pathlib import Path
+from openpyxl import load_workbook
+
+# Determine oldest male BLM carrier.
+status_ws = load_workbook('inputs/230215_Trio_Status.xlsx', data_only=True).active
+records=[]
+for row in status_ws.iter_rows(min_row=2, values_only=True):
+    sid,status,sex,blm,age,cancer,*_ = row
+    try: age_num=float(age)
+    except (TypeError,ValueError): continue
+    if sex == 'M' and blm == 'Carrier':
+        records.append((age_num,str(sid),status,sex,blm))
+print('male carriers by age:', sorted(records, reverse=True))
+age,sid,*_ = max(records)
+print('selected:', sid, age)
+
+# Load CHIP gene symbols.
+gene_ws = load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx', data_only=True).active
+chip_genes={str(gene_ws.cell(r,1).value).strip() for r in range(1,gene_ws.max_row+1) if gene_ws.cell(r,1).value}
+
+# Resolve selected sample workbook.
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob(f'*CHIP_{sid}-*.xlsx'))
+print('candidate files:', [str(p) for p in files])
+assert len(files)==1
+ws=load_workbook(files[0],data_only=True).active
+headers=[ws.cell(2,c).value for c in range(1,ws.max_column+1)]
+col={h:i+1 for i,h in enumerate(headers) if h is not None}
+nonref=[]
+for r in range(3,ws.max_row+1):
+    z=ws.cell(r,col['Zygosity']).value
+    if z in ('Heterozygous','Homozygous Variant'):
+        genes=str(ws.cell(r,col['Gene Names']).value or '')
+        # Split comma-separated annotation symbols for gene-level counts.
+        syms=[g.strip() for g in genes.split(',') if g.strip()]
+        nonref.append((r,ws.cell(r,col['Chr:Pos']).value,ws.cell(r,col['Variant ID']).value,genes,syms,z))
+print('nonref records:',len(nonref))
+print('nonref zygosity:',Counter(x[-1] for x in nonref))
+# exact annotation-string count
+print('top exact annotation strings:',Counter(x[3] for x in nonref).most_common(10))
+# symbol count, restricted to supplied CHIP list
+symcounts=Counter(g for x in nonref for g in x[4])
+chipcounts=Counter(g for g in (g for x in nonref for g in x[4]) if g in chip_genes)
+print('top symbols:',symcounts.most_common(15))
+print('top CHIP symbols:',chipcounts.most_common(15))
+print('top exact gene labels that are CHIP:',[(k,v) for k,v in Counter(x[3] for x in nonref).most_common() if x[0] in chip_genes][:15])
+print('NOTCH1 rows:')
+for x in nonref:
+    if 'NOTCH1' in x[4]: print(x)
+print('duplicate positions among nonref:',len(nonref)-len({x[1] for x in nonref}))
+PY"

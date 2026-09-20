@@ -1,0 +1,24 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, gseapy
+raw=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+cols=['3_1','3_2','3_3','9_1','9_2','9_3']
+counts=raw[cols]
+# DESeq2 median ratio size factors: geometric mean across samples for genes nonzero in all? R's estimateSizeFactors uses genes with nonzero geometric means, not necessarily all nonzero
+x=counts.to_numpy(float)
+logx=np.log(x,where=x>0,out=np.full(x.shape,np.nan))
+gm=np.exp(np.nanmean(logx,axis=1))
+# In DESeq2 geometric mean is zero if any zero? geometric mean of all samples: product; zero if any zero. Use genes all >0.
+allpos=(x>0).all(1)
+gm2=np.exp(np.mean(np.log(x[allpos]),axis=1))
+ratios=x[allpos]/gm2[:,None]
+sf=np.median(ratios,axis=0)
+sf=sf/np.exp(np.mean(np.log(sf)))
+print('size factors',dict(zip(cols,sf)))
+norm=counts/sf
+lfc=np.log2((norm[['9_1','9_2','9_3']].mean(1)+1e-9)/(norm[['3_1','3_2','3_3']].mean(1)+1e-9))
+gs=gseapy.get_library(name='Reactome_2022',organism='Human')
+term=set(gs[[k for k in gs if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes')][0]])
+mp=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+sub=mp[mp.gene_name.isin(term)].merge(pd.DataFrame({'id':counts.index,'lfc':lfc}),left_on='ENSG',right_on='id')
+print(sub[['gene_name','lfc']].sort_values('lfc').to_string(index=False))
+PY"

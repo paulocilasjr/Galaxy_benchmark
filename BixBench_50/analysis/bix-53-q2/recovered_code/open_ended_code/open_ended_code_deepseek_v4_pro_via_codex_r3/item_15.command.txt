@@ -1,0 +1,28 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('/workspace/inputs/count.csv', index_col=0)
+
+def run(cols):
+    c = counts.loc[:, cols].T
+    meta = pd.DataFrame({'condition': [x[:2] for x in cols]}, index=cols)
+    meta['condition'] = pd.Categorical(meta['condition'], categories=['KL','WL'])
+    dds = DeseqDataSet(counts=c, metadata=meta, design='~condition', quiet=True)
+    dds.deseq2()
+    ds = DeseqStats(dds, contrast=['condition','WL','KL'], quiet=True)
+    ds.summary()
+    coeff = ds.LFC.columns[-1]
+    ds.lfc_shrink(coeff=coeff)
+    res = ds.results_df.copy()
+    n_pvalue = int(((res['pvalue'] < 0.05) & (res['log2FoldChange'].abs() > 1) & (res['baseMean'] > 10)).sum())
+    n_padj = int(((res['padj'] < 0.05) & (res['log2FoldChange'].abs() > 1) & (res['baseMean'] > 10)).sum())
+    print(cols, 'pvalue', n_pvalue, 'padj', n_padj, 'total', len(res), 'nonNA_padj', res['padj'].notna().sum(), flush=True)
+    return res, n_pvalue, n_padj
+
+full, nf_p, nf_padj = run(['KL1','KL2','KL3','WL1','WL2','WL3'])
+red, nr_p, nr_padj = run(['KL1','KL2','WL1','WL2'])
+print('FINAL pvalue full/reduced/direction:', nf_p, nr_p, 'increase' if nr_p>nf_p else 'decrease' if nr_p<nf_p else 'no change', flush=True)
+print('FINAL padj full/reduced/direction:', nf_padj, nr_padj, 'increase' if nr_padj>nf_padj else 'decrease' if nr_padj<nf_padj else 'no change', flush=True)
+PY"

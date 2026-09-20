@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import exp, log, isfinite
+
+path='/workspace/inputs/data.xlsx'
+wb=load_workbook(path, data_only=True, read_only=True)
+ws=wb['Sheet1']
+headers=list(next(ws.iter_rows(values_only=True)))
+cols={h:i for i,h in enumerate(headers) if h is not None}
+xs=[]; ys=[]
+for r in ws.iter_rows(min_row=2, values_only=True):
+    eff=r[cols['Efficacy']]
+    bmi=r[cols['BMI']]
+    if eff is None or bmi is None:
+        continue
+    xs.append(float(bmi))
+    ys.append(1.0 if eff == 'PR' else 0.0)
+
+def sigmoid(eta):
+    if eta >= 0:
+        z=exp(-eta)
+        return 1.0/(1.0+z)
+    z=exp(eta)
+    return z/(1.0+z)
+
+def log1pexp(eta):
+    if eta > 0:
+        return eta + log(1.0+exp(-eta))
+    return log(1.0+exp(eta))
+
+def loglik(b0,b1):
+    return sum(y*(b0+b1*x) - log1pexp(b0+b1*x) for x,y in zip(xs,ys))
+
+b0=0.0; b1=0.0
+for it in range(100):
+    g0=g1=0.0
+    a=b=c=0.0 # XTWX: [[a,b],[b,c]]
+    for x,y in zip(xs,ys):
+        eta=b0+b1*x
+        p=sigmoid(eta)
+        w=p*(1-p)
+        diff=y-p
+        g0 += diff
+        g1 += diff*x
+        a += w
+        b += w*x
+        c += w*x*x
+    det=a*c-b*b
+    d0=(c*g0-b*g1)/det
+    d1=(-b*g0+a*g1)/det
+    old=loglik(b0,b1)
+    step=1.0
+    while True:
+        nb0=b0+step*d0; nb1=b1+step*d1
+        new=loglik(nb0,nb1)
+        if new >= old or step < 1e-12:
+            break
+        step *= 0.5
+    b0,b1=nb0,nb1
+    if max(abs(step*d0), abs(step*d1)) < 1e-12:
+        break
+ll=loglik(b0,b1)
+aic=-2*ll+2*2
+print('n', len(xs), 'events', int(sum(ys)))
+print('b0', repr(b0), 'b1', repr(b1))
+print('logLik', repr(ll))
+print('AIC', repr(aic))
+print('AIC 15g', format(aic,'.15g'))
+PY"

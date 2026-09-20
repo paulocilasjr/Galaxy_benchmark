@@ -1,0 +1,66 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b58f4599af86020a7f",
+  "history_id": "bbd44e69cb8906b5d191a264291a23b8",
+  "tool_id": "carrier-chip-clinvar-benign-proportion-v2",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-07-15T06:26:43.574570",
+  "update_time": "2026-07-15T06:27:24.743863",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78535715/inputs/dataset_c0b2d752-0dc4-4c64-b32b-cb8dc2b7c430.dat\" <<'PY'\nfrom __future__ import print_function\nimport sys, os, zipfile, re, shutil\nfrom collections import Counter\nfrom openpyxl import load_workbook\n\nzip_path = sys.argv[1]\nwork = 'workbooks'\nif os.path.exists(work):\n    shutil.rmtree(work)\nos.makedirs(work)\nwith zipfile.ZipFile(zip_path) as z:\n    z.extractall(work)\n\ndef row_values(row):\n    return [cell.value for cell in row]\n\ndef all_rows(ws):\n    for row in ws.iter_rows():\n        yield row_values(row)\n\ndef norm_id(x):\n    if x is None:\n        return ''\n    if isinstance(x, float) and x.is_integer():\n        return str(int(x))\n    if isinstance(x, int):\n        return str(x)\n    s = str(x).strip()\n    if re.match(r'^\\d+\\.0$', s):\n        s = s[:-2]\n    return s\n\ndef norm_text(x):\n    if x is None:\n        return ''\n    return str(x).strip()\n\ndef truthy(x):\n    return norm_text(x).lower() in ('true','yes','1','y')\n\ndef to_float(x):\n    if x is None:\n        return None\n    if isinstance(x, (int, float)):\n        return float(x)\n    s = str(x).strip()\n    if not s:\n        return None\n    try:\n        return float(s)\n    except Exception:\n        return None\n\ndef find_file(ending):\n    matches = []\n    for root, dirs, files in os.walk(work):\n        for name in files:\n            if name == ending:\n                matches.append(os.path.join(root, name))\n    if len(matches) != 1:\n        raise RuntimeError('Expected one file named %s, found %d' % (ending, len(matches)))\n    return matches[0]\n\nstatus_path = find_file('230215_Trio_Status.xlsx')\nchip_path = find_file('230214_Schenz_et_al_2022_CHIP_Genes.xlsx')\n\nwb = load_workbook(status_path, read_only=False, data_only=True)\nws = wb.active\nrows = list(all_rows(ws))\nheaders = [norm_text(v) for v in rows[0]]\nhidx = dict((h, i) for i, h in enumerate(headers) if h)\nsample_status = {}\nfor row in rows[1:]:\n    sid = norm_id(row[hidx['Sample ID']])\n    blm = norm_text(row[hidx['BLM Mutation Status']])\n    if sid:\n        sample_status[sid] = blm\n\nwb = load_workbook(chip_path, read_only=False, data_only=True)\nws = wb.active\nchip_genes = set()\nfor row in all_rows(ws):\n    if row and row[0] is not None:\n        chip_genes.add(norm_text(row[0]).upper())\n\nvariant_files = []\nfor root, dirs, files in os.walk(work):\n    for name in files:\n        if name.endswith('.xlsx') and 'CHIP_DP10_GQ20_PASS' in root:\n            variant_files.append(os.path.join(root, name))\nvariant_files.sort()\n\nneeded = ['Chr:Pos','Ref/Alt','Zygosity','Variant Allele Freq','Gene Names','Sequence Ontology (Combined)','Classification','In_CHIP']\nrecords = []\nclass_counts = Counter()\ncarrier_files = 0\nskipped_noncarrier = 0\n\nfor path in variant_files:\n    base = os.path.basename(path)\n    m = re.match(r'230209_Exome_GRCh38_CHIP_(.+)\\.xlsx$', base)\n    if not m:\n        continue\n    token = m.group(1)\n    if token.startswith('SRR'):\n        sid = token.strip()\n    else:\n        sid = token.split('-')[0].strip()\n    if sample_status.get(sid) != 'Carrier':\n        skipped_noncarrier += 1\n        continue\n    carrier_files += 1\n    wb = load_workbook(path, read_only=False, data_only=True)\n    ws = wb.active\n    rows2 = list(all_rows(ws))\n    header_row = None\n    header_i = None\n    for i, row in enumerate(rows2):\n        vals = [norm_text(v) for v in row]\n        if 'Chr:Pos' in vals and 'Classification' in vals and 'Variant Allele Freq' in vals:\n            header_row = vals\n            header_i = i\n            break\n    if header_row is None:\n        raise RuntimeError('No variant header found in %s' % base)\n    idx = dict((h, i) for i, h in enumerate(header_row) if h)\n    for n in needed:\n        if n not in idx:\n            raise RuntimeError('Missing column %s in %s' % (n, base))\n    for row in rows2[header_i+1:]:\n        zyg = norm_text(row[idx['Zygosity']])\n        if zyg.lower() == 'reference' or zyg == '':\n            continue\n        vaf = to_float(row[idx['Variant Allele Freq']])\n        if vaf is None or not (vaf < 0.3):\n            continue\n        so = norm_text(row[idx['Sequence Ontology (Combined)']])\n        so_l = so.lower()\n        if ('intron' in so_l) or ('intergenic' in so_l) or ('utr' in so_l):\n            continue\n        genes_text = norm_text(row[idx['Gene Names']])\n        genes = set(g.upper() for g in re.split(r'[;,\\s]+', genes_text) if g)\n        in_chip = truthy(row[idx['In_CHIP']]) or bool(genes & chip_genes)\n        if not in_chip:\n            continue\n        classification = norm_text(row[idx['Classification']])\n        if classification == '' or classification.lower() in ('none','nan','na','n/a'):\n            continue\n        is_blb = classification.lower() in ('benign','likely benign')\n        class_counts[classification] += 1\n        records.append((sid, base, norm_text(row[idx['Chr:Pos']]), norm_text(row[idx['Ref/Alt']]), zyg, vaf, genes_text, so, classification, '1' if is_blb else '0'))\n\nden = len(records)\nnum = sum(1 for r in records if r[-1] == '1')\nif den == 0:\n    prop = 'nan'\nelse:\n    prop = ('%.17g' % (float(num) / float(den)))\n\nwith open('answer.txt','w') as out:\n    out.write(prop + '\\n')\nwith open('audit.tsv','w') as out:\n    out.write('metric\\tvalue\\n')\n    out.write('carrier_files\\t%d\\n' % carrier_files)\n    out.write('skipped_noncarrier_files\\t%d\\n' % skipped_noncarrier)\n    out.write('denominator_clinvar_somatic_chip_variants\\t%d\\n' % den)\n    out.write('numerator_benign_or_likely_benign\\t%d\\n' % num)\n    out.write('proportion\\t%s\\n' % prop)\n    for cls, count in sorted(class_counts.items()):\n        out.write('classification:%s\\t%d\\n' % (cls, count))\nwith open('filtered_variants.tsv','w') as out:\n    out.write('sample_id\\tfile\\tchr_pos\\tref_alt\\tzygosity\\tvaf\\tgene_names\\tsequence_ontology\\tclassification\\tbenign_or_likely_benign\\n')\n    for rec in records:\n        out.write('\\t'.join(str(x) for x in rec) + '\\n')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input_zip": {
+      "id": "f9cad7b01a47213581e84f72a22dd364",
+      "src": "hda",
+      "uuid": "c0b2d752-0dc4-4c64-b32b-cb8dc2b7c430"
+    }
+  },
+  "outputs": {
+    "answer": {
+      "id": "f9cad7b01a4721353bd45045f29b6e4b",
+      "src": "hda",
+      "uuid": "ec7f7246-160a-4aa2-9b26-a32e17cfd2aa"
+    },
+    "audit": {
+      "id": "f9cad7b01a47213545e3e6e8f99c6903",
+      "src": "hda",
+      "uuid": "6be84296-0fe6-45ad-9070-80ca7744fd2c"
+    },
+    "filtered_variants": {
+      "id": "f9cad7b01a472135727bf5d47c134637",
+      "src": "hda",
+      "uuid": "b5986fba-2108-4138-8d8c-0172c05b2c3b"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 175, in <module>\nNameError: name 'PY' is not defined\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 175, in <module>\nNameError: name 'PY' is not defined\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

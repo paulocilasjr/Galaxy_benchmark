@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+import os, csv
+import numpy as np
+import pandas as pd
+
+crispr_path = 'inputs/CRISPRGeneEffect.csv'
+expr_path = 'inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+out_path = 'codex_output/answer.txt'
+
+def read_matrix(path):
+    with open(path, newline='') as f:
+        header = next(csv.reader(f))
+    dtype = {c: np.float32 for c in header[1:]}
+    return pd.read_csv(path, index_col=0, dtype=dtype)
+
+dep = read_matrix(crispr_path)
+expr = read_matrix(expr_path)
+
+common_genes = dep.columns.intersection(expr.columns)
+common_models = dep.index.intersection(expr.index)
+print(f'dep shape {dep.shape}')
+print(f'expr shape {expr.shape}')
+print(f'common genes {len(common_genes)}')
+print(f'common models {len(common_models)}')
+
+dep = dep.loc[common_models, common_genes]
+expr = expr.loc[common_models, common_genes]
+ess = -dep
+
+rx = expr.rank(axis=0, method='average', na_option='keep')
+ry = ess.rank(axis=0, method='average', na_option='keep')
+
+x = rx.to_numpy(dtype=np.float64, copy=False)
+y = ry.to_numpy(dtype=np.float64, copy=False)
+mask = np.isfinite(x) & np.isfinite(y)
+n = mask.sum(axis=0)
+
+x0 = np.where(mask, x, 0.0)
+y0 = np.where(mask, y, 0.0)
+mx = x0.sum(axis=0) / n
+my = y0.sum(axis=0) / n
+xc = np.where(mask, x - mx, 0.0)
+yc = np.where(mask, y - my, 0.0)
+num = (xc * yc).sum(axis=0)
+den = np.sqrt((xc * xc).sum(axis=0) * (yc * yc).sum(axis=0))
+rho = np.divide(num, den, out=np.full(num.shape, np.nan), where=(den > 0) & (n >= 2))
+
+count = int(np.nansum(rho >= 0.6))
+raw_gene_effect_positive_count = int(np.nansum((-rho) >= 0.6))
+print(f'count expr vs positive essentiality rho>=0.6: {count}')
+print(f'sign sanity count expr vs raw GeneEffect rho>=0.6: {raw_gene_effect_positive_count}')
+print(f'finite correlations {np.isfinite(rho).sum()}')
+print(f'max rho essentiality {np.nanmax(rho):.9f}')
+print(f'min rho essentiality {np.nanmin(rho):.9f}')
+print('top positive essentiality correlations:')
+order = np.argsort(np.nan_to_num(rho, nan=-np.inf))[::-1][:10]
+for i in order:
+    print(common_genes[i], f'{rho[i]:.9f}', 'n=', int(n[i]))
+
+os.makedirs('codex_output', exist_ok=True)
+with open(out_path, 'w', encoding='ascii') as f:
+    f.write(str(count) + '\\n')
+PY"

@@ -1,0 +1,39 @@
+/bin/bash -lc "cat > /workspace/tmp/write_pvals.py <<'PY'
+import urllib.request, csv, os
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau').read().decode().splitlines()
+listp=set(l.split('\\t')[0] for l in urllib.request.urlopen('https://rest.kegg.jp/list/pathway/pau').read().decode().splitlines() if l.strip())
+g2p=defaultdict(set)
+for l in link:
+ if '\\t' not in l: continue
+ g,p=l.split('\\t'); g=g.split(':')[1]; p=p[5:]
+ if p in listp: g2p[g].add(p)
+p2g=defaultdict(set)
+for g,ps in g2p.items():
+ for p in ps:p2g[p].add(g)
+db=set(g2p); N=len(db)
+data={}
+for f in ['tmp/res_1vs97.csv','tmp/res_1vs98.csv','tmp/res_1vs99.csv']:
+ with open(f) as fh:data[f]={r['gene']:float(r['log2FoldChange']) for r in csv.DictReader(fh)}
+os.makedirs('tmp',exist_ok=True)
+for f,vals in data.items():
+ for d,comp in [('up',lambda x:x>1.5),('down',lambda x:x<-1.5)]:
+  genes=set(g for g,l in vals.items() if comp(l)) & db; n=len(genes)
+  rows=[]
+  for p in sorted(p2g):
+   K=len(p2g[p]);
+   if K<10 or K>500: continue
+   k=len(genes&p2g[p]);
+   if k==0: continue
+   pval=hypergeom.sf(k-1,N,K,n)
+   rows.append((p,k,K,n,pval))
+  padj=multipletests([x[4] for x in rows],method='fdr_bh')[1]
+  with open(f'tmp/{d}{f.split(\"/\")[1].split(\".\")[0][-2:]}_pvals.txt','w') as out:
+   out.write('path\\tk\\tK\\tn\\tp\\tpy_padj\\n')
+   for (p,k,K,n,pv),pa in zip(rows,padj):
+    out.write(f'{p}\\t{k}\\t{K}\\t{n}\\t{pv:.17g}\\t{pa:.17g}\\n')
+PY
+python3 /workspace/tmp/write_pvals.py
+Rscript /workspace/tmp/check_pvals.R"

@@ -1,0 +1,40 @@
+/bin/bash -lc "cd /workspace && R_MAKEVARS_USER=/workspace/tmp/rmake/Makevars ./tmp/bin/micromamba run -p /workspace/tmp/renv42 Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+counts <- read.csv('inputs/counts_raw_unfiltered.csv', row.names=1, check.names=FALSE)
+colnames(counts) <- gsub('_','-', colnames(counts))
+layout <- read.csv('inputs/sample_layout.csv')
+meta <- layout[layout"'$Group %in% c('"'DMSO','Cisplatin_IC50_CBD_IC50'), c('SampleID','Group')]
+rownames(meta) <- meta"'$SampleID
+meta$condition <- factor(meta$Group, levels=c('"'DMSO','Cisplatin_IC50_CBD_IC50'))
+counts_sub <- counts[, rownames(meta), drop=FALSE]
+stopifnot(all(rownames(meta)==colnames(counts_sub)))
+dds <- DESeqDataSetFromMatrix(countData=as.matrix(counts_sub), colData=meta, design=~condition)
+dds <- DESeq(dds)
+res <- results(dds, contrast=c('condition','Cisplatin_IC50_CBD_IC50','DMSO'), alpha=0.05)
+print(sessionInfo()[1])
+print(dim(res))
+print(head(res[order(res"'$pvalue),], 5))
+print(summary(res))
+write.csv(as.data.frame(res), '"'/workspace/tmp/deseq2_full.csv')
+# Counts after filter
+keep <- "'!is.na(res$padj) & res$padj < 0.05 & !is.na(res$log2FoldChange) & abs(res$log2FoldChange) >= 0.5
+cat('"'DEG count', sum(keep), 'up', sum(keep & res"'$log2FoldChange>0), '"'down', sum(keep & res"'$log2FoldChange<0), '"'\\n')
+# save sig
+sig <- as.data.frame(res[keep,])
+write.csv(sig, '/workspace/tmp/deseq2_sig.csv')
+# map symbols
+map <- read.delim('inputs/ensg_to_gene_name.tsv', header=TRUE)
+sig"'$symbol <- map$gene_name[match(rownames(sig), map$ENSG)]
+cat('"'symbols mapped',sum("'!is.na(sig$symbol)),'"'NA',sum(is.na(sig"'$symbol)),'"'unique',length(unique(na.omit(sig"'$symbol))),'"'\\n')
+gl <- unique(na.omit(sig"'$symbol))
+writeLines(gl, '"'/workspace/tmp/deseq2_genes.txt')
+# download pathway from gseapy? Here check target genes stats using local file if available? use R output and known gene set from gseapy library maybe
+target <- c('ARID3A','AURKA','BAX','BTG2','CARM1','CCNA1','CCNA2','CCNB1','CCNE1','CCNE2','CDC25C','CDK1','CDK2','CDKN1A','CDKN1B','CENPJ','CNOT1','CNOT10','CNOT11','CNOT2','CNOT3','CNOT4','CNOT6','CNOT6L','CNOT7','CNOT8','CNOT9','E2F1','E2F4','E2F7','E2F8','EP300','GADD45A','NPM1','PCBP4','PCNA','PLAGL1','PLK2','PLK3','PRMT1','RBL1','RBL2','REXO2','RGCC','TFDP1','TFDP2','TNKS1BP1','TP53','ZNF385A')
+cat('pathway overlap', length(intersect(gl, target)), '/', length(target), '\\n')
+print(sig[sig"'$symbol %in% target, c('"'symbol','log2FoldChange','padj','baseMean')])
+# near threshold genes
+for(g in target) {
+  rows <- as.data.frame(res)[map"'$ENSG[match(g,map$gene_name)],,drop=FALSE]
+  if(nrow(rows)>0) cat(g, rows$log2FoldChange, rows$padj, '"'\\n')
+}
+RS"

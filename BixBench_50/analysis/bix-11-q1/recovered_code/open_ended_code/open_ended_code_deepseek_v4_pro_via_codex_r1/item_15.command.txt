@@ -1,0 +1,76 @@
+/bin/bash -c "python - <<'PY'
+import glob, os, statistics, collections, re
+from io import StringIO
+
+def treeness_from_text(txt):
+    pass
+# simple parse reuse from earlier quickly
+def parse_tree(text):
+    text=text.strip()
+    if text.endswith(';'): text=text[:-1]
+    def node(s,i):
+        while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+        if s[i]=='(':
+            i+=1; children=[]
+            while True:
+                c,i=node(s,i); children.append(c)
+                while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+                if i<len(s) and s[i]==',': i+=1; continue
+                if i<len(s) and s[i]==')': i+=1; break
+                raise ValueError((s[i:i+20],i))
+            st=i
+            while i<len(s) and s[i] not in ':,' and s[i] not in '()' and s[i] not in ' \\t\\r\\n': i+=1
+            name=s[st:i]
+            while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+            length=None
+            if i<len(s) and s[i]==':':
+                i+=1; st=i
+                while i<len(s) and s[i] not in ',()' and s[i] not in ' \\t\\r\\n': i+=1
+                length=float(s[st:i]) if s[st:i] else None
+            return (name,length,children),i
+        else:
+            st=i
+            while i<len(s) and s[i] not in ':,' and s[i] not in '()' and s[i] not in ' \\t\\r\\n': i+=1
+            name=s[st:i]
+            while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+            length=None
+            if i<len(s) and s[i]==':':
+                i+=1; st=i
+                while i<len(s) and s[i] not in ',()' and s[i] not in ' \\t\\r\\n': i+=1
+                length=float(s[st:i]) if s[st:i] else None
+            return (name,length,[]),i
+    r,i=node(text,0); return r
+
+def metrics(path):
+    root=parse_tree(open(path).read())
+    total=0; internal=0; nleaves=0; ninternal=0
+    stack=[root]
+    while stack:
+        name,length,children=stack.pop()
+        if length is not None:
+            total+=length
+            if children:
+                internal+=length
+        if children:
+            ninternal+=1; stack.extend(children)
+        else:
+            nleaves+=1
+    return nleaves, total, internal, (internal/total if total else None)
+
+for label,p in [('animals','tmp/scogs_animals/*.treefile'),('fungi','tmp/scogs_fungi/*.treefile')]:
+    files=glob.glob(p); rows=[metrics(f) for f in files]
+    print('\\n',label,'n',len(rows))
+    print('leaf counts',collections.Counter(r[0] for r in rows))
+    print('n_internal nodes',collections.Counter(r[3] for r in rows))
+    vals=[r[4] for r in rows if r[4] is not None]
+    print('median',statistics.median(vals),'zero count',sum(v==0 for v in vals),'positive',sum(v>0 for v in vals))
+    print('first 20', [round(v,6) for v in vals[:20]])
+    # files with leaves >3 sorted
+    for f,r in zip(files,rows):
+        if r[0]>=4:
+            pass
+    print('files >3 leaves vals:')
+    for f,r in zip(files,rows):
+        if r[0]>3:
+            print(os.path.basename(f), r)
+PY"

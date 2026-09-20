@@ -1,0 +1,116 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+import pickle
+
+# Load data
+res_97 = pd.read_csv("/tmp/analysis/res_97.csv")
+res_98 = pd.read_csv("/tmp/analysis/res_98.csv")
+res_99 = pd.read_csv("/tmp/analysis/res_99.csv")
+
+with open("/tmp/analysis/kegg_data.pkl", "rb") as f:
+    kegg_data = pickle.load(f)
+pathway_genes_raw = {k: set(v) for k, v in kegg_data["pathway_genes"].items()}
+pathways = kegg_data["pathways"]
+
+all_genes = set(res_97["gene"])
+all_kegg_genes = set()
+for gs in pathway_genes_raw.values():
+    all_kegg_genes.update(gs)
+universe = all_genes & all_kegg_genes
+N = len(universe)
+
+# Run ORA with BH correction ACROSS both directions combined (more conservative)
+def run_ora_combined(res_df, pathway_genes, lfc_threshold=1.5):
+    de_up = set(res_df[res_df["log2FoldChange"] > lfc_threshold]["gene"]) & universe
+    de_down = set(res_df[res_df["log2FoldChange"] < -lfc_threshold]["gene"]) & universe
+    
+    all_results = []
+    for direction, de_set in [('up', de_up), ('down', de_down)]:
+        K = len(de_set)
+        for pid, pw_genes in pathway_genes.items():
+            pw_in_u = pw_genes & universe
+            n = len(pw_in_u)
+            if n < 2: continue
+            x = len(pw_in_u & de_set)
+            if x == 0: continue
+            pval = hypergeom.sf(x - 1, N, K, n)
+            fe = (x / n) / (K / N)
+            all_results.append((pid, direction, pval, fe, x, n, K))
+    
+    if all_results:
+        pvals = [r[2] for r in all_results]
+        _, padjs, _, _ = multipletests(pvals, method='fdr_bh')
+        for i, padj in enumerate(padjs):
+            all_results[i] = all_results[i] + (padj,)
+    
+    return all_results
+
+# Run for each strain
+for label, res_df in [('97', res_97), ('98', res_98), ('99', res_99)]:
+    results = run_ora_combined(res_df, pathway_genes_raw)
+    sig = {}
+    for r in results:
+        pid, direction, pval, fe, x, n, K, padj = r
+        if padj < 0.05:
+            if direction not in sig:
+                sig[direction] = set()
+            sig[direction].add(pid)
+    
+    print(f"Strain {label}:")
+    for d in ['up', 'down']:
+        if d in sig:
+            print(f"  Sig {d} (combined BH): {len(sig[d])} pathways")
+            for pid in sorted(sig[d]):
+                r = [x for x in results if x[0]==pid and x[1]==d][0]
+                print(f"    {pid}: padj={r[7]:.4f}, fe={r[3]:.2f}, overlap={r[4]}")
+        else:
+            print(f"  Sig {d} (combined BH): 0 pathways")
+    
+    print()
+
+# Now find consistent pathways (padj < 0.05 across all three, same direction)
+print("=== Cross-strain consistency (combined BH, padj<0.05) ===")
+all_sig = {}
+for label, res_df in [('97', res_97), ('98', res_98), ('99', res_99)]:
+    results = run_ora_combined(res_df, pathway_genes_raw)
+    all_sig[label] = {'up': set(), 'down': set()}
+    for r in results:
+        pid, direction, pval, fe, x, n, K, padj = r
+        if padj < 0.05:
+            all_sig[label][direction].add(pid)
+
+cons_up = all_sig['97']['up'] & all_sig['98']['up'] & all_sig['99']['up']
+cons_down = all_sig['97']['down'] & all_sig['98']['down'] & all_sig['99']['down']
+
+print(f"Consistent UP: {len(cons_up)}")
+print(f"Consistent DOWN: {len(cons_down)}")
+print(f"TOTAL: {len(cons_up) + len(cons_down)}")
+
+# Also try with nominal p<0.05 (no correction) just to be thorough
+print("\n=== Cross-strain consistency (nominal p<0.05, no correction) ===")
+all_nom = {}
+for label, res_df in [('97', res_97), ('98', res_98), ('99', res_99)]:
+    results = run_ora_combined(res_df, pathway_genes_raw)
+    all_nom[label] = {'up': set(), 'down': set()}
+    for r in results:
+        pid, direction, pval, fe, x, n, K = r[:7]
+        if pval < 0.05:
+            all_nom[label][direction].add(pid)
+
+nom_up = all_nom['97']['up'] & all_nom['98']['up'] & all_nom['99']['up']
+nom_down = all_nom['97']['down'] & all_nom['98']['down'] & all_nom['99']['down']
+
+print(f"Nominal UP: {len(nom_up)}")
+for pid in sorted(nom_up):
+    print(f"  {pid}: {pathways.get(pid, 'N/A')[:80]}")
+print(f"Nominal DOWN: {len(nom_down)}")
+for pid in sorted(nom_down):
+    # Get nominal p-values for each strain
+    p97 = [r for r in all_nom['97']['down'] if r==pid]
+    print(f"  {pid}: {pathways.get(pid, 'N/A')[:80]}")
+print(f"TOTAL (nominal): {len(nom_up) + len(nom_down)}")
+PYEOF

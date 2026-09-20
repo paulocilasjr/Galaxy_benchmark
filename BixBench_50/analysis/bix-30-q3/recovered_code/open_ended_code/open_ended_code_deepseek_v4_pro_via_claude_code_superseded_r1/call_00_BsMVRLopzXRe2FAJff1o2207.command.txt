@@ -1,0 +1,72 @@
+PYTHONPATH=/tmp/pylibs python3 << 'PYEOF'
+import xlrd
+import numpy as np
+from scipy import stats
+
+wb = xlrd.open_workbook('/workspace/inputs/pone.0150501.s002.xls')
+sheet = wb.sheet_by_index(0)
+
+# Extract miRNA data
+mirnas = []
+for r in range(2, sheet.nrows):
+    name = sheet.cell_value(r, 0)
+    pv, cv = [], []
+    for c in range(1, 11):
+        v = sheet.cell_value(r, c)
+        if v != '' and v != 'NAN':
+            pv.append(float(v))
+    for c in range(11, 21):
+        v = sheet.cell_value(r, c)
+        if v != '' and v != 'NAN':
+            cv.append(float(v))
+    mirnas.append((name, pv, cv))
+
+# Welch's t-test
+p_vals = []
+for name, pv, cv in mirnas:
+    if len(pv) < 2 or len(cv) < 2:
+        p_vals.append(np.nan)
+    else:
+        _, p = stats.ttest_ind(pv, cv, equal_var=False)
+        p_vals.append(p)
+p_vals = np.array(p_vals)
+valid = ~np.isnan(p_vals)
+valid_p = p_vals[valid]
+n_tests = len(mirnas)
+
+# Bonferroni
+bonf_p = np.minimum(valid_p * n_tests, 1.0)
+bonf_sig = int(np.sum(bonf_p <= 0.05))
+
+# Benjamini-Yekutieli
+c_m = np.sum(1.0 / np.arange(1, n_tests + 1))
+sorted_idx = np.argsort(valid_p)
+m = len(valid_p)
+by_p = np.empty(m)
+cummin = np.inf
+for i in range(m - 1, -1, -1):
+    rank = i + 1
+    adj = min(valid_p[sorted_idx[i]] * n_tests * c_m / rank, 1.0)
+    cummin = min(cummin, adj)
+    by_p[sorted_idx[i]] = cummin
+by_sig = int(np.sum(by_p <= 0.05))
+
+print(f"n_tests={n_tests}, c({n_tests})={c_m:.4f}")
+print(f"Min raw p: {np.min(valid_p):.8f}")
+print(f"Bonferroni threshold: 0.05/{n_tests} = {0.05/n_tests:.8f}")
+print(f"BY threshold (rank 1): 0.05/({n_tests}*{c_m:.4f}) = {0.05/(n_tests*c_m):.8f}")
+print(f"Bonferroni significant: {bonf_sig}")
+print(f"Benjamini-Yekutieli significant: {by_sig}")
+print(f"Ratio = {bonf_sig}:{by_sig}")
+
+# Also verify with BY decision rule directly
+# Find largest k: p_(k) <= k*alpha/(m*c_m)
+alpha = 0.05
+sorted_p = np.sort(valid_p)
+by_sig_decision = 0
+for k in range(1, m + 1):
+    threshold = k * alpha / (n_tests * c_m)
+    if sorted_p[k-1] <= threshold:
+        by_sig_decision = k
+print(f"BY decision rule significant count: {by_sig_decision}")
+PYEOF

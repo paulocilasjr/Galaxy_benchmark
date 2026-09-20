@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+import re
+import pandas as pd
+from openpyxl import load_workbook
+
+# Carrier IDs from the supplied trio-status workbook.
+status = pd.read_excel('inputs/230215_Trio_Status.xlsx', header=0, dtype=object)
+status['Sample ID'] = status['Sample ID'].astype(str).str.strip()
+carrier_ids = set(status.loc[status['BLM Mutation Status'].eq('Carrier'), 'Sample ID'])
+
+records=[]
+for path in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    m=re.search(r'_CHIP_(\\d+)', path.name)
+    if not m or m.group(1) not in carrier_ids:
+        continue
+    sid=m.group(1)
+    df=pd.read_excel(path, header=1, dtype=object)
+    df['sample_id']=sid
+    records.append(df)
+allv=pd.concat(records,ignore_index=True)
+allv['vaf_num']=pd.to_numeric(allv['Variant Allele Freq'], errors='coerce')
+# Coding terms represented in these records; retain standard coding SO consequences.
+coding_terms={'synonymous_variant','missense_variant','stop_gained','stop_lost','start_lost','frameshift_variant','inframe_insertion','inframe_deletion','protein_altering_variant','coding_sequence_variant'}
+q=allv[allv['vaf_num'].lt(0.3) & allv['Sequence Ontology (Combined)'].isin(coding_terms)]
+print('carrier IDs in metadata:',len(carrier_ids),sorted(carrier_ids,key=lambda x:(not x.isdigit(),int(x) if x.isdigit() else x)))
+print('carrier workbooks loaded:',len(records),sorted([d['sample_id'].iloc[0] for d in records],key=lambda x:int(x)))
+print('qualifying rows:',len(q))
+print('SO counts:',q['Sequence Ontology (Combined)'].value_counts().to_dict())
+print('synonymous fraction:',q['Sequence Ontology (Combined)'].eq('synonymous_variant').sum()/len(q))
+# Confirm coding count does not change if reference/no-call rows are removed.
+q_called=q[q['Zygosity'].ne('Reference')]
+print('called coding rows:',len(q_called),'called SO counts:',q_called['Sequence Ontology (Combined)'].value_counts().to_dict())
+print('threshold boundary rows:',(allv['vaf_num'].eq(0.3)).sum())
+PY"

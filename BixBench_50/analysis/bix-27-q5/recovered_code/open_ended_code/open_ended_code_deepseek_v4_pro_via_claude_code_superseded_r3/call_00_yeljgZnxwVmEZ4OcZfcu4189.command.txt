@@ -1,0 +1,128 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+from sklearn.decomposition import PCA
+from collections import defaultdict
+
+# ---- 1. Read metadata and identify collisions vs aggregates ----
+meta_rows = []
+with open('/workspace/inputs/ROSMAP_meta_ad.csv') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        meta_rows.append(row)
+
+meta_by_id = defaultdict(list)
+for row in meta_rows:
+    meta_by_id[row['projid']].append(row)
+
+# Identify collision groups vs aggregate groups
+collision_ids = set()
+aggregate_ids = {}  # id -> number of rows
+
+for pid, rows in meta_by_id.items():
+    if len(rows) <= 1:
+        continue
+    invariant_keys = ['msex', 'educ', 'apoe_genotype']
+    all_match = True
+    for key in invariant_keys:
+        vals = set(r[key] for r in rows)
+        if len(vals) > 1:
+            all_match = False
+            break
+    if all_match:
+        aggregate_ids[pid] = len(rows)
+    else:
+        collision_ids.add(pid)
+
+print("Collision IDs (exclude):", sorted(collision_ids))
+print("Aggregate IDs (average):", aggregate_ids)
+
+# ---- 2. Read expression matrix ----
+with open('/workspace/inputs/ROSMAP_genexp_ad.csv') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+
+sample_ids = header[1:]  # skip the 'gene' label
+gene_names = []
+data_rows = []
+for row in reader:
+    gene_names.append(row[0])
+    data_rows.append([float(x) for x in row[1:]])
+
+X_raw = np.array(data_rows)  # shape: (n_genes, n_samples)
+n_genes, n_samples = X_raw.shape
+print(f"\nExpression matrix: {n_genes} genes x {n_samples} samples")
+
+sample_idx_map = defaultdict(list)
+for i, sid in enumerate(sample_ids):
+    sample_idx_map[sid].append(i)
+
+print(f"Unique sample IDs in expression: {len(sample_idx_map)}")
+
+# ---- 3. Resolve duplicates ----
+cols_to_keep = []
+for sid, indices in sorted(sample_idx_map.items()):
+    if sid in collision_ids:
+        continue
+    elif sid in aggregate_ids:
+        cols_to_keep.append((sid, indices))
+    else:
+        assert len(indices) == 1, f"Expected 1 for {sid}, got {len(indices)}. Collision? {sid in collision_ids}"
+        cols_to_keep.append((sid, indices[0]))
+
+print(f"Samples after resolution: {len(cols_to_keep)}")
+
+# Build resolved matrix
+resolved_samples = []
+resolved_data = np.zeros((n_genes, len(cols_to_keep)))
+for j, (sid, col_info) in enumerate(cols_to_keep):
+    resolved_samples.append(sid)
+    if isinstance(col_info, list):
+        resolved_data[:, j] = X_raw[:, col_info].mean(axis=1)
+    else:
+        resolved_data[:, j] = X_raw[:, col_info]
+
+# ---- 4. Transpose: samples as rows, genes as columns ----
+X = resolved_data.T
+print(f"Transposed: {X.shape[0]} samples x {X.shape[1]} genes")
+
+# ---- 5. log10(x + 1) transform ----
+X_log = np.log10(X + 1)
+print(f"After log10(x+1): min={X_log.min():.4f}, max={X_log.max():.4f}")
+
+# ---- 6. Remove zero-variance genes ----
+gene_vars = np.var(X_log, axis=0)
+nzv_mask = gene_vars > 0
+print(f"Zero-variance genes: {(~nzv_mask).sum()} out of {len(gene_vars)}")
+X_filt = X_log[:, nzv_mask]
+print(f"Filtered: {X_filt.shape}")
+
+# ---- 7. Center features (genes) ----
+gene_means = X_filt.mean(axis=0)
+X_centered = X_filt - gene_means
+print(f"Centered: max abs gene mean = {np.abs(gene_means).max():.2e}")
+
+# ---- 8. PCA with 100 components ----
+pca = PCA(n_components=100, svd_solver='auto')
+pca.fit(X_centered)
+
+# ---- 9. Results ----
+print(f"\n===== PCA RESULTS =====")
+print(f"PC1 explained variance ratio: {pca.explained_variance_ratio_[0]:.10f}")
+print(f"PC1 % of total variance: {pca.explained_variance_ratio_[0] * 100:.6f}%")
+print(f"Sum of first 100 PCs: {pca.explained_variance_ratio_.sum():.6f}")
+print(f"Number of components: {pca.n_components_}")
+
+# Sanity: total variance = trace of covariance matrix
+total_var = np.var(X_centered, axis=0).sum()
+print(f"Total variance (trace): {total_var:.4f}")
+print(f"Sum explained_var_: {pca.explained_variance_.sum():.4f}")
+print(f"Ratio check: {pca.explained_variance_.sum() / total_var:.6f}")
+
+# Check: sklearn's explained_variance_ratio_ sums correctly
+print(f"explained_variance_ratio_ sum: {pca.explained_variance_ratio_.sum():.6f}")
+
+# Show top 5 PCs
+for i in range(5):
+    print(f"PC{i+1}: {pca.explained_variance_ratio_[i]*100:.4f}% (cumulative: {pca.explained_variance_ratio_[:i+1].sum()*100:.4f}%)")
+PYEOF

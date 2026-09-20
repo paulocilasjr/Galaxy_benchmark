@@ -1,0 +1,125 @@
+python3 -c "
+# Final computation with full diagnostics
+import os
+
+def parse_fasta(filepath):
+    seqs = []
+    cur_h, cur_s = None, []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if cur_h:
+                    seqs.append((cur_h, ''.join(cur_s)))
+                cur_h = line[1:]
+                cur_s = []
+            else:
+                cur_s.append(line.upper())
+        if cur_h:
+            seqs.append((cur_h, ''.join(cur_s)))
+    return seqs
+
+def count_pis(sequences):
+    '''Count parsimony informative sites. Gaps treated as missing data.'''
+    if len(sequences) < 4:  # need >=4 seqs for >=2 states each in >=2 seqs
+        # Actually even with 4 seqs, a site might need all 4
+        # Let the main code handle it
+        pass
+    
+    if len(sequences) < 2:
+        return 0, 0
+    
+    seqs = [s for _, s in sequences if len(s) > 0]
+    if not seqs:
+        return 0, 0
+    
+    n = len(seqs[0])
+    pis = 0
+    for col in range(n):
+        chars = [s[col] for s in seqs if col < len(s)]
+        freq = {}
+        for c in chars:
+            if c == '-':
+                continue
+            freq[c] = freq.get(c, 0) + 1
+        inf = sum(1 for v in freq.values() if v >= 2)
+        if inf >= 2:
+            pis += 1
+    return pis, n
+
+def mannwhitneyu(x, y):
+    n1, n2 = len(x), len(y)
+    combined = [(v, 0) for v in x] + [(v, 1) for v in y]
+    combined.sort(key=lambda t: t[0])
+    
+    ranks = [0.0] * len(combined)
+    i = 0
+    while i < len(combined):
+        j = i
+        while j < len(combined) and combined[j][0] == combined[i][0]:
+            j += 1
+        midrank = (i + j + 1) / 2.0  # 1-indexed midrank
+        for k in range(i, j):
+            ranks[k] = midrank
+        i = j
+    
+    r1 = sum(ranks[k] for k in range(len(combined)) if combined[k][1] == 0)
+    u1 = r1 - n1 * (n1 + 1) / 2.0
+    return u1
+
+animals_dir = '/workspace/tmp/animals'
+fungi_dir = '/workspace/tmp/fungi'
+
+animals_mafft = set(f for f in os.listdir(animals_dir) if f.endswith('.mafft'))
+fungi_mafft = set(f for f in os.listdir(fungi_dir) if f.endswith('.mafft'))
+shared = sorted(animals_mafft & fungi_mafft)
+
+animal_pis = []
+fungi_pis = []
+details = []
+
+for mf in shared:
+    af = os.path.join(animals_dir, mf)
+    ff = os.path.join(fungi_dir, mf)
+    
+    seqs_a = parse_fasta(af)
+    seqs_f = parse_fasta(ff)
+    
+    pis_a, alen_a = count_pis(seqs_a)
+    pis_f, alen_f = count_pis(seqs_f)
+    
+    pct_a = (pis_a / alen_a * 100.0) if alen_a > 0 else 0.0
+    pct_f = (pis_f / alen_f * 100.0) if alen_f > 0 else 0.0
+    
+    animal_pis.append(pct_a)
+    fungi_pis.append(pct_f)
+    details.append((mf, len(seqs_a), len(seqs_f), alen_a, alen_f, pis_a, pis_f, pct_a, pct_f))
+
+print(f'Total shared OGs: {len(shared)}')
+print(f'Animals: n={len(animal_pis)}, mean PIS%={sum(animal_pis)/len(animal_pis):.4f}, median={sorted(animal_pis)[len(animal_pis)//2]:.4f}')
+print(f'Fungi:   n={len(fungi_pis)}, mean PIS%={sum(fungi_pis)/len(fungi_pis):.4f}, median={sorted(fungi_pis)[len(fungi_pis)//2]:.4f}')
+print(f'Animals PIS% range: {min(animal_pis):.4f} - {max(animal_pis):.4f}')
+print(f'Fungi PIS% range: {min(fungi_pis):.4f} - {max(fungi_pis):.4f}')
+
+# Count by species
+from collections import Counter
+animal_sp_counts = Counter(len(parse_fasta(os.path.join(animals_dir, mf))) for mf in shared)
+fungi_sp_counts = Counter(len(parse_fasta(os.path.join(fungi_dir, mf))) for mf in shared)
+print(f'\\nAnimal species counts: {dict(sorted(animal_sp_counts.items()))}')
+print(f'Fungi species counts: {dict(sorted(fungi_sp_counts.items()))}')
+
+u_stat = mannwhitneyu(animal_pis, fungi_pis)
+print(f'\\nMann-Whitney U (animals vs fungi): {u_stat}')
+
+# Verify: U1 + U2 should = n1*n2
+n1, n2 = len(animal_pis), len(fungi_pis)
+u_rev = mannwhitneyu(fungi_pis, animal_pis)
+print(f'U (fungi vs animals): {u_rev}')
+print(f'U1 + U2 = {u_stat + u_rev}, n1*n2 = {n1*n2}')
+
+# Count non-zero PIS values
+print(f'\\nAnimal OGs with PIS > 0: {sum(1 for v in animal_pis if v > 0)}')
+print(f'Fungi OGs with PIS > 0: {sum(1 for v in fungi_pis if v > 0)}')
+print(f'Animal OGs with PIS > 0 in BOTH: {sum(1 for a,f in zip(animal_pis, fungi_pis) if a > 0 and f > 0)}')
+"
+

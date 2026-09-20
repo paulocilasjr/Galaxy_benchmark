@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import gc, time
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+start=time.time()
+path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+hdr=pd.read_csv(path, nrows=0)
+dtypes={c:np.int32 for c in hdr.columns[1:]}
+gene_by_sample=pd.read_csv(path, index_col=0, dtype=dtypes)
+nonzero=gene_by_sample.sum(axis=1)>0
+print('genes total/nonzero/allzero',len(nonzero),int(nonzero.sum()),int((~nonzero).sum()),flush=True)
+counts=gene_by_sample.loc[nonzero].T
+del gene_by_sample, nonzero, hdr, dtypes
+gc.collect()
+counts.index.name='sample'
+meta=pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample').loc[counts.index].copy()
+meta['batch']=pd.Categorical(meta['batch'].astype(str), categories=['1','2','3','4'])
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+print('loaded',counts.shape,'dtype',counts.dtypes.iloc[0],'elapsed',round(time.time()-start,2),flush=True)
+
+dds=DeseqDataSet(counts=counts, metadata=meta, design='~ batch + sex', refit_cooks=True,
+                 n_cpus=1, low_memory=True)
+print('design columns',list(dds.obsm['design_matrix'].columns),flush=True)
+del counts,meta
+gc.collect()
+dds.deseq2()
+print('fit elapsed',round(time.time()-start,2),flush=True)
+stat_res=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=1)
+stat_res.summary()
+print('LFC columns',list(stat_res.LFC.columns),flush=True)
+print('FAM138A unshrunk',stat_res.results_df.loc['FAM138A'].to_dict(),flush=True)
+stat_res.lfc_shrink(coeff='sex[T.M]')
+row=stat_res.results_df.loc['FAM138A']
+print('FAM138A shrunk',row.to_dict(),flush=True)
+print('passes thresholds',bool(abs(row['log2FoldChange'])>0.5 and row['baseMean']>10),flush=True)
+print('final elapsed',round(time.time()-start,2),flush=True)
+PY"

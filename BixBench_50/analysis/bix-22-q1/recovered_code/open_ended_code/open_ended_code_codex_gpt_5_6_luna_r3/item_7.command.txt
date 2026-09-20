@@ -1,0 +1,62 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from pathlib import Path
+import numpy as np
+
+base=Path('/workspace/inputs')
+# Load metadata keyed by exact matrix gene label.
+meta={}
+with open(base/'GeneMetaInfo_Zenodo.csv', newline='') as f:
+    for row in csv.DictReader(f):
+        key=row['']
+        if key in meta:
+            raise RuntimeError(f'duplicate metadata gene {key}')
+        meta[key]=(float(row['Length']), row['gene_biotype'])
+
+# Use every matrix column whose annotated cell type is one of the requested types.
+with open(base/'Sample_annotated_Zenodo.csv', newline='') as f:
+    ann={row['sample']:row['celltype'] for row in csv.DictReader(f)}
+
+types=['CD4','CD8','CD14','CD19']
+with open(base/'BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    reader=csv.reader(f)
+    header=next(reader)
+    sample_names=header[1:]
+    if any(s not in ann for s in sample_names):
+        raise RuntimeError('unannotated matrix sample')
+    group_idx={ct:np.array([i for i,s in enumerate(sample_names) if ann[s]==ct], dtype=np.int64) for ct in types}
+    print('sample counts', {ct:len(ix) for ct,ix in group_idx.items()})
+    lengths=[]
+    sums={ct:[] for ct in types}
+    nrows=0
+    npc=0
+    missing_meta=[]
+    for row in reader:
+        nrows+=1
+        gene=row[0]
+        if gene not in meta:
+            missing_meta.append(gene)
+            continue
+        length, biotype=meta[gene]
+        if biotype"'!='"'protein_coding':
+            continue
+        if len(row)"'!=len(header):
+            raise RuntimeError(f'"'bad row length for {gene}: {len(row)}')
+        vals=np.asarray(row[1:], dtype=np.float64)
+        lengths.append(length)
+        for ct, ix in group_idx.items():
+            sums[ct].append(float(vals[ix].mean()))
+        npc+=1
+    if missing_meta:
+        print('matrix genes missing metadata', len(missing_meta), missing_meta[:5])
+    if nrows "'!= len(meta):
+        print('"'matrix rows',nrows,'metadata rows',len(meta))
+
+x=np.asarray(lengths, dtype=np.float64)
+print('protein coding rows used',len(x),'length range',x.min(),x.max())
+for ct in types:
+    y=np.asarray(sums[ct], dtype=np.float64)
+    mask=np.isfinite(x)&np.isfinite(y)
+    r=np.corrcoef(x[mask],y[mask])[0,1]
+    print(ct, 'r=',repr(float(r)), 'abs=',repr(float(abs(r))), 'mean range=',float(y.min()),float(y.max()), 'zeros=',int((y==0).sum()))
+PY"

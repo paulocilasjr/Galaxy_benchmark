@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5e80f64c6dcdc3b0a",
+  "history_id": "bbd44e69cb8906b5cfafcf561b38e52c",
+  "tool_id": "treeness-zip-median-diff-20260715-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T23:33:52.326506",
+  "update_time": "2026-07-16T00:18:28.591927",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > treeness_job.py <<'PY'\nimport sys, zipfile, statistics, re, math\n\nnumber_re = re.compile(r'[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?')\n\nclass Parser:\n    def __init__(self, text):\n        self.s = text.strip()\n        self.n = len(self.s)\n        self.total = 0.0\n        self.internal = 0.0\n\n    def skip_ws_comments(self, i):\n        while i < self.n:\n            if self.s[i].isspace():\n                i += 1\n                continue\n            if self.s[i] == '[':\n                depth = 1\n                i += 1\n                while i < self.n and depth:\n                    if self.s[i] == '[':\n                        depth += 1\n                    elif self.s[i] == ']':\n                        depth -= 1\n                    i += 1\n                continue\n            break\n        return i\n\n    def parse_label(self, i):\n        i = self.skip_ws_comments(i)\n        if i < self.n and self.s[i] == \"'\":\n            i += 1\n            while i < self.n:\n                if self.s[i] == \"'\":\n                    if i + 1 < self.n and self.s[i + 1] == \"'\":\n                        i += 2\n                        continue\n                    i += 1\n                    break\n                i += 1\n            return self.skip_ws_comments(i)\n        while i < self.n and self.s[i] not in ':,();':\n            if self.s[i] == '[':\n                break\n            i += 1\n        return self.skip_ws_comments(i)\n\n    def parse_length(self, i):\n        i = self.skip_ws_comments(i)\n        if i >= self.n or self.s[i] != ':':\n            return i, None\n        i += 1\n        i = self.skip_ws_comments(i)\n        m = number_re.match(self.s, i)\n        if not m:\n            raise ValueError('branch length expected near offset %d' % i)\n        value = float(m.group(0))\n        i = m.end()\n        return self.skip_ws_comments(i), value\n\n    def parse_subtree(self, i):\n        i = self.skip_ws_comments(i)\n        if i >= self.n:\n            raise ValueError('unexpected end of tree')\n        if self.s[i] == '(':\n            i += 1\n            child_count = 0\n            while True:\n                i = self.parse_subtree(i)\n                child_count += 1\n                i = self.skip_ws_comments(i)\n                if i < self.n and self.s[i] == ',':\n                    i += 1\n                    continue\n                if i < self.n and self.s[i] == ')':\n                    i += 1\n                    break\n                raise ValueError('expected comma or close parenthesis near offset %d' % i)\n            if child_count == 0:\n                raise ValueError('internal node without children')\n            i = self.parse_label(i)\n            i, length = self.parse_length(i)\n            if length is not None:\n                self.total += length\n                self.internal += length\n            return i\n        else:\n            i = self.parse_label(i)\n            i, length = self.parse_length(i)\n            if length is not None:\n                self.total += length\n            return i\n\n    def treeness(self):\n        i = self.parse_subtree(0)\n        i = self.skip_ws_comments(i)\n        if i < self.n and self.s[i] == ';':\n            i += 1\n        i = self.skip_ws_comments(i)\n        if i != self.n:\n            raise ValueError('unexpected trailing text near offset %d' % i)\n        if self.total <= 0.0:\n            raise ValueError('non-positive total branch length')\n        return self.internal / self.total\n\ndef compute_group(zip_path):\n    rows = []\n    failures = []\n    with zipfile.ZipFile(zip_path) as zf:\n        names = sorted(n for n in zf.namelist() if n.endswith('.treefile') and not n.endswith('/'))\n        for name in names:\n            try:\n                raw = zf.read(name).decode('utf-8').strip()\n                if not raw:\n                    raise ValueError('empty treefile')\n                val = Parser(raw).treeness()\n                if not math.isfinite(val):\n                    raise ValueError('non-finite treeness')\n                rows.append((name, val))\n            except Exception as exc:\n                failures.append((name, str(exc)))\n    if not rows:\n        raise RuntimeError('no valid .treefile members in %s' % zip_path)\n    return names, rows, failures\n\ndef fmt(x):\n    return format(x, '.17g')\n\nanimals_zip, fungi_zip, summary_path, answer_path = sys.argv[1:5]\nresults = {}\nfor group, path in [('animals', animals_zip), ('fungi', fungi_zip)]:\n    names, rows, failures = compute_group(path)\n    median = statistics.median(v for _, v in rows)\n    results[group] = {'names': names, 'rows': rows, 'failures': failures, 'median': median}\n\ndiff = results['fungi']['median'] - results['animals']['median']\nwith open(summary_path, 'w', encoding='utf-8') as out:\n    out.write('record\\tgroup\\tmember\\ttreeness\\tn_treefiles\\tn_valid\\tn_failed\\tmedian_treeness\\tdifference_fungi_minus_animals\\n')\n    for group in ['animals', 'fungi']:\n        r = results[group]\n        for member, value in r['rows']:\n            out.write('tree\\t%s\\t%s\\t%s\\t%d\\t%d\\t%d\\t%s\\t\\n' % (group, member, fmt(value), len(r['names']), len(r['rows']), len(r['failures']), fmt(r['median'])))\n    out.write('difference\\tfungi_minus_animals\\t\\t\\t%d\\t%d\\t%d\\t\\t%s\\n' % (len(results['animals']['names']) + len(results['fungi']['names']), len(results['animals']['rows']) + len(results['fungi']['rows']), len(results['animals']['failures']) + len(results['fungi']['failures']), fmt(diff)))\nwith open(answer_path, 'w', encoding='utf-8') as out:\n    out.write(fmt(diff) + '\\n')\nPY\npython treeness_job.py \"/jetstream2/scratch/main/jobs/78547603/inputs/dataset_08ec74c0-a79d-4683-b47a-f894a91d31f7.dat\" \"/jetstream2/scratch/main/jobs/78547603/inputs/dataset_feeb634d-25aa-4b7f-b5e9-96db97e1de1f.dat\" treeness_summary.tsv answer.txt",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "animals_zip": {
+      "id": "f9cad7b01a4721351ae8f868d6482e43",
+      "src": "hda",
+      "uuid": "08ec74c0-a79d-4683-b47a-f894a91d31f7"
+    },
+    "fungi_zip": {
+      "id": "f9cad7b01a472135f949ca67d7006326",
+      "src": "hda",
+      "uuid": "feeb634d-25aa-4b7f-b5e9-96db97e1de1f"
+    }
+  },
+  "outputs": {
+    "summary": {
+      "id": "f9cad7b01a47213516473f12dc94ace0",
+      "src": "hda",
+      "uuid": "506930a6-a6d7-4436-8c02-ffab9cb20a73"
+    },
+    "answer": {
+      "id": "f9cad7b01a472135bd65207a6564fac8",
+      "src": "hda",
+      "uuid": "f717eae1-edea-436d-ae67-447a1ee02173"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

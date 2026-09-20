@@ -1,0 +1,68 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+from sklearn.decomposition import PCA
+from collections import Counter
+
+# ---- Read expression matrix ----
+with open('inputs/ROSMAP_genexp_ad.csv') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    all_sample_ids = header[1:]
+    genes = []
+    raw_data = []
+    for row in reader:
+        genes.append(row[0])
+        raw_data.append([float(x) for x in row[1:]])
+
+raw_matrix = np.array(raw_data, dtype=np.float64)  # genes x samples (2456 x 222)
+
+# ---- Identity resolution ----
+id_counts = Counter(all_sample_ids)
+repeated_ids = {k for k, v in id_counts.items() if v > 1}
+keep_mask = np.array([sid not in repeated_ids for sid in all_sample_ids])
+filtered = raw_matrix[:, keep_mask]
+n_kept = filtered.shape[1]
+print(f"Kept {n_kept} samples with unique IDs")
+
+# ---- Transpose, transform, PCA ----
+expr = filtered.T  # samples x genes
+log_expr = np.log10(expr + 1.0)
+
+# Check for zero-variance features
+gene_stds = np.std(log_expr, axis=0, ddof=0)
+n_zero = np.sum(gene_stds == 0)
+print(f"Zero-variance genes: {n_zero}")
+if n_zero > 0:
+    log_expr = log_expr[:, gene_stds > 0]
+
+# PCA
+pca = PCA(n_components=100, random_state=42)
+pca.fit(log_expr)
+
+pc1_pct = pca.explained_variance_ratio_[0] * 100
+print(f"\nPC1 explained variance: {pc1_pct:.8f}%")
+
+# Additional validation
+print(f"\nExplained variance ratio sum (100 PCs): {pca.explained_variance_ratio_.sum():.10f}")
+print(f"Number of features: {log_expr.shape[1]}")
+print(f"Number of samples: {log_expr.shape[0]}")
+
+# Verify using eigenvalues directly
+# PCA stores eigenvalues in explained_variance_
+eigenvalues = pca.explained_variance_
+total_var = np.var(log_expr, axis=0, ddof=0).sum()
+print(f"\nManual verification:")
+print(f"  Total variance (sum of feature variances): {total_var:.10f}")
+print(f"  Sum of 100 eigenvalues: {eigenvalues.sum():.10f}")
+print(f"  PC1 eigenvalue / total variance * 100: {eigenvalues[0] / total_var * 100:.8f}%")
+print(f"  sklearn explained_variance_ratio_[0] * 100: {pc1_pct:.8f}%")
+
+# Check that all eigenvalues sum would equal total variance
+# (PCA with n_components < n_features only computes top eigenvalues)
+print(f"  First eigenvalue: {eigenvalues[0]:.4f}")
+print(f"  Total variance: {total_var:.4f}")
+print(f"  Ratio: {eigenvalues[0]/total_var:.8f}")
+
+PYEOF
+

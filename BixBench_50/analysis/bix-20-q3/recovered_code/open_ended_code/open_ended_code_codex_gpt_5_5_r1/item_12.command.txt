@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, xml.etree.ElementTree as ET
+from pathlib import Path
+NS={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+def col_to_idx(col):
+    n=0
+    for ch in col:
+        n=n*26+ord(ch)-64
+    return n-1
+
+def shared_strings(z):
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    ss=[]
+    for si in root.findall('m:si', NS):
+        texts=[]
+        for t in si.findall('.//m:t', NS):
+            texts.append(t.text or '')
+        ss.append(''.join(texts))
+    return ss
+
+def read_xlsx(path):
+    with zipfile.ZipFile(path) as z:
+        ss=shared_strings(z)
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows={}
+        for row in root.findall('.//m:sheetData/m:row', NS):
+            r=int(row.attrib['r'])
+            cells={}
+            for c in row.findall('m:c', NS):
+                ref=c.attrib['r']; col=re.match(r'([A-Z]+)', ref).group(1); idx=col_to_idx(col)
+                v=c.find('m:v', NS)
+                if v is None: val=None
+                elif c.attrib.get('t')=='s': val=ss[int(v.text)]
+                else:
+                    text=v.text
+                    try: val=float(text) if '.' in text or 'E' in text.upper() else int(text)
+                    except Exception: val=text
+                cells[idx]=val
+            rows[r]=cells
+        maxcol=max((max(cells) for cells in rows.values() if cells), default=-1)+1
+        return [[rows.get(r,{}).get(i) for i in range(maxcol)] for r in range(1, max(rows)+1)]
+
+rows=read_xlsx(Path('inputs/CHIP_DP10_GQ20_PASS/230209_Exome_GRCh38_CHIP_179-P1.xlsx'))
+for i,row in enumerate(rows[:8], start=1):
+    print('ROW', i)
+    for j,v in enumerate(row):
+        if v is not None:
+            print(j, v)
+print('nrows', len(rows), 'ncols', max(len(r) for r in rows))
+PY"

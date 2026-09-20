@@ -1,0 +1,46 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, xml.etree.ElementTree as ET
+from collections import Counter
+
+def parse(path):
+ z=zipfile.ZipFile(path); M='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'; ns={'m':M[1:-1]}
+ items=[''.join(t.text or '' for t in si.iter(M+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall('m:si',ns)]
+ def ci(ref):
+  s=''
+  for ch in ref:
+   if ch.isalpha(): s+=ch
+   else: break
+  n=0
+  for ch in s: n=n*26+ord(ch)-64
+  return n-1
+ rows=[]
+ for row in ET.fromstring(z.read('xl/worksheets/sheet1.xml')).iter(M+'row'):
+  r=int(row.get('r')); vals={}
+  for c in row.findall(M+'c'):
+   idx=ci(c.get('r')); typ=c.get('t'); v=c.find(M+'v')
+   if v is None:
+    is_=c.find(M+'is'); val=''.join(t.text or '' for t in is_.iter(M+'t')) if is_ is not None else ''
+   else:
+    val=v.text or ''
+    if typ=='s': val=items[int(val)]
+   vals[idx]=val
+  rows.append((r,vals))
+ return rows
+rows=parse('/workspace/inputs/CHIP_DP10_GQ20_PASS/230209_Exome_GRCh38_CHIP_556-PF.xlsx')
+data=rows[2:]
+nr=[v for r,v in data if v.get(4)"'!='"'Reference']
+print('nr rows',len(nr))
+for col,name in [(30,'Match InCHIP'),(12,'Gene Names')]:
+ c=Counter()
+ for v in nr:
+  val=v.get(col)
+  if val:
+   # split by comma? For col12 maybe multiple, for col30 single
+   for x in [x.strip() for x in str(val).split(',') if x.strip()]:
+    c[x]+=1
+ print('\\n',name)
+ for g,n in c.most_common(20): print(g,n)
+# Also by Gene Names using comma split vs single
+print('\\nTop match col30 all')
+print(Counter(v.get(30) for v in nr).most_common())
+PY"

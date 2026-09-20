@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reuse by executing simplified ORA for pooled abs lists and also directional per strain; output counts
+import math,csv,re
+from collections import defaultdict
+p2g=defaultdict(set);g2p=defaultdict(set)
+for l in open('/workspace/tmp/pau_link.tsv'):
+ g,p=l.strip().split('\\t');g=g.split(':',1)[1];p=p.split(':',1)[1];p2g[p].add(g);g2p[g].add(p)
+names=set(l.split('\\t',1)[0] for l in open('/workspace/tmp/pau_pathways.tsv'))
+p2g={p:g for p,g in p2g.items() if p in names};g2p={g:{p for p in ps if p in names} for g,ps in g2p.items()}
+N=len({g for gs in p2g.values() for g in gs})
+def bh(ps):
+ n=len(ps);idx=sorted(range(n),key=lambda i:ps[i]);q=[0]*n;prev=1
+ for rank,i in enumerate(idx): v=ps[i]*n/(rank+1); q[i]=min(v,prev);prev=q[i]
+ return [min(x,1) for x in q]
+def ora(gs):
+ gs=set(gs)&set(g2p); mapped={g:set(g2p[g]) for g in gs}; qts=set().union(*mapped.values()) if mapped else set()
+ qts={t for t in qts if 10<=len(p2g[t])<=500}; n=len(mapped); rows=[]
+ for t in sorted(qts):
+  k=len(p2g[t]&set(mapped));M=len(p2g[t]);den=math.comb(N,n);p=sum(math.comb(M,i)*math.comb(N-M,n-i)/den for i in range(k,min(n,M)+1));rows.append((t,k,M,n,p))
+ ps=[r[4] for r in rows];pa=bh(ps)
+ return [r[0] for r,a in zip(rows,pa) if r[4]<=.05 and a<=.05]
+for st in ['97','98','99']:
+ genes=[(r['gene'],float(r['lfc'])) for r in csv.DictReader(open(f'/workspace/tmp/res_{st}.csv'))]
+ for label,pred in [('up',lambda x:x>1.5),('down',lambda x:x<-1.5),('abs',lambda x:abs(x)>1.5)]:
+  ids=ora([g for g,l in genes if pred(l)])
+  print(st,label,len(ids),ids)
+PY"

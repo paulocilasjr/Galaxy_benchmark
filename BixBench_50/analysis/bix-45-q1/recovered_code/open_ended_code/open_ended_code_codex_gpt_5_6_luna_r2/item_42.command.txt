@@ -1,0 +1,30 @@
+/bin/bash -lc 'work_tmp=$(mktemp -d /tmp/rcv_scopes.XXXXXX)
+unzip -qq inputs/scogs_animals.zip -d "$work_tmp/animals"
+unzip -qq inputs/scogs_fungi.zip -d "$work_tmp/fungi"
+WORK_TMP="$work_tmp" python - <<'"'PY'
+import os, pathlib, itertools, statistics
+from Bio import AlignIO
+from scipy.stats import mannwhitneyu
+from phykit.services.alignment.base import Alignment
+root=pathlib.Path(os.environ['WORK_TMP'])
+def data(dom):
+ d={}
+ for p in sorted((root/dom).glob('*.faa.mafft')):
+  d[p.stem.replace('.faa','')]= (len(AlignIO.read(str(p),'fasta')), Alignment(alignment_file_path=str(p)).calculate_rcv())
+ return d
+A=data('animals'); F=data('fungi')
+def mw(x,y):
+ for lab,xx,yy in [('raw',x,y),('r4',[round(z,4) for z in x],[round(z,4) for z in y])]:
+  z=mannwhitneyu(xx,yy,alternative='two-sided')
+  print(lab,len(xx),len(yy),float(z.statistic),format(float(z.pvalue),'.17g'))
+for label, aa, ff in [
+ ('all',A,F),
+ ('both2',{k:v for k,v in A.items() if v[0]>=2}, {k:v for k,v in F.items() if v[0]>=2}),
+ ('a2_allF',{k:v for k,v in A.items() if v[0]>=2},F),
+ ('common', {k:A[k] for k in A if k in F},{k:F[k] for k in A if k in F}),
+ ('common2',{k:A[k] for k in A if k in F and A[k][0]>=2},{k:F[k] for k in A if k in F and A[k][0]>=2}),
+ ('four', {k:A[k] for k in A if A[k][0]==4},{k:F[k] for k in A if A[k][0]==4}),
+]:
+ print('\\n',label)
+ mw([v[1] for v in aa.values()],[v[1] for v in ff.values()])
+PY"

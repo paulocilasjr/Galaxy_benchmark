@@ -1,0 +1,76 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import requests
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+import csv
+
+# Load the gene data
+df = pd.read_csv("/workspace/res_GluFevsGluFePlus.csv")
+print(f"Total genes: {len(df)}")
+
+# Filter upregulated
+up_mask = (df['log2FoldChange'] > 1.5) & (df['padj'] < 0.05)
+up_genes = set(df.loc[up_mask, 'gene'].tolist())
+print(f"Upregulated genes: {len(up_genes)}")
+
+# All background genes
+all_genes = set(df['gene'].tolist())
+print(f"All genes: {len(all_genes)}")
+
+# Get KEGG pathway to gene mapping for P. aeruginosa PA14
+# Organism code: pau
+print("\nFetching KEGG pathway-gene links...")
+url = "http://rest.kegg.jp/link/pau/pathway"
+response = requests.get(url, timeout=60)
+print(f"Response status: {response.status_code}")
+print(f"Response length: {len(response.text)}")
+
+# Parse the mapping
+pathway_to_genes = {}
+gene_to_pathways = {}
+for line in response.text.strip().split('\n'):
+    parts = line.split('\t')
+    if len(parts) == 2:
+        gene_id = parts[0].strip()  # e.g., pau:PA14_33530
+        pathway_id = parts[1].strip()  # e.g., path:pau02010
+        
+        # Extract just the gene name (remove pau: prefix)
+        gene_name = gene_id.replace('pau:', '')
+        pathway_name = pathway_id.replace('path:', '')
+        
+        if pathway_name not in pathway_to_genes:
+            pathway_to_genes[pathway_name] = set()
+        pathway_to_genes[pathway_name].add(gene_name)
+        
+        if gene_name not in gene_to_pathways:
+            gene_to_pathways[gene_name] = set()
+        gene_to_pathways[gene_name].add(pathway_name)
+
+print(f"Number of pathways: {len(pathway_to_genes)}")
+print(f"Number of genes with pathway annotations: {len(gene_to_pathways)}")
+
+# Check ABC transporters pathway
+print("\nABC transporters pathway IDs:")
+for pid in pathway_to_genes:
+    if '02010' in pid:
+        print(f"  {pid}: {len(pathway_to_genes[pid])} genes")
+
+# Get pathway names
+url2 = "http://rest.kegg.jp/list/pathway/pau"
+response2 = requests.get(url2, timeout=60)
+pathway_names = {}
+for line in response2.text.strip().split('\n'):
+    parts = line.split('\t')
+    if len(parts) == 2:
+        pid = parts[0].strip().replace('path:', '')
+        pname = parts[1].strip()
+        pathway_names[pid] = pname
+
+# Look for ABC transporters
+for pid, pname in pathway_names.items():
+    if 'ABC' in pname.upper():
+        print(f"  {pid}: {pname}")
+
+PYEOF

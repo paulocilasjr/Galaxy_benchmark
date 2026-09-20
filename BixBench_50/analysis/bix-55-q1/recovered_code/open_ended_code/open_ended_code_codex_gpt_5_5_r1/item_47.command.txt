@@ -1,0 +1,204 @@
+/bin/bash -lc "PYTHONPATH=/workspace/tmp/pyhmmer python3 - <<'PY'
+import os, time, math
+from collections import defaultdict
+from pyhmmer import easel, plan7, hmmer
+
+base='/workspace/tmp/busco_downloads/lineages/eukaryota_odb10'
+inputs=['inputs/Animals_Cele.faa','inputs/Animals_Ggal.faa','inputs/Fungi_Ncra.faa','inputs/Fungi_Scer.faa']
+
+# Load BUSCO cutoffs from the supplied odb10 lineage.
+cutoff={}
+with open(os.path.join(base,'scores_cutoff')) as f:
+    for line in f:
+        if line.strip():
+            bid, score = line.split()[:2]
+            cutoff.setdefault(bid,{})['score']=float(score)
+with open(os.path.join(base,'lengths_cutoff')) as f:
+    for line in f:
+        if line.strip():
+            parts=line.split()
+            bid=parts[0]
+            sd=float(parts[2]) or 1.0
+            length=float(parts[3])
+            cutoff.setdefault(bid,{})['sigma']=sd
+            cutoff.setdefault(bid,{})['length']=length
+
+def sum_hmm_len(coords):
+    used=[]
+    for start,end in sorted(coords):
+        for u in used:
+            if u[0] <= start <= u[1]:
+                if end > u[1]: u[1]=end
+                break
+        else:
+            used.append([start,end])
+    return sum(end-start+1 for start,end in used)
+
+def add_match(target_records, bid, hit):
+    domains=[d for d in hit.domains if d.reported]
+    if not domains:
+        return
+    score=float(hit.score)
+    if score < cutoff[bid]['score']:
+        return
+    hmm_coords=[(int(d.alignment.hmm_from), int(d.alignment.hmm_to)) for d in domains]
+    size=sum_hmm_len(hmm_coords)
+    zeta=(cutoff[bid]['length'] - size) / cutoff[bid]['sigma']
+    rec={
+        'bitscore': score,
+        'length': size,
+        'target_len': int(hit.length),
+        'hmm_coords': hmm_coords,
+    }
+    gene=hit.name.decode() if isinstance(hit.name, bytes) else str(hit.name)
+    if -2 <= zeta <= 2:
+        target_records['complete'][bid][gene].append(rec)
+        target_records['matched_complete'][gene].append(bid)
+    elif zeta < -2:
+        target_records['vlarge'][bid][gene].append(rec)
+        target_records['matched_vlarge'][gene].append(bid)
+    else:
+        target_records['fragment'][bid][gene].append(rec)
+        target_records['matched_fragment'][gene].append(bid)
+
+def get_matched(records, busco_dict_name):
+    return {'complete':'matched_complete','vlarge':'matched_vlarge','fragment':'matched_fragment'}[busco_dict_name]
+
+def remove_remaining_duplicate_matches(records, dict_name):
+    busco_dict=records[dict_name]
+    matched=records[get_matched(records, dict_name)]
+    to_remove=[]
+    for gene, buscos in list(matched.items()):
+        if len(buscos) > 1:
+            bits=[]; busco_matches=[]
+            for bid in buscos:
+                if bid not in busco_matches and bid in busco_dict and gene in busco_dict[bid]:
+                    for match in busco_dict[bid][gene]:
+                        bits.append(match['bitscore'])
+                    busco_matches.append(bid)
+            if len(set(buscos)) == 1 or not bits:
+                continue
+            best_i=max(range(len(bits)), key=lambda i: bits[i])
+            keep=busco_matches[best_i]
+            for dup in set([b for b in buscos if b "'!= keep]):
+                if dup in busco_dict and gene in busco_dict[dup]:
+                    busco_dict[dup].pop(gene, None)
+                    if not busco_dict[dup]:
+                        busco_dict.pop(dup, None)
+                    to_remove.append((gene,dup))
+    for gene,bid in to_remove:
+        if gene in matched:
+            matched[gene]=[x for x in matched[gene] if x != bid]
+            if not matched[gene]: matched.pop(gene,None)
+
+def remove_lower_ranked_duplicates(records, dict_name, already_used, higher_buscos):
+    busco_dict=records[dict_name]
+    matched=records[get_matched(records, dict_name)]
+    for bid in list(busco_dict.keys()):
+        matches=busco_dict[bid]
+        if bid in higher_buscos:
+            busco_dict.pop(bid,None)
+            for gene in list(matches.keys()):
+                if gene in matched:
+                    matched[gene]=[x for x in matched[gene] if x != bid]
+                    if not matched[gene]: matched.pop(gene,None)
+            continue
+        for gene in list(matches.keys()):
+            if gene in already_used:
+                busco_dict[bid].pop(gene,None)
+                if gene in matched:
+                    matched[gene]=[x for x in matched[gene] if x != bid]
+                    if not matched[gene]: matched.pop(gene,None)
+                if not busco_dict.get(bid):
+                    busco_dict.pop(bid,None)
+
+def remove_low_scoring_matches(records, dict_name):
+    busco_dict=records[dict_name]
+    matched=records[get_matched(records, dict_name)]
+    empty=[]
+    for bid, matches in list(busco_dict.items()):
+        if len(matches) > 1:
+            max_bits=max(m['"'bitscore'] for ms in matches.values() for m in ms)
+            for gene, minfo in list(matches.items()):
+                busco_dict[bid][gene]=[m for m in minfo if m['bitscore'] >= 0.85*max_bits]
+                if not busco_dict[bid][gene]: empty.append((bid,gene))
+    for bid,gene in empty:
+        if bid in busco_dict:
+            busco_dict[bid].pop(gene,None)
+            if not busco_dict[bid]: busco_dict.pop(bid,None)
+        if gene in matched:
+            matched[gene]=[x for x in matched[gene] if x "'!= bid]
+            if not matched[gene]: matched.pop(gene,None)
+
+def classify_records(records):
+    already=set()
+    for matches in records['"'complete'].values(): already.update(matches.keys())
+    remove_lower_ranked_duplicates(records, 'vlarge', already, set(records['complete'].keys()))
+    for matches in records['vlarge'].values(): already.update(matches.keys())
+    remove_lower_ranked_duplicates(records, 'fragment', already, set(records['complete'].keys())|set(records['vlarge'].keys()))
+    remove_remaining_duplicate_matches(records, 'complete')
+    remove_remaining_duplicate_matches(records, 'vlarge')
+    remove_remaining_duplicate_matches(records, 'fragment')
+    for name in ['complete','vlarge','fragment']:
+        remove_low_scoring_matches(records, name)
+    single={}
+    multi={}
+    for name in ['complete','vlarge']:
+        for bid, matches in records[name].items():
+            if len(matches)==1:
+                single[bid]=matches
+            else:
+                multi[bid]=matches
+    frag={}
+    for bid, matches in records['fragment'].items():
+        if len(matches)>1:
+            best_gene=max(((gene,m['bitscore']) for gene, ms in matches.items() for m in ms), key=lambda x:x[1])[0]
+            frag[bid]={best_gene:matches[best_gene]}
+        else:
+            frag[bid]=matches
+    return single, multi, frag
+
+# Load all HMMs once in the file-system sorted order used by BUSCO's output processing.
+hmm_paths=sorted(os.path.join(base,'hmms',p) for p in os.listdir(os.path.join(base,'hmms')) if p.endswith('.hmm'))
+hmms=[]
+for p in hmm_paths:
+    with plan7.HMMFile(p) as hf:
+        hmms.append(next(hf))
+print('hmms',len(hmms), flush=True)
+alpha=easel.Alphabet.amino()
+all_results={}
+for inp in inputs:
+    t=time.time()
+    with easel.SequenceFile('/workspace/'+inp, digital=True, alphabet=alpha) as sf:
+        seqs=sf.read_block()
+    records={
+        'complete':defaultdict(lambda: defaultdict(list)),
+        'vlarge':defaultdict(lambda: defaultdict(list)),
+        'fragment':defaultdict(lambda: defaultdict(list)),
+        'matched_complete':defaultdict(list),
+        'matched_vlarge':defaultdict(list),
+        'matched_fragment':defaultdict(list),
+    }
+    for hits in hmmer.hmmsearch(hmms, seqs, cpus=8, parallel='queries'):
+        bid=hits.query.name.decode() if isinstance(hits.query.name, bytes) else str(hits.query.name)
+        # BUSCO sorts targets by non-overlapping HMM match length, then full-sequence score.
+        tmp=[]
+        for hit in hits:
+            domains=[d for d in hit.domains if d.reported]
+            if not domains:
+                continue
+            length=sum_hmm_len([(int(d.alignment.hmm_from), int(d.alignment.hmm_to)) for d in domains])
+            tmp.append((hit, length, float(hit.score)))
+        for hit,_,_ in sorted(tmp, key=lambda x:(-x[1], -x[2])):
+            add_match(records,bid,hit)
+    single,multi,frag=classify_records(records)
+    all_results[inp]={'single':single,'multi':multi,'frag':frag}
+    print(inp, 'S',len(single),'D',len(multi),'C',len(single)+len(multi),'F',len(frag),'M',len(hmms)-len(single)-len(multi)-len(frag),'time',round(time.time()-t,1), flush=True)
+
+sets_single=[set(r['single']) for r in all_results.values()]
+sets_complete=[set(r['single'])|set(r['multi']) for r in all_results.values()]
+print('intersection_single_all', len(set.intersection(*sets_single)))
+print('intersection_complete_all', len(set.intersection(*sets_complete)))
+# Also print BUSCO IDs if the two differ, for internal sanity.
+print('complete_not_single_shared', len(set.intersection(*sets_complete) - set.intersection(*sets_single)))
+PY"

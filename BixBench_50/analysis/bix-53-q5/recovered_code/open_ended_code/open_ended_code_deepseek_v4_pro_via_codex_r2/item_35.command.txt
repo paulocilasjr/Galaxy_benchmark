@@ -1,0 +1,26 @@
+/bin/bash -lc "cat > /workspace/tmp/run_deseq2_variants.R <<'EOF'
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(org.Mm.eg.db))
+counts <- read.csv('/workspace/inputs/count.csv', row.names=1, check.names=FALSE)
+counts <- as.matrix(counts); storage.mode(counts) <- 'integer'
+coldata <- data.frame(condition=factor(c('KL','KL','KL','WL','WL','WL'), levels=c('KL','WL')), row.names=colnames(counts))
+dds <- DESeqDataSetFromMatrix(countData=counts, colData=coldata, design=~condition)
+dds <- DESeq(dds)
+res <- results(dds, contrast=c('condition','WL','KL'), alpha=0.05)
+# normal shrink
+resn <- lfcShrink(dds, coef='condition_WL_vs_KL', type='normal', res=res, svalue=FALSE)
+# apeglm
+resa <- lfcShrink(dds, coef='condition_WL_vs_KL', type='apeglm', res=res, svalue=FALSE)
+write.csv(as.data.frame(resn), '/workspace/tmp/r_deseq_results_normal.csv')
+write.csv(as.data.frame(resa), '/workspace/tmp/r_deseq_results_apeglm.csv')
+for(type in c('normal','apeglm')) {
+ rr <- if(type=='normal') resn else resa
+ for(pcol in c('pvalue','padj')) {
+  mask <- which("'!is.na(rr[[pcol]]) & rr[[pcol]] < 0.05 & !is.na(rr$log2FoldChange) & abs(rr$log2FoldChange) > 1 & rr$baseMean > 10)
+  cat(type, pcol, length(mask), '"'\\n')
+  sym <- mapIds(org.Mm.eg.db, keys=rownames(rr)[mask], keytype='ENSEMBL', column='SYMBOL', multiVals='first')
+  writeLines(sym["'!is.na(sym)], paste0('"'/workspace/tmp/r_sig_symbols_',type,'_',pcol,'.txt'))
+ }
+}
+EOF
+/workspace/tmp/bin/bin/micromamba run -p /workspace/tmp/mamba_env Rscript /workspace/tmp/run_deseq2_variants.R"

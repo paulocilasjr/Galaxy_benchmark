@@ -1,0 +1,47 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+counts.index.name='gene'
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample')
+# order metadata same as count columns
+counts = counts[layout.index]
+metadata = layout[['Group']].copy()
+metadata.columns=['group']
+print(metadata)
+# Ensure categories sorted; ref DMSO via ref_level
+metadata['group'] = pd.Categorical(metadata['group'])
+print(metadata['group'].cat.categories)
+
+t0=time.time()
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~group',
+    design_factors='group',
+    ref_level=['group','DMSO'],
+    n_cpus=4,
+    quiet=False,
+)
+dds.deseq2()
+print('dds time', time.time()-t0, 'genes after filtering', dds.n_obs, dds.n_vars)
+print(dds.obsm.keys() if hasattr(dds,'obsm') else '')
+# stats
+stat = DeseqStats(dds, contrast=['group','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05, cooks_filter=True, independent_filter=True, n_cpus=4, quiet=False)
+stat.summary()
+res = stat.results_df.copy()
+print('res shape', res.shape)
+print(res.head())
+print('nonNA padj', res['padj'].notna().sum())
+print('padj<0.05', (res['padj']<0.05).sum())
+print('padj<0.05 & abs log2FC>=0.5', ((res['padj']<0.05)&(res['log2FoldChange'].abs()>=0.5)).sum())
+print('NA padj', res['padj'].isna().sum())
+# save results to /tmp for further steps
+res.to_csv('/tmp/pydeseq2_res.csv')
+with open('/tmp/pydeseq2_meta.txt','w') as f:
+    f.write(f'genes_after_filtering={dds.n_obs}\\n')
+PY"

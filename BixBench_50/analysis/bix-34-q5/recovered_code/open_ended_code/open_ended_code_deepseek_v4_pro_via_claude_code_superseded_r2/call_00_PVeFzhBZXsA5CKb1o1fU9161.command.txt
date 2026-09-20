@@ -1,0 +1,98 @@
+/workspace/venv/bin/python3 -c "
+import sys
+sys.path.insert(0, '/workspace/venv/lib/python3.11/site-packages')
+import dendropy
+import os
+import numpy as np
+
+animal_dir = '/workspace/extracted'
+fungi_dir = '/workspace/extracted_fungi'
+
+def compute_mean_patristic(tree_file):
+    tree = dendropy.Tree.get(path=tree_file, schema='newick', preserve_underscores=True)
+    taxa = [leaf.taxon for leaf in tree.leaf_node_iter()]
+    n = len(taxa)
+    if n < 2:
+        return None
+    pdm = tree.phylogenetic_distance_matrix()
+    distances = []
+    for i in range(n):
+        for j in range(i+1, n):
+            distances.append(pdm(taxa[i], taxa[j]))
+    return np.mean(distances)
+
+# ALL animal orthogroups
+animal_means_all = []
+for f in os.listdir(animal_dir):
+    if f.endswith('.treefile'):
+        m = compute_mean_patristic(os.path.join(animal_dir, f))
+        if m is not None:
+            animal_means_all.append(m)
+
+# ALL fungi orthogroups
+fungi_means_all = []
+for f in os.listdir(fungi_dir):
+    if f.endswith('.treefile'):
+        m = compute_mean_patristic(os.path.join(fungi_dir, f))
+        if m is not None:
+            fungi_means_all.append(m)
+
+print(f'All animal orthogroups: {len(animal_means_all)}, median: {np.median(animal_means_all):.6f}')
+print(f'All fungi orthogroups: {len(fungi_means_all)}, median: {np.median(fungi_means_all):.6f}')
+print(f'Ratio (all): {np.median(fungi_means_all)/np.median(animal_means_all):.6f}')
+
+# Median of ratios for shared orthogroups
+animals_s = set()
+for f in os.listdir(animal_dir):
+    if f.endswith('.treefile'):
+        animals_s.add(f.replace('.mafft.clipkit.treefile', ''))
+
+fungi_s = set()
+for f in os.listdir(fungi_dir):
+    if f.endswith('.treefile'):
+        fungi_s.add(f.replace('.mafft.clipkit.treefile', ''))
+
+shared = sorted(animals_s & fungi_s)
+ratios = []
+for og in shared:
+    am = compute_mean_patristic(os.path.join(animal_dir, og + '.mafft.clipkit.treefile'))
+    fm = compute_mean_patristic(os.path.join(fungi_dir, og + '.mafft.clipkit.treefile'))
+    if am is not None and fm is not None:
+        ratios.append(fm/am)
+
+print(f'\\nMedian of per-gene ratios: {np.median(ratios):.6f}')
+
+# Only full 4-species orthogroups
+full4_animal = []
+full4_fungi = []
+full4_ratios = []
+for og in shared:
+    tree_a = dendropy.Tree.get(path=os.path.join(animal_dir, og + '.mafft.clipkit.treefile'), schema='newick', preserve_underscores=True)
+    tree_f = dendropy.Tree.get(path=os.path.join(fungi_dir, og + '.mafft.clipkit.treefile'), schema='newick', preserve_underscores=True)
+    n_a = len(list(tree_a.leaf_node_iter()))
+    n_f = len(list(tree_f.leaf_node_iter()))
+    if n_a == 4 and n_f == 4:
+        taxa_a = [leaf.taxon for leaf in tree_a.leaf_node_iter()]
+        taxa_f = [leaf.taxon for leaf in tree_f.leaf_node_iter()]
+        pdm_a = tree_a.phylogenetic_distance_matrix()
+        pdm_f = tree_f.phylogenetic_distance_matrix()
+        
+        dists_a = []
+        for i in range(4):
+            for j in range(i+1, 4):
+                dists_a.append(pdm_a(taxa_a[i], taxa_a[j]))
+        dists_f = []
+        for i in range(4):
+            for j in range(i+1, 4):
+                dists_f.append(pdm_f(taxa_f[i], taxa_f[j]))
+        
+        full4_animal.append(np.mean(dists_a))
+        full4_fungi.append(np.mean(dists_f))
+        full4_ratios.append(np.mean(dists_f)/np.mean(dists_a))
+
+print(f'Full 4-species orthogroups: {len(full4_ratios)}')
+print(f'Animal median (full4): {np.median(full4_animal):.6f}')
+print(f'Fungi median (full4): {np.median(full4_fungi):.6f}')
+print(f'Ratio (full4): {np.median(full4_fungi)/np.median(full4_animal):.6f}')
+print(f'Median of per-gene ratios (full4): {np.median(full4_ratios):.6f}')
+" 2>&1

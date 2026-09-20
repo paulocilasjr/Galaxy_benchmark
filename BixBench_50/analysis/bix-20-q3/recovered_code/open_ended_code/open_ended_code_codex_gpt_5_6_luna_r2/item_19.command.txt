@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+# Recompute carrier candidate and print filter steps/counts for several precise rules.
+from openpyxl import load_workbook
+from pathlib import Path
+from collections import Counter
+base=Path('inputs')
+# statuses
+wb=load_workbook(base/'230215_Trio_Status.xlsx',read_only=True,data_only=True);ws=wb.active;ws.reset_dimensions(); it=ws.iter_rows(values_only=True); hdr=[str(x).strip() if x is not None else None for x in next(it)]; carriers=set()
+for row in it:
+ d=dict(zip(hdr,row)); sid=str(d.get('Sample ID')).strip();
+ if str(d.get('BLM Mutation Status')).strip()=='Carrier': carriers.add(sid)
+rows=[]
+for p in sorted((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+ suffix=p.stem.split('_CHIP_',1)[1]; sid=suffix.split('-',1)[0] if suffix[0].isdigit() else suffix
+ if sid not in carriers: continue
+ wb=load_workbook(p,read_only=True,data_only=True); ws=wb.active;ws.reset_dimensions(); it=ws.iter_rows(values_only=True);next(it); h=[x.strip() if isinstance(x,str) else x for x in next(it)]
+ for row in it: rows.append(dict(zip(h,row),Sample=sid))
+def f(v):
+ try:return float(v)
+ except:return None
+# all files are In_CHIP true, but use explicit flag and inspect variant status
+basecand=[r for r in rows if str(r['In_CHIP']).strip().lower()=='true' and f(r['Variant Allele Freq']) is not None and f(r['Variant Allele Freq'])<.3]
+print('base',len(basecand))
+# region detect
+bad_terms=('intron','intergenic','UTR')
+def badregion(r):
+ s=str(r.get('Sequence Ontology (Combined)') or '')
+ return any(t.lower() in s.lower() for t in bad_terms)
+for label, func in [('badregion',badregion),('ref',lambda r:str(r.get('Zygosity')).strip().lower()=='reference'),('no_class',lambda r:r.get('Classification') is None or str(r.get('Classification')).strip() in ('','None'))]:
+ print(label,sum(func(r) for r in basecand))
+filtered=[r for r in basecand if not badregion(r) and str(r.get('Zygosity')).strip().lower()"'!='"'reference']
+classified=[r for r in filtered if r.get('Classification') is not None and str(r.get('Classification')).strip() not in ('','None')]
+print('filtered no bad region/reference',len(filtered),Counter(r.get('Classification') for r in filtered),Counter(r.get('Zygosity') for r in filtered),Counter(r.get('Sequence Ontology (Combined)') for r in filtered))
+print('classified',len(classified),'classes',Counter(r.get('Classification') for r in classified))
+print('num',sum(str(r.get('Classification')).strip() in ('Benign','Likely Benign') for r in classified),'prop',sum(str(r.get('Classification')).strip() in ('Benign','Likely Benign') for r in classified)/len(classified))
+for r in filtered:
+ print(r['Sample'],r['Chr:Pos'],r['Gene Names'],r['Sequence Ontology (Combined)'],r['Zygosity'],r['Variant Allele Freq'],r['Classification'])
+PY"

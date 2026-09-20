@@ -1,0 +1,61 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter, defaultdict
+from openpyxl import load_workbook
+import re, math
+
+base=Path('inputs')
+files=sorted((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+print('sample files',len(files))
+# status rows
+wb=load_workbook(base/'230215_Trio_Status.xlsx',read_only=True,data_only=True)
+ws=wb.active
+status={}
+for row in ws.iter_rows(min_row=2,values_only=True):
+    sid=row[0]
+    if sid is None: continue
+    sid=str(sid).strip()
+    status[sid]=row
+carriers={sid for sid,row in status.items() if str(row[3]).strip()=='Carrier'}
+print('carrier IDs',len(carriers),sorted(carriers,key=lambda x:(not x.isdigit(),int(x) if x.isdigit() else x)))
+
+allstats=Counter(); byfile={}; carrier_files=[]; missing=[]
+for path in files:
+    sid=path.stem.split('_CHIP_',1)[1]
+    # workbook parse full dimensions
+    wb=load_workbook(path,read_only=True,data_only=True)
+    ws=wb.active; ws.reset_dimensions()
+    rows=ws.iter_rows(values_only=True)
+    top=next(rows); hdr=next(rows)
+    h={str(v).strip():i for i,v in enumerate(hdr) if v is not None}
+    needed=['Zygosity','Variant Allele Freq','Gene Names','Sequence Ontology (Combined)','Classification','In_CHIP','Ref/Alt','Chr:Pos']
+    if any(x not in h for x in needed): print('missing headers',path,[x for x in needed if x not in h])
+    counts=Counter(); so=Counter(); classif=Counter(); chipvals=Counter(); zyg=Counter(); vafs=[]
+    n=0
+    for row in rows:
+        n+=1
+        vals={k: row[i] if i<len(row) else None for k,i in h.items()}
+        chipvals[str(vals['In_CHIP'])]+=1
+        zyg[str(vals['Zygosity'])]+=1
+        so[str(vals['Sequence Ontology (Combined)'])]+=1
+        classif[str(vals['Classification'])]+=1
+        v=vals['Variant Allele Freq']
+        if v is not None:
+            try: vafs.append(float(v))
+            except: pass
+    counts['rows']=n
+    byfile[sid]=(counts,chipvals,zyg,so,classif,vafs,top,hdr)
+    allstats['rows']+=n
+    if sid in carriers:
+        carrier_files.append(sid)
+    # print summary
+print('all rows',allstats['rows'],'carrier files',len(carrier_files),sorted(carrier_files))
+print('carriers missing files',sorted(carriers-set(carrier_files)))
+print('status IDs missing from files',sorted(set(status)-{path.stem.split('_CHIP_',1)[1] for path in files}))
+print('all In_CHIP values',Counter({k:sum(v[1][k] for v in byfile.values()) for k in set().union(*(set(v[1]) for v in byfile.values()))}))
+print('all zygosity',Counter({k:sum(v[2][k] for v in byfile.values()) for k in set().union(*(set(v[2]) for v in byfile.values()))}))
+print('all sequence ontology (top)')
+for k,n in Counter({k:sum(v[3][k] for v in byfile.values()) for k in set().union(*(set(v[3]) for v in byfile.values()))}).most_common(): print(repr(k),n)
+print('all classification (top)')
+for k,n in Counter({k:sum(v[4][k] for v in byfile.values()) for k in set().union(*(set(v[4]) for v in byfile.values()) )}).most_common(): print(repr(k),n)
+PY"

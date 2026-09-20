@@ -1,0 +1,53 @@
+/bin/bash -c "python - <<'PY'
+import time, warnings, os
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+t0=time.time()
+print('loading', flush=True)
+counts=pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0).T
+counts.index.name='sample'
+print('counts', counts.shape, flush=True)
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+meta=meta.loc[counts.index]
+meta['batch']=pd.Categorical(meta['batch'], categories=sorted(meta['batch'].astype(int).unique()))
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+print('meta', meta.shape, flush=True)
+print(meta.dtypes, flush=True)
+print('batch/sex', pd.crosstab(meta['batch'],meta['sex']).to_dict(), flush=True)
+assert meta.index.equals(counts.index)
+assert 'FAM138A' in counts.columns
+print('FAM counts', counts['FAM138A'].sum(), counts['FAM138A'].mean(), flush=True)
+
+dds=DeseqDataSet(counts=counts, metadata=meta, design='~batch+sex', n_cpus=8, quiet=False, low_memory=True)
+print('dds made, design columns', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+dds.deseq2()
+print('deseq2 done', time.time()-t0, flush=True)
+print('LFC columns available', dds.varm['LFC'].columns.tolist(), flush=True)
+
+stat=DeseqStats(dds, contrast=['sex','M','F'], alpha=0.05, n_cpus=8, quiet=False)
+stat.summary()
+print('summary done', time.time()-t0, flush=True)
+print('LFC columns in stats', stat.LFC.columns.tolist(), flush=True)
+print('results cols', stat.results_df.columns.tolist(), flush=True)
+stat.lfc_shrink(coeff='sex[T.M]')
+print('shrink done', time.time()-t0, flush=True)
+
+res=stat.results_df.copy()
+print('results shape', res.shape, flush=True)
+print('FAM row', flush=True)
+print(res.loc['FAM138A'], flush=True)
+print('shrunk LFC FAM:', res.loc['FAM138A','log2FoldChange'], flush=True)
+print('baseMean FAM:', res.loc['FAM138A','baseMean'], flush=True)
+crit=(res['log2FoldChange'].abs()>0.5)&(res['baseMean']>10)
+print('passing criteria', int(crit.sum()), 'of', len(res), flush=True)
+print('FAM passes', bool(crit.loc['FAM138A']), flush=True)
+# Write answer regardless using shrunken LFC (the requested target value)
+os.makedirs('/workspace/codex_output', exist_ok=True)
+val=float(res.loc['FAM138A','log2FoldChange'])
+with open('/workspace/codex_output/answer.txt','w') as f:
+    f.write(f'{val:.15g}\\n')
+print('wrote', val, 'elapsed', time.time()-t0, flush=True)
+PY"

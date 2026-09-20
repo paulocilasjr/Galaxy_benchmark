@@ -82,6 +82,33 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(len(captured["outputs"]), 1)
             self.assertEqual((root / captured["outputs"][0]["path"]).read_bytes(), b"0.5")
 
+    def test_galaxy_binary_output_is_recorded_as_skipped(self):
+        hid = "d" * 32
+        class FakeClient(Client):
+            def __init__(self):
+                pass
+            def get(self, url, *, service):
+                if url.endswith(f"/histories/{hid}"):
+                    obj = {"id": hid, "count": 1}
+                elif "/contents?" in url:
+                    obj = [{"id": "pdf1", "history_content_type": "dataset", "creating_job": "job1",
+                            "name": "figure.pdf", "state": "ok", "file_size": 9,
+                            "accessible": True, "purged": False, "download_url": "/api/datasets/pdf1/display"}]
+                elif "/jobs/job1" in url:
+                    obj = {"id": "job1", "tool_id": "plot", "state": "ok"}
+                elif "/datasets/pdf1/display" in url:
+                    return b"%PDF-1.4\x00", {}
+                else:
+                    raise AssertionError(url)
+                return json.dumps(obj).encode(), {}
+        row = RunLink("bixbench", "bix-6-q4", "GPT-5.5", "galaxy", "galaxy-api", 1,
+                      f"https://usegalaxy.org/histories/view?id={hid}", None, "Runs", 2)
+        with tempfile.TemporaryDirectory() as temp:
+            captured = collect_galaxy(FakeClient(), row, Path(temp))
+            self.assertEqual(captured["status"], "retrieved")
+            self.assertEqual(captured["outputs"], [])
+            self.assertEqual(captured["skipped_outputs"], [{"hda_id": "pdf1", "reason": "binary_or_unsupported_encoding"}])
+
     def test_trace_collection_redacts_secret_and_records_both_hashes(self):
         class FakeClient(Client):
             def __init__(self):
@@ -134,7 +161,9 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual([r.condition for r in rows], ["galaxy", "open_ended_code"])
             outroot = root / "BixBench_50"
             out = outroot / "bix-6-q4"
-            write_json(out / ".analysis_execution.json", {"generator": "analysis_execution", "format_version": 1})
+            out.mkdir(parents=True)
+            (out / "history_analysis.md").write_text("legacy report\n")
+            (out / "history_analysis_evidence.json").write_text('{"legacy": true}\n')
             for row in rows:
                 folder = out / "source_snapshots/huggingface_traces/files" / row.run_id
                 files = {
@@ -169,7 +198,7 @@ class PipelineTest(unittest.TestCase):
                         "jobs": [{"id": "job1", "path": str(jobpath.relative_to(out)), "sha256": digest(jobpath.read_bytes())}],
                         "outputs": [{"hda_id": "hda1", "path": str(output_file.relative_to(out)), "retained_bytes": 2,
                                      "retained_sha256": digest(b"ok")} ]})
-            self.assertEqual(main([str(book), "--output-root", str(outroot), "--offline"]), 0)
+            self.assertEqual(main([str(book), "--output-root", str(outroot), "--offline", "--adopt-existing"]), 0)
             evidence = json.loads((out / "history_analysis_evidence.json").read_text())
             self.assertEqual(evidence["validation"]["schema"]["validation_status"], "passed")
             self.assertEqual(len(evidence["runs"]), 2)
@@ -177,6 +206,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(evidence["comparisons"][1]["estimate"], 2.0)
             self.assertIn("1 distinct analytical creating jobs", (out / "history_analysis.md").read_text())
             self.assertTrue((out / "recovered_code/open_ended_code" / rows[1].run_id / "item_1.command.txt").exists())
+            self.assertEqual((out / "legacy_pre_analysis_execution/history_analysis.md").read_text(), "legacy report\n")
 
 
 if __name__ == "__main__":

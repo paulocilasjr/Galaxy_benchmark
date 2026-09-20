@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from scipy.stats import mannwhitneyu
+
+
+def parse_fasta(txt):
+    out=[]; h=None; s=[]
+    for line in txt.decode().splitlines():
+        if line.startswith('>'):
+            if h is not None: out.append((h,''.join(s)))
+            h=line[1:].split()[0]; s=[]
+        elif line.strip(): s.append(line.strip())
+    if h is not None: out.append((h,''.join(s)))
+    return out
+
+def groups(path):
+    with ZipFile(path) as z:
+        return [(n[:-len('.faa.mafft')],parse_fasta(z.read(n))) for n in z.namelist() if n.endswith('.faa.mafft')]
+
+def pi(seq, mode):
+    # modes: gapstate, nongap, complete
+    n=len(seq); L=len(seq[0]) if seq else 0
+    total=0
+    for col in zip(*seq):
+        c=Counter(col)
+        if mode=='nongap': c.pop('-',None)
+        elif mode=='complete' and '-' in c: continue
+        if sum(v>=2 for v in c.values())>=2: total+=1
+    return total
+
+for mode in ['gapstate','nongap','complete']:
+    vals=[]
+    print('\\nMODE',mode)
+    for label,path in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+        xs=[pi([s for _,s in seqs],mode) for _,seqs in groups(path)]
+        vals.append(xs)
+        print(label,'n',len(xs),'sum',sum(xs),'nonzero',sum(x>0 for x in xs),'min/max',min(xs),max(xs),'mean',sum(xs)/len(xs),'median',sorted(xs)[len(xs)//2], 'freq',Counter(xs).most_common(20))
+    for alt in ['two-sided','less','greater']:
+        res=mannwhitneyu(vals[0],vals[1],alternative=alt,method='asymptotic')
+        print(alt,'U',res.statistic,'p',res.pvalue)
+    n1,n2=map(len,vals); U1=mannwhitneyu(vals[0],vals[1]).statistic
+    print('U2',n1*n2-U1)
+PY"

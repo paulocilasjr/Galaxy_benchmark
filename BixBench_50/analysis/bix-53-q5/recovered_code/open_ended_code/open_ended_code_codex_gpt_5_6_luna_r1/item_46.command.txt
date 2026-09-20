@@ -1,0 +1,69 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import pandas as pd, numpy as np, requests, time, sys, traceback
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy
+try:
+    raw = pd.read_csv('inputs/count.csv')
+    counts = raw.set_index('geneID').T
+    metadata = pd.DataFrame({'condition':['KL']*3 + ['WL']*3}, index=counts.index)
+    print('Fitting DESeq2-style model...', flush=True)
+    dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition',
+                       refit_cooks=True, quiet=True, n_cpus=8)
+    dds.deseq2()
+    stat = DeseqStats(dds, contrast=['condition','WL','KL'], alpha=0.05,
+                      cooks_filter=True, independent_filter=True, quiet=True, n_cpus=8)
+    stat.summary()
+    coeff = [c for c in stat.LFC.columns if str(c).startswith('condition')][0]
+    stat.lfc_shrink(coeff, adapt=True)
+    res = stat.results_df.copy()
+    filt = (res['pvalue'] < 0.05) & (res['log2FoldChange'].abs() > 1) & (res['baseMean'] > 10)
+    ids = list(res.index[filt])
+    print('DE foreground:', len(ids), flush=True)
+
+    # Map Ensembl gene IDs to mouse gene symbols for the Enrichr/WikiPathways namespace.
+    mapping = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i+500]
+        rr = requests.post('https://mygene.info/v3/query', data={
+            'q': ','.join(chunk), 'scopes':'ensembl.gene',
+            'fields':'symbol', 'species':'mouse', 'size':1000}, timeout=60)
+        rr.raise_for_status()
+        docs = rr.json()
+        for d in docs:
+            q = d.get('query')
+            s = d.get('symbol')
+            if q and s:
+                mapping[q] = s
+    symbols = [mapping[x] for x in ids if x in mapping]
+    print('Mapped IDs:', len(symbols), 'unique symbols:', len(set(symbols)), flush=True)
+
+    lib = gseapy.get_library('WikiPathways_2019_Mouse', organism='Mouse')
+    print('Library terms:',len(lib),'library genes:',len(set().union(*map(set,lib.values()))), flush=True)
+    enr = gseapy.enrichr(gene_list=symbols, gene_sets=lib, organism='Mouse',
+                         outdir=None, no_plot=True, verbose=False)
+    out = enr.results.copy()
+    print('Enrichment rows:',len(out), flush=True)
+    # Show both plausible gseapy rankings for audit of the top-N interpretation.
+    for col in ['P-value','Adjusted P-value','Combined Score']:
+        if col not in out: continue
+        s = out.sort_values([col,'Term'], ascending=[col "'!= '"'Combined Score', True], kind='mergesort').head(20)
+        hits = s['Term'].str.contains('oxidative', case=False, na=False)
+        print('\\nSORT',col,'oxidative',int(hits.sum()),'fraction',float(hits.mean()),flush=True)
+        print(s[['Term','P-value','Adjusted P-value','Overlap']].to_string(index=False),flush=True)
+    # Also test Enrichr online mode with the exact named library (if available).
+    try:
+        online = gseapy.enrichr(gene_list=symbols, gene_sets='WikiPathways_2019_Mouse', organism='Mouse',
+                                outdir=None, no_plot=True, verbose=False)
+        oo = online.results.copy()
+        print('\\nONLINE rows',len(oo), 'cols',oo.columns.tolist(),flush=True)
+        print(oo.head(20)[['Term','P-value','Adjusted P-value','Overlap']].to_string(index=False),flush=True)
+        for col in ['P-value','Adjusted P-value']:
+            if col in oo:
+                ss=oo.sort_values([col,'Term'],kind='mergesort').head(20)
+                print('ONLINE SORT',col,'oxidative',int(ss.Term.str.contains('oxidative',case=False).sum()),'fraction',float(ss.Term.str.contains('oxidative',case=False).mean()),flush=True)
+    except Exception as e:
+        print('ONLINE ERROR',repr(e),flush=True)
+except BaseException as e:
+    print('ERROR',repr(e), flush=True); traceback.print_exc(); sys.exit(1)
+PY"

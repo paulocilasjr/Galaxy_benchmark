@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+ann=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t').set_index('ENSG')['gene_name']
+lib=gp.get_library(name='Reactome_2022',organism='Human')
+term=[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes ')][0]
+path=set(lib[term])
+print('TERM',term,'SIZE',len(lib[term]),'UNIQUE',len(path),'GENES',sorted(path),flush=True)
+
+def run(label, cols, groups):
+ x=counts[cols].T
+ meta=pd.DataFrame({'condition':groups},index=cols)
+ print('\\nRUN',label,x.shape,meta.condition.value_counts().to_dict(),flush=True)
+ dds=DeseqDataSet(counts=x,metadata=meta,design='~condition',refit_cooks=True,n_cpus=2,quiet=True)
+ dds.deseq2()
+ st=DeseqStats(dds,contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=0.05,n_cpus=2,quiet=True)
+ st.summary()
+ r=st.results_df
+ deg=r[(r.padj<0.05)&(r.log2FoldChange.abs()>=0.5)]
+ syms=ann.reindex(deg.index).dropna()
+ hits=sorted(set(syms)&path)
+ print('DEG',len(deg),'MAPPED',len(syms),'UNIQUE',syms.nunique(),'HITS',len(hits),'OVERLAP',f'{len(hits)}/{len(path)}','HITGENES',hits,flush=True)
+ print('hit details')
+ rr=r.join(ann.rename('symbol'))
+ print(rr[rr.symbol.isin(path)].sort_values('padj').head(60).to_string(),flush=True)
+ return deg
+cols6=['3_1','3_2','3_3','9_1','9_2','9_3']
+g6=['DMSO']*3+['Cisplatin_IC50_CBD_IC50']*3
+run('subset6',cols6,g6)
+# All 30 samples, group labels matched from metadata
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout['col']=layout.SampleID.str.replace('-','_',regex=False)
+run('all30',layout['col'].tolist(),layout.Group.tolist())
+PY"

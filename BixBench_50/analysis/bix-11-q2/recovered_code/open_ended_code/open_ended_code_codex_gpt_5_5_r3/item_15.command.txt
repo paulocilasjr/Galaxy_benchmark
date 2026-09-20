@@ -1,0 +1,104 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re
+from dataclasses import dataclass, field
+from typing import Optional
+
+zip_path='inputs/scogs_fungi.zip'
+
+@dataclass
+class Node:
+    name: str = ''
+    length: Optional[float] = None
+    children: list = field(default_factory=list)
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'):
+        s=s[:-1]
+    i=0
+    n=len(s)
+    def parse_subtree():
+        nonlocal i
+        node=Node()
+        if i<n and s[i]=='(':
+            i+=1
+            while True:
+                node.children.append(parse_subtree())
+                if i<n and s[i]==',':
+                    i+=1
+                    continue
+                if i<n and s[i]==')':
+                    i+=1
+                    break
+                raise ValueError(f'expected , or ) at {i}: {s[i:i+20]}')
+        # optional name/support until colon/comma/paren/end
+        start=i
+        while i<n and s[i] not in ':,()':
+            i+=1
+        node.name=s[start:i].strip()
+        if i<n and s[i]==':':
+            i+=1
+            start=i
+            while i<n and s[i] not in ',()':
+                i+=1
+            val=s[start:i].strip()
+            node.length=float(val) if val else None
+        return node
+    root=parse_subtree()
+    if i "'!= n:
+        raise ValueError((i,n,s[i:i+20]))
+    return root
+
+def sums(root):
+    total=0.0
+    internal=0.0
+    def rec(node, is_root):
+        nonlocal total, internal
+        if node.length is not None:
+            total += node.length
+            if node.children:
+                internal += node.length
+        for c in node.children:
+            rec(c, False)
+    rec(root, True)
+    return total, internal
+
+with zipfile.ZipFile(zip_path) as z:
+    tree_names=sorted(n for n in z.namelist() if n.endswith('"'.treefile'))
+    ratios=[]
+    for name in tree_names:
+        nw=z.read(name).decode().strip()
+        total, internal=sums(parse_newick(nw))
+        ratios.append((name, internal/total if total else float('nan'), total, internal))
+    gt=sum(r>0.06 for _,r,_,_ in ratios)
+    denom=len(ratios)
+    print('treefile_count', denom)
+    print('gt_0.06', gt)
+    print('percent', gt/denom*100)
+    print('min max', min(r for _,r,_,_ in ratios), max(r for _,r,_,_ in ratios))
+    # Compare exact treefile ratios to iqtree reported percentages where possible.
+    mismatches=[]
+    iq_names=sorted(n for n in z.namelist() if n.endswith('.iqtree'))
+    iq_by_base={n[:-7]: n for n in iq_names}  # strip .iqtree
+    for name,r,total,internal in ratios:
+        base=name[:-9] # strip .treefile
+        iq=iq_by_base.get(base)
+        if not iq:
+            mismatches.append((name,'missing iqtree'))
+            continue
+        txt=z.read(iq).decode(errors='replace')
+        m=re.search(r'Sum of internal branch lengths:\\s*([0-9.]+) \\(([0-9.]+)% of tree length\\)', txt)
+        if not m:
+            mismatches.append((name,'missing sum line'))
+            continue
+        pct=float(m.group(2))/100
+        if abs(pct-r)>5e-5:
+            mismatches.append((name, r, pct))
+    print('iqtree_count', len(iq_names))
+    print('mismatches', len(mismatches))
+    print('first_gt', ratios[[r>0.06 for _,r,_,_ in ratios].index(True)] if gt else None)
+    near=sorted((abs(r-0.06),name,r) for name,r,_,_ in ratios)[:10]
+    print('nearest')
+    for _,name,r in near:
+        print(name, f'{r:.10f}')
+PY"

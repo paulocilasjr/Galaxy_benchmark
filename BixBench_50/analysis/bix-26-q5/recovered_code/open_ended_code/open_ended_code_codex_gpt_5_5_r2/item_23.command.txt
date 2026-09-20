@@ -1,0 +1,67 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) {
+  x <- readRDS(f); a <- attributes(x); data.frame(gene=a"'$rownames, a$listData, check.names=FALSE)
+}
+fetch <- function(url) strsplit(paste(readLines(url, warn=FALSE), collapse='"'\\n'), '\\n')[[1]]
+link_lines <- fetch('https://rest.kegg.jp/link/pathway/pau')
+path_lines <- fetch('https://rest.kegg.jp/list/pathway/pau')
+links <- do.call(rbind, strsplit(link_lines, '\\t'))
+paths <- do.call(rbind, strsplit(path_lines, '\\t'))
+colnames(links) <- c('gene','pathway')
+links <- as.data.frame(links, stringsAsFactors=FALSE)
+links"'$gene <- sub('"'"'^pau:'"', '', links"'$gene)
+links$pathway <- sub('"'"'^path:'"', '', links"'$pathway)
+colnames(paths) <- c('"'pathway','name')
+paths <- as.data.frame(paths, stringsAsFactors=FALSE)
+cat('KEGG pathways', length(unique(links"'$pathway)), '"'gene links', nrow(links), 'path list', nrow(paths), '\\n')
+run_ora <- function(d, minGS=1, maxGS=Inf) {
+  universe <- intersect(d"'$gene, unique(links$gene))
+  fg0 <- d$gene[!is.na(d$padj) & !is.na(d$log2FoldChange) & abs(d$log2FoldChange)>1.5 & d$padj < 0.05]
+  fg <- intersect(fg0, universe)
+  M <- length(universe); n <- length(fg)
+  byp <- split(links$gene, links$pathway)
+  rows <- lapply(names(byp), function(pid) {
+    gs <- intersect(unique(byp[[pid]]), universe)
+    N <- length(gs)
+    if (N < minGS || N > maxGS) return(NULL)
+    k <- sum(fg %in% gs)
+    if (k == 0) return(NULL) # clusterProfiler-like tested/hit terms only? change later
+    data.frame(ID=pid, k=k, N=N, M=M, n=n, pvalue=phyper(k-1, N, M-N, n, lower.tail=FALSE))
+  })
+  res <- do.call(rbind, rows)
+  if (is.null(res)) return(data.frame())
+  res$padj <- p.adjust(res$pvalue, '"'BH')
+  res[order(res"'$padj, res$pvalue, res$ID),]
+}
+run_ora_allterms <- function(d, minGS=1, maxGS=Inf) {
+  universe <- intersect(d$gene, unique(links$gene))
+  fg0 <- d$gene[!is.na(d$padj) & !is.na(d$log2FoldChange) & abs(d$log2FoldChange)>1.5 & d$padj < 0.05]
+  fg <- intersect(fg0, universe)
+  M <- length(universe); n <- length(fg)
+  byp <- split(links$gene, links$pathway)
+  rows <- lapply(names(byp), function(pid) {
+    gs <- intersect(unique(byp[[pid]]), universe)
+    N <- length(gs)
+    if (N < minGS || N > maxGS) return(NULL)
+    k <- sum(fg %in% gs)
+    data.frame(ID=pid, k=k, N=N, M=M, n=n, pvalue=phyper(k-1, N, M-N, n, lower.tail=FALSE))
+  })
+  res <- do.call(rbind, rows)
+  res$padj <- p.adjust(res$pvalue, '"'BH')
+  res[order(res"'$padj, res$pvalue, res$ID),]
+}
+
+d_iron <- read_res('"'inputs/res_GluFevsGluFePlus.rds')
+d_succ <- read_res('inputs/res_SuccvsGluFePlus.rds')
+for (variant in c('hit_all_size','hit_10_500','allterms_all_size','allterms_10_500')) {
+  if (variant=='hit_all_size') { a<-run_ora(d_iron); b<-run_ora(d_succ) }
+  if (variant=='hit_10_500') { a<-run_ora(d_iron,10,500); b<-run_ora(d_succ,10,500) }
+  if (variant=='allterms_all_size') { a<-run_ora_allterms(d_iron); b<-run_ora_allterms(d_succ) }
+  if (variant=='allterms_10_500') { a<-run_ora_allterms(d_iron,10,500); b<-run_ora_allterms(d_succ,10,500) }
+  sa <- a"'$ID[a$padj < .05]; sb <- b$ID[b$padj < .05]
+  cat('"'\\nVARIANT', variant, 'tested iron/succ', nrow(a), nrow(b), 'sig iron/succ', length(sa), length(sb), 'iron_not_succ', length(setdiff(sa,sb)), '\\n')
+  cat('iron sig:', paste(sa, collapse=', '), '\\n')
+  cat('succ sig:', paste(sb, collapse=', '), '\\n')
+  cat('iron_not_succ:', paste(setdiff(sa,sb), collapse=', '), '\\n')
+}
+RS"

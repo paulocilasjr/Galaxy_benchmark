@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'EOF'
+import rdata,numpy as np,requests,warnings,math
+from statsmodels.stats.multitest import multipletests
+warnings.filterwarnings('ignore')
+obj=rdata.read_rds('inputs/res_GluFevsGluFePlus.rds')
+rows=obj.rownames; lfc=np.asarray(obj.listData['log2FoldChange']); padj=np.asarray(obj.listData['padj'])
+up=set(rows[(lfc>1.5)&(padj<.05)])
+r=requests.get('https://rest.kegg.jp/link/pau/pathway',timeout=120)
+path2genes={}; gene2paths={}
+for line in r.text.strip().split('\\n'):
+ path,gene=line.split('\\t')
+ pid=path.split(':')[1]; gid=gene.split(':')[1]
+ path2genes.setdefault(pid,set()).add(gid)
+ gene2paths.setdefault(gid,set()).add(pid)
+universe=set(gene2paths)
+n=len(up&universe)
+N=len(universe)
+print('universe',N,'query mapped',n)
+# list pathways from KEGG
+r=requests.get('https://rest.kegg.jp/list/pathway/pau',timeout=60)
+path_names={}
+for line in r.text.strip().split('\\n'):
+ pid,name=line.split('\\t',1); path_names[pid.split(':')[1]]=name.split(' - ',1)[0]
+# hypergeom p
+rows_res=[]
+for pid,gs in path2genes.items():
+ K=len(gs)
+ k=len(up&gs)
+ if K<10 or K>500: continue
+ if k==0: continue
+ def comb(a,b): return math.comb(a,b) if 0<=b<=a else 0
+ p=sum(comb(K,i)*comb(N-K,n-i) for i in range(k,min(K,n)+1))/comb(N,n)
+ rows_res.append((p,pid,k,K,path_names.get(pid,pid)))
+rows_res.sort()
+ps=[x[0] for x in rows_res]
+reject,q=multipletests(ps,method='fdr_bh')[:2]
+for i,(p,pid,k,K,name) in enumerate(rows_res):
+ if pid=='02010' or name.startswith('ABC'):
+  print(i,pid,name,k,K,p,q[i],reject[i])
+print('n pathways tested',len(rows_res),'sig p<.05',sum(x[0]<.05 for x in rows_res),'sig q<.05',sum(reject))
+print('top20')
+for p,pid,k,K,name in rows_res[:20]: print(pid,name,k,K,p)
+EOF"

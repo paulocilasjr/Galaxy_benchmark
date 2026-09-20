@@ -1,0 +1,71 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+import xml.etree.ElementTree as ET
+from collections import Counter
+NS={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def colnum(cellref):
+    s=''.join(ch for ch in cellref if ch.isalpha()); n=0
+    for ch in s: n=n*26+ord(ch.upper())-64
+    return n-1
+def read_xlsx(path):
+    with ZipFile(path) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', NS): ss.append(''.join(t.text or '' for t in si.findall('.//a:t', NS)))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for rr in root.findall('a:sheetData/a:row', NS):
+            vals=[]
+            for c in rr.findall('a:c', NS):
+                idx=colnum(c.attrib.get('r','A1'))
+                while len(vals)<idx: vals.append('')
+                typ=c.attrib.get('t')
+                if typ=='inlineStr': val=''.join(t.text or '' for t in c.findall('.//a:t', NS))
+                else:
+                    v=c.find('a:v', NS); val='' if v is None else v.text or ''
+                    if typ=='s' and val"'!='"'': val=ss[int(val)]
+                vals.append(val)
+            rows.append(vals)
+        return rows
+meta=read_xlsx('inputs/230215_Trio_Status.xlsx'); mi={h:i for i,h in enumerate(meta[0])}
+groups={}
+for status in ['Carrier','Affected','Unaffected']:
+    groups[status]={r[mi['Sample ID']].strip() for r in meta[1:] if r[mi['BLM Mutation Status']].strip()==status}
+files=[]
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    sid=p.stem.replace('230209_Exome_GRCh38_CHIP_','').split('-')[0].strip()
+    files.append((sid,p))
+# define coding SO terms in these data: protein-coding consequence terms present
+coding_terms={'synonymous_variant','missense_variant','stop_gained','stop_lost','start_lost','frameshift_variant','inframe_deletion','inframe_insertion','protein_altering_variant','coding_sequence_variant'}
+def calc(sample_ids, require_nonref=False, require_vaf_gt0=False, include_affected=False):
+    total=syn=0; counts=Counter(); z=Counter(); examples=[]
+    for sid,p in files:
+        if sid not in sample_ids: continue
+        rows=read_xlsx(p); hdr=rows[1]; idx={h:i for i,h in enumerate(hdr)}
+        for r in rows[2:]:
+            def get(k): return r[idx[k]] if idx[k]<len(r) else ''
+            v=get('Variant Allele Freq')
+            if not v: continue
+            try: vf=float(v)
+            except: continue
+            if not (vf < 0.3): continue
+            if require_vaf_gt0 and not (vf>0): continue
+            if require_nonref and get('Zygosity')=='Reference': continue
+            so=get('Sequence Ontology (Combined)')
+            # Combined could have comma, split on comma just in case
+            terms={x.strip() for x in so.split(',')}
+            is_coding=bool(terms & coding_terms)
+            if not is_coding: continue
+            total+=1; counts[so]+=1; z[get('Zygosity')]+=1
+            if 'synonymous_variant' in terms: syn+=1
+            if len(examples)<10: examples.append((sid,get('Chr:Pos'),get('Zygosity'),vf,so,get('HGVS p. (Clinically Relevant)')))
+    return syn,total,counts,z,examples
+for label, ids in [('Carrier only', groups['Carrier']), ('Carrier+Affected', groups['Carrier']|groups['Affected']), ('Affected only', groups['Affected'])]:
+    print('\\n', label, len(ids))
+    for nr in [False, True]:
+      for gt0 in [False, True]:
+        syn,total,counts,z,ex=calc(ids, require_nonref=nr, require_vaf_gt0=gt0)
+        print('nonref',nr,'vaf_gt0',gt0,'syn/total',syn,total,'frac', None if total==0 else syn/total,'counts',counts,'zyg',z)
+PY"

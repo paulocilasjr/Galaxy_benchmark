@@ -1,0 +1,71 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+import gc
+import os
+
+os.makedirs('codex_output', exist_ok=True)
+
+# Load data
+counts_df = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+annot = annot.set_index('sample')
+annot = annot.loc[counts_df.columns]
+annot['batch'] = annot['batch'].astype(str)
+annot['sex'] = annot['sex'].astype(str)
+
+# Prefilter to reduce memory while keeping FAM138A (total count = 292)
+row_sums = counts_df.sum(axis=1)
+keep = row_sums >= 50
+keep = keep | (counts_df.index == 'FAM138A')
+counts_filtered = counts_df.loc[keep]
+del counts_df, row_sums
+gc.collect()
+
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_int = counts_filtered.T.round().astype(int)
+del counts_filtered
+gc.collect()
+
+dds = DeseqDataSet(
+    counts=counts_int,
+    metadata=annot,
+    design_factors="batch + sex",
+    refit_cooks=False,
+    n_cpus=1,
+)
+del counts_int
+gc.collect()
+
+print("Fitting DESeq2...")
+dds.deseq2()
+print("Done!\n")
+
+# Run DeseqStats for sex M vs F
+print("Running Wald test...")
+stat = DeseqStats(dds, contrast=["sex", "M", "F"], n_cpus=1, cooks_filter=False, independent_filter=False)
+stat.summary()
+print("Done!\n")
+
+# LFC shrinkage with default method (apeglm)
+print("Running LFC shrinkage (default method = apeglm)...")
+stat.lfc_shrink(coeff="sex[T.M]")
+print("Done!\n")
+
+res = stat.results_df
+res.to_csv('codex_output/deseq2_results.csv')
+print(f"Results saved, shape: {res.shape}")
+print(f"Columns: {res.columns.tolist()}")
+
+# FAM138A
+if 'FAM138A' in res.index:
+    fam = res.loc['FAM138A']
+    print(f"\n=== FAM138A RESULTS ===")
+    for col in fam.index:
+        print(f"  {col}: {fam[col]}")
+PYEOF
+

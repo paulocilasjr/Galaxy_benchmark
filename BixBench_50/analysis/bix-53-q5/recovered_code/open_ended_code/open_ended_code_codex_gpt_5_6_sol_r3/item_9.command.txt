@@ -1,0 +1,30 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+x=pd.read_csv('inputs/count.csv',index_col=0).T
+meta=pd.DataFrame({'condition':['KL']*3+['WL']*3}, index=x.index)
+dds=DeseqDataSet(counts=x,metadata=meta,design='~condition',refit_cooks=True,n_cpus=1,quiet=False)
+dds.deseq2()
+print('variables', list(dds.varm.keys()))
+print('coef names', dds.varm['LFC'].columns.tolist())
+st=DeseqStats(dds,contrast=['condition','WL','KL'],alpha=.05,n_cpus=1,quiet=False)
+st.summary()
+un=st.results_df.copy()
+print('unshrunk counts rawp, padj:', (((un.pvalue<.05)&(un.log2FoldChange.abs()>1)&(un.baseMean>10)).sum()), (((un.padj<.05)&(un.log2FoldChange.abs()>1)&(un.baseMean>10)).sum()))
+st.lfc_shrink(coeff='condition[T.WL]')
+res=st.results_df.copy()
+for pcol in ['pvalue','padj']:
+ sig=res[(res[pcol]<.05)&(res.log2FoldChange.abs()>1)&(res.baseMean>10)]
+ print('\\nFILTER',pcol,'n',len(sig),'lfc+',sum(sig.log2FoldChange>0),'lfc-',sum(sig.log2FoldChange<0))
+ print(sig.sort_values(pcol).head(10).to_string())
+ try:
+  enr=gp.enrichr(gene_list=sig.index.astype(str).tolist(), gene_sets='WikiPathways_2019_Mouse', organism='Mouse', outdir=None, no_plot=True, verbose=True)
+  tab=enr.results.sort_values('Adjusted P-value').head(20)
+  print('direct enrichr top20')
+  print(tab[['Term','P-value','Adjusted P-value','Overlap']].to_string(index=False))
+  print('oxidative',tab.Term.str.contains('oxidative',case=False).sum())
+ except Exception as e:
+  print('ENRICH ERROR',type(e),e)
+PY"

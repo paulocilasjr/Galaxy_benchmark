@@ -1,0 +1,43 @@
+/bin/bash -c "Rscript - <<'RS'
+suppressPackageStartupMessages({library(DESeq2); library(org.Hs.eg.db); library(AnnotationDbi); library(GO.db)})
+counts <- read.csv('/workspace/inputs/counts_raw_unfiltered.csv', check.names=FALSE, row.names=1)
+layout <- read.csv('/workspace/inputs/sample_layout.csv', stringsAsFactors=FALSE)
+layout"'$SampleID <- gsub('"'-','_',layout"'$SampleID)
+layout <- layout[layout$Group %in% c('"'DMSO','CBD_IC50'),]
+layout <- layout[match(colnames(counts), layout"'$SampleID),]; layout <- layout[!is.na(layout$SampleID),]
+layout$Group <- factor(layout$Group, levels=c('"'DMSO','CBD_IC50'))
+cts <- counts[, layout"'$SampleID]
+dds <- DESeqDataSetFromMatrix(as.matrix(cts), data.frame(row.names=layout$SampleID, Group=layout$Group), ~Group)
+dds <- DESeq(dds, quiet=TRUE)
+res <- results(dds, alpha=0.05)
+resdf <- as.data.frame(res); resdf$gene_id <- rownames(resdf)
+up <- rownames(resdf)[!is.na(resdf$padj) & resdf$padj<0.05 & resdf$log2FoldChange>0.5]
+down <- rownames(resdf)[!is.na(resdf$padj) & resdf$padj<0.05 & resdf$log2FoldChange< -0.5]
+allens <- unique(c(rownames(counts), up, down))
+map <- select(org.Hs.eg.db, keys=allens, columns='"'ENTREZID', keytype='ENSEMBL')
+map <- map["'!is.na(map$ENTREZID) & !duplicated(map$ENSEMBL),]
+metabolic_ids <- unique(c('"'GO:0008152', GOBPOFFSPRING[['GO:0008152']]))
+bp_go <- select(GO.db, keys=keys(GO.db,'GOID'), columns=c('GOID','TERM','ONTOLOGY'), keytype='GOID')
+bp_go <- bp_go[bp_go"'$ONTOLOGY=='"'BP',]
+run <- function(uni_ens) {
+  ue <- unique(map"'$ENTREZID[map$ENSEMBL %in% uni_ens])
+  fgu <- unique(map$ENTREZID[map$ENSEMBL %in% up]); fgd <- unique(map$ENTREZID[map$ENSEMBL %in% down])
+  fgu <- fgu[fgu %in% ue]; fgd <- fgd[fgd %in% ue]
+  g2g <- select(org.Hs.eg.db, keys=ue, columns='"'GO', keytype='ENTREZID')
+  g2g <- g2g["'!is.na(g2g$GO) & g2g$GO %in% bp_go$GOID,]
+  tg <- lapply(split(g2g$ENTREZID,g2g$GO), unique)
+  ora <- function(fg) {
+    N<-length(ue); k<-length(fg)
+    rows <- lapply(names(tg), function(go){m<-length(tg[[go]]); if(m<10||m>500)return(NULL); q<-sum(tg[[go]]%in%fg); if(q==0)return(NULL); data.frame(GOID=go,m=m,q=q,p=phyper(q-1,m,N-m,k,lower.tail=FALSE))})
+    tab<-do.call(rbind,rows); if(is.null(tab)||nrow(tab)==0)return(tab); tab$padj<-p.adjust(tab$p,'"'BH'); tab[tab"'$padj<0.05,]
+  }
+  su<-ora(fgu); sd<-ora(fgd)
+  c(uni=length(ue), up=length(fgu), down=length(fgd),
+    sigup=if(is.null(su))0 else nrow(su), sigdown=if(is.null(sd))0 else nrow(sd),
+    metup=if(is.null(su))0 else sum(su$GOID%in%metabolic_ids),
+    metdown=if(is.null(sd))0 else sum(sd$GOID%in%metabolic_ids))
+}
+cat('"'non-NA padj universe:\\n'); print(run(rownames(resdf)["'!is.na(resdf$padj)]))
+cat('"'non-NA pvalue universe:\\n'); print(run(rownames(resdf)["'!is.na(resdf$pvalue)]))
+cat('"'all count rows universe:\\n'); print(run(rownames(counts)))
+RS"

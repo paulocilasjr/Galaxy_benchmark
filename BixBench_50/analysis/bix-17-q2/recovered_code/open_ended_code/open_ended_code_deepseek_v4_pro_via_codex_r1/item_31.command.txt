@@ -1,0 +1,50 @@
+/bin/bash -c "python3 - <<'PY'
+# median counts with additional HGVS UTR/intron detection variants
+import openpyxl, glob, os, re, statistics
+chip=set()
+ws=openpyxl.load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx',data_only=True).active
+for r in ws.iter_rows(values_only=True):
+ if r[0]: chip.add(str(r[0]))
+trio_ws=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+recs=[]
+for r in trio_ws.iter_rows(min_row=2,values_only=True):
+ sid=str(r[0]).strip().replace('\\t','').strip(); status=str(r[1]).strip(); blm=str(r[3]).strip()
+ recs.append((sid,status,blm))
+files={os.path.basename(f).split('_')[-1].split('.')[0]:f for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+def match(sid):
+ if sid in files:return sid
+ if re.fullmatch(r'\\d+',sid):
+  cand=[t for t in files if re.fullmatch(re.escape(sid)+r'-[A-Z0-9]+',t)]
+  return cand[0] if len(cand)==1 else None
+ return None
+ont_excl={'intron_variant','intergenic_variant','3_prime_UTR_variant','5_prime_UTR_variant','5_prime_UTR_premature_start_codon_gain_variant'}
+def is_excluded(ont,hgvs):
+ if ont in ont_excl: return True
+ # c.* UTR 3'; c.- UTR 5'; maybe also c. with +/-
+ if hgvs:
+  if ':c.*' in hgvs or ':c.-' in hgvs:
+   return True
+  # n. UTR? probably not
+ return False
+for mode in ['ont','ont+hgvs_utr']:
+ print('\\nMODE',mode)
+ for label,pred in [('Carrier',lambda r:r[2]=='Carrier'),('Affected',lambda r:r[2]=='Affected'),('Combined',lambda r:r[2] in ('Carrier','Affected'))]:
+  counts=[]
+  for sid,status,blm in recs:
+   if not pred((sid,status,blm)): continue
+   tok=match(sid)
+   if not tok: continue
+   w=openpyxl.load_workbook(files[tok],data_only=True).active;n=0
+   for r in w.iter_rows(min_row=3,values_only=True):
+    if r[4]=='Reference': continue
+    if mode=='ont':
+     excl=r[13] in ont_excl
+    else:
+     excl=is_excluded(str(r[13]),str(r[17] or ''))
+    if excl: continue
+    try:v=float(r[9])
+    except:continue
+    if v<0.3:n+=1
+   counts.append(n)
+  print(label,counts,'median',statistics.median(counts))
+PY"

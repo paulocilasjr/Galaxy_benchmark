@@ -1,0 +1,82 @@
+python3 -c "
+import zipfile
+from collections import Counter
+
+def parse_fasta(text):
+    '''Parse FASTA format and return list of (header, sequence) tuples'''
+    entries = []
+    current_header = None
+    current_seq = []
+    for line in text.split('\\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            if current_header is not None:
+                entries.append((current_header, ''.join(current_seq)))
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_header is not None:
+        entries.append((current_header, ''.join(current_seq)))
+    return entries
+
+def count_parsimony_informative_sites(sequences):
+    '''Count columns that are parsimony informative.
+    A site is parsimony informative if:
+    - At least 2 different character states
+    - Each character state appears in at least 2 sequences'''
+    if not sequences:
+        return 0
+    
+    seqlen = len(sequences[0])
+    # Verify all same length
+    for s in sequences:
+        assert len(s) == seqlen, f'Sequences have different lengths: {seqlen} vs {len(s)}'
+    
+    count = 0
+    for i in range(seqlen):
+        col = [s[i] for s in sequences]
+        counter = Counter(col)
+        # Remove gaps
+        counter.pop('-', None)
+        counter.pop('.', None)
+        counter.pop('?', None)
+        counter.pop('X', None)  # X is ambiguous, not informative
+        
+        # Need at least 2 different character states
+        if len(counter) < 2:
+            continue
+        
+        # Each state must appear in at least 2 sequences
+        if all(v >= 2 for v in counter.values()):
+            count += 1
+    
+    return count
+
+with zipfile.ZipFile('inputs/scogs_animals.zip') as z:
+    mafft_files = [n for n in z.namelist() if n.endswith('.faa.mafft')]
+    print(f'Total alignments: {len(mafft_files)}')
+    
+    max_pis = 0
+    max_gene = None
+    
+    for i, mf in enumerate(mafft_files):
+        with z.open(mf) as f:
+            content = f.read().decode('utf-8')
+        entries = parse_fasta(content)
+        sequences = [seq for _, seq in entries]
+        pis = count_parsimony_informative_sites(sequences)
+        
+        if pis > max_pis:
+            max_pis = pis
+            max_gene = mf
+        
+        if i < 5 or pis > 100:
+            gene_name = mf.replace('.faa.mafft', '')
+            print(f'{gene_name}: {pis} PIS ({len(entries)} seqs, {len(sequences[0]) if sequences else 0} cols)')
+    
+    print(f'\\nMaximum parsimony informative sites: {max_pis}')
+    print(f'Gene: {max_gene}')
+"

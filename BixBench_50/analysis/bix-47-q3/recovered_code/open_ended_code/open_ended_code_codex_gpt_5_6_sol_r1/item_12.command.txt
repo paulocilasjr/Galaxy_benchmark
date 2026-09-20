@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter
+root=Path('/workspace/inputs')
+# Metadata verification and target resolution
+ws=load_workbook(root/'230215_Trio_Status.xlsx',read_only=True,data_only=True).active
+it=ws.iter_rows(values_only=True); h=next(it)
+people=[dict(zip(h,r)) for r in it if any(v is not None for v in r)]
+males=[d for d in people if d['Sex']=='M' and d['BLM Mutation Status']=='Carrier']
+target=max(males,key=lambda d:d['Age'])
+print('TARGET',target)
+files=list((root/'CHIP_DP10_GQ20_PASS').glob(f\"230209_Exome_GRCh38_CHIP_{target['Sample ID']}-*.xlsx\"))
+print('FILES',[p.name for p in files])
+# Count one supplied PASS row/site once for each named gene, excluding Reference genotype
+p=files[0]
+ws=load_workbook(p,read_only=True,data_only=True).active; ws.reset_dimensions()
+it=ws.iter_rows(values_only=True); next(it); headers=next(it); idx={x:i for i,x in enumerate(headers)}
+counts=Counter(); n=0
+for row in it:
+ if not any(v is not None for v in row): continue
+ z=row[idx['Zygosity']]
+ if z in (None,'Reference'): continue
+ n+=1
+ for gene in str(row[idx['Gene Names']]).split(','):
+  counts[gene.strip()]+=1
+print('NONREF_SITES',n)
+print('TOP10',counts.most_common(10))
+chip_ws=load_workbook(root/'230214_Schenz_et_al_2022_CHIP_Genes.xlsx',read_only=True,data_only=True).active
+chip={r[0] for r in chip_ws.iter_rows(values_only=True) if r[0] is not None}
+print('TOP_IN_GENE_LIST',counts.most_common(1)[0][0] in chip)
+print('TOP_GENE',counts.most_common(1)[0][0])
+PY"

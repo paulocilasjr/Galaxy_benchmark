@@ -1,0 +1,34 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) { x<-readRDS(f); ld<-attr(x,'listData'); data.frame(gene=attr(x,'rownames'), lfc=ld"'$log2FoldChange) }
+res <- lapply(c('"'97'='inputs/res_1vs97.rds','98'='inputs/res_1vs98.rds','99'='inputs/res_1vs99.rds'), read_res)
+link <- read.table('https://rest.kegg.jp/link/pathway/pau', sep='\\t', stringsAsFactors=FALSE, col.names=c('gene','path'))
+link"'$gene <- sub('"'"'^pau:'"', '', link"'$gene); link$path <- sub('"'"'^path:'"', '', link"'$path)
+names <- read.table('"'https://rest.kegg.jp/list/pathway/pau', sep='\\t', quote='', stringsAsFactors=FALSE, col.names=c('path','name'))
+t2g <- split(link"'$gene, link$path)
+ora <- function(genes, universe) {
+  universe <- intersect(universe, unique(link$gene)); genes <- intersect(genes, universe)
+  tt <- lapply(t2g, function(g) intersect(unique(g), universe)); tt <- tt[lengths(tt)>=10 & lengths(tt)<=500]
+  N<-length(universe); n<-length(genes)
+  out <- do.call(rbind, lapply(names(tt), function(p) {
+    M<-length(tt[[p]]); k<-length(intersect(genes, tt[[p]]));
+    if(k==0) return(NULL)
+    data.frame(path=p, M=M, k=k, pvalue=phyper(k-1,M,N-M,n,lower.tail=FALSE))
+  }))
+  out$padj <- p.adjust(out$pvalue,'"'BH')
+  out"'$name <- names$name[match(out$path, names$path)]
+  out[order(out$padj),]
+}
+univ_exp <- Reduce(intersect, lapply(res, `[[`, '"'gene'))
+univ_kegg <- unique(link"'$gene)
+for (um in c('"'experiment','kegg')) {
+  universe <- if(um=='experiment') univ_exp else univ_kegg
+  cat('\\nUNIVERSE', um, '\\n')
+  for (s in names(res)) {
+    genes <- res[[s]]"'$gene[res[[s]]$lfc < -1.5]
+    er <- ora(genes, universe)
+    rows <- er[er$path %in% c('"'pau01110','pau01310'), c('path','k','M','pvalue','padj','name')]
+    cat('strain',s,'nfg_mapped',length(intersect(genes, link"'$gene)),'"'\\n')
+    print(rows, row.names=FALSE)
+  }
+}
+RS"

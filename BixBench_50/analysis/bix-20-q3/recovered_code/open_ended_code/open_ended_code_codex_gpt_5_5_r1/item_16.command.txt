@@ -1,0 +1,115 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, xml.etree.ElementTree as ET, glob, os
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+NS={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+def col_to_idx(col):
+    n=0
+    for ch in col:
+        n=n*26+ord(ch)-64
+    return n-1
+
+def shared_strings(z):
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    ss=[]
+    for si in root.findall('m:si', NS):
+        ss.append(''.join(t.text or '' for t in si.findall('.//m:t', NS)))
+    return ss
+
+def read_xlsx_xml(path):
+    with zipfile.ZipFile(path) as z:
+        ss=shared_strings(z)
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows={}
+        maxcol=0
+        for row in root.findall('.//m:sheetData/m:row', NS):
+            r=int(row.attrib['r'])
+            cells={}
+            for c in row.findall('m:c', NS):
+                ref=c.attrib['r']
+                idx=col_to_idx(re.match(r'([A-Z]+)', ref).group(1))
+                maxcol=max(maxcol,idx+1)
+                v=c.find('m:v', NS)
+                if v is None:
+                    val=None
+                elif c.attrib.get('t')=='s':
+                    val=ss[int(v.text)]
+                else:
+                    text=v.text
+                    try:
+                        val=float(text) if any(ch in text for ch in '.Ee') else int(text)
+                    except Exception:
+                        val=text
+                cells[idx]=val
+            rows[r]=cells
+        if 2 not in rows: raise ValueError(path)
+        headers=[rows[2].get(i) for i in range(maxcol)]
+        out=[]
+        for r in sorted(k for k in rows if k>=3):
+            rec={headers[i]:rows[r].get(i) for i in range(maxcol) if headers[i] is not None}
+            out.append(rec)
+        return out
+
+# status carrier ids
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True)); hdr=list(rows[0])
+carrier=[]
+for row in rows[1:]:
+    d=dict(zip(hdr,row))
+    if d.get('BLM Mutation Status')=='Carrier':
+        carrier.append(str(d['Sample ID']).strip())
+print('carrier ids', carrier, len(carrier))
+files=glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+file_by_id={}
+for f in files:
+    base=os.path.basename(f)
+    m=re.search(r'_CHIP_(.+)\\.xlsx"'$'"', base)
+    sid=m.group(1).split('-')[0] if m else base
+    file_by_id.setdefault(sid,[]).append(f)
+print('missing carriers', [sid for sid in carrier if sid not in file_by_id])
+carrier_files=[file_by_id[sid][0] for sid in carrier if sid in file_by_id]
+print('carrier files', len(carrier_files), [os.path.basename(f) for f in carrier_files])
+
+seq_counter=Counter(); zyg_counter=Counter(); class_counter=Counter(); in_chip_counter=Counter(); effect_counter=Counter()
+counts=Counter()
+examples=[]
+for f in carrier_files:
+    recs=read_xlsx_xml(f)
+    counts['raw']+=len(recs)
+    for rec in recs:
+        z=rec.get('Zygosity')
+        so=rec.get('Sequence Ontology (Combined)') or ''
+        cls=rec.get('Classification')
+        vaf=rec.get('Variant Allele Freq')
+        inchip=rec.get('In_CHIP')
+        zyg_counter[z]+=1; seq_counter[so]+=1; class_counter[cls]+=1; in_chip_counter[inchip]+=1; effect_counter[rec.get('Effect (Combined)')]+=1
+        if inchip is True: counts['in_chip']+=1
+        # step filters candidate using likely interpretation
+        if inchip is not True: continue
+        if z == 'Reference': continue
+        counts['nonref_inchip']+=1
+        if vaf is None or not isinstance(vaf,(int,float)): continue
+        if not (vaf < 0.3): continue
+        counts['vaf_lt_0.3']+=1
+        sol=so.lower()
+        if any(term in sol for term in ['intron','intergenic','utr']): continue
+        counts['coding_region']+=1
+        if not cls or str(cls).strip()=='': continue
+        counts['with_clinvar']+=1
+        if cls in ('Benign','Likely Benign'):
+            counts['benign_lb']+=1
+        if len(examples)<20:
+            examples.append((os.path.basename(f), rec.get('Chr:Pos'), rec.get('Ref/Alt'), z, vaf, so, rec.get('Effect (Combined)'), cls, inchip))
+print('counts', counts)
+print('proportion', counts['benign_lb']/counts['with_clinvar'] if counts['with_clinvar'] else None)
+print('\\nZygosity', zyg_counter)
+print('\\nIn_CHIP', in_chip_counter)
+print('\\nClassifications top', class_counter.most_common(20))
+print('\\nSeq Ontology top', seq_counter.most_common(30))
+print('\\nEffect top', effect_counter.most_common(20))
+print('\\nExamples final denom-ish')
+for e in examples: print(e)
+PY"

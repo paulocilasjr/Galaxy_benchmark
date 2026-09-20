@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import ttest_ind
+from statsmodels.stats.multitest import multipletests
+p='inputs/pone.0150501.s002.xls'
+df=pd.read_excel(p,header=1)
+df=df.rename(columns={df.columns[0]:'miRNA'}).set_index('miRNA').apply(pd.to_numeric,errors='coerce')
+print(df.shape)
+print('numeric counts >=34, missing:',int((df>=34).sum().sum()),int(df.isna().sum().sum()))
+cols=[c for c in df if c not in ['P_3','C_18']]
+P=[c for c in cols if c.startswith('P_')]; C=[c for c in cols if c.startswith('C_')]
+print(P,C)
+means=df[cols].where(df[cols]<34).mean(axis=0)
+print('means',means.round(4).to_dict())
+for cutoff in ['mask_ge34','retain_ge34']:
+ x=df[cols].copy()
+ if cutoff=='mask_ge34': x=x.where(x<34)
+ z=means-x
+ for eq in [True,False]:
+  ps=[]
+  for _,row in z.iterrows():
+   a=row[P].dropna().values; b=row[C].dropna().values
+   ps.append(ttest_ind(a,b,equal_var=eq).pvalue if len(a)>=2 and len(b)>=2 else np.nan)
+  ps=np.array(ps,float)
+  for m_mode in ['finite','all175']:
+   finite=np.isfinite(ps)
+   qbon=np.full(len(ps),np.nan); qby=np.full(len(ps),np.nan)
+   if m_mode=='finite':
+    qbon[finite]=multipletests(ps[finite],method='bonferroni')[1]
+    qby[finite]=multipletests(ps[finite],method='fdr_by')[1]
+   else:
+    full=np.r_[ps[finite],np.ones((~finite).sum())]
+    qbon[finite]=multipletests(full,method='bonferroni')[1][:finite.sum()]
+    qby[finite]=multipletests(full,method='fdr_by')[1][:finite.sum()]
+   print('\\n',cutoff,'equal_var',eq,'m',m_mode,'finite',finite.sum(),'raw',sum(ps<=.05),'bon',sum(qbon<=.05),'by',sum(qby<=.05),'min',np.nanmin(ps))
+   sig=np.where(qby<=.05)[0]
+   print(' BY sig',[(df.index[i],round(ps[i],9),round(qbon[i],6),round(qby[i],6)) for i in sig])
+PY"

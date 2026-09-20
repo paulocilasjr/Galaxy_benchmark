@@ -1,0 +1,27 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np, time, gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+meta=pd.read_csv('inputs/sample_layout.csv')
+meta['count_id']=meta['SampleID'].str.replace('-','_',regex=False)
+meta=meta.set_index('count_id').loc[counts.columns]
+counts=counts.loc[(counts>10).any(axis=1)]
+groups=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+sm=meta[meta.Group.isin(groups)].copy(); sm['Group']=pd.Categorical(sm['Group'],categories=groups,ordered=True)
+sc=counts.loc[:,sm.index]
+print('fit input',sc.shape,flush=True); t=time.time()
+dds=DeseqDataSet(counts=sc.T,metadata=sm[['Group']],design='~Group',refit_cooks=True,n_cpus=1,quiet=True); dds.deseq2()
+print('fit done',time.time()-t,flush=True)
+ds=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=.05,quiet=True,n_cpus=1); ds.summary(); res=ds.results_df
+sel=res[(res.padj<=.05)&(res.log2FoldChange.abs()>=.5)&(res.baseMean>=10)]
+mp=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+fg=sel.reset_index(names='ENSG').merge(mp,on='ENSG',how='left',sort=False).gene_name.dropna().tolist()
+print('selected',len(sel),'mapped entries',len(fg),'unique',len(set(fg)),flush=True)
+print('enrichr call',flush=True)
+enr=gp.enrichr(gene_list=fg,gene_sets='Reactome_2022',organism='human',outdir=None,no_plot=True,verbose=True)
+print('res shape',enr.results.shape,flush=True)
+term=enr.results[enr.results.Term.str.contains('TP53 Regulates Transcription Of Cell Cycle Genes',case=False,na=False)]
+print(term.to_string(index=False),flush=True)
+print('all cycle terms:',flush=True); print(enr.results[enr.results.Term.str.contains('cell cycle',case=False,na=False)].to_string(index=False),flush=True)
+PY"

@@ -1,0 +1,83 @@
+/bin/bash -lc "export R_LIBS=/workspace/.debian_root/usr/lib/R/site-library:/workspace/.debian_root/usr/lib/R/library
+export LD_LIBRARY_PATH=/workspace/.debian_root/usr/lib/aarch64-linux-gnu:/workspace/.debian_root/lib/aarch64-linux-gnu
+Rscript --vanilla - <<'RS'
+suppressPackageStartupMessages({library(DESeq2);library(AnnotationDbi);library(org.Hs.eg.db);library(GO.db)})
+counts <- as.matrix(read.csv('inputs/counts_raw_unfiltered.csv', row.names=1, check.names=FALSE))
+storage.mode(counts) <- 'integer'
+meta <- read.csv('inputs/sample_layout.csv', stringsAsFactors=FALSE, check.names=FALSE)
+rownames(meta) <- gsub('-', '_', meta"'$SampleID)
+stopifnot(identical(colnames(counts), rownames(meta)))
+meta$Group <- factor(meta$Group)
+
+fit_one <- function(counts, meta, label) {
+  dds <- DESeqDataSetFromMatrix(countData=counts, colData=meta, design=~Group)
+  dds <- DESeq(dds, quiet=TRUE)
+  res <- results(dds, contrast=c('"'Group','CBD_IC50','DMSO'), alpha=0.05)
+  rdf <- as.data.frame(res)
+  rdf"'$ENSEMBL <- rownames(rdf)
+  up <- with(rdf, ENSEMBL[!is.na(padj) & padj < .05 & log2FoldChange > .5])
+  down <- with(rdf, ENSEMBL[!is.na(padj) & padj < .05 & log2FoldChange < -.5])
+  cat('"'\\nMODEL',label,'\\n')
+  cat('results_names',paste(resultsNames(dds),collapse=' | '),'\\n')
+  cat('nonzero',sum(rowSums(counts)>0),'pvalue_nonNA',sum("'!is.na(rdf$pvalue)),'"'padj_nonNA',sum("'!is.na(rdf$padj)),'"'\\n')
+  cat('DE_up',length(up),'DE_down',length(down),'\\n')
+  cat('size_factors\\n'); print(round(sizeFactors(dds),4))
+  list(dds=dds,res=rdf,up=up,down=down)
+}
+full <- fit_one(counts,meta,'full_30_samples')
+keep <- meta"'$Group %in% c('"'DMSO','CBD_IC50')
+sub <- fit_one(counts[,keep],droplevels(meta[keep,,drop=FALSE]),'subset_6_samples')
+
+# Common GO BP enrichment implementation, clusterProfiler-style 10..500 mapped gene sets.
+all_eligible <- unique(c(full"'$res$ENSEMBL[!is.na(full$res$pvalue)], sub$res$ENSEMBL[!is.na(sub$res$pvalue)]))
+ann <- AnnotationDbi::select(org.Hs.eg.db, keys=all_eligible, keytype='"'ENSEMBL', columns=c('GOALL','ONTOLOGYALL'))
+ann <- unique(ann["'!is.na(ann$GOALL) & ann$ONTOLOGYALL=='"'BP',c('ENSEMBL','GOALL')])
+term_names <- AnnotationDbi::select(GO.db, keys=unique(ann"'$GOALL), keytype='"'GOID', columns=c('TERM','ONTOLOGY'))
+term_names <- unique(term_names[term_names"'$ONTOLOGY=='"'BP',c('GOID','TERM')])
+name_map <- setNames(term_names"'$TERM,term_names$GOID)
+metabolic_ids <- unique(c('"'GO:0008152', unlist(mget('GO:0008152', GOBPOFFSPRING, ifnotfound=NA))))
+ora <- function(fg, universe) {
+  universe <- intersect(unique(universe),ann"'$ENSEMBL)
+  fg <- intersect(unique(fg),universe)
+  a <- ann[ann$ENSEMBL %in% universe,,drop=FALSE]
+  gs <- split(a$ENSEMBL,a$GOALL)
+  gs <- lapply(gs,unique)
+  gs <- gs[lengths(gs)>=10 & lengths(gs)<=500]
+  N <- length(universe); n <- length(fg)
+  k <- vapply(gs,function(z) sum(fg %in% z),integer(1))
+  K <- lengths(gs)
+  tested <- k>0
+  out <- data.frame(GOID=names(gs)[tested],k=k[tested],K=K[tested],n=n,N=N,
+                    pvalue=phyper(k[tested]-1,K[tested],N-K[tested],n,lower.tail=FALSE),stringsAsFactors=FALSE)
+  out$padj <- p.adjust(out$pvalue,'"'BH')
+  out"'$TERM <- unname(name_map[out$GOID])
+  out$metabolic <- out$GOID %in% metabolic_ids
+  out <- out[order(out$padj,out$pvalue,-out$k,out$GOID),]
+  out
+}
+report_ora <- function(obj,label,bgfield=c('"'pvalue','padj')) {
+  for(bg in bgfield) {
+    uni <- obj"'$res$ENSEMBL[!is.na(obj$res[[bg]])]
+    for(direction in c('"'up','down')) {
+      z <- ora(obj[[direction]],uni)
+      sig <- z["'!is.na(z$padj)&z$padj<.05,,drop=FALSE]
+      mets <- sig[sig$metabolic,,drop=FALSE]
+      cat('"'\\nORA',label,'background',bg,'direction',direction,'\\n')
+      cat('foreground_mapped',if(nrow(z)) z"'$n[1] else 0,'"'universe_mapped',if(nrow(z))z"'$N[1] else 0,
+          '"'tested_terms',nrow(z),'sig_terms',nrow(sig),'sig_metabolic_terms',nrow(mets),'\\n')
+      cat('TOP_ALL\\n'); print(head(sig[,c('GOID','TERM','k','K','padj','metabolic')],15),row.names=FALSE)
+      cat('TOP_METABOLIC\\n'); print(head(mets[,c('GOID','TERM','k','K','padj')],25),row.names=FALSE)
+    }
+  }
+}
+report_ora(full,'full')
+report_ora(sub,'subset')
+
+# VST sample-level nearest correlations to verify target/control replicate coherence
+vs <- vst(full"'$dds,blind=FALSE)
+cm <- cor(assay(vs))
+for (s in c('"'3_1','3_2','3_3','7_1','7_2','7_3')) {
+  ord <- order(cm[,s],decreasing=TRUE)
+  cat('COR_NEIGHBORS',s,paste(names(ord)[2:4],round(cm[ord[2:4],s],3),collapse=' | '),'\\n')
+}
+RS"

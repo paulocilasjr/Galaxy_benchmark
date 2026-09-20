@@ -1,0 +1,80 @@
+PYTHONPATH=/workspace/pylib:$PYTHONPATH python3 << 'PYEOF'
+import pandas as pd
+import os
+import re
+import numpy as np
+
+# Read Trio Status
+trio = pd.read_excel('inputs/230215_Trio_Status.xlsx')
+trio['Sample ID'] = trio['Sample ID'].astype(str).str.strip()
+
+# Get BLM carriers
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+carrier_ids = set(carriers['Sample ID'].tolist())
+
+# Build mapping from sample ID to CHIP file
+chip_dir = 'inputs/CHIP_DP10_GQ20_PASS'
+sample_to_file = {}
+for f in os.listdir(chip_dir):
+    m = re.search(r'CHIP_(\d+)-', f)
+    if m:
+        sample_to_file[m.group(1)] = os.path.join(chip_dir, f)
+    else:
+        m = re.search(r'CHIP_(SRR\d+)', f)
+        if m:
+            sample_to_file[m.group(1)] = os.path.join(chip_dir, f)
+
+# Sequence Ontology terms to exclude
+exclude_so = {
+    'intron_variant',
+    'intergenic_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+# Process each carrier
+carrier_variant_counts = {}
+detail_rows = []
+
+for sid in sorted(carrier_ids, key=lambda x: int(x) if x.isdigit() else 999999):
+    if sid not in sample_to_file:
+        print(f"Sample {sid}: NO CHIP FILE - SKIPPED")
+        continue
+    
+    fpath = sample_to_file[sid]
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:]
+    
+    zygosity = data[4]
+    vaf_str = data[9]
+    so_term = data[13]
+    
+    is_variant = zygosity != 'Reference'
+    is_coding = ~so_term.isin(exclude_so)
+    vaf_num = pd.to_numeric(vaf_str, errors='coerce')
+    has_low_vaf = vaf_num < 0.3
+    
+    filtered = data[is_variant & is_coding & has_low_vaf]
+    count = len(filtered)
+    carrier_variant_counts[sid] = count
+    detail_rows.append({'Sample': sid, 'Count': count})
+    
+    # Show which genes the variants are in
+    genes = filtered[12].tolist() if len(filtered) > 0 else []
+    vafs = filtered[9].tolist() if len(filtered) > 0 else []
+    print(f"Sample {sid}: {count} variants - genes: {list(zip(genes, vafs))}")
+
+counts = list(carrier_variant_counts.values())
+print(f"\nCounts (n={len(counts)}): {sorted(counts)}")
+print(f"Median: {np.median(counts)}")
+
+# Also verify median calculation manually
+sorted_counts = sorted(counts)
+n = len(sorted_counts)
+print(f"Sorted: {sorted_counts}")
+print(f"n={n}, middle index={(n-1)//2}, value={sorted_counts[(n-1)//2]}")
+if n % 2 == 0:
+    print(f"Even number: median = ({sorted_counts[n//2-1]} + {sorted_counts[n//2]})/2 = {(sorted_counts[n//2-1] + sorted_counts[n//2])/2}")
+PYEOF
+

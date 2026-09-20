@@ -1,0 +1,27 @@
+/bin/bash -c "Rscript - <<'RS'
+suppressPackageStartupMessages({library(DESeq2); library(org.Hs.eg.db); library(AnnotationDbi); library(GO.db)})
+counts <- read.csv('/workspace/inputs/counts_raw_unfiltered.csv', check.names=FALSE, row.names=1)
+layout <- read.csv('/workspace/inputs/sample_layout.csv', stringsAsFactors=FALSE)
+layout"'$SampleID <- gsub('"'-','_',layout"'$SampleID)
+layout <- layout[layout$Group %in% c('"'DMSO','CBD_IC50'),]
+layout <- layout[match(colnames(counts), layout"'$SampleID),]; layout <- layout[!is.na(layout$SampleID),]
+layout$Group <- factor(layout$Group, levels=c('"'DMSO','CBD_IC50'))
+cts <- counts[, layout"'$SampleID]; cts <- cts[rowSums(cts)>=5,]
+dds <- DESeqDataSetFromMatrix(as.matrix(cts), data.frame(row.names=layout$SampleID, Group=layout$Group), ~Group)
+dds <- DESeq(dds, quiet=TRUE)
+res <- results(dds, alpha=0.05); resdf <- as.data.frame(res); resdf$gene <- rownames(resdf)
+up <- rownames(resdf)[!is.na(resdf$padj)&resdf$padj<0.05&resdf$log2FoldChange>0.5]
+down <- rownames(resdf)[!is.na(resdf$padj)&resdf$padj<0.05&resdf$log2FoldChange<(-0.5)]
+uni <- rownames(resdf)[!is.na(resdf$padj)]
+map <- select(org.Hs.eg.db, keys=unique(c(up,down,uni)), columns='"'ENTREZID', keytype='ENSEMBL'); map <- map["'!is.na(map$ENTREZID)&!duplicated(map$ENSEMBL),]
+ue <- unique(map$ENTREZID[map$ENSEMBL%in%uni]); fu<-unique(map$ENTREZID[map$ENSEMBL%in%up]); fd<-unique(map$ENTREZID[map$ENSEMBL%in%down]); fu<-fu[fu%in%ue]; fd<-fd[fd%in%ue]
+bp <- select(GO.db, keys=keys(GO.db,'"'GOID'), columns=c('GOID','TERM','ONTOLOGY'), keytype='GOID'); bp<-bp[bp"'$ONTOLOGY=='"'BP',]
+g2g <- select(org.Hs.eg.db, keys=ue, columns='GO', keytype='ENTREZID'); g2g<-g2g["'!is.na(g2g$GO)&g2g$GO%in%bp$GOID,]
+tg<-lapply(split(g2g$ENTREZID,g2g$GO),unique)
+met <- unique(c('"'GO:0008152',GOBPOFFSPRING[['GO:0008152']]))
+ora<-function(fg){N<-length(ue);k<-length(fg);o<-lapply(names(tg),function(go){m<-length(tg[[go]]);if(m<10||m>500)return(NULL);q<-sum(tg[[go]]%in%fg);if(q==0)return(NULL);data.frame(GOID=go,Term=bp"'$TERM[match(go,bp$GOID)],m=m,q=q,p=phyper(q-1,m,N-m,k,lower.tail=FALSE))});o<-do.call(rbind,o);if(is.null(o)||nrow(o)==0)return(o);o$padj<-p.adjust(o$p,'"'BH');o[o"'$padj<0.05,]}
+su<-ora(fu); sd<-ora(fd)
+cat('"'universe',length(ue),'up',length(fu),'down',length(fd),'sigup',nrow(su),'sigdown',nrow(sd),'metup',sum(su"'$GOID%in%met),'"'metdown',sum(sd"'$GOID%in%met),'"'\\n')
+cat('DOWN top\\n'); print(head(sd[order(sd"'$padj),],10),row.names=FALSE)
+cat('"'UP top\\n'); print(head(su[order(su"'$padj),],10),row.names=FALSE)
+RS'

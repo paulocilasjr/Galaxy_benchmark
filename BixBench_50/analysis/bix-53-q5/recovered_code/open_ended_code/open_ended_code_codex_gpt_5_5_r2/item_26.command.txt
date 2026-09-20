@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_raw = pd.read_csv('/workspace/inputs/count.csv')
+counts = counts_raw.set_index('geneID').T.astype(int)
+metadata = pd.DataFrame({'condition':['KL' if s.startswith('KL') else 'WL' for s in counts.index]}, index=counts.index)
+print('counts', counts.shape)
+print(metadata.T.to_string())
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', ref_level=['condition','KL'], quiet=False, n_cpus=1)
+dds.deseq2()
+print('var columns', dds.var.columns.tolist()[:20])
+print('LFC columns in dds?', getattr(dds, 'varm', {}).keys() if hasattr(dds,'varm') else 'no')
+stat = DeseqStats(dds, contrast=['condition','WL','KL'], alpha=0.05, quiet=False, n_cpus=1)
+stat.summary()
+print('LFC cols:', stat.LFC.columns.tolist())
+print('results cols:', stat.results_df.columns.tolist())
+print(stat.results_df.head().to_string())
+coeff=[c for c in stat.LFC.columns if c"'!='"'Intercept'][0]
+print('shrink coeff', coeff)
+stat.lfc_shrink(coeff=coeff)
+res=stat.results_df.copy()
+print('post cols', res.columns.tolist())
+print(res.head().to_string())
+mask=(res['pvalue']<0.05) & (res['log2FoldChange'].abs()>1) & (res['baseMean']>10)
+print('sig n', int(mask.sum()))
+print(res.loc[mask].head(20).to_string())
+PY"

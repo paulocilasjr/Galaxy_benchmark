@@ -1,0 +1,76 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from statistics import median
+from math import comb, isfinite
+
+class Parser:
+    def __init__(self, s): self.s=s.strip(); self.i=0; self.nodes=[]
+    def node(self):
+        idx=len(self.nodes); self.nodes.append({'children':[], 'name':None, 'length':None})
+        if self.s[self.i]=='(':
+            self.i+=1
+            while True:
+                c=self.node(); self.nodes[idx]['children'].append(c)
+                if self.s[self.i]==',': self.i+=1; continue
+                if self.s[self.i]==')': self.i+=1; break
+                raise ValueError(('expected comma/close',self.i,self.s[self.i:self.i+20]))
+            # optional internal label/support
+            start=self.i
+            while self.i<len(self.s) and self.s[self.i] not in ':,();': self.i+=1
+            if self.i>start: self.nodes[idx]['name']=self.s[start:self.i]
+        else:
+            start=self.i
+            while self.i<len(self.s) and self.s[self.i] not in ':,();': self.i+=1
+            self.nodes[idx]['name']=self.s[start:self.i]
+        if self.i<len(self.s) and self.s[self.i]==':':
+            self.i+=1; start=self.i
+            while self.i<len(self.s) and self.s[self.i] not in ',();': self.i+=1
+            self.nodes[idx]['length']=float(self.s[start:self.i])
+        return idx
+    def parse(self):
+        root=self.node()
+        if self.i<len(self.s) and self.s[self.i]==';': self.i+=1
+        if self.i"'!=len(self.s): raise ValueError(('"'trailing',self.i,self.s[self.i:]))
+        return root,self.nodes
+
+def mean_patristic(newick):
+    root,nodes=Parser(newick).parse()
+    nleaf=sum(not x['children'] for x in nodes)
+    if nleaf<2: raise ValueError('fewer than 2 leaves')
+    missing=[]; negative=[]
+    total=0.0
+    def descend(u):
+        nonlocal total
+        if not nodes[u]['children']: return 1
+        k=0
+        for v in nodes[u]['children']:
+            kv=descend(v); k+=kv
+            w=nodes[v]['length']
+            if w is None: missing.append(v)
+            else:
+                if w<0: negative.append(w)
+                total += w*kv*(nleaf-kv)
+        return k
+    assert descend(root)==nleaf
+    if missing: raise ValueError(('missing branch lengths',missing))
+    return total/comb(nleaf,2),nleaf,negative
+
+for label,path in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+    rows=[]; neg=[]
+    with ZipFile(path) as z:
+        names=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        for name in names:
+            tree=z.read(name).decode().strip()
+            m,n,ns=mean_patristic(tree)
+            if not isfinite(m): raise ValueError((name,m))
+            rows.append((name,m,n)); neg += [(name,x) for x in ns]
+    vals=[x[1] for x in rows]
+    print(label,'processed',len(rows),'taxon_counts',dict(sorted(Counter(x[2] for x in rows).items())),
+          'negative_edges',len(neg),'median',repr(median(vals)),'min',min(vals),'max',max(vals))
+    ss=sorted(rows,key=lambda x:x[1]); mid=len(ss)//2
+    print(' middle rows:', ss[mid-1:mid+1] if len(ss)%2==0 else ss[mid:mid+1])
+    globals()[label]=median(vals)
+print('fungi/animals',repr(fungi/animals))
+print('animals/fungi',repr(animals/fungi))
+PY"

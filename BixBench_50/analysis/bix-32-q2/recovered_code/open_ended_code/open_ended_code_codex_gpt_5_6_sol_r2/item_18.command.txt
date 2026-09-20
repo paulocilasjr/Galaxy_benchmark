@@ -1,0 +1,55 @@
+/bin/bash -lc "Rscript - <<'RS'
+options(timeout=120)
+# read supplied DESeqResults objects using their raw serialized slots, avoiding package dependency
+files <- c('97'='inputs/res_1vs97.rds','98'='inputs/res_1vs98.rds','99'='inputs/res_1vs99.rds')
+res <- lapply(files, function(f) {
+  x <- readRDS(f); a <- attributes(x); d <- as.data.frame(a[['listData']]); rownames(d) <- a[['rownames']]; d
+})
+cat('dims:',sapply(res,nrow),'rownames identical:',all(vapply(res[-1],function(x) identical(rownames(res[[1]]),rownames(x)),logical(1))),'\\n')
+# live KEGG organism-specific link collection
+ln <- readLines('https://rest.kegg.jp/link/pathway/pau', warn=FALSE)
+z <- strsplit(ln,'\\\\t')
+links <- data.frame(gene=sub('"'^pau:'"','',vapply(z,"'`[`,character(1),1)),
+                    pathway=sub('"'"'^path:'"','',vapply(z,"'`[`,character(1),2)),stringsAsFactors=FALSE)
+cat('"'links',nrow(links),'genes',length(unique(links"'$gene)),'"'pathways',length(unique(links"'$pathway)),'"'\\n')
+all_rows <- Reduce(intersect,lapply(res,rownames))
+shared_univ <- intersect(all_rows, unique(links"'$gene))
+kegg_univ <- unique(links$gene)
+cat('"'all result rows',length(all_rows),'shared mapped universe',length(shared_univ),'KEGG universe',length(kegg_univ),'\\n')
+ora <- function(fg, universe, minGS=10, maxGS=500) {
+  # clusterProfiler-style: only genes/pathways represented after mapping/universe restriction
+  lk <- links[links"'$gene %in% universe,,drop=FALSE]
+  universe <- unique(lk$gene)
+  fg <- intersect(fg, universe)
+  sets <- split(lk$gene,lk$pathway)
+  sets <- lapply(sets,unique)
+  sizes <- lengths(sets)
+  sets <- sets[sizes>=minGS & sizes<=maxGS]
+  N <- length(universe); n <- length(fg)
+  k <- vapply(sets,function(s) sum(fg %in% s),integer(1))
+  M <- lengths(sets)
+  keep <- k > 0
+  p <- phyper(k[keep]-1,M[keep],N-M[keep],n,lower.tail=FALSE)
+  data.frame(path=names(k)[keep],k=k[keep],M=M[keep],n=n,N=N,pvalue=p,padj=p.adjust(p,'"'BH'),row.names=NULL)
+}
+run <- function(gene_rule=c('lfc','padj05','padj10'), universe_type=c('shared','kegg'), path_cut=c('padj05','p05')) {
+ gene_rule<-match.arg(gene_rule); universe_type<-match.arg(universe_type); path_cut<-match.arg(path_cut)
+ univ<-if(universe_type=='shared') shared_univ else kegg_univ
+ sig <- list()
+ for(nm in names(res)) for(dir in c('up','down')) {
+   d<-res[[nm]]
+   ok<-if(dir=='up') d"'$log2FoldChange>1.5 else d$log2FoldChange< -1.5
+   if(gene_rule=='"'padj05') ok<-ok & "'!is.na(d$padj) & d$padj<.05
+   if(gene_rule=='"'padj10') ok<-ok & "'!is.na(d$padj) & d$padj<.10
+   o<-ora(rownames(d)[ok],univ)
+   hit<-if(path_cut=='"'padj05') o"'$path[o$padj<.05] else o$path[o$pvalue<.05]
+   sig[[paste(nm,dir,sep='"'_')]]<-hit
+ }
+ up<-Reduce(intersect,sig[c('97_up','98_up','99_up')]); down<-Reduce(intersect,sig[c('97_down','98_down','99_down')])
+ cat(sprintf('%-7s %-6s %-6s fg=%s sigpaths=%s common_up=%d {%s} common_down=%d {%s} union=%d\\n',gene_rule,universe_type,path_cut,
+   paste(sapply(names(res),function(nm){d<-res[[nm]]; if(gene_rule=='lfc') sum(abs(d"'$log2FoldChange)>1.5,na.rm=T) else sum(abs(d$log2FoldChange)>1.5 & !is.na(d$padj) & d$padj < if(gene_rule=='"'padj05') .05 else .1)},collapse=','),
+   paste(lengths(sig),collapse=','),length(up),paste(up,collapse=','),length(down),paste(down,collapse=','),length(union(up,down))))
+ invisible(list(sig=sig,up=up,down=down))
+}
+for(gr in c('lfc','padj05','padj10')) for(ut in c('shared','kegg')) for(pc in c('padj05','p05')) run(gr,ut,pc)
+RS"

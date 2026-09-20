@@ -1,0 +1,38 @@
+/bin/bash -lc "Rscript - <<'RS'
+.libPaths(c('/workspace/Rlib', .libPaths()))
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(readxl)
+})
+counts_df <- read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, check.names=FALSE)
+stopifnot("'!anyDuplicated(counts_df$Geneid))
+rownames(counts_df) <- counts_df$Geneid
+counts_df$Geneid <- NULL
+coldata <- as.data.frame(read_excel('"'inputs/Issy_ASXL1_blood_coldata_gender.xlsx'))
+coldata <- coldata["'!is.na(coldata$sample) & coldata$sample != '"'', , drop=FALSE]
+rownames(coldata) <- coldata"'$sample
+common <- intersect(colnames(counts_df), rownames(coldata))
+missing_meta <- setdiff(colnames(counts_df), rownames(coldata))
+missing_counts <- setdiff(rownames(coldata), colnames(counts_df))
+cat('"'counts_cols=', ncol(counts_df), ' metadata_rows=', nrow(coldata), ' common=', length(common), '\\n', sep='')
+cat('missing_meta=', paste(missing_meta, collapse=','), '\\n', sep='')
+cat('missing_counts=', paste(missing_counts, collapse=','), '\\n', sep='')
+count_mat <- as.matrix(counts_df[, common, drop=FALSE])
+storage.mode(count_mat) <- 'integer'
+coldata <- coldata[common, , drop=FALSE]
+coldata"'$condition <- relevel(factor(coldata$condition), ref='"'Control')
+coldata"'$sex <- factor(coldata$sex)
+print(table(coldata$condition, coldata$sex))
+dds <- DESeqDataSetFromMatrix(countData=count_mat, colData=coldata, design=~ sex + condition)
+dds <- DESeq(dds, quiet=TRUE)
+print(resultsNames(dds))
+coef_name <- '"'condition_ASXL1_vs_Control'
+stopifnot(coef_name %in% resultsNames(dds))
+res <- results(dds, name=coef_name, alpha=0.05)
+shr <- lfcShrink(dds, coef=coef_name, res=res, type='apeglm', quiet=TRUE)
+cat('same_padj=', identical(as.numeric(res"'$padj), as.numeric(shr$padj)), '"'\\n', sep='')
+ans <- sum("'!is.na(shr$padj) & shr$padj < 0.05)
+cat('"'ANSWER=', ans, '\\n', sep='')
+cat('tested_nonNA_padj=', sum("'!is.na(shr$padj)), '"' total_rows=', nrow(shr), '\\n', sep='')
+RS"

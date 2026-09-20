@@ -1,0 +1,30 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('/workspace/inputs/sample_layout.csv')
+layout['sample_col'] = layout['SampleID'].str.replace('-','_', regex=False)
+groups = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+layout_sub = layout[layout['Group'].isin(groups)].copy()
+keep = (counts > 10).any(axis=1)
+print('keep', keep.sum(), 'total', len(keep))
+counts_pre = counts.loc[keep, layout_sub['sample_col']].copy()
+print('counts_pre genes x samples', counts_pre.shape)
+print('all-zero rows subset', (counts_pre.sum(axis=1)==0).sum())
+# transpose to samples x genes
+cts = counts_pre.T.copy()
+print('samples x genes', cts.shape)
+metadata = layout_sub[['sample_col','Group']].rename(columns={'sample_col':'sample'}).reset_index(drop=True).set_index('sample')
+print(metadata)
+dds = DeseqDataSet(counts=cts, metadata=metadata, design='~Group', quiet=False)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], quiet=False)
+stat.summary()
+res = stat.results_df
+print(res.head())
+print(res.shape, res.columns)
+res.to_csv('/workspace/tmp/de_result_test.csv')
+print('done')
+PY"

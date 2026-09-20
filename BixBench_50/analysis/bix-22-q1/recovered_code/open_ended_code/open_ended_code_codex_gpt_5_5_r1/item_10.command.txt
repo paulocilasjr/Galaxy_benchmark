@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, os
+
+celltypes = ['CD4', 'CD8', 'CD14', 'CD19']
+
+# protein-coding gene lengths keyed by gene id
+lengths = {}
+with open('inputs/GeneMetaInfo_Zenodo.csv', newline='') as f:
+    for row in csv.DictReader(f):
+        if row['gene_biotype'] == 'protein_coding':
+            lengths[row['Geneid']] = float(row['Length'])
+
+# sample -> celltype from annotation
+sample_cell = {}
+with open('inputs/Sample_annotated_Zenodo.csv', newline='') as f:
+    for row in csv.DictReader(f):
+        sample_cell[row['sample']] = row['celltype']
+
+# map count-table column indexes to target cell types
+with open('inputs/BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    idx_by_cell = {ct: [] for ct in celltypes}
+    for idx, sample in enumerate(header[1:], start=1):
+        ct = sample_cell.get(sample)
+        if ct in idx_by_cell:
+            idx_by_cell[ct].append(idx)
+    print('sample counts', {ct: len(v) for ct, v in idx_by_cell.items()})
+
+    xs = {ct: [] for ct in celltypes}
+    ys = {ct: [] for ct in celltypes}
+    used = 0
+    for row in reader:
+        gene = row[0]
+        length = lengths.get(gene)
+        if length is None:
+            continue
+        used += 1
+        for ct, idxs in idx_by_cell.items():
+            # all values are numeric; using float is robust to corrected counts if decimals appear
+            avg = sum(float(row[i]) for i in idxs) / len(idxs)
+            xs[ct].append(length)
+            ys[ct].append(avg)
+
+print('protein coding rows used', used)
+
+def pearson(a, b):
+    n = len(a)
+    ma = sum(a) / n
+    mb = sum(b) / n
+    num = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    da = math.sqrt(sum((x - ma) ** 2 for x in a))
+    db = math.sqrt(sum((y - mb) ** 2 for y in b))
+    return num / (da * db)
+
+cors = {ct: pearson(xs[ct], ys[ct]) for ct in celltypes}
+for ct in celltypes:
+    print(ct, cors[ct], 'abs', abs(cors[ct]))
+weakest = min(celltypes, key=lambda ct: abs(cors[ct]))
+print('weakest', weakest)
+
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', newline='') as f:
+    f.write(weakest + '\\n')
+PY
+printf 'answer.txt: '; cat codex_output/answer.txt"

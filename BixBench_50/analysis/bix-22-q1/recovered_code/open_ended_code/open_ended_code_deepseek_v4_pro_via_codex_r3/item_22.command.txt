@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+ann={}; typ={}
+with open('inputs/Sample_annotated_Zenodo.csv',newline='') as f:
+    for d in csv.DictReader(f):
+        ann[d['sample']]=d['celltype']; typ[d['sample']]=d['samtype']
+lengths={}; pc=[]
+with open('inputs/GeneMetaInfo_Zenodo.csv',newline='') as f:
+    for d in csv.DictReader(f):
+        if d['gene_biotype']=='protein_coding':
+            pc.append(d['Geneid']); lengths[d['Geneid']]=float(d['Length'])
+idx={g:i for i,g in enumerate(pc)}
+for subsetname, allowed in [('refsamp',{'refsamp'}),('nonrefsamp',{'nonrefsamp'}),('all',None)]:
+    with open('inputs/BatchCorrectedReadCounts_Zenodo.csv',newline='') as f:
+        r=csv.reader(f); header=next(r); cols=header[1:]
+        pos={t:[] for t in ['CD4','CD8','CD14','CD19']}
+        for i,c in enumerate(cols,1):
+            if allowed is None or typ[c] in allowed:
+                t=ann[c]
+                if t in pos: pos[t].append(i)
+        n=len(pc)
+        sums={t:[0.0]*n for t in pos}; cnt={t:len(pos[t]) for t in pos}
+        for row in r:
+            g=row[0]; i=idx.get(g)
+            if i is None: continue
+            for t,ps in pos.items():
+                s=0.0
+                for p in ps: s+=float(row[p])
+                sums[t][i]=s
+    L=[lengths[g] for g in pc]
+    def pr(a,b):
+        ma=statistics.fmean(a); mb=statistics.fmean(b)
+        return sum((x-ma)*(y-mb) for x,y in zip(a,b))/math.sqrt(sum((x-ma)**2 for x in a)*sum((y-mb)**2 for y in b))
+    print(subsetname, {t:cnt[t] for t in cnt})
+    for t in ['CD4','CD8','CD14','CD19']:
+        mean=[sums[t][i]/cnt[t] for i in range(n)]
+        print(t, pr(L,mean))
+PY"

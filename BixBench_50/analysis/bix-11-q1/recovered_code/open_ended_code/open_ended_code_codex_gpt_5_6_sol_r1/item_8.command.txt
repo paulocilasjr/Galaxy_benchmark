@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from io import StringIO
+from statistics import median
+from collections import Counter
+from Bio import Phylo
+import re
+allvals={}
+for group in ['animals','fungi']:
+    zpath=f'inputs/scogs_{group}.zip'
+    vals=[]; leaves=Counter(); diffs=[]; report_vals=[]
+    with ZipFile(zpath) as z:
+      names=[n for n in z.namelist() if n.endswith('.treefile')]
+      for n in names:
+        s=z.read(n).decode()
+        t=Phylo.read(StringIO(s),'newick')
+        branches=[c.branch_length or 0.0 for c in t.find_clades()]
+        internals=[c.branch_length or 0.0 for c in t.get_nonterminals()]
+        val=sum(internals)/sum(branches)
+        vals.append(val)
+        leaves[len(t.get_terminals())]+=1
+        iq=n[:-8]+'iqtree'
+        report=z.read(iq).decode(errors='replace')
+        m=re.search(r'Sum of internal branch lengths: ["'^'"\\n]*\\(([0-9.]+)% of tree length\\)',report)
+        if m:
+          rv=float(m.group(1))/100
+          report_vals.append(rv); diffs.append(val-rv)
+    print(group,'n',len(vals),'leaves',dict(leaves),'minmax',min(vals),max(vals))
+    print('exact median',repr(median(vals)),'report rounded median',repr(median(report_vals)))
+    k=len(vals)//2
+    print('median center sorted', sorted(vals)[max(0,k-2):k+3])
+    print('report matched',len(report_vals),'max exact-report diff',max(map(abs,diffs)))
+    allvals[group]=vals
+print('fungi - animals exact',repr(median(allvals['fungi'])-median(allvals['animals'])))
+print('animals - fungi exact',repr(median(allvals['animals'])-median(allvals['fungi'])))
+PY"

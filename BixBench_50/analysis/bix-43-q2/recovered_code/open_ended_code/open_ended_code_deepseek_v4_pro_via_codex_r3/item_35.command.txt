@@ -1,0 +1,32 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+sel_groups=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+sel=layout[layout.Group.isin(sel_groups)]
+cols=[s.replace('-','_') for s in sel.SampleID]
+meta=sel.set_index('SampleID')[['Group']].rename_axis(index='sample'); meta.index=meta.index.str.replace('-','_')
+# alternative prefilter only selected samples
+sub=counts[cols]
+keep=(sub>10).any(axis=1)
+sub=sub.loc[keep]
+print('alt keep',sub.shape)
+dds=DeseqDataSet(counts=sub.T,metadata=meta,design='~Group',n_cpus=4)
+dds.deseq2()
+ds=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],n_cpus=4)
+ds.summary()
+res=ds.results_df
+sig=res[(res.padj<=.05)&(res.log2FoldChange.abs()>=.5)&(res.baseMean>=10)]
+print('alt sig',sig.shape)
+# map and enrich quickly
+mp=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t'); s2g=mp.set_index('ENSG')['gene_name']
+symbols=sig.index.map(s2g).dropna().astype(str); symbols=symbols[symbols.str.len()>0].unique()
+import gseapy
+enr=gseapy.enrichr(gene_list=symbols.tolist(),gene_sets='Reactome_2022',organism='human',outdir=None,no_plot=True)
+res2=enr.results
+term='TP53 Regulates Transcription Of Cell Cycle Genes R-HSA-6791312'
+print(res2[res2.Term==term][['Term','Overlap','Odds Ratio','Genes']].to_string(index=False))
+PY"

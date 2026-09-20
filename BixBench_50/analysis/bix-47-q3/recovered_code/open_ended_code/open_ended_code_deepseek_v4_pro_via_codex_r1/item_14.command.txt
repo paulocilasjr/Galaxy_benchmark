@@ -1,0 +1,43 @@
+/bin/bash -c "python3 - <<'PY'
+# quick parse 556 and check zygosity vs vaf and DP/GQ
+import zipfile, xml.etree.ElementTree as ET
+from collections import Counter
+def parse(path):
+ z=zipfile.ZipFile(path); M='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'; ns={'m':M[1:-1]}
+ items=[''.join(t.text or '' for t in si.iter(M+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall('m:si',ns)]
+ def ci(ref):
+  s=''
+  for ch in ref:
+   if ch.isalpha(): s+=ch
+   else: break
+  n=0
+  for ch in s:n=n*26+ord(ch)-64
+  return n-1
+ rows=[]
+ for row in ET.fromstring(z.read('xl/worksheets/sheet1.xml')).iter(M+'row'):
+  r=int(row.get('r')); vals={}
+  for c in row.findall(M+'c'):
+   idx=ci(c.get('r')); typ=c.get('t'); v=c.find(M+'v')
+   if v is None:
+    is_=c.find(M+'is'); val=''.join(t.text or '' for t in is_.iter(M+'t')) if is_ is not None else ''
+   else:
+    val=v.text or ''
+    if typ=='s': val=items[int(val)]
+   vals[idx]=val
+  rows.append((r,vals))
+ return rows
+rows=parse('/workspace/inputs/CHIP_DP10_GQ20_PASS/230209_Exome_GRCh38_CHIP_556-PF.xlsx')[2:]
+for r,v in rows:
+ try: vaf=float(v.get(9,'nan'))
+ except: vaf=None
+ z=v.get(4)
+ if (z=='Reference' and (vaf is None or vaf>0)) or (z"'!='"'Reference' and (vaf is None or vaf<=0)):
+  print(r,z,v.get(9),v.get(7),v.get(8),v.get(12))
+print('counts by z/vaf0')
+c=Counter()
+for r,v in rows:
+ try:vaf=float(v.get(9))
+ except:vaf=None
+ c[(v.get(4), vaf==0 if vaf is not None else 'na')]+=1
+print(c)
+PY"

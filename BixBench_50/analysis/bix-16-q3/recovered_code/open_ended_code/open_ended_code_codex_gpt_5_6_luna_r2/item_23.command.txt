@@ -1,0 +1,39 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.local_deps python3 - <<'PY'
+import csv
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata, spearmanr
+
+base=Path('inputs')
+def header(p):
+    with open(p,newline='') as f:return next(csv.reader(f))
+def first(p):
+    with open(p,newline='') as f:
+        rd=csv.reader(f);next(rd);return [r[0] for r in rd]
+cp=base/'CRISPRGeneEffect.csv'; epth=base/'OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'; mp=base/'Model.csv'
+ch=header(cp); eh=header(epth); epos={x:i for i,x in enumerate(eh)}
+genes=[x for x in ch[1:] if x in epos]; gs=set(genes)
+cuse=[0]+[i for i,x in enumerate(ch) if x in gs]; euse=[0]+[epos[x] for x in genes]
+ids_c=set(first(cp)); ids_e=set(first(epth)); ids_m=first(mp); shared=[x for x in ids_m if x in ids_c and x in ids_e]
+dtype={x:np.float32 for x in genes}
+c=pd.read_csv(cp,usecols=cuse,index_col=0,dtype=dtype).loc[shared,genes].to_numpy(copy=False)
+e=pd.read_csv(epth,usecols=euse,index_col=0,dtype=dtype).loc[shared,genes].to_numpy(copy=False)
+r=np.full(len(genes),np.nan); ns=np.zeros(len(genes),int)
+for j in range(len(genes)):
+    y=c[:,j]; ok=np.isfinite(y); ns[j]=int(ok.sum())
+    if ns[j] > 1:
+        a=rankdata(e[ok,j],method='average'); b=rankdata(-y[ok],method='average')
+        a-=a.mean(); b-=b.mean(); d=np.sqrt(a@a*(b@b))
+        if d:r[j]=(a@b)/d
+q=np.flatnonzero(r>=.6)
+print('qualifying count',len(q))
+for j in q[np.argsort(r[q])[::-1]]:
+    rho_s=float(spearmanr(e[np.isfinite(c[:,j]),j],-c[np.isfinite(c[:,j]),j]).statistic)
+    rho_raw=float(spearmanr(e[np.isfinite(c[:,j]),j],c[np.isfinite(c[:,j]),j]).statistic)
+    print(genes[j], 'n',ns[j], 'manual',format(float(r[j]),'.15f'),'scipy',format(rho_s,'.15f'),'raw',format(rho_raw,'.15f'),'delta',format(abs(r[j]-rho_s),'.3g'))
+# Show the boundary on both sides.
+order=np.argsort(r)
+print('largest below threshold:')
+for j in order[(r[order]<.6)][-5:][::-1]: print(genes[j],ns[j],format(float(r[j]),'.15f'))
+PY"

@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+from tempfile import TemporaryDirectory
+from subprocess import check_output
+from scipy.stats import mannwhitneyu
+import json, os, statistics
+
+root = Path('inputs')
+archives = {'animals': root/'scogs_animals.zip', 'fungi': root/'scogs_fungi.zip'}
+all_rates = {}
+all_names = {}
+with TemporaryDirectory(prefix='phykit_evo_rate_') as td:
+    td = Path(td)
+    for group, archive in archives.items():
+        rates = []
+        names = []
+        with ZipFile(archive) as z:
+            entries = sorted((n for n in z.namelist() if n.endswith('.treefile')))
+            for i, entry in enumerate(entries):
+                p = td / f'{group}_{i}.treefile'
+                p.write_bytes(z.read(entry))
+                out = check_output(['/opt/agent-venv/bin/pk_evo_rate', str(p)], text=True).strip()
+                if not out:
+                    raise RuntimeError(f'empty PhyKIT output for {entry}')
+                try:
+                    rate = float(out)
+                except ValueError as e:
+                    raise RuntimeError(f'bad PhyKIT output {out"'!r} for {entry}'"') from e
+                rates.append(rate)
+                names.append(entry)
+        all_rates[group] = rates
+        all_names[group] = names
+
+animals = all_rates['animals']
+fungi = all_rates['fungi']
+res = mannwhitneyu(animals, fungi, alternative='two-sided', method='auto')
+print(json.dumps({
+    'phykit_version': '2.4.1',
+    'n_animals': len(animals), 'n_fungi': len(fungi),
+    'u_animals': float(res.statistic),
+    'u_fungi': float(len(animals)*len(fungi)-res.statistic),
+    'pvalue': float(res.pvalue),
+    'animal_min': min(animals), 'animal_median': statistics.median(animals), 'animal_max': max(animals),
+    'fungi_min': min(fungi), 'fungi_median': statistics.median(fungi), 'fungi_max': max(fungi),
+    'unique_combined_rates': len(set(animals+fungi)),
+    'ties_combined': len(animals)+len(fungi)-len(set(animals+fungi)),
+}, sort_keys=True, indent=2))
+PY"

@@ -1,0 +1,112 @@
+source /workspace/venv/bin/activate && python3 << 'PYEOF'
+import json
+import numpy as np
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# Load the consistent genes
+with open('/workspace/consistent_genes.txt') as f:
+    consistent_genes = [line.strip() for line in f if line.strip()]
+
+print(f"Consistent DE genes (|lfc|>1.5 in all 3): {len(consistent_genes)}")
+
+# Map to KEGG IDs
+consistent_kegg = set()
+for g in consistent_genes:
+    kegg_id = f"pau:{g}"
+    consistent_kegg.add(kegg_id)
+
+# Load KEGG annotations
+with open('/workspace/gene_to_pathway.json') as f:
+    gene_to_pathway = json.load(f)
+
+with open('/workspace/pathway_names.json') as f:
+    pathway_names = json.load(f)
+
+with open('/workspace/all_kegg_genes.json') as f:
+    all_kegg_genes = set(json.load(f))
+
+# Build pathway to gene mapping
+pathway_to_genes = {}
+for gene, pathways in gene_to_pathway.items():
+    for pathway in pathways:
+        pid = pathway.replace('path:', '')
+        if pid not in pathway_to_genes:
+            pathway_to_genes[pid] = set()
+        pathway_to_genes[pid].add(gene)
+
+# Background: genes with ANY pathway annotation
+background_genes = set(gene_to_pathway.keys())
+print(f"Background genes (with any pathway): {len(background_genes)}")
+
+# DE genes that have pathway annotations
+de_with_pathways = consistent_kegg & background_genes
+print(f"DE genes with pathway annotations: {len(de_with_pathways)}")
+
+# Count DE genes without pathway annotations
+de_without_pathways = consistent_kegg - background_genes
+print(f"DE genes without pathway annotations: {len(de_without_pathways)}")
+
+# Perform Fisher's exact test for each pathway
+results = []
+N = len(background_genes)
+
+for pid, pathway_genes in pathway_to_genes.items():
+    pathway_in_bg = pathway_genes & background_genes
+    de_in_pathway = len(de_with_pathways & pathway_in_bg)
+    
+    if de_in_pathway == 0:
+        continue
+    
+    a = de_in_pathway
+    b = len(pathway_in_bg) - de_in_pathway
+    c = len(de_with_pathways) - de_in_pathway
+    d = N - len(pathway_in_bg) - c
+    
+    odds_ratio, p_value = fisher_exact([[a, b], [c, d]], alternative='greater')
+    
+    results.append({
+        'pathway': pid,
+        'name': pathway_names.get(pid, 'Unknown'),
+        'de_genes': a,
+        'pathway_size': len(pathway_in_bg),
+        'p_value': p_value,
+        'odds_ratio': odds_ratio
+    })
+
+print(f"\nPathways with at least 1 DE gene: {len(results)}")
+
+# Multiple testing correction (Benjamini-Hochberg)
+p_values = [r['p_value'] for r in results]
+reject, p_adj, _, _ = multipletests(p_values, method='fdr_bh')
+
+for i, r in enumerate(results):
+    r['p_adj'] = p_adj[i]
+    r['significant'] = reject[i]
+
+# Count significant pathways
+sig_results = [r for r in results if r['significant']]
+print(f"\nSignificantly enriched pathways (FDR < 0.05): {len(sig_results)}")
+
+# Sort by p-value and show results
+results_sorted = sorted(results, key=lambda x: x['p_value'])
+
+print("\nTop 30 enriched pathways:")
+print(f"{'Pathway':<12} {'DE':>4} {'Size':>5} {'p-value':>12} {'FDR':>12} {'Name'}")
+print("-" * 100)
+for r in results_sorted[:30]:
+    sig = "*" if r['significant'] else " "
+    print(f"{r['pathway']:<12} {r['de_genes']:>4} {r['pathway_size']:>5} {r['p_value']:>12.3e} {r['p_adj']:>12.3e} {sig} {r['name'][:60]}")
+
+# Show all significant pathways
+if sig_results:
+    print(f"\nAll {len(sig_results)} significantly enriched pathways:")
+    sig_sorted = sorted(sig_results, key=lambda x: x['p_value'])
+    for r in sig_sorted:
+        print(f"  {r['pathway']}: {r['name']} (DE={r['de_genes']}/{r['pathway_size']}, p={r['p_value']:.3e}, FDR={r['p_adj']:.3e})")
+else:
+    print("\nNo pathways were significantly enriched at FDR < 0.05")
+
+print(f"\n=== FINAL ANSWER ===")
+print(f"{len(sig_results)}")
+PYEOF

@@ -1,0 +1,61 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5c1094e482b96fc82",
+  "history_id": "bbd44e69cb8906b510acea6bde6a9d1f",
+  "tool_id": "codex_pydeseq2_sex_de_20260801_v2",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-01T15:38:19.400775",
+  "update_time": "2026-08-01T15:41:08.137461",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78853751/inputs/dataset_d4c351a9-51fe-41e0-be48-3700d1431fc8.dat\" \"/jetstream2/scratch/main/jobs/78853751/inputs/dataset_487b6c89-1b24-4064-b3fb-89ec1cb0aaa9.dat\" <<'PY'\nimport importlib.metadata\nimport os\nimport sys\nimport numpy as np\nimport pandas as pd\nfrom pydeseq2.dds import DeseqDataSet\nfrom pydeseq2.ds import DeseqStats\n\ncounts_path, metadata_path = sys.argv[1:3]\nn_cpus = max(1, int(os.environ.get(\"GALAXY_SLOTS\", \"1\")))\n\ncounts = pd.read_csv(counts_path, index_col=0)\nmetadata = pd.read_csv(metadata_path)\n\nif \"sample\" not in metadata.columns:\n    raise ValueError(\"Metadata must contain a sample column\")\nfor col in (\"batch\", \"sex\"):\n    if col not in metadata.columns:\n        raise ValueError(f\"Metadata must contain {col}\")\n\ncounts.index = counts.index.astype(str)\ncounts.columns = counts.columns.astype(str)\nif counts.index.has_duplicates:\n    raise ValueError(\"Count matrix has duplicate gene identifiers\")\nif counts.columns.has_duplicates:\n    raise ValueError(\"Count matrix has duplicate sample identifiers\")\n\nmetadata[\"sample\"] = metadata[\"sample\"].astype(str)\nif metadata[\"sample\"].duplicated().any():\n    raise ValueError(\"Metadata has duplicate sample identifiers\")\nmetadata = metadata.set_index(\"sample\", drop=True)\n\nmissing_metadata = sorted(set(counts.columns) - set(metadata.index))\nmissing_counts = sorted(set(metadata.index) - set(counts.columns))\nif missing_metadata or missing_counts:\n    raise ValueError(\n        f\"Sample mismatch: missing_metadata={missing_metadata[:5]}, \"\n        f\"missing_counts={missing_counts[:5]}\"\n    )\nmetadata = metadata.loc[counts.columns].copy()\n\ncounts = counts.apply(pd.to_numeric, errors=\"raise\")\ncount_array = counts.to_numpy()\nif not np.isfinite(count_array).all():\n    raise ValueError(\"Count matrix contains non-finite values\")\nif (count_array < 0).any():\n    raise ValueError(\"Count matrix contains negative values\")\nif not np.equal(count_array, np.floor(count_array)).all():\n    raise ValueError(\"Count matrix contains non-integer values\")\ncounts = counts.astype(np.int64)\n\nmetadata[\"batch\"] = pd.Categorical(\n    metadata[\"batch\"].astype(str),\n    categories=[\"1\", \"2\", \"3\", \"4\"],\n    ordered=True,\n)\nmetadata[\"sex\"] = pd.Categorical(\n    metadata[\"sex\"].astype(str),\n    categories=[\"F\", \"M\"],\n    ordered=True,\n)\nif metadata[\"batch\"].isna().any() or metadata[\"sex\"].isna().any():\n    raise ValueError(\"Unexpected batch or sex level in metadata\")\n\ndds = DeseqDataSet(\n    counts=counts,\n    metadata=metadata,\n    design=\"~ batch + sex\",\n    n_cpus=n_cpus,\n    quiet=True,\n)\ndds.deseq2()\n\nstat_res = DeseqStats(\n    dds,\n    contrast=[\"sex\", \"M\", \"F\"],\n    n_cpus=n_cpus,\n    quiet=True,\n)\nstat_res.summary()\n\ncoefficients = [str(c) for c in stat_res.LFC.columns]\nsex_coefficients = [\n    c for c in coefficients\n    if c.startswith(\"sex[\") and c.endswith(\"M]\")\n]\nif len(sex_coefficients) != 1:\n    raise ValueError(f\"Could not identify unique M sex coefficient: {coefficients}\")\nstat_res.lfc_shrink(coeff=sex_coefficients[0])\n\nresults = stat_res.results_df.copy()\nresults.index = results.index.astype(str)\nresults.index.name = \"gene_id\"\nresults = results.reset_index()\nresults = results[\n    [\"gene_id\", \"baseMean\", \"log2FoldChange\", \"lfcSE\", \"stat\", \"pvalue\", \"padj\"]\n]\nresults.to_csv(\n    \"pydeseq2_apeglm_shrunken_results.tsv\",\n    sep=\"\\t\",\n    index=False,\n    na_rep=\"NA\",\n    float_format=\"%.15g\",\n)\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a472135e0cc58331a06835e",
+      "src": "hda",
+      "uuid": "d4c351a9-51fe-41e0-be48-3700d1431fc8"
+    },
+    "metadata": {
+      "id": "f9cad7b01a472135b5543ec2adf2f904",
+      "src": "hda",
+      "uuid": "487b6c89-1b24-4064-b3fb-89ec1cb0aaa9"
+    }
+  },
+  "outputs": {
+    "results": {
+      "id": "f9cad7b01a47213570e835f392f146b0",
+      "src": "hda",
+      "uuid": "b6529cf5-3020-4f94-933d-4a5ea2c63034"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 65, in <module>\n  File \"/usr/local/lib/python3.14/site-packages/pydeseq2/dds.py\", line 249, in __init__\n    super().__init__(X=counts.astype(int), obs=metadata)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/legacy_api_wrap/__init__.py\", line 88, in fn_compatible\n    return fn(*args_all, **kw)\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 252, in __init__\n    self._init_as_actual(\n    ~~~~~~~~~~~~~~~~~~~~^\n        X=X,\n        ^^^^\n    ...<12 lines>...\n        filemode=filemode,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 442, in _init_as_actual\n    self._obs = _gen_dataframe(\n                ~~~~~~~~~~~~~~^\n        obs, [\"obs_names\", \"row_names\"], source=source, attr=\"obs\", length=n_obs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/functools.py\", line 982, in wrapper\n    return dispatch(args[0].__class__)(*args, **kw)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/aligned_df.py\", line 89, in _gen_dataframe_df\n    raise _mk_df_error(source, attr, length, len(anno))\nValueError: Observations annot. `obs` must have as many rows as `X` has rows (59453), but has 723 rows.\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 65, in <module>\n  File \"/usr/local/lib/python3.14/site-packages/pydeseq2/dds.py\", line 249, in __init__\n    super().__init__(X=counts.astype(int), obs=metadata)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/legacy_api_wrap/__init__.py\", line 88, in fn_compatible\n    return fn(*args_all, **kw)\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 252, in __init__\n    self._init_as_actual(\n    ~~~~~~~~~~~~~~~~~~~~^\n        X=X,\n        ^^^^\n    ...<12 lines>...\n        filemode=filemode,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 442, in _init_as_actual\n    self._obs = _gen_dataframe(\n                ~~~~~~~~~~~~~~^\n        obs, [\"obs_names\", \"row_names\"], source=source, attr=\"obs\", length=n_obs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/functools.py\", line 982, in wrapper\n    return dispatch(args[0].__class__)(*args, **kw)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/aligned_df.py\", line 89, in _gen_dataframe_df\n    raise _mk_df_error(source, attr, length, len(anno))\nValueError: Observations annot. `obs` must have as many rows as `X` has rows (59453), but has 723 rows.\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

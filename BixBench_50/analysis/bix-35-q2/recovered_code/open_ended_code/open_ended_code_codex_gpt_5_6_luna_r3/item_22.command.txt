@@ -1,0 +1,33 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.phykit_pkgs python - <<'PY'
+from argparse import Namespace
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from phykit.services.tree.evolutionary_rate import EvolutionaryRate
+from scipy.stats import mannwhitneyu
+
+
+def rates_for(dirpath):
+    out=[]
+    for p in sorted(Path(dirpath).glob('*.treefile')):
+        buf=StringIO()
+        with redirect_stdout(buf):
+            EvolutionaryRate(Namespace(tree=str(p), json=False)).run()
+        s=buf.getvalue().strip()
+        if not s:
+            raise RuntimeError(f'No evo_rate output for {p}')
+        out.append((p.stem.replace('.faa.mafft.clipkit',''), float(s)))
+    return out
+
+a=rates_for('/workspace/.rate_work/animals')
+f=rates_for('/workspace/.rate_work/fungi')
+xa=[x[1] for x in a]; xf=[x[1] for x in f]
+print('n animals',len(xa),'n fungi',len(xf))
+print('animal rate range',min(xa),max(xa),'mean',sum(xa)/len(xa),'median',sorted(xa)[len(xa)//2-1:len(xa)//2+1])
+print('fungi rate range',min(xf),max(xf),'mean',sum(xf)/len(xf),'median',sorted(xf)[len(xf)//2-1:len(xf)//2+1])
+for alt in ['two-sided','less','greater']:
+    r=mannwhitneyu(xa,xf,alternative=alt)
+    print(alt, 'U(first animals)=',r.statistic,'p=',r.pvalue)
+print('smaller U',min(mannwhitneyu(xa,xf,alternative='two-sided').statistic, mannwhitneyu(xf,xa,alternative='two-sided').statistic))
+print('tie counts animal',len(xa)-len(set(xa)),'fungi',len(xf)-len(set(xf)))
+PY"

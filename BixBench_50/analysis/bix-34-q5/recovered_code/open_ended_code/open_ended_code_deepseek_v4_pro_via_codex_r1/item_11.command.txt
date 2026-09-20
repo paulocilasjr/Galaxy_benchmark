@@ -1,0 +1,55 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, io, statistics, itertools, math, os
+from Bio import Phylo
+
+def pairwise_dists_tree(newick):
+    tree=Phylo.read(io.StringIO(newick),'newick')
+    terms=tree.get_terminals()
+    dists={}
+    # ensure rooted? Bio Phylo unrooted? For tree string, node root maybe no name, could parse. Use distance method on tree? 
+    for a,b in itertools.combinations(terms,2):
+        d=tree.distance(a,b)
+        dists[(a.name,b.name)]=d
+    return terms,dists
+
+def summary(z, ext='treefile'):
+    with zipfile.ZipFile(z) as f:
+        names=[n for n in f.namelist() if n.endswith('.'+ext)]
+        vals=[]; info=[]
+        for n in names:
+            data=f.read(n).decode().strip()
+            if ext=='treefile':
+                terms,dists=pairwise_dists_tree(data)
+                if not dists:
+                    continue
+                ds=list(dists.values())
+                mean=statistics.mean(ds)
+                # get terminal names
+            elif ext=='mldist':
+                lines=data.splitlines()
+                if not lines: continue
+                ntax=int(lines[0])
+                # triangular matrix lines each has ntax floats
+                rows=[]
+                for line in lines[1:1+ntax]:
+                    parts=line.split()
+                    rows.append([float(x) for x in parts[1:]])
+                ds=[]
+                for i in range(ntax):
+                    for j in range(i):
+                        ds.append(rows[i][j])
+                mean=statistics.mean(ds)
+                terms=rows
+            vals.append(mean)
+            info.append((n,mean,len(ds), [a.name for a in terms] if ext=='treefile' else None))
+        return vals, info
+for group in ['animals','fungi']:
+    z=f'/workspace/inputs/scogs_{group}.zip'
+    print('\\nGROUP',group)
+    for ext in ['treefile','mldist']:
+        vals,info=summary(z,ext)
+        print(ext,'n',len(vals),'median',statistics.median(vals),'mean',statistics.mean(vals),'minmax',min(vals),max(vals))
+        # sample info with min/max
+        for x in sorted(info,key=lambda x:x[1])[:2]: print(' min',x)
+        for x in sorted(info,key=lambda x:x[1])[-2:]: print(' max',x)
+PY"

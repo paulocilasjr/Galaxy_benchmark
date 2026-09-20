@@ -1,0 +1,110 @@
+/bin/bash -c "python - <<'PY'
+import xlrd, math
+import numpy as np
+from scipy import stats
+sh=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+P_cols=range(1,11)
+C_cols=range(11,21)
+all_names=[]
+all_data=[]
+for r in range(2,sh.nrows):
+    name=sh.cell_value(r,0)
+    vals=[]
+    for c in range(1,21):
+        v=sh.cell_value(r,c)
+        vals.append(np.nan if isinstance(v,str) and v.strip().upper()=='NAN' else (float(v) if isinstance(v,(int,float)) else np.nan))
+    all_names.append(name); all_data.append(vals)
+A=np.array(all_data) # rows x samples
+names=all_names
+Pmask=np.zeros(A.shape[1],bool); Pmask[list(P_cols)]=True
+Cmask=np.zeros(A.shape[1],bool); Cmask[list(C_cols)]=True
+
+def apply_discard(data, discard):
+    if not discard: return data
+    drop=[2,17] # indices P3, C18
+    keep=[i for i in range(data.shape[1]) if i not in drop]
+    return data[:,keep], Pmask[keep], Cmask[keep]
+
+def compute(data,Pmask,Cmask, norm='detected', use_high=True, missing_policy='drop'):
+    # sample mean
+    means=[]
+    for j in range(data.shape[1]):
+        vals=data[:,j]
+        finite=~np.isnan(vals)
+        if norm=='detected':
+            finite=finite & (vals<34)
+        elif norm=='all':
+            pass
+        if finite.sum()==0: means.append(np.nan)
+        else: means.append(np.nanmean(vals[finite]))
+    means=np.array(means)
+    X = means[None,:] - data  # negative dCt, finite if data finite and mean finite
+    raw=[]; names2=[]
+    for i in range(data.shape[0]):
+        x=X[i]
+        if missing_policy=='drop':
+            # include finite x; NAN rows removed
+            xp=x[Pmask & ~np.isnan(x)]
+            xc=x[Cmask & ~np.isnan(x)]
+        elif missing_policy=='impute40':
+            # treat all NAN as 40 for row? x from mean-40; data missing replaced 40 before norm?
+            pass
+        if len(xp)>=2 and len(xc)>=2:
+            t,p=stats.ttest_ind(xp,xc,equal_var=True)
+            raw.append(p); names2.append(names[i])
+    return np.array(raw), names2, X
+
+def adjust_counts(p, method):
+    m=len(p)
+    if method=='bonf': q=np.minimum(p*m,1)
+    elif method=='bh':
+        order=np.argsort(p); q=np.empty(m)
+        prev=1.0
+        for rank in range(m,0,-1):
+            idx=order[rank-1]
+            val=min(m/rank*p[idx],1)
+            prev=min(prev,val)
+            q[idx]=prev
+    elif method=='by':
+        order=np.argsort(p); q=np.empty(m)
+        # c(m)=sum 1/i
+        c=sum(1.0/k for k in range(1,m+1))
+        prev=1.0
+        for rank in range(m,0,-1):
+            idx=order[rank-1]
+            val=min(m*c/rank*p[idx],1)
+            prev=min(prev,val)
+            q[idx]=prev
+    return q
+
+for discard in [False, True]:
+    data,P,C=apply_discard(A, discard)
+    for norm in ['detected','all','none']:
+        for use_high in [True]:
+            X=None
+            if norm=='none':
+                X=-data
+            else:
+                means=[]
+                for j in range(data.shape[1]):
+                    vals=data[:,j]; finite=~np.isnan(vals)
+                    if norm=='detected': finite &= vals<34
+                    if finite.sum()==0: means.append(np.nan)
+                    else: means.append(np.nanmean(vals[finite]))
+                X=np.array(means)[None,:]-data
+            pvals=[]; ns=[]
+            for i in range(data.shape[0]):
+                x=X[i]
+                xp=x[P & ~np.isnan(x)]
+                xc=x[C & ~np.isnan(x)]
+                if len(xp)>=2 and len(xc)>=2:
+                    pvals.append(stats.ttest_ind(xp,xc,equal_var=True).pvalue)
+                    ns.append(names[i])
+            p=np.array(pvals)
+            print('discard',discard,'norm',norm,'rows',len(p),'raw<.05',np.sum(p<.05))
+            for meth in ['bonf','bh','by']:
+                q=adjust_counts(p,meth)
+                sig=np.where(q<=0.05)[0]
+                print(' ',meth, len(sig), [ns[i] for i in sig], 'minp', p.min(), 'minq', q.min())
+    print('---')
+PY"

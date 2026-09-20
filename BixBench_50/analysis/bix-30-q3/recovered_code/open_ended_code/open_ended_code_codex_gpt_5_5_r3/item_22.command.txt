@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess, sys, math
+book=xlrd.open_workbook('inputs/pone.0150501.s002.xls')
+s=book.sheet_by_index(0)
+headers=s.row_values(1)[1:]
+# exclude P_3 and C_18 per paper
+keep=[i for i,h in enumerate(headers) if h not in ('P_3','C_18')]
+kept_headers=[headers[i] for i in keep]
+# raw matrix [row][sample]
+mir=[]; mat=[]
+for r in range(2,s.nrows):
+    vals=[]
+    for c in range(1,s.ncols):
+        v=s.cell_value(r,c)
+        if isinstance(v,str) and v.strip().upper()=='NAN': vals.append(None)
+        else: vals.append(float(v))
+    mir.append(s.cell_value(r,0)); mat.append(vals)
+# sample means over detected miRNAs Ct<34, not NAN
+means=[]
+for j in range(len(headers)):
+    xs=[row[j] for row in mat if row[j] is not None and row[j] < 34]
+    means.append(sum(xs)/len(xs))
+print('kept', kept_headers)
+print('sample_means kept', [round(means[i],6) for i in keep])
+# build several variants as input to R
+variants={}
+for mode in ['keep_all_ct','na_ct_ge_34','cap_ct_ge_34_to_34']:
+    lines=[]
+    for name,row in zip(mir,mat):
+        vals=[]
+        for j in keep:
+            v=row[j]
+            if v is None:
+                vals.append(None)
+            elif mode=='na_ct_ge_34' and v>=34:
+                vals.append(None)
+            elif mode=='cap_ct_ge_34_to_34' and v>=34:
+                vals.append(-(34-means[j])) # log2 expr = -deltaCt
+            else:
+                vals.append(-(v-means[j]))
+        p=[vals[i] for i,h in enumerate(kept_headers) if h.startswith('P_')]
+        c=[vals[i] for i,h in enumerate(kept_headers) if h.startswith('C_')]
+        def fmt(xs): return ';'.join('NA' if x is None else repr(x) for x in xs)
+        lines.append(name+'\\t'+fmt(p)+'\\t'+fmt(c))
+    variants[mode]='\\n'.join(lines)+'\\n'
+
+r_code = r'''
+d <- read.delim('stdin', header=FALSE, sep='\\t', stringsAsFactors=FALSE)
+parsev <- function(x) as.numeric(strsplit(x, ';', fixed=TRUE)[[1]])
+pv <- numeric(nrow(d)); names <- d[,1]
+for (i in seq_len(nrow(d))) {
+  p <- parsev(d[i,2]); c <- parsev(d[i,3])
+  pv[i] <- t.test(p, c, var.equal=TRUE)"'$p.value
+}
+cat('"'raw_lt_0.05', sum(pv < 0.05), 'raw_le_0.05', sum(pv <= 0.05), 'min', min(pv), 'min_name', names[which.min(pv)], '\\n')
+cat('bonf', sum(p.adjust(pv, 'bonferroni') <= 0.05), 'BY', sum(p.adjust(pv, 'BY') <= 0.05), 'BH', sum(p.adjust(pv, 'BH') <= 0.05), '\\n')
+ix <- order(pv)[1:10]
+for (i in ix) cat(names[i], pv[i], p.adjust(pv,'bonferroni')[i], p.adjust(pv,'BY')[i], p.adjust(pv,'BH')[i], '\\n')
+'''
+for mode,data in variants.items():
+    out=subprocess.run(['Rscript','-e',r_code], input=data, text=True, capture_output=True)
+    print('MODE', mode)
+    print(out.stdout, end='')
+    if out.stderr: print('stderr:', out.stderr, file=sys.stderr)
+    if out.returncode: print('return', out.returncode)
+PY"

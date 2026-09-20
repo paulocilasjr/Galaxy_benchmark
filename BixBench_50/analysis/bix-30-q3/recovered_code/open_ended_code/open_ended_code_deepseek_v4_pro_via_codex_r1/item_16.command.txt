@@ -1,0 +1,68 @@
+/bin/bash -c "python - <<'PY'
+import xlrd, math, numpy as np
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+p='/workspace/inputs/pone.0150501.s002.xls'
+sh=xlrd.open_workbook(p).sheet_by_index(0)
+headers=sh.row_values(1)
+data=[]
+for r in range(2,sh.nrows):
+    vals=sh.row_values(r)
+    name=vals[0]
+    nums=[]
+    for v in vals[1:]:
+        if isinstance(v,(int,float)):
+            nums.append(float(v))
+        else:
+            nums.append(np.nan)
+    data.append((name,np.array(nums)))
+headers=headers[1:]
+idxP=[i for i,h in enumerate(headers) if h.startswith('P_')]
+idxC=[i for i,h in enumerate(headers) if h.startswith('C_')]
+
+def run(excludeP=None, excludeC=None, center=False, use_cutoff=False, cutoff=34, logrel=False, eq=True):
+    pvals=[]; names=[]; details=[]
+    for name,arr in data:
+        pi=[i for i in idxP if (excludeP is None or headers[i] not in excludeP)]
+        ci=[i for i in idxC if (excludeC is None or headers[i] not in excludeC)]
+        if use_cutoff:
+            # maybe set values >=cutoff to nan per sample? or globally? Try threshold raw ct >=34 missing
+            a=arr.copy()
+            a[a>=cutoff]=np.nan
+        else:
+            a=arr.copy()
+        x=a[pi].astype(float); y=a[ci].astype(float)
+        if center:
+            # subtract mean of detected values per sample? all samples combined excluding missing
+            # center by each sample mean over all 175
+            for sidx in pi+ci:
+                samplevals=a[sidx]
+                # use global mean across all 175 in that sample, ignoring nan
+                m=np.nanmean(samplevals)
+                a[sidx]=a[sidx]-m
+            x=a[pi].astype(float); y=a[ci].astype(float)
+        x=x[~np.isnan(x)]; y=y[~np.isnan(y)]
+        if len(x)<2 or len(y)<2:
+            continue
+        t,pval=stats.ttest_ind(x,y,equal_var=eq)
+        pvals.append(pval); names.append(name); details.append((name,t,pval,len(x),len(y),np.mean(x),np.mean(y)))
+    pvals=np.array(pvals)
+    res=multipletests(pvals,alpha=0.05,method='bonferroni')
+    by=multipletests(pvals,alpha=0.05,method='fdr_by')
+    bonf_sig=np.sum(res[0]); by_sig=np.sum(by[0])
+    raw_sig=np.sum(pvals<=0.05)
+    print('n tests',len(pvals),'raw p<=.05',raw_sig,'bonf',bonf_sig,'BY',by_sig)
+    # names for raw and bonf
+    print('bonf names', [n for n,s in zip(names,res[0]) if s])
+    print('by names', [n for n,s in zip(names,by[0]) if s])
+    return names,pvals,details
+
+print('ALL raw Ct equal_var')
+run()
+print('\\nEXCLUDE P3 C18 raw Ct')
+run(excludeP={'P_3'}, excludeC={'C_18'})
+print('\\nALL centered all 175')
+run(center=True)
+print('\\nEXCLUDE centered')
+run(excludeP={'P_3'}, excludeC={'C_18'}, center=True)
+PY"

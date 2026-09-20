@@ -1,0 +1,91 @@
+/bin/bash -lc "python - <<'PY'
+import csv, time
+from pathlib import Path
+import numpy as np
+from scipy.stats import rankdata
+
+crispr_path = Path('inputs/CRISPRGeneEffect.csv')
+expr_path = Path('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+
+def read_header(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))
+
+def read_ids(path):
+    ids=[]
+    with open(path, newline='') as f:
+        r=csv.reader(f); next(r)
+        for row in r: ids.append(row[0])
+    return ids
+
+print('reading headers/ids', flush=True)
+ch = read_header(crispr_path); eh = read_header(expr_path)
+crispr_ids = read_ids(crispr_path); expr_ids = read_ids(expr_path)
+cmap = {g:i for i,g in enumerate(ch[1:])}
+emap = {g:i for i,g in enumerate(eh[1:])}
+common_genes = [g for g in eh[1:] if g in cmap]
+common_models = [m for m in expr_ids if m in set(crispr_ids)]
+print('common models', len(common_models), 'common genes', len(common_genes), flush=True)
+
+ecols0 = [emap[g] for g in common_genes]
+ccols0 = [cmap[g] for g in common_genes]
+# np usecols is 1-based here because column 0 is the row ID.
+e_usecols = [i+1 for i in ecols0]
+c_usecols = [i+1 for i in ccols0]
+
+print('loading selected expression columns', flush=True)
+t0=time.time()
+expr = np.loadtxt(expr_path, delimiter=',', skiprows=1, usecols=e_usecols, dtype=np.float64)
+print('expr', expr.shape, 'sec', time.time()-t0, flush=True)
+print('loading selected crispr columns with NaN blanks', flush=True)
+t0=time.time()
+crispr = np.genfromtxt(crispr_path, delimiter=',', skip_header=1, usecols=c_usecols,
+                       dtype=np.float64, missing_values='', filling_values=np.nan)
+print('crispr', crispr.shape, 'sec', time.time()-t0, flush=True)
+
+expr_row = {m:i for i,m in enumerate(expr_ids)}
+crispr_row = {m:i for i,m in enumerate(crispr_ids)}
+erows = np.array([expr_row[m] for m in common_models], dtype=np.int64)
+crows = np.array([crispr_row[m] for m in common_models], dtype=np.int64)
+X = expr[erows, :]
+Y = -crispr[crows, :]
+print('aligned', X.shape, Y.shape, 'nan counts', int(np.isnan(X).sum()), int(np.isnan(Y).sum()), flush=True)
+
+if not np.isnan(X).any() and not np.isnan(Y).any():
+    RX = rankdata(X, axis=0, method='average')
+    RY = rankdata(Y, axis=0, method='average')
+    RX -= RX.mean(axis=0); RY -= RY.mean(axis=0)
+    corr = np.sum(RX*RY, axis=0) / np.sqrt(np.sum(RX*RX, axis=0)*np.sum(RY*RY, axis=0))
+else:
+    corr = np.full(len(common_genes), np.nan)
+    nobs = np.zeros(len(common_genes), dtype=np.int32)
+    print('pairwise ranking loop', flush=True)
+    for j in range(len(common_genes)):
+        x = X[:, j]; y = Y[:, j]
+        mask = np.isfinite(x) & np.isfinite(y)
+        n = int(mask.sum()); nobs[j] = n
+        if n >= 2:
+            rx = rankdata(x[mask], method='average')
+            ry = rankdata(y[mask], method='average')
+            rx -= rx.mean(); ry -= ry.mean()
+            den = np.sqrt(np.sum(rx*rx) * np.sum(ry*ry))
+            if den > 0:
+                corr[j] = np.sum(rx*ry) / den
+
+valid = np.isfinite(corr)
+valid_idxs = np.flatnonzero(valid)
+min_idx = valid_idxs[np.argmin(corr[valid])]
+label = common_genes[min_idx]
+symbol = label.rsplit(' (', 1)[0]
+print('valid_corrs', int(valid.sum()))
+print('min_label', label)
+print('symbol', symbol)
+print('rho', repr(float(corr[min_idx])))
+if 'nobs' in locals(): print('nobs_min', int(nobs[min_idx]))
+print('top10')
+for idx in valid_idxs[np.argsort(corr[valid])[:10]]:
+    if 'nobs' in locals():
+        print(common_genes[idx], float(corr[idx]), int(nobs[idx]))
+    else:
+        print(common_genes[idx], float(corr[idx]))
+PY"

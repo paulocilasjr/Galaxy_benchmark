@@ -1,0 +1,34 @@
+/bin/bash -c "python - <<'PY'
+import time, pandas as pd, numpy as np, gc
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+t0=time.time()
+print('loading...', flush=True)
+counts=pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+meta=meta.loc[counts.columns].copy()
+# Drop all-zero genes, which PyDESeq2 excludes internally.
+nz=(counts.to_numpy(dtype=np.int32).sum(axis=1)>0)
+counts=counts.loc[nz]
+print('nonzero counts shape', counts.shape, 'mem MB', counts.memory_usage(deep=True).sum()/1e6, flush=True)
+counts=counts.T
+print('transposed shape', counts.shape, flush=True)
+meta['batch']=pd.Categorical(meta['batch'])
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+gc.collect()
+dds=DeseqDataSet(counts=counts, metadata=meta[['batch','sex']], design='~batch+sex', n_cpus=2, low_memory=True, quiet=True)
+print('DDS init done', time.time()-t0, 'design cols', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+dds.deseq2()
+print('deseq2 done', time.time()-t0, flush=True)
+stats=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=2, quiet=True)
+stats.summary()
+print('summary done', time.time()-t0, 'LFC cols', stats.LFC.columns.tolist(), flush=True)
+print('FAM138A unshrunk', stats.results_df.loc['FAM138A'].to_dict(), flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+print('shrink done', time.time()-t0, flush=True)
+res=stats.results_df.copy()
+print('FAM138A final', res.loc['FAM138A'].to_dict(), flush=True)
+res[['baseMean','log2FoldChange','lfcSE','stat','pvalue','padj']].to_csv('/workspace/tmp/de_results_categorical_lowmem.csv')
+print('saved filtered count', ((res['log2FoldChange'].abs()>0.5)&(res['baseMean']>10)).sum(), 'elapsed', time.time()-t0, flush=True)
+PY"

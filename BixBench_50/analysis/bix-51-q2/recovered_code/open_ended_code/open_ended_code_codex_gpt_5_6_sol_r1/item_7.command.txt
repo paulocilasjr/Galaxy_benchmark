@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+import numpy as np
+from scipy.optimize import minimize
+try:
+    import statsmodels.api as sm
+except Exception as e:
+    sm=None; print('statsmodels import:',e)
+ws=load_workbook('/workspace/inputs/data.xlsx',data_only=True,read_only=True).active
+records=[]
+for row in ws.iter_rows(min_row=2,values_only=True):
+    seq,group,eff,bmi=row[0],row[1],row[2],row[10]
+    if seq is None and group is None and eff is None and bmi is None:
+        continue
+    if eff is None or bmi is None:
+        print('excluded nonblank row',seq,group,eff,bmi)
+        continue
+    records.append((seq,group,eff,float(bmi)))
+y=np.array([e=='PR' for _,_,e,_ in records], dtype=float)
+x=np.array([b for *_,b in records])
+X=np.column_stack([np.ones(len(x)),x])
+
+def nll(beta):
+    eta=X@beta
+    # stable: sum(log(1+exp(eta))-y*eta)
+    return np.logaddexp(0,eta).sum() - y@eta
+res=minimize(nll, np.zeros(2), method='BFGS', options={'gtol':1e-12})
+beta=res.x
+ll=-nll(beta)
+aic=2*2-2*ll
+print('n=',len(y),'PR=',int(y.sum()),'nonPR=',int(len(y)-y.sum()))
+print('BMI min/max=',x.min(),x.max())
+print('manual beta=',[repr(v) for v in beta])
+print('manual ll=',repr(ll))
+print('manual AIC=',repr(aic),'success=',res.success,res.message,'grad=',res.jac)
+if sm is not None:
+    logit=sm.Logit(y,X).fit(disp=0)
+    glm=sm.GLM(y,X,family=sm.families.Binomial()).fit()
+    print('statsmodels Logit params=',logit.params,'llf=',repr(logit.llf),'AIC=',repr(logit.aic))
+    print('statsmodels GLM params=',glm.params,'llf=',repr(glm.llf),'AIC=',repr(glm.aic),'deviance=',repr(glm.deviance))
+# Compute exact likelihood at SM params for cross-check
+b=logit.params if sm is not None else beta
+ll2=-np.sum(np.logaddexp(0,X@b)-y*(X@b))
+print('stable LL at accepted=',repr(ll2),'AIC=',repr(4-2*ll2))
+PY"

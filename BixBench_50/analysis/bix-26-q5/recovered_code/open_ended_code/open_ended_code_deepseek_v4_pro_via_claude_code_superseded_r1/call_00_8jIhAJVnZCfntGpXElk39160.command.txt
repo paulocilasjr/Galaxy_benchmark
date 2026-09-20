@@ -1,0 +1,192 @@
+export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:$PYTHONPATH"
+python3 << 'PYEOF'
+import re
+import requests
+import time
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# Read gene lists
+with open("/tmp/de_iron.txt") as f:
+    iron_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/de_innate.txt") as f:
+    innate_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/all_genes.txt") as f:
+    all_genes = [l.strip() for l in f if l.strip()]
+
+def fetch_kegg(url):
+    for i in range(5):
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200:
+                return r.text
+            time.sleep(3)
+        except:
+            time.sleep(3)
+    return None
+
+link_text = fetch_kegg("https://rest.kegg.jp/link/pau/pathway")
+lines = [l for l in link_text.strip().split('\n') if l]
+
+pw2genes = {}
+for line in lines:
+    parts = line.strip().split('\t')
+    if len(parts) >= 2:
+        pw = parts[0].strip()
+        gene = parts[1].strip()
+        if pw not in pw2genes:
+            pw2genes[pw] = set()
+        pw2genes[pw].add(gene)
+
+pw_text = fetch_kegg("https://rest.kegg.jp/list/pathway/pau")
+pw_name = {}
+for line in pw_text.strip().split('\n'):
+    if not line: continue
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pid = parts[0].strip()
+        name = re.sub(r'\s+-\s+Pseudomonas aeruginosa.*', '', parts[1].strip())
+        pw_name['path:' + pid] = name
+
+def to_kegg(gene):
+    return f"pau:{gene}"
+
+# Get all KEGG-annotated genes
+all_kegg_genes = set()
+for genes in pw2genes.values():
+    all_kegg_genes.update(genes)
+
+# ==========================================
+# APPROACH 1: Universe = tested genes with KEGG annotation
+# ==========================================
+print("=" * 60)
+print("APPROACH 1: Universe = tested genes with KEGG annotation")
+print("=" * 60)
+
+universe1 = set(to_kegg(g) for g in all_genes) & all_kegg_genes
+iron_fg1 = set(to_kegg(g) for g in iron_de) & all_kegg_genes
+innate_fg1 = set(to_kegg(g) for g in innate_de) & all_kegg_genes
+
+def run_ora(fg, universe, pw2genes, min_genes=3, label=""):
+    pathways = {}
+    for pw, genes in pw2genes.items():
+        genes_in_universe = genes & universe
+        if len(genes_in_universe) >= min_genes:
+            pathways[pw] = genes_in_universe
+    
+    results = {}
+    N = len(universe)
+    n = len(fg)
+    
+    for pw, pw_genes in pathways.items():
+        a = len(pw_genes & fg)
+        if a == 0:
+            continue
+        b = len(pw_genes) - a
+        c = n - a
+        d = N - a - b - c
+        table = [[a, b], [c, d]]
+        odds_ratio, p_value = fisher_exact(table, alternative='two-sided')
+        results[pw] = {
+            'name': pw_name.get(pw, pw),
+            'count': a, 'pw_size': len(pw_genes),
+            'pvalue': p_value, 'or': odds_ratio
+        }
+    
+    # BH correction
+    pvals = [r['pvalue'] for r in results.values()]
+    pw_list = list(results.keys())
+    if pvals:
+        _, padj, _, _ = multipletests(pvals, method='fdr_bh')
+        for i, pw in enumerate(pw_list):
+            results[pw]['padj'] = padj[i]
+    
+    return results
+
+iron_res1 = run_ora(iron_fg1, universe1, pw2genes, min_genes=3)
+innate_res1 = run_ora(innate_fg1, universe1, pw2genes, min_genes=3)
+
+iron_sig1 = {pw: r for pw, r in iron_res1.items() if r['padj'] < 0.05}
+innate_sig1 = {pw: r for pw, r in innate_res1.items() if r['padj'] < 0.05}
+iron_only1 = set(iron_sig1.keys()) - set(innate_sig1.keys())
+
+print(f"Universe: {len(universe1)}, Iron FG: {len(iron_fg1)}, Innate FG: {len(innate_fg1)}")
+print(f"Iron sig: {len(iron_sig1)}, Innate sig: {len(innate_sig1)}, Iron-only: {len(iron_only1)}")
+for pw in sorted(iron_only1):
+    r = iron_res1[pw]
+    ir = innate_res1.get(pw, {})
+    print(f"  {r['name']}: iron_padj={r['padj']:.2e}, innate_padj={ir.get('padj', 'N/A')}")
+
+# ==========================================
+# APPROACH 2: Universe = all tested genes
+# ==========================================
+print("\n" + "=" * 60)
+print("APPROACH 2: Universe = all tested genes")
+print("=" * 60)
+
+universe2 = set(to_kegg(g) for g in all_genes)
+iron_fg2 = set(to_kegg(g) for g in iron_de)
+innate_fg2 = set(to_kegg(g) for g in innate_de)
+
+iron_res2 = run_ora(iron_fg2, universe2, pw2genes, min_genes=3)
+innate_res2 = run_ora(innate_fg2, universe2, pw2genes, min_genes=3)
+
+iron_sig2 = {pw: r for pw, r in iron_res2.items() if r['padj'] < 0.05}
+innate_sig2 = {pw: r for pw, r in innate_res2.items() if r['padj'] < 0.05}
+iron_only2 = set(iron_sig2.keys()) - set(innate_sig2.keys())
+
+print(f"Universe: {len(universe2)}, Iron FG: {len(iron_fg2)}, Innate FG: {len(innate_fg2)}")
+print(f"Iron sig: {len(iron_sig2)}, Innate sig: {len(innate_sig2)}, Iron-only: {len(iron_only2)}")
+for pw in sorted(iron_only2):
+    r = iron_res2[pw]
+    ir = innate_res2.get(pw, {})
+    print(f"  {r['name']}: iron_padj={r['padj']:.2e}, innate_padj={ir.get('padj', 'N/A')}")
+
+# ==========================================
+# APPROACH 3: Universe = all KEGG-annotated genes in pau
+# ==========================================
+print("\n" + "=" * 60)
+print("APPROACH 3: Universe = all KEGG pau genes (default for clusterProfiler)")
+print("=" * 60)
+
+universe3 = all_kegg_genes
+iron_fg3 = set(to_kegg(g) for g in iron_de) & all_kegg_genes
+innate_fg3 = set(to_kegg(g) for g in innate_de) & all_kegg_genes
+
+iron_res3 = run_ora(iron_fg3, universe3, pw2genes, min_genes=3)
+innate_res3 = run_ora(innate_fg3, universe3, pw2genes, min_genes=3)
+
+iron_sig3 = {pw: r for pw, r in iron_res3.items() if r['padj'] < 0.05}
+innate_sig3 = {pw: r for pw, r in innate_res3.items() if r['padj'] < 0.05}
+iron_only3 = set(iron_sig3.keys()) - set(innate_sig3.keys())
+
+print(f"Universe: {len(universe3)}, Iron FG: {len(iron_fg3)}, Innate FG: {len(innate_fg3)}")
+print(f"Iron sig: {len(iron_sig3)}, Innate sig: {len(innate_sig3)}, Iron-only: {len(iron_only3)}")
+for pw in sorted(iron_only3):
+    r = iron_res3[pw]
+    ir = innate_res3.get(pw, {})
+    print(f"  {r['name']}: iron_padj={r['padj']:.2e}, innate_padj={ir.get('padj', 'N/A')}")
+
+# ==========================================
+# APPROACH 4: Same as 1 but with minGSSize=10 (clusterProfiler default)
+# ==========================================
+print("\n" + "=" * 60)
+print("APPROACH 4: Universe = KEGG-annotated tested, minGSSize=10")
+print("=" * 60)
+
+iron_res4 = run_ora(iron_fg1, universe1, pw2genes, min_genes=10)
+innate_res4 = run_ora(innate_fg1, universe1, pw2genes, min_genes=10)
+
+iron_sig4 = {pw: r for pw, r in iron_res4.items() if r['padj'] < 0.05}
+innate_sig4 = {pw: r for pw, r in innate_res4.items() if r['padj'] < 0.05}
+iron_only4 = set(iron_sig4.keys()) - set(innate_sig4.keys())
+
+print(f"Universe: {len(universe1)}, Iron FG: {len(iron_fg1)}, Innate FG: {len(innate_fg1)}")
+print(f"Iron sig: {len(iron_sig4)}, Innate sig: {len(innate_sig4)}, Iron-only: {len(iron_only4)}")
+for pw in sorted(iron_only4):
+    r = iron_res4[pw]
+    ir = innate_res4.get(pw, {})
+    print(f"  {r['name']}: iron_padj={r['padj']:.2e}, innate_padj={ir.get('padj', 'N/A')}")
+
+PYEOF
+

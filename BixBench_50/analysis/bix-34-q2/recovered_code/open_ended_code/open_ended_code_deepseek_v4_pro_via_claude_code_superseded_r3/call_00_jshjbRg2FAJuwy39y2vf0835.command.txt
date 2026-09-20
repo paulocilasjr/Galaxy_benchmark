@@ -1,0 +1,195 @@
+python3 << 'PYEOF'
+import re
+from itertools import combinations
+
+def parse_newick(newick_str):
+    """Parse a newick tree string and return a list of (taxon, distance_from_root) pairs.
+    Also compute all pairwise patristic distances."""
+    
+    # Remove trailing semicolon
+    s = newick_str.strip().rstrip(';')
+    
+    # Store taxa and their paths
+    taxa_paths = {}
+    
+    def parse_subtree(s, start, current_path):
+        """Parse a subtree starting at position start, accumulating branch lengths in current_path.
+        Returns (end_pos, taxa_found)"""
+        i = start
+        
+        if s[i] == '(':
+            # Internal node
+            i += 1  # skip '('
+            
+            # Parse children (comma-separated subtrees)
+            while i < len(s):
+                # Parse one child subtree
+                i, _ = parse_subtree(s, i, current_path[:])
+                
+                if i < len(s) and s[i] == ',':
+                    i += 1  # skip comma
+                    continue
+                elif i < len(s) and s[i] == ')':
+                    break
+            
+            # Skip closing paren
+            if i < len(s) and s[i] == ')':
+                i += 1
+            
+            # Parse optional label and branch length for this internal node
+            # Branch length comes after colon
+            if i < len(s) and s[i] == ':':
+                i += 1
+                # Read number
+                j = i
+                while j < len(s) and s[j] in '0123456789.eE+-':
+                    j += 1
+                brlen = float(s[i:j])
+                i = j
+                # Add this branch length to all taxa in the subtree
+                # But we've already accumulated in current_path, so we record separately
+                # Actually, for patristic distance, we need to track branch lengths
+                # along each path
+        
+        # This gets complicated. Let me use a different approach.
+        pass
+    
+    # Let me use a simpler approach for this specific tree format
+    # (A:brA, (B:brB, C:brC):brInt, D:brD)
+    # This is: 4 taxa with a specific rooted topology
+    
+    # Actually, let me use a stack-based approach
+    return taxa_paths
+
+
+# Simpler approach: tokenize and build adjacency matrix
+def compute_patristic_distances(newick_str):
+    """Tokenize and compute patristic distances using an adjacency-based approach."""
+    s = newick_str.strip().rstrip(';')
+    
+    # Extract all (taxon:branch_length) patterns and also internal node branches
+    # For the specific tree: (Fungi_Ncra:0.7104773274,(Fungi_Scer:1.4449700366,Fungi_Spom:1.0514665806):0.6126881082,Fungi_Umay:1.4152587494)
+    
+    # Build a tree structure manually
+    # IQ-TREE outputs this as rooted at Ncra
+    
+    # Extract taxa and branch lengths
+    pattern = r'([A-Za-z_]+):([0-9.eE+-]+)'
+    matches = re.findall(pattern, s)
+    
+    taxon_to_brlen = {}
+    for taxon, brlen_str in matches:
+        if '_' in taxon:  # It's a species name
+            taxon_to_brlen[taxon] = float(brlen_str)
+    
+    print("Taxon to branch length:", taxon_to_brlen)
+    
+    # Now extract internal branch lengths
+    # The pattern ):number means internal branch
+    internal_pattern = r'\):([0-9.eE+-]+)'
+    internal_matches = re.findall(internal_pattern, s)
+    print("Internal branch lengths:", internal_matches)
+    
+    # For this tree: (Fungi_Ncra:0.7104773274,(Fungi_Scer:1.4449700366,Fungi_Spom:1.0514665806):0.6126881082,Fungi_Umay:1.4152587494)
+    # Topology: Ncra, (Scer, Spom), Umay all branch off from root with branches:
+    # Ncra: 0.7104773274
+    # (Scer,Spom) clade: 0.6126881082 (internal branch)
+    # Umay: 1.4152587494
+    # Within the (Scer,Spom) clade: Scer:1.4449700366, Spom:1.0514665806
+    
+    # The unrooted representation: all 4 taxa connect to a central node
+    # Ncra ---[0.7105]--- central ---[0.6127]--- (Scer,Spom) ancestor ---[1.4450]--- Scer
+    #                |                                        |---[1.0515]--- Spom
+    #                |
+    #                +---[1.4153]--- Umay
+    
+    # Patristic distances:
+    nc = taxon_to_brlen['Fungi_Ncra']
+    sc = taxon_to_brlen['Fungi_Scer']
+    sp = taxon_to_brlen['Fungi_Spom']
+    um = taxon_to_brlen['Fungi_Umay']
+    internal = float(internal_matches[0])
+    
+    dists = {
+        ('Fungi_Ncra', 'Fungi_Scer'): nc + internal + sc,
+        ('Fungi_Ncra', 'Fungi_Spom'): nc + internal + sp,
+        ('Fungi_Ncra', 'Fungi_Umay'): nc + um,
+        ('Fungi_Scer', 'Fungi_Spom'): sc + sp,
+        ('Fungi_Scer', 'Fungi_Umay'): sc + internal + um,
+        ('Fungi_Spom', 'Fungi_Umay'): sp + internal + um,
+    }
+    
+    return dists
+
+# Read the tree
+with open('extracted/981902at2759.faa.mafft.clipkit.treefile') as f:
+    tree_str = f.read().strip()
+
+print("Tree string:", tree_str)
+dists = compute_patristic_distances(tree_str)
+print("\nAll pairwise patristic distances:")
+vals = []
+for (a, b), d in sorted(dists.items()):
+    print(f"  {a} <-> {b}: {d:.10f}")
+    vals.append(d)
+
+vals_sorted = sorted(vals)
+print(f"\nSorted: {vals_sorted}")
+n = len(vals_sorted)
+median = (vals_sorted[n//2 - 1] + vals_sorted[n//2]) / 2
+print(f"Median: {median}")
+
+# Now also compute median from the mldist file
+print("\n--- ML distances from mldist ---")
+with open('extracted/981902at2759.faa.mafft.clipkit.mldist') as f:
+    lines = f.readlines()
+
+n_taxa = int(lines[0].strip())
+ml_dists = []
+for line in lines[1:]:
+    parts = line.strip().split()
+    taxon = parts[0]
+    dist_values = [float(x) for x in parts[1:]]
+    for i, d in enumerate(dist_values):
+        if i > 0 or True:  # all non-self pairs
+            pass
+    # Get off-diagonal elements
+    for d in dist_values:
+        if d > 0:
+            ml_dists.append(d)
+    break  # Only need to read off-diagonals once since matrix is symmetric
+
+# Actually, read all lines properly
+ml_dists = []
+for line in lines[1:]:
+    parts = line.strip().split()
+    dist_values = [float(x) for x in parts[1:]]
+    ml_dists.extend([d for d in dist_values if d > 0])
+
+# Matrix is symmetric, so each off-diagonal appears twice. Take unique values.
+# For n=4 taxa, there are 6 unique pairs
+# The matrix is:
+# Ncra: 0, d12, d13, d14
+# Scer: d12, 0, d23, d24
+# Spom: d13, d23, 0, d34
+# Umay: d14, d24, d34, 0
+# Lower triangle: d12(Ncra-Scer), d13(Ncra-Spom), d14(Ncra-Umay), d23(Scer-Spom), d24(Scer-Umay), d34(Spom-Umay)
+# These are at positions: row1[1], row1[2], row1[3], row2[2], row2[3], row3[3]
+
+# Simpler: just take the lower triangle
+all_rows = []
+for line in lines[1:]:
+    parts = line.strip().split()
+    row = [float(x) for x in parts[1:]]
+    all_rows.append(row)
+
+ml_unique = []
+for i in range(n_taxa):
+    for j in range(i+1, n_taxa):
+        ml_unique.append(all_rows[i][j])
+
+print(f"ML distances: {sorted(ml_unique)}")
+ml_median = (sorted(ml_unique)[2] + sorted(ml_unique)[3]) / 2
+print(f"ML distance median: {ml_median}")
+PYEOF
+

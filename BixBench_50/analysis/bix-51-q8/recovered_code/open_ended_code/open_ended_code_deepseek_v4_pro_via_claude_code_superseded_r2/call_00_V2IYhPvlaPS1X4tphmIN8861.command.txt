@@ -1,0 +1,41 @@
+/tmp/venv/bin/python3 << 'EOF'
+import openpyxl
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+wb = openpyxl.load_workbook('/workspace/inputs/data.xlsx')
+ws = wb.active
+
+data = []
+for row in ws.iter_rows(min_row=2, max_row=ws.max_row, values_only=True):
+    group = row[1]
+    age = row[3]
+    if group is not None and age is not None:
+        data.append({'group': group, 'age': age})
+
+y = np.array([1 if d['group'] == 1 else 0 for d in data])
+X = np.array([d['age'] for d in data])
+
+# sklearn logistic regression (no regularization, equivalent to statsmodels Logit)
+clf = LogisticRegression(penalty=None, solver='lbfgs', max_iter=1000)
+clf.fit(X.reshape(-1, 1), y)
+print(f"sklearn intercept: {clf.intercept_[0]:.10f}")
+print(f"sklearn coefficient for age: {clf.coef_[0][0]:.10f}")
+
+# Manual verification with scipy
+from scipy.optimize import minimize
+
+def neg_log_likelihood(params):
+    beta0, beta1 = params
+    logit = beta0 + beta1 * X
+    p = 1 / (1 + np.exp(-logit))
+    p = np.clip(p, 1e-10, 1 - 1e-10)
+    ll = y * np.log(p) + (1 - y) * np.log(1 - p)
+    return -np.sum(ll)
+
+result = minimize(neg_log_likelihood, [0, 0], method='BFGS')
+print(f"\nScipy optimization:")
+print(f"  beta0 (intercept): {result.x[0]:.10f}")
+print(f"  beta1 (age coef):  {result.x[1]:.10f}")
+EOF
+

@@ -1,0 +1,45 @@
+/bin/bash -c "Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+res <- read.csv('/workspace/tmp/deseq2_results.csv')
+# unshrunken results from previously? We didn't save. Re-run quickly
+counts <- read.csv('/workspace/inputs/count.csv', row.names=1, check.names=FALSE)
+counts <- as.matrix(counts); mode(counts) <- 'integer'
+samples <- data.frame(row.names=colnames(counts), condition=factor(c('KL','KL','KL','WL','WL','WL'), levels=c('KL','WL')))
+dds <- DESeqDataSetFromMatrix(counts, samples, ~condition)
+dds <- DESeq(dds, quiet=TRUE)
+resraw <- results(dds, contrast=c('condition','WL','KL'))
+resraw <- as.data.frame(resraw)
+resraw"'$geneID <- rownames(resraw)
+# raw p filter (using shrunken lfc from res)
+res2 <- merge(resraw[,c('"'geneID','pvalue')], res[,c('geneID','baseMean','log2FoldChange')], by='geneID')
+sigp <- res2["'!is.na(res2$pvalue) & res2$pvalue < 0.05 & !is.na(res2$log2FoldChange) & abs(res2$log2FoldChange)>1 & res2$baseMean>10,]
+write.table(sigp[,c('"'geneID','baseMean','log2FoldChange','pvalue')], '/workspace/tmp/sig_genes_pvalue.tsv', sep='\\t', quote=FALSE, row.names=FALSE)
+cat('raw p sig count', nrow(sigp), '\\n')
+RS
+/opt/agent-venv/bin/python - <<'PY'
+import pandas as pd, mygene
+for f in ['sig_genes_pvalue.tsv']:
+ sig=pd.read_csv('/workspace/tmp/'+f, sep='\\t')
+ ids=sig['geneID'].tolist(); mg=mygene.MyGeneInfo(); out=mg.querymany(ids, scopes='ensembl.gene', fields='symbol,name', species='mouse', verbose=False)
+ rows=[]
+ for item in out:
+  q=item.get('query'); sym=item.get('symbol')
+  if isinstance(sym,list): sym=sym[0] if sym else None
+  if q: rows.append((q,sym))
+ ann=pd.DataFrame(rows,columns=['geneID','symbol']).drop_duplicates('geneID')
+ m=sig.merge(ann,on='geneID',how='left').dropna(subset=['symbol']).sort_values('pvalue').drop_duplicates('symbol')
+ print(f, len(sig), 'mapped unique', len(m))
+ m['symbol'].to_csv('/workspace/tmp/symbols_pvalue.tsv', sep='\\t', index=False, header=False)
+PY
+/opt/agent-venv/bin/python - <<'PY'
+import pandas as pd, gseapy as gp
+genes=pd.read_csv('/workspace/tmp/symbols_pvalue.tsv', header=None)[0].tolist()
+print('n genes', len(genes))
+enr=gp.enrichr(gene_list=genes, gene_sets='WikiPathways_2019_Mouse', organism='mouse', outdir=None, cutoff=1)
+res=enr.results
+res.to_csv('/workspace/tmp/enrichr_pvalue.tsv', sep='\\t', index=False)
+top20=res.head(20)
+mask=top20['Term'].str.lower().str.contains('oxidative', na=False)
+print('top20 oxidative', mask.sum(), 'fraction', mask.sum()/20)
+print(top20[['Term','P-value']].to_string(index=False))
+PY"

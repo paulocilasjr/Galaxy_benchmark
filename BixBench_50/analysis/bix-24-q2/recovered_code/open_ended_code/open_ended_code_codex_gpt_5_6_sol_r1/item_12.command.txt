@@ -1,0 +1,26 @@
+/bin/bash -lc "Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+cts <- as.matrix(read.csv('inputs/counts_raw_unfiltered.csv', row.names=1, check.names=FALSE))
+meta <- read.csv('inputs/sample_layout.csv', check.names=FALSE, stringsAsFactors=FALSE)
+meta"'$count_id <- gsub('"'-', '_', meta"'$SampleID)
+keepm <- meta$Group %in% c('"'DMSO','CBD_IC50')
+meta <- meta[keepm,]
+stopifnot(setequal(meta"'$count_id, colnames(cts)[colnames(cts) %in% meta$count_id]))
+cts <- cts[,meta$count_id,drop=FALSE]
+colnames(cts) <- meta$SampleID
+rownames(meta) <- meta$SampleID
+meta$Group <- relevel(factor(meta$Group), ref='"'DMSO')
+cat('design samples:\\n'); print(meta[,c('SampleID','Group')])
+dds <- DESeqDataSetFromMatrix(cts, meta, ~ Group)
+dds <- DESeq(dds, quiet=TRUE)
+res <- results(dds, contrast=c('Group','CBD_IC50','DMSO'), alpha=0.05)
+r <- as.data.frame(res)
+r"'$gene <- rownames(r)
+sig <- subset(r, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 0.5)
+cat('"'result names:',resultsNames(dds),'\\n')
+cat('tested nonNA padj:',sum("'!is.na(r$padj)),'"' significant:',nrow(sig),' up:',sum(sig"'$log2FoldChange>0),'"' down:',sum(sig"'$log2FoldChange<0),'"'\\n')
+cat('LFC summary significant:\\n'); print(summary(sig"'$log2FoldChange))
+cat('"'top up:\\n'); print(head(sig[order(sig"'$padj, -sig$log2FoldChange),c('"'gene','baseMean','log2FoldChange','padj')],20),row.names=FALSE)
+cat('top down:\\n'); print(head(sig[order(sig"'$padj, sig$log2FoldChange),c('"'gene','baseMean','log2FoldChange','padj')],20),row.names=FALSE)
+saveRDS(list(dds=dds,res=r,sig=sig), '/workspace/.de_tmp.rds')
+RS"

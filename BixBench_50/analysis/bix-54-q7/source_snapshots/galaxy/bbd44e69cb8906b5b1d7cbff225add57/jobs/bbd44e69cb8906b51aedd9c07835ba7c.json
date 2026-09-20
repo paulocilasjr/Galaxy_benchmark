@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b51aedd9c07835ba7c",
+  "history_id": "bbd44e69cb8906b5b1d7cbff225add57",
+  "tool_id": "colony_area_mixture_model_comparison_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-15T14:54:43.792904",
+  "update_time": "2026-08-15T14:55:21.750083",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'EOF'\n\nsuppressPackageStartupMessages(library(splines))\n\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 2) {\n  stop(\"expected input csv and output csv paths\")\n}\nin_path <- args[1]\nout_path <- args[2]\n\nd <- read.csv(in_path, stringsAsFactors = FALSE, check.names = FALSE)\nif (!all(c(\"StrainNumber\", \"Ratio\", \"Area\") %in% names(d))) {\n  stop(\"required columns not found\")\n}\n\nd <- d[d$StrainNumber == \"287_98\", , drop = FALSE]\nif (nrow(d) != 36) {\n  stop(sprintf(\"expected 36 mixture rows, found %d\", nrow(d)))\n}\n\nparts <- strsplit(as.character(d$Ratio), \":\", fixed = TRUE)\nd$p <- vapply(parts, function(z) {\n  a <- as.numeric(z[1])\n  b <- as.numeric(z[2])\n  a / (a + b)\n}, numeric(1))\n\nif (any(!is.finite(d$p)) || any(d$p <= 0) || any(d$p >= 1)) {\n  stop(\"invalid interior mixture proportions\")\n}\n\nfit_models <- list(\n  quadratic = lm(Area ~ p + I(p^2), data = d),\n  cubic = lm(Area ~ p + I(p^2) + I(p^3), data = d),\n  natural_spline = lm(Area ~ ns(p, df = 4), data = d)\n)\n\npred_at <- function(fit, x) {\n  predict(fit, newdata = data.frame(p = x))\n}\n\nglobal_max <- function(fit, lower, upper) {\n  grid <- seq(lower, upper, length.out = 5001)\n  vals <- pred_at(fit, grid)\n  i <- which.max(vals)\n\n  left <- grid[max(1L, i - 2L)]\n  right <- grid[min(length(grid), i + 2L)]\n  local <- optimize(function(x) pred_at(fit, x), interval = c(left, right),\n                    maximum = TRUE, tol = 1e-10)\n\n  full <- optimize(function(x) pred_at(fit, x), interval = c(lower, upper),\n                   maximum = TRUE, tol = 1e-10)\n\n  if (full$objective >= local$objective) {\n    full\n  } else {\n    local\n  }\n}\n\nlower <- min(d$p)\nupper <- max(d$p)\nrows <- list()\n\nfor (nm in names(fit_models)) {\n  fit <- fit_models[[nm]]\n  opt <- global_max(fit, lower, upper)\n  aic <- AIC(fit)\n  bic <- BIC(fit)\n  edf <- as.numeric(extractAIC(fit)[1])\n  adj_r2 <- summary(fit)$adj.r.squared\n\n  rows[[length(rows) + 1L]] <- data.frame(\n    model = nm,\n    edf = edf,\n    n = nrow(d),\n    aic = as.numeric(aic),\n    bic = as.numeric(bic),\n    adj_r2 = adj_r2,\n    optimum_p = opt$maximum,\n    max_area = opt$objective,\n    stringsAsFactors = FALSE\n  )\n}\n\nsummary_df <- do.call(rbind, rows)\nwrite.csv(summary_df, file = out_path, row.names = FALSE, quote = FALSE)\n\nEOF\nRscript analysis.R \"/jetstream2/scratch/main/jobs/79155884/inputs/dataset_780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f.dat\" model_summary.csv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a4721350b66653976dccbc5",
+      "src": "hda",
+      "uuid": "780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f"
+    }
+  },
+  "outputs": {
+    "model_summary": {
+      "id": "f9cad7b01a472135c8f998f768e949b0",
+      "src": "hda",
+      "uuid": "ba5d4f9e-5905-4bb0-9dc0-b777c8e56f2a"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

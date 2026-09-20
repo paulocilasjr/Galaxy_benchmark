@@ -1,0 +1,83 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+import gc
+
+# Load data
+counts_df = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+
+annot = annot.set_index('sample')
+annot = annot.loc[counts_df.columns]
+annot['batch'] = annot['batch'].astype(str)
+annot['sex'] = annot['sex'].astype(str)
+
+# Prefilter: keep genes with at least some minimal total counts
+# FAM138A has 292 total, threshold of 50 keeps FAM138A + ~36k genes
+row_sums = counts_df.sum(axis=1)
+keep = row_sums >= 50  # FAM138A has 292, safe
+keep = keep | (counts_df.index == 'FAM138A')  # explicit safety
+print(f"Keeping {keep.sum()} / {len(keep)} genes")
+counts_filtered = counts_df.loc[keep]
+del counts_df, row_sums
+gc.collect()
+
+from pydeseq2.dds import DeseqDataSet
+
+counts_int = counts_filtered.T.round().astype(int)
+del counts_filtered
+gc.collect()
+
+print(f"Counts matrix shape: {counts_int.shape}")
+
+dds = DeseqDataSet(
+    counts=counts_int,
+    metadata=annot,
+    design_factors="batch + sex",
+    refit_cooks=False,
+    n_cpus=1,
+)
+del counts_int
+gc.collect()
+
+print("Starting deseq2 fitting...")
+dds.deseq2()
+print("DESeq2 fitting done!")
+
+# Immediately save key attributes before adding more objects
+dispersions = dds.dispersions.copy()
+lfc = dds.LFCs.copy() if hasattr(dds, 'LFCs') else None
+print(f"Dispersions shape: {dispersions.shape if hasattr(dispersions, 'shape') else len(dispersions)}")
+
+# Try to get results via DeseqStats
+from pydeseq2.ds import DeseqStats
+
+print("Creating DeseqStats for sex contrast (M vs F)...")
+stat = DeseqStats(dds, contrast=["sex", "M", "F"], n_cpus=1, cooks_filter=False, independent_filter=False)
+print("Running Wald test...")
+stat.summary()
+print("Wald test done")
+
+print("Running LFC shrinkage (default method)...")
+stat.lfc_shrink()
+print("LFC shrinkage done")
+
+res = stat.results_df
+print(f"Results columns: {res.columns.tolist()}")
+
+# FAM138A
+if 'FAM138A' in res.index:
+    fam = res.loc['FAM138A']
+    print(f"\n=== FAM138A RESULTS ===")
+    for col in fam.index:
+        print(f"  {col}: {fam[col]}")
+else:
+    print("FAM138A NOT in results!")
+    # Check all gene names
+    all_genes = res.index.tolist()
+    fam_matches = [g for g in all_genes if 'FAM138' in str(g).upper()]
+    print(f"Genes matching FAM138: {fam_matches}")
+PYEOF
+

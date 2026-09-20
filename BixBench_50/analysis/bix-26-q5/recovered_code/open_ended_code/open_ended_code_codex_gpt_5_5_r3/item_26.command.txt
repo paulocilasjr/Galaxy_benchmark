@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, urllib.request, math
+from collections import defaultdict
+
+def read(path):
+    code=r'''x<-readRDS(commandArgs(TRUE)[1]);ld<-attr(x,\"listData\");rn<-attr(x,\"rownames\");for(i in seq_along(rn)){cat(paste(rn[[i]],ld"'$log2FoldChange[[i]],ld$padj[[i]],sep="'"\\t\"),\"\\n\",sep=\"\")}'''
+    p=subprocess.run(['Rscript','-e',code,path],text=True,stdout=subprocess.PIPE,check=True)
+    rows=[]
+    for line in p.stdout.splitlines():
+        g,lfc,padj=line.split('\\t')
+        rows.append((g,float(lfc),float(padj) if padj"'!='"'NA' else math.nan))
+    return rows
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau').read().decode()
+pg=defaultdict(set); gp=defaultdict(set)
+for line in link.strip().splitlines():
+    g,p=line.split('\\t'); g=g.split(':')[1]; p=p.split(':')[1]; pg[p].add(g); gp[g].add(p)
+fe=read('/workspace/inputs/res_GluFevsGluFePlus.rds'); su=read('/workspace/inputs/res_SuccvsGluFePlus.rds')
+fg_fe={g for g,l,p in fe if not math.isnan(p) and abs(l)>1.5 and p<0.05}
+fg_su={g for g,l,p in su if not math.isnan(p) and abs(l)>1.5 and p<0.05}
+
+def sf(k,M,n,N):
+    denom=math.lgamma(M+1)-math.lgamma(N+1)-math.lgamma(M-N+1)
+    logs=[]
+    for x in range(k,min(n,N)+1):
+        if 0 <= N-x <= M-n:
+            logs.append(math.lgamma(n+1)-math.lgamma(x+1)-math.lgamma(n-x+1)+math.lgamma(M-n+1)-math.lgamma(N-x+1)-math.lgamma(M-n-(N-x)+1)-denom)
+    if not logs: return 1
+    m=max(logs)
+    return min(1, math.exp(m)*sum(math.exp(z-m) for z in logs))
+
+def bh(ps):
+    m=len(ps); order=sorted(range(m), key=lambda i:ps[i]); adj=[0]*m; prev=1
+    for r in range(m-1,-1,-1):
+        i=order[r]; v=ps[i]*m/(r+1); prev=min(prev,v); adj[i]=min(1,prev)
+    return adj
+
+def enrich(fg, universe, min_size, include_zero):
+    fg=fg&universe; rows=[]
+    for pid,genes in sorted(pg.items()):
+        gs=genes&universe; n=len(gs)
+        if n<min_size or n>500: continue
+        k=len(gs&fg)
+        if k==0 and not include_zero: continue
+        rows.append([pid,k,n,sf(k,len(universe),n,len(fg))])
+    adj=bh([r[3] for r in rows])
+    return {r[0]:a for r,a in zip(rows,adj)}
+for universe_name, universe in [('result', (set(g for g,_,_ in fe)|set(g for g,_,_ in su))&set(gp)), ('kegg', set(gp))]:
+  for min_size in [1,10]:
+    for zero in [False, True]:
+      ef=enrich(fg_fe,universe,min_size,zero); es=enrich(fg_su,universe,min_size,zero)
+      sfe={k for k,v in ef.items() if v<0.05}; ss={k for k,v in es.items() if v<0.05}
+      print(universe_name, 'min',min_size,'zero',zero,'tested',len(ef),len(es),'sig',len(sfe),len(ss),'diff',len(sfe-ss),sorted(sfe-ss))
+PY"

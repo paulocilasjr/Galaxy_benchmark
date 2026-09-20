@@ -1,0 +1,111 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, urllib.request, math, statistics
+from collections import defaultdict
+
+def read_deseq(path):
+    code = r'''
+x<-readRDS(commandArgs(TRUE)[1])
+ld<-attr(x,\"listData\")
+rn<-attr(x,\"rownames\")
+cat(\"gene\\tbaseMean\\tlog2FoldChange\\tlfcSE\\tstat\\tpvalue\\tpadj\\n\")
+for(i in seq_along(rn)){
+  vals <- vapply(ld, function(v) { z<-v[[i]]; if (is.na(z)) \"NA\" else format(z, digits=17, scientific=TRUE) }, character(1))
+  cat(rn[[i]], \"\\t\", paste(vals, collapse=\"\\t\"), \"\\n\", sep=\"\")
+}
+'''
+    p = subprocess.run(['Rscript','-e',code,path], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    lines = p.stdout.strip().splitlines()
+    header = lines[0].split('\\t')
+    rows=[]
+    for line in lines[1:]:
+        parts=line.split('\\t')
+        d={'gene':parts[0]}
+        for k,v in zip(header[1:], parts[1:]):
+            d[k]=float(v) if v"'!='"'NA' else math.nan
+        rows.append(d)
+    return rows
+
+def kegg_get(url):
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return r.read().decode()
+
+# Confirm organism mapping by using PA14-specific code pau.
+link = kegg_get('https://rest.kegg.jp/link/pathway/pau')
+pathway_genes=defaultdict(set)
+gene_pathways=defaultdict(set)
+for line in link.strip().splitlines():
+    g,pw=line.split('\\t')
+    gene=g.split(':',1)[1]
+    pid=pw.split(':',1)[1]
+    pathway_genes[pid].add(gene)
+    gene_pathways[gene].add(pid)
+print('pathways raw', len(pathway_genes), 'genes mapped', len(gene_pathways))
+print('contains PA14_33530', 'PA14_33530' in gene_pathways, sorted(list(gene_pathways.get('PA14_33530', [])))[:5])
+
+res_fe = read_deseq('/workspace/inputs/res_GluFevsGluFePlus.rds')
+res_succ = read_deseq('/workspace/inputs/res_SuccvsGluFePlus.rds')
+print('rows', len(res_fe), len(res_succ), 'same genes', set(r['gene'] for r in res_fe)==set(r['gene'] for r in res_succ))
+
+def foreground(rows):
+    return {r['gene'] for r in rows if (not math.isnan(r['padj'])) and abs(r['log2FoldChange']) > 1.5 and r['padj'] < 0.05}
+fg_fe=foreground(res_fe); fg_succ=foreground(res_succ)
+print('fg sizes', len(fg_fe), len(fg_succ))
+
+universe = (set(r['gene'] for r in res_fe) | set(r['gene'] for r in res_succ)) & set(gene_pathways)
+print('universe', len(universe))
+
+# hypergeom p-value P[X >= k] using logsumexp. M universe size, n pathway genes in universe, N fg in universe.
+def hypergeom_sf(k, M, n, N):
+    maxx=min(n,N)
+    if k>maxx: return 0.0
+    logs=[]
+    denom=math.lgamma(M+1)-math.lgamma(N+1)-math.lgamma(M-N+1)
+    for x in range(k, maxx+1):
+        if N-x <= M-n and x <= n:
+            logp=(math.lgamma(n+1)-math.lgamma(x+1)-math.lgamma(n-x+1)
+                  + math.lgamma(M-n+1)-math.lgamma(N-x+1)-math.lgamma(M-n-(N-x)+1)
+                  - denom)
+            logs.append(logp)
+    if not logs: return 1.0
+    m=max(logs)
+    return min(1.0, math.exp(m)*sum(math.exp(z-m) for z in logs))
+
+def bh(pvals):
+    m=len(pvals)
+    order=sorted(range(m), key=lambda i:pvals[i])
+    adj=[None]*m
+    prev=1.0
+    for rank_idx in range(m-1, -1, -1):
+        i=order[rank_idx]
+        rank=rank_idx+1
+        val=pvals[i]*m/rank
+        if val>prev: val=prev
+        prev=val
+        adj[i]=min(1.0,val)
+    return adj
+
+def enrich(fg, min_size=1, max_size=10**9):
+    fg=fg & universe
+    rows=[]
+    for pid, genes in sorted(pathway_genes.items()):
+        gs=genes & universe
+        n=len(gs)
+        if n < min_size or n > max_size: continue
+        k=len(gs & fg)
+        if k == 0: continue  # same tested terms? clusterProfiler only terms with hits; for BH, zero-hit omitted
+        p=hypergeom_sf(k, len(universe), n, len(fg))
+        rows.append({'ID':pid,'k':k,'n':n,'N':len(fg),'M':len(universe),'pvalue':p})
+    adj=bh([r['pvalue'] for r in rows])
+    for r,a in zip(rows, adj): r['padj']=a
+    return rows
+
+for min_size,max_size in [(1,10**9),(10,500),(10,10**9)]:
+    ef=enrich(fg_fe,min_size,max_size)
+    es=enrich(fg_succ,min_size,max_size)
+    sig_fe={r['ID'] for r in ef if r['padj']<0.05}
+    sig_succ={r['ID'] for r in es if r['padj']<0.05}
+    print('sizes filter', min_size,max_size,'tested',len(ef),len(es),'sig',len(sig_fe),len(sig_succ),'fe_not_succ',len(sig_fe-sig_succ))
+    print('fe_not_succ IDs', sorted(sig_fe-sig_succ))
+    print('fe sig', sorted(sig_fe))
+    print('succ sig', sorted(sig_succ))
+PY"

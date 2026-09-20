@@ -1,0 +1,65 @@
+python3 -c "
+import zipfile
+from collections import Counter
+import sys
+
+def parse_fasta(text):
+    sequences = []
+    current_header = None
+    current_seq = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            if current_header is not None:
+                sequences.append((current_header, ''.join(current_seq)))
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_header is not None:
+        sequences.append((current_header, ''.join(current_seq)))
+    return sequences
+
+def compute_pis_pct(sequences, gaps_as_state=True):
+    seqs = [s for _, s in sequences]
+    n_sites = len(seqs[0])
+    pis = 0
+    for col in range(n_sites):
+        chars = [s[col] for s in seqs]
+        if not gaps_as_state:
+            chars = [c for c in chars if c != '-']
+        if len(chars) < 2:
+            continue
+        counts = Counter(chars)
+        states_ge2 = sum(1 for c in counts.values() if c >= 2)
+        if states_ge2 >= 2:
+            pis += 1
+    return pis / n_sites * 100 if n_sites > 0 else 0.0
+
+# Both approaches
+with zipfile.ZipFile('/workspace/inputs/scogs_fungi.zip', 'r') as zf:
+    mafft_files = [n for n in zf.namelist() if n.endswith('.faa.mafft')]
+    
+    pcts_gaps_state = []
+    pcts_gaps_missing = []
+    
+    for fname in sorted(mafft_files):
+        content = zf.read(fname).decode('utf-8')
+        sequences = parse_fasta(content)
+        pcts_gaps_state.append(compute_pis_pct(sequences, gaps_as_state=True))
+        pcts_gaps_missing.append(compute_pis_pct(sequences, gaps_as_state=False))
+
+def median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if n % 2 == 0:
+        return (s[n//2-1] + s[n//2]) / 2
+    return s[n//2]
+
+print(f'Gaps as state:     median = {median(pcts_gaps_state):.6f}%')
+print(f'Gaps as missing:   median = {median(pcts_gaps_missing):.6f}%')
+print(f'Difference: {abs(median(pcts_gaps_state) - median(pcts_gaps_missing)):.6f} percentage points')
+"
+

@@ -1,0 +1,41 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import pandas as pd, numpy as np, warnings, time, gseapy
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+warnings.filterwarnings('ignore')
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout['count_col']=layout['SampleID'].str.replace('-','_',regex=False)
+all_keep=(counts>10).any(axis=1)
+model_groups=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+ml=layout[layout.Group.isin(model_groups)].copy()
+cc=counts.loc[all_keep,ml.count_col.tolist()].T
+cc.index=ml.SampleID.tolist()
+md=ml.set_index('SampleID')[['Group']].rename(columns={'Group':'condition'}).loc[cc.index]
+print('fitting',cc.shape,flush=True)
+dds=DeseqDataSet(counts=cc,metadata=md,design='~condition',ref_level=['condition','DMSO'],quiet=True,n_cpus=1)
+dds.deseq2()
+ds=DeseqStats(dds,contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'],quiet=True,n_cpus=1)
+ds.summary()
+res=ds.results_df
+sel=res[(res.padj<=0.05)&(res.log2FoldChange.abs()>=0.5)&(res.baseMean>=10)]
+ann=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t').set_index('ENSG')
+selected_names=sel.join(ann).gene_name.dropna().drop_duplicates().tolist()
+background_names=counts.index[all_keep].to_series().map(ann.gene_name).dropna().drop_duplicates().tolist()
+print('selected',len(sel),'mapped unique',len(selected_names),'background mapped unique',len(background_names),flush=True)
+print('running online enrichr',flush=True)
+enr=gseapy.enrichr(gene_list=selected_names,gene_sets='Reactome_2022',organism='human',outdir=None,no_plot=True,verbose=False)
+r=enr.results
+hit=r[r.Term.str.contains('TP53 Regulates Transcription Of Cell Cycle Genes',case=False,regex=False)]
+print('online target')
+print(hit.to_string(index=False))
+print('p53 terms')
+print(r[r.Term.str.contains('p53|TP53',case=False,regex=True)][['Term','Overlap','P-value','Adjusted P-value','Odds Ratio']].to_string(index=False))
+lib=gseapy.get_library('Reactome_2022',organism='human')
+term=[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes ')][0]
+print('target term',repr(term),'library size',len(lib[term]),'members',sorted(lib[term]))
+for bg_name,bg in [('none',None),('prefiltered mapped',background_names)]:
+    print('local',bg_name,flush=True)
+    e=gseapy.enrich(gene_list=selected_names,gene_sets={term:lib[term]},background=bg,outdir=None,no_plot=True,verbose=False)
+    print(e.results.to_string(index=False))
+PY"

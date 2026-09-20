@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample').loc[counts.columns]
+metadata = pd.DataFrame({'condition': layout['Group']}, index=layout.index)
+count_all = counts.T.astype(int)
+
+treatment='Cisplatin_IC50_CBD_IC50'; control='DMSO'
+dds = DeseqDataSet(counts=count_all, metadata=metadata, design='~condition', n_cpus=1, quiet=True)
+dds.deseq2()
+ds = DeseqStats(dds, contrast=['condition', treatment, control], alpha=0.05, n_cpus=1, quiet=True)
+ds.summary()
+res = ds.results_df.copy()
+deg = res[(res['padj'].notna()) & (res['padj'] < 0.05) & (res['log2FoldChange'].abs() >= 0.5)].copy()
+print('DEG_ENSG_all_design', len(deg))
+map_series = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t').dropna().drop_duplicates('ENSG').set_index('ENSG')['gene_name']
+genes = sorted(set(deg.index.to_series().map(map_series).dropna().astype(str)))
+print('DEG_mapped_symbols_all_design', len(genes))
+enr = gp.enrichr(gene_list=genes, gene_sets='Reactome_2022', organism='human', outdir=None, no_plot=True, cutoff=1.0, verbose=False)
+res_enr = enr.results
+mask = res_enr['Term'].str.startswith('TP53 Regulates Transcription Of Cell Cycle Genes', na=False)
+print(res_enr.loc[mask, ['Term','Overlap','Genes']].to_string(index=False))
+PY"

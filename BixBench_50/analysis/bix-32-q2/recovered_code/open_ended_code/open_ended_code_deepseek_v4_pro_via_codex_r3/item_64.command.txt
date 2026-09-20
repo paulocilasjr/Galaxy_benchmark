@@ -1,0 +1,25 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+import qvalue
+from scipy.stats import hypergeom
+# recreate clusterprofiler and qvalue for each
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path'])
+link['gene']=link['gene'].str.split(':',expand=True)[1]; link['path']=link['path'].str.split(':',expand=True)[1]
+allkg=set(link.gene); files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+for strain,fn in files.items():
+ df=pd.read_csv('/workspace/tmp/'+fn)
+ for direction,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+  gene=set(df.loc[expr,'gene']); mapped=[g for g in gene if g in allkg]; n=len(mapped)
+  rows=[]
+  for p,gdf in link.groupby('path'):
+   m=len(set(gdf.gene))
+   if m<10 or m>500: continue
+   q=len(set(gdf.gene)&gene)
+   if q==0: continue
+   pval=hypergeom.sf(q-1,len(allkg),m,n); rows.append((p,pval,q,m,n))
+  if not rows: continue
+  d=pd.DataFrame(rows,columns=['path','pval','q','m','n'])
+  qobj=qvalue.qvalues(d.pval.values, pi0=1.0) # maybe API
+  print(strain,direction,'tested',len(d),'qvalue attrs',qobj)
+  print('padj<.05',sum(d.pval<=0.05)) # no padj yet
+PY"

@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile, collections, statistics
+
+def read_fasta_bytes(b):
+    seqs=[]; chunks=[]; name=None
+    for raw in b.decode().splitlines():
+        line=raw.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None: seqs.append(''.join(chunks))
+            name=line[1:]; chunks=[]
+        else: chunks.append(line)
+    if name is not None: seqs.append(''.join(chunks))
+    return seqs
+
+def pi_pct(seqs, count_gaps=False, denom_all=True):
+    pi=0
+    cols=list(zip(*seqs))
+    for col in cols:
+        states=col if count_gaps else [c for c in col if c not in '-?.']
+        counts=collections.Counter(states)
+        if sum(v>=2 for v in counts.values()) >= 2:
+            pi += 1
+    return 100*pi/len(cols)
+
+def values(fn, only4=False, common_ids=None):
+    vals=[]; ids=[]
+    with zipfile.ZipFile(fn) as z:
+        for name in sorted(n for n in z.namelist() if n.endswith('.faa.mafft')):
+            base=name[:-10] if name.endswith('.faa.mafft') else name
+            if common_ids is not None and base not in common_ids: continue
+            seqs=read_fasta_bytes(z.read(name))
+            if only4 and len(seqs)"'!=4: continue
+            vals.append(pi_pct(seqs)); ids.append(base)
+    return ids, vals
+
+def U(x,y): return sum(1 if a>b else .5 if a==b else 0 for a in x for b in y)
+# all full4
+for desc, kwargs in [('"'all',{}),('only4',{'only4':True})]:
+    ia,xa=values('inputs/scogs_animals.zip', **kwargs); ifu,yf=values('inputs/scogs_fungi.zip', **kwargs)
+    print(desc, len(xa),len(yf), 'U_animals', U(xa,yf), 'U_fungi', len(xa)*len(yf)-U(xa,yf), 'means', statistics.mean(xa), statistics.mean(yf),'medians',statistics.median(xa),statistics.median(yf))
+# common IDs only, not requiring 4, and common + only4 separately? 
+with zipfile.ZipFile('inputs/scogs_animals.zip') as za, zipfile.ZipFile('inputs/scogs_fungi.zip') as zf:
+    A={n[:-10] for n in za.namelist() if n.endswith('.faa.mafft')}
+    F={n[:-10] for n in zf.namelist() if n.endswith('.faa.mafft')}
+common=A&F
+print('common count', len(common), 'Aonly',len(A-common),'Fonly',len(F-common))
+for only4 in [False,True]:
+    ia,xa=values('inputs/scogs_animals.zip', only4=only4, common_ids=common)
+    ifu,yf=values('inputs/scogs_fungi.zip', only4=only4, common_ids=common)
+    print('common only4',only4, len(xa),len(yf),'U_animals',U(xa,yf),'U_fungi',len(xa)*len(yf)-U(xa,yf),'means',statistics.mean(xa),statistics.mean(yf),'medians',statistics.median(xa),statistics.median(yf))
+# paired common where both have 4
+ia4,xa4=values('inputs/scogs_animals.zip', only4=True); if4,yf4=values('inputs/scogs_fungi.zip', only4=True)
+print('animal full IDs', ia4[:10])
+PY"

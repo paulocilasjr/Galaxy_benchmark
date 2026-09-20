@@ -1,0 +1,105 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+from statistics import median, mean
+from itertools import combinations
+import re, math
+
+class Node:
+    __slots__=('name','length','children')
+    def __init__(self,name=None,length=0.0):
+        self.name=name; self.length=length; self.children=[]
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    i=0
+    def token(stop):
+        nonlocal i
+        j=i
+        while i<len(s) and s[i] not in stop: i+=1
+        return s[j:i].strip()
+    def subtree():
+        nonlocal i
+        if s[i]=='(':
+            i+=1
+            node=Node()
+            while True:
+                node.children.append(subtree())
+                if i>=len(s): raise ValueError('unterminated')
+                if s[i]==',': i+=1; continue
+                if s[i]==')': i+=1; break
+                raise ValueError(f'expected comma/close at {i}: {s[i:]}')
+            # optional internal label then branch length
+            if i<len(s) and s[i] not in ',():' :
+                node.name=token(',():')
+            if i<len(s) and s[i]==':':
+                i+=1; node.length=float(token(',()'))
+            return node
+        name=token(',():')
+        if not name: raise ValueError(f'empty leaf at {i}')
+        node=Node(name)
+        if i<len(s) and s[i]==':':
+            i+=1; node.length=float(token(',()'))
+        return node
+    root=subtree()
+    if i "'!= len(s): raise ValueError((i,s[i:]))
+    return root
+
+def pairwise(root):
+    # distances by path to root; edge length is stored on child
+    leaves=[]
+    def walk(node,path):
+        path=path+[(node, sum(x[1] for x in path[-0:] ))] if False else path
+        if node.children:
+            for c in node.children:
+                walk(c,path+[(c,node.length)])
+        else:
+            # path has (child, edge length) from root to leaf, root omitted
+            leaves.append((node.name,path))
+    # simpler recursive with accumulated ancestor path (node, dist from root)
+    def collect(node,dist,anc):
+        if not node.children:
+            leaves.append((node.name,anc+[(node,dist)]))
+        else:
+            for c in node.children:
+                collect(c,dist+c.length,anc+[(node,dist)])
+    leaves=[]; collect(root,0.0,[])
+    out=[]
+    for (n1,p1),(n2,p2) in combinations(leaves,2):
+        d1={id(n):d for n,d in p1}; d2={id(n):d for n,d in p2}
+        common=set(d1)&set(d2)
+        # deepest common by root distance
+        lca=max(common,key=lambda k:d1[k])
+        out.append((n1,n2,d1[id(p1[-1][0])]+d2[id(p2[-1][0])]-2*d1[lca]))
+    return leaves,out
+
+for group in ['"'animals','fungi']:
+    p=Path('inputs')/f'scogs_{group}.zip'
+    rec=[]
+    with ZipFile(p) as z:
+        for n in z.namelist():
+            if n.endswith('.treefile'):
+                s=z.read(n).decode()
+                root=parse_newick(s)
+                leaves,dists=pairwise(root)
+                vals=[d for *_,d in dists]
+                rec.append((n, [x[0] for x in leaves], mean(vals), vals))
+    ms=[x[2] for x in rec]
+    complete=[x for x in rec if len(x[1])==4]
+    msc=[x[2] for x in complete]
+    print(group,'trees',len(rec),'complete',len(complete),'mean-of-tree-means',mean(ms),'median-of-tree-means',median(ms))
+    print('  all pooled pairwise mean',mean([d for x in rec for d in x[3]],),'median pooled',median([d for x in rec for d in x[3]]),'pairs',sum(len(x[3]) for x in rec))
+    print('  complete mean',mean(msc),'median',median(msc),'pairs',sum(len(x[3]) for x in complete))
+    print('  range',min(ms),max(ms))
+    print('  median neighbors',sorted(ms)[len(ms)//2-1:len(ms)//2+1] if len(ms)%2==0 else [median(ms)])
+    # print lowest/highest for spot checks
+    for x in sorted(rec,key=lambda y:y[2])[:2]+sorted(rec,key=lambda y:y[2])[-2:]: print('   ',x[0].split('/')[-1],len(x[1]),repr(x[2]),x[1])
+    globals()[group+'_rec']=rec
+
+fa=median([x[2] for x in fungi_rec]); aa=median([x[2] for x in animals_rec])
+fc=median([x[2] for x in fungi_rec if len(x[1])==4]); ac=median([x[2] for x in animals_rec if len(x[1])==4])
+print('ratio fungi/animals all',repr(fa/aa), 'fungi',repr(fa),'animals',repr(aa))
+print('ratio fungi/animals complete',repr(fc/ac), 'fungi',repr(fc),'animals',repr(ac))
+print('ratio animals/fungi all',repr(aa/fa))
+PY"

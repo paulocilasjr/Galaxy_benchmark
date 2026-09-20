@@ -1,0 +1,28 @@
+/bin/bash -lc "PYTHONPATH=/workspace/pylib python3 - <<'PY'
+import os
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', sep=r'\\s+', engine='python').set_index('Geneid')
+coldata = pd.read_excel('inputs/Issy_ASXL1_blood_coldata_gender.xlsx').dropna(how='all')
+coldata = coldata.loc[coldata['sample'].notna(), ['sample','condition','sex']].copy().set_index('sample')
+samples = [s for s in coldata.index if s in counts.columns]
+metadata = coldata.loc[samples].copy()
+metadata['condition'] = pd.Categorical(metadata['condition'], categories=['Control','ASXL1'])
+metadata['sex'] = pd.Categorical(metadata['sex'], categories=['F','M'])
+cts = counts[samples].T.astype(int)
+
+dds = DeseqDataSet(counts=cts, metadata=metadata, design='~ sex + condition', refit_cooks=True, n_cpus=4, quiet=True)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['condition','ASXL1','Control'], alpha=0.05, cooks_filter=True, independent_filter=True, quiet=True, n_cpus=4)
+stat.summary()
+stat.lfc_shrink(coeff='condition[T.ASXL1]')
+res = stat.results_df
+count = int((res['padj'] < 0.05).sum())
+print('SIGNIF_COUNT', count)
+print('padj_non_na', int(res['padj'].notna().sum()))
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w') as f:
+    f.write(str(count)+'\\n')
+PY"

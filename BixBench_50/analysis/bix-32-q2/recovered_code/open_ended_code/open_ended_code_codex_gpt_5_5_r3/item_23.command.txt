@@ -1,0 +1,40 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) { x<-readRDS(f); ld<-attr(x,'listData'); data.frame(gene=attr(x,'rownames'), lfc=ld"'$log2FoldChange, padj=ld$padj) }
+res <- lapply(c('"'97'='inputs/res_1vs97.rds','98'='inputs/res_1vs98.rds','99'='inputs/res_1vs99.rds'), read_res)
+link <- read.table('https://rest.kegg.jp/link/pathway/pau', sep='\\t', stringsAsFactors=FALSE, col.names=c('gene','path'))
+link"'$gene <- sub('"'"'^pau:'"', '', link"'$gene); link$path <- sub('"'"'^path:'"', '', link"'$path)
+t2g <- split(link$gene, link$path)
+ora <- function(genes, universe_mode=c('"'experiment','kegg'), minGS=10, maxGS=500) {
+  universe_mode <- match.arg(universe_mode)
+  if (universe_mode=='experiment') universe <- Reduce(intersect, lapply(res, "'`[[`, '"'gene')) else universe <- unique(link"'$gene)
+  universe <- intersect(universe, unique(link$gene)); genes <- intersect(unique(genes), universe)
+  tt <- lapply(t2g, function(g) intersect(unique(g), universe)); tt <- tt[lengths(tt)>=minGS & lengths(tt)<=maxGS]
+  N <- length(universe); n <- length(genes)
+  p <- sapply(tt, function(g) { k<-length(intersect(genes,g)); if(k) phyper(k-1,length(g),N-length(g),n,lower.tail=FALSE) else NA_real_ })
+  keep <- !is.na(p)
+  data.frame(path=names(p)[keep], pvalue=p[keep], padj=p.adjust(p[keep], '"'BH'), row.names=NULL)
+}
+cat('unique KEGG pathway genes:', length(unique(link"'$gene)), '"'\\n')
+cat('experiment genes:', length(Reduce(intersect, lapply(res, "'`[[`, '"'gene'))), '\\n')
+cat('mapped experiment genes:', length(intersect(Reduce(intersect, lapply(res, "'`[[`, '"'gene')), unique(link"'$gene))), '"'\\n')
+for (um in c('experiment','kegg')) for (mm in c('all','cp')) {
+  mg <- if(mm=='cp') c(10,500) else c(1,Inf)
+  sets <- list(up=list(), down=list())
+  for (s in names(res)) for (dir in c('up','down')) {
+    genes <- res[[s]]"'$gene[if(dir=='"'up') res[[s]]"'$lfc>1.5 else res[[s]]$lfc< -1.5]
+    er <- ora(genes, um, mg[1], mg[2])
+    # clusterProfiler default additionally requires raw pvalue <= 0.05; redundant for many but included
+    sets[[dir]][[s]] <- er$path[er$pvalue <= 0.05 & er$padj <= 0.05]
+  }
+  cat('"'\\n', um, mm, 'intersect05 up', length(Reduce(intersect, sets"'$up)), '"'down', length(Reduce(intersect, sets"'$down)), '"'total', length(union(Reduce(intersect, sets"'$up), Reduce(intersect, sets$down))), '"'\\n')
+  for (alpha in c(.05,.1)) {
+    sets <- list(up=list(), down=list())
+    for (s in names(res)) for (dir in c('up','down')) {
+      genes <- res[[s]]"'$gene[if(dir=='"'up') res[[s]]"'$lfc>1.5 else res[[s]]$lfc< -1.5]
+      er <- ora(genes, um, mg[1], mg[2])
+      sets[[dir]][[s]] <- er$path[er$padj <= alpha]
+    }
+    cat('"' padj<=', alpha, 'up', paste(Reduce(intersect, sets"'$up), collapse='"','), 'down', paste(Reduce(intersect, sets"'$down), collapse='"','), '\\n')
+  }
+}
+RS"

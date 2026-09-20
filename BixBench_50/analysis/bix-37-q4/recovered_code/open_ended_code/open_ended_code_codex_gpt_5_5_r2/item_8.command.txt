@@ -1,0 +1,58 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+xlsx = Path('/workspace/inputs/Proteomic_data .xlsx')
+ns = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+with ZipFile(xlsx) as z:
+    # shared strings
+    shared = []
+    root = ET.fromstring(z.read('xl/sharedStrings.xml'))
+    for si in root.findall('m:si', ns):
+        texts = []
+        for t in si.findall('.//m:t', ns):
+            texts.append(t.text or '')
+        shared.append(''.join(texts))
+
+    def col_index(cell_ref):
+        letters = ''.join(ch for ch in cell_ref if ch.isalpha())
+        n = 0
+        for ch in letters:
+            n = n * 26 + (ord(ch.upper()) - 64)
+        return n - 1
+
+    rows = []
+    for event, elem in ET.iterparse(z.open('xl/worksheets/sheet1.xml'), events=('end',)):
+        if elem.tag.endswith('row'):
+            vals = {}
+            for c in elem.findall('m:c', ns):
+                ref = c.attrib.get('r', '')
+                idx = col_index(ref)
+                t = c.attrib.get('t')
+                v = c.find('m:v', ns)
+                if v is None:
+                    val = ''
+                elif t == 's':
+                    val = shared[int(v.text)]
+                else:
+                    val = v.text
+                vals[idx] = val
+            if vals:
+                maxidx = max(vals)
+                row = [vals.get(i, '') for i in range(maxidx+1)]
+                rows.append(row)
+            elem.clear()
+
+headers = rows[0]
+print('headers:', headers)
+print('nrows:', len(rows))
+gene_i = headers.index('gene')
+for i, row in enumerate(rows[1:], start=2):
+    gene = row[gene_i] if gene_i < len(row) else ''
+    if gene == 'ENO1':
+        print('row', i)
+        for h, v in zip(headers, row):
+            print(f'{h}: {v}')
+PY"

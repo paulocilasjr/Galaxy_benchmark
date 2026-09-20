@@ -1,0 +1,57 @@
+/bin/bash -c "python - <<'PY'
+import time, pandas as pd, numpy as np, gc, math
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+def mem_mb():
+    try:
+        with open('/sys/fs/cgroup/memory.current') as f: return int(f.read())/1e6
+    except Exception: return float('nan')
+
+t0=time.time()
+path='/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv'
+h=pd.read_csv(path, nrows=0).columns
+dtypes={c: np.int32 for c in h[1:]}
+counts=pd.read_csv(path, index_col=0, dtype=dtypes)
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+meta=meta.loc[counts.columns].copy()
+nz=(counts.to_numpy(dtype=np.int32).sum(axis=1)>0)
+counts=counts.loc[nz].T
+# sex categorical, F reference; batch left integer (continuous)
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+gc.collect()
+print('mem before init', mem_mb(), flush=True)
+dds=DeseqDataSet(counts=counts, metadata=meta[['batch','sex']], design='~batch+sex', n_cpus=1, low_memory=True, quiet=True)
+print('after init', mem_mb(), 'design cols', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+del counts; gc.collect()
+dds.deseq2()
+print('deseq2 done', time.time()-t0, 'mem', mem_mb(), flush=True)
+stats=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=1, quiet=True)
+stats.summary()
+print('summary done', time.time()-t0, flush=True)
+print('LFC cols', stats.LFC.columns.tolist())
+print('FAM138A unshrunk', stats.results_df.loc['FAM138A'].to_dict(), flush=True)
+# Target-only apeglm shrinkage, equivalent to the full default lfc_shrink for this gene.
+coeff='sex[T.M]'
+coeff_idx=stats.LFC.columns.get_loc(coeff)
+prior_var=stats._fit_prior_var(coeff_idx=coeff_idx)
+prior_scale=float(np.minimum(np.sqrt(prior_var), 1))
+gene_idx=list(stats.dds.var_names).index('FAM138A')
+size=np.array([1.0 / stats.dds.var['dispersions'].values[gene_idx]])
+offset=np.log(stats.dds.obs['size_factors']).values
+lfcs, inv_hessians, conv = stats.inference.lfc_shrink_nbinom_glm(
+    design_matrix=stats.design_matrix.values,
+    counts=stats.dds.X[:, [gene_idx]],
+    size=size,
+    offset=offset,
+    prior_no_shrink_scale=15,
+    prior_scale=prior_scale,
+    optimizer='L-BFGS-B',
+    shrink_index=coeff_idx,
+)
+new_lfc=float(np.array(lfcs)[0, coeff_idx])
+new_se=float(np.sqrt(np.abs(np.array(inv_hessians)[0, coeff_idx, coeff_idx])))
+print('prior_var', prior_var, 'prior_scale', prior_scale, 'target_idx', gene_idx, 'conv', conv, flush=True)
+print('FAM138A shrunken continuous-batch target', new_lfc, 'se', new_se, flush=True)
+print('elapsed', time.time()-t0, flush=True)
+PY"

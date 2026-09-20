@@ -1,0 +1,29 @@
+/bin/bash -lc "python -u - <<'PY'
+import gc, time
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from pydeseq2.default_inference import DefaultInference
+start=time.time()
+print('reading int32 counts',flush=True)
+counts=pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv',index_col=0,dtype='int32').T
+meta=pd.read_csv('inputs/Sample_annotated_Zenodo.csv',index_col='sample').loc[counts.index,['batch','sex']].copy()
+meta['batch']=meta['batch'].astype(str)
+meta['sex']=pd.Categorical(meta['sex'],categories=['F','M'])
+inference=DefaultInference(n_cpus=1)
+print('constructing',counts.shape,counts.dtypes.iloc[0],flush=True)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~ batch + sex',refit_cooks=True,inference=inference,quiet=False)
+del counts,meta
+gc.collect()
+print('design',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+dds.deseq2()
+print('fit complete elapsed',time.time()-start,flush=True)
+stats=DeseqStats(dds,contrast=['sex','M','F'],inference=inference,quiet=False)
+stats.summary()
+print('unshrunk',stats.results_df.loc['FAM138A'].to_dict(),flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+row=stats.results_df.loc['FAM138A']
+print('shrunken',row.to_dict(),flush=True)
+print('qualifies',bool(abs(row.log2FoldChange)>0.5 and row.baseMean>10),flush=True)
+print('FINAL_VALUE',repr(float(row.log2FoldChange)),flush=True)
+PY"

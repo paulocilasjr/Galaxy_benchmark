@@ -1,0 +1,34 @@
+/bin/bash -lc "Rscript - <<'RS'
+options(digits=17)
+ann <- read.csv('inputs/Sample_annotated_Zenodo.csv', check.names=FALSE, stringsAsFactors=FALSE)
+meta <- read.csv('inputs/GeneMetaInfo_Zenodo.csv', check.names=FALSE, stringsAsFactors=FALSE)
+cts <- read.csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', check.names=FALSE, stringsAsFactors=FALSE)
+cat('dimensions ann/meta/cts:', paste(dim(ann),collapse='x'), paste(dim(meta),collapse='x'), paste(dim(cts),collapse='x'),'\\n')
+cat('column names meta:',paste(names(meta),collapse='|'),'\\n')
+cat('column names counts first/last:',paste(head(names(cts),3),collapse='|'),paste(tail(names(cts),3),collapse='|'),'\\n')
+cat('cell types:\\n'); print(table(ann"'$celltype,useNA='"'ifany'))
+cat('duplicate sample/meta/count gene IDs:',sum(duplicated(ann"'$sample)),sum(duplicated(meta[[1]])),sum(duplicated(cts[[1]])),'"'\\n')
+cat('sample set differences counts-ann / ann-counts:',length(setdiff(names(cts)[-1],ann"'$sample)),length(setdiff(ann$sample,names(cts)[-1])),'"'\\n')
+cat('gene set differences counts-meta / meta-counts:',length(setdiff(cts[[1]],meta[[1]])),length(setdiff(meta[[1]],cts[[1]])),'\\n')
+cat('meta ID equality:',sum(meta[[1]] == meta"'$Geneid,na.rm=TRUE),'"'of',nrow(meta),'\\n')
+cd14 <- ann"'$sample[ann$celltype == '"'CD14']
+cat('CD14 n/present:',length(cd14),sum(cd14 %in% names(cts)),'\\n')
+idx <- match(meta[[1]],cts[[1]])
+pc <- meta"'$gene_biotype == '"'protein_coding'
+mat <- as.matrix(cts[idx[pc], cd14, drop=FALSE])
+storage.mode(mat) <- 'double'
+len <- meta"'$Length[pc]
+tot <- rowSums(mat)
+mn <- rowMeans(mat)
+allmat <- as.matrix(cts[idx[pc], -1, drop=FALSE]); storage.mode(allmat)<-'"'double'
+alltot <- rowSums(allmat)
+variants <- list(cd14_total_ge10=tot>=10, all_total_ge10=alltot>=10,
+                 cd14_any_ge10=apply(mat>=10,1,any), all_pc=rep(TRUE,length(tot)))
+cat('protein coding n:',sum(pc),' missing length:',sum(is.na(len)),'missing selected:',sum(is.na(mat)),'negative selected:',sum(mat<0,na.rm=TRUE),' range:',range(mat,na.rm=TRUE),'\\n')
+for (nm in names(variants)) {
+ keep <- variants[[nm]] & is.finite(len) & is.finite(mn)
+ cat(nm,'n',sum(keep),'r',format(cor(len[keep],mn[keep],method='pearson'),digits=17,scientific=FALSE),'mean range',paste(range(mn[keep]),collapse=' '),'\\n')
+}
+cat('excluded cd14 threshold:',sum(tot<10),' total range:',paste(range(tot),collapse=' '),'length range:',paste(range(len,na.rm=TRUE),collapse=' '),'\\n')
+cat('mean-total identity max error:',max(abs(mn*length(cd14)-tot)),'\\n')
+RS"

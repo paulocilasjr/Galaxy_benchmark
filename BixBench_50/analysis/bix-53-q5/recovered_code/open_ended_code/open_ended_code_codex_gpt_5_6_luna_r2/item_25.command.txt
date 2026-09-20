@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, warnings, mygene, gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+warnings.filterwarnings('ignore')
+
+counts=pd.read_csv('/workspace/inputs/count.csv').set_index('geneID')
+meta=pd.DataFrame({'condition':['KL']*3+['WL']*3},index=counts.columns)
+t0=time.time()
+dds=DeseqDataSet(counts=counts.T,metadata=meta,design='~condition',ref_level=['condition','KL'],quiet=True,n_cpus=4)
+dds.deseq2()
+stat=DeseqStats(dds,contrast=['condition','WL','KL'],quiet=True,n_cpus=4)
+stat.summary()
+stat.lfc_shrink(coeff='condition[T.WL]',adapt=True)
+res=stat.results_df.copy()
+print('DE seconds',round(time.time()-t0,1),flush=True)
+
+mg=mygene.MyGeneInfo()
+lib=gp.get_library('WikiPathways_2019_Mouse',organism='Mouse')
+print('library pathways',len(lib),'library genes',len(set(g for v in lib.values() for g in v)),flush=True)
+
+for pcol in ['pvalue','padj']:
+    sel=res[(res[pcol]<0.05)&(res['log2FoldChange'].abs()>1)&(res['baseMean']>10)].copy()
+    ids=sel.index.astype(str).tolist()
+    q=mg.querymany(ids,scopes='ensembl.gene',fields='symbol',species='mouse',as_dataframe=False,returnall=True,verbose=False)
+    mp={}
+    for row in q['out']:
+        if row.get('symbol'):
+            mp.setdefault(row['query'],row['symbol'])
+    syms=[]
+    for x in ids:
+        if x in mp and mp[x] not in syms: syms.append(mp[x])
+    print('\\nFILTER',pcol,'DE',len(ids),'mapped',len(syms),'library-overlap',len(set(syms)&set(g for v in lib.values() for g in v)), 'missing',len(q.get('missing',[])),flush=True)
+    e=gp.enrichr(gene_list=syms,gene_sets='WikiPathways_2019_Mouse',organism='mouse',outdir=None,no_plot=True,verbose=False)
+    tab=e.res2d.copy()
+    print('online rows',len(tab), 'columns',tab.columns.tolist(),flush=True)
+    for rankcol in ['P-value','Adjusted P-value','Combined Score']:
+        top=tab.sort_values([rankcol,'Term'],ascending=[rankcol"'!='"'Combined Score',True]).head(20)
+        oxy=top['Term'].str.lower().str.contains('oxidative',regex=False).sum()
+        print('rank',rankcol,'oxidative',int(oxy),'fraction',oxy/20,flush=True)
+        print(top[['Term','Overlap','P-value','Adjusted P-value','Combined Score','Genes']].to_string(index=False),flush=True)
+PY"

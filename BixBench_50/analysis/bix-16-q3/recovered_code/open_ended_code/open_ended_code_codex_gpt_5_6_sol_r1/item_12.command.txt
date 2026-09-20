@@ -1,0 +1,50 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, re, time
+from scipy.stats import spearmanr
+EFILE='inputs/CRISPRGeneEffect.csv'; XFILE='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+t=time.time(); print('reading effect',flush=True)
+e=pd.read_csv(EFILE,index_col=0,dtype=np.float32)
+print('effect shape',e.shape,'sec',round(time.time()-t,1),'NA',int(e.isna().to_numpy().sum()),flush=True)
+t=time.time(); print('reading expression',flush=True)
+x=pd.read_csv(XFILE,index_col=0,dtype=np.float32)
+print('expr shape',x.shape,'sec',round(time.time()-t,1),'NA',int(x.isna().to_numpy().sum()),flush=True)
+# Align shared observations in effect-file order
+models=e.index[e.index.isin(x.index)]
+e=e.loc[models]; x=x.loc[models]
+# Pair columns: exact label if available, else unique stable Entrez ID mapping.
+idpat=re.compile(r'.+ \\((\\d+)\\)"'$'"')
+x_by_id={}
+for c in x.columns:
+    x_by_id.setdefault(idpat.fullmatch(c).group(1),[]).append(c)
+pairs=[]
+for ec in e.columns:
+    gid=idpat.fullmatch(ec).group(1)
+    choices=x_by_id.get(gid,[])
+    if not choices: continue
+    if ec in choices: xc=ec
+    elif len(choices)==1: xc=choices[0]
+    else: raise RuntimeError((ec,choices))
+    pairs.append((ec,xc,gid))
+print('models',len(models),'pairs',len(pairs),flush=True)
+# Pairwise-complete Spearman. Negate raw gene effect so higher = stronger essentiality.
+rhos=np.empty(len(pairs)); ns=np.empty(len(pairs),dtype=int)
+t=time.time()
+for j,(ec,xc,gid) in enumerate(pairs):
+    a=x[xc].to_numpy(dtype=np.float64,copy=False)
+    b=-e[ec].to_numpy(dtype=np.float64,copy=False)
+    ok=np.isfinite(a)&np.isfinite(b)
+    ns[j]=ok.sum()
+    rhos[j]=spearmanr(a[ok],b[ok]).statistic if ns[j]>=2 else np.nan
+    if (j+1)%3000==0: print('done',j+1,'sec',round(time.time()-t,1),flush=True)
+valid=np.isfinite(rhos)
+print('valid',valid.sum(),'nan',(~valid).sum(),'n min/median/max',ns[valid].min(),np.median(ns[valid]),ns[valid].max())
+print('biological essentiality rho>=0.6',int(np.sum(rhos>=0.6)))
+print('raw gene effect rho>=0.6',int(np.sum(rhos<=-0.6)))
+print('bio rho<=-0.6',int(np.sum(rhos<=-0.6)))
+ix=np.argsort(np.nan_to_num(rhos,nan=-99))[::-1][:20]
+print('top20')
+for i in ix: print(pairs[i][0],pairs[i][1],rhos[i],ns[i])
+near=np.where((rhos>=0.55)&(rhos<=0.65))[0]
+print('near threshold count',len(near))
+for i in near[np.argsort(rhos[near])]: print('NEAR',pairs[i][0],pairs[i][1],rhos[i],ns[i])
+PY"

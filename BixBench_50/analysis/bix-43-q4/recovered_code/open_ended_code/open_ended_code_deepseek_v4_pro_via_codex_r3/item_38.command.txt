@@ -1,0 +1,30 @@
+/bin/bash -lc "cd /workspace && python - <<'PY'
+from gseapy.parser import download_library
+import pandas as pd
+lib=download_library('Reactome_2022', organism='human')
+# target keys
+keys=[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes')]
+print(keys)
+for k in keys:
+    genes=lib[k]
+    print('key',k,'n',len(genes),'genes',genes)
+    # map to DE stats
+    r=pd.read_csv('tmp/pydeseq2_full.csv',index_col=0)
+    m=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+    sig=r[(r.padj<0.05)&(r.log2FoldChange.abs()>=0.5)].copy()
+    sig['symbol']=sig.index.to_series().map(m.set_index('ENSG').gene_name)
+    print('overlap symbols', [g for g in genes if g in set(sig.symbol.dropna())])
+    sub=sig[sig.symbol.isin(genes)]
+    print(sub[['symbol','log2FoldChange','padj','baseMean']].to_string())
+    # all DE stats for pathway genes
+    mm=m.set_index('ENSG').gene_name
+    ens_by_sym={}
+    for ens,sym in mm.items():
+        ens_by_sym.setdefault(sym,[]).append(ens)
+    for g in genes:
+        ens=ens_by_sym.get(g,[])
+        rows=r.loc[r.index.isin(ens)] if ens else pd.DataFrame()
+        if len(rows):
+            print('\\n',g,ens)
+            print(rows[['log2FoldChange','padj','baseMean']].to_string())
+PY"

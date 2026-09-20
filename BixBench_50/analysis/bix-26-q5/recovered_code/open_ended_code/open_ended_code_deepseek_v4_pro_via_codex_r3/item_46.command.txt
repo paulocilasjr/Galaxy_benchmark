@@ -1,0 +1,45 @@
+/bin/bash -c "Rscript - <<'RS'
+library(jsonlite)
+D <- fromJSON('/workspace/tmp/kegg_pau.json')
+g2p <- D"'$g2p
+pathname <- D$pathname
+# replicate clusterProfiler name cleaning
+clean_name <- function(x) sub("'"\\\\s-\\\\s[a-zA-Z ]+\\\\(\\\\w+\\\\)"'$", "", x)
+# gene2paths currently names PA14_...
+files <- list(GluFe='"'/workspace/tmp/GluFe_degs.txt', Succ='/workspace/tmp/Succ_degs.txt')
+for(nm in names(files)){
+  genes <- readLines(files[[nm]])
+  genes <- unique(genes)
+  qExtID2TermID <- g2p[genes]
+  qExtID2TermID <- qExtID2TermID["'!is.na(names(qExtID2TermID)) & lengths(qExtID2TermID)>0]
+  qTermID <- unique(unlist(qExtID2TermID))
+  extID <- unique(unlist(g2p))
+  # qTermID2ExtID
+  qdf <- do.call(rbind, lapply(names(qExtID2TermID), function(g) data.frame(gene=g, term=qExtID2TermID[[g]], stringsAsFactors=FALSE)))
+  qdf <- unique(qdf)
+  qTermID2ExtID <- split(qdf$gene, qdf$term)
+  qTermID2ExtID <- lapply(qTermID2ExtID, intersect, extID)
+  termID2ExtID <- lapply(qTermID, function(t) intersect(g2p_genes_for_term(t), extID))
+  # Need g2p reversed
+  p2g <- split(rep(names(g2p), lengths(g2p)), unlist(g2p))
+  termID2ExtID <- lapply(qTermID, function(t) intersect(p2g[[t]], extID))
+  names(termID2ExtID) <- qTermID
+  idx <- lengths(termID2ExtID) >= 10 & lengths(termID2ExtID) <= 500
+  termID2ExtID <- termID2ExtID[idx]
+  qTermID2ExtID <- qTermID2ExtID[names(termID2ExtID)]
+  qTermID <- unique(names(qTermID2ExtID))
+  k <- lengths(qTermID2ExtID)[qTermID]
+  M <- lengths(termID2ExtID)[qTermID]
+  N <- length(extID)
+  n <- length(qExtID2TermID)
+  p <- phyper(k-1, M, N-M, n, lower.tail=FALSE)
+  p.adj <- p.adjust(p, method='"'BH')
+  res <- data.frame(ID=qTermID, k=k, M=M, pvalue=p, padj=p.adj, stringsAsFactors=FALSE)
+  res <- res[order(res"'$pvalue),]
+  sig <- res[res$p.adjust < 0.05,]
+  cat('"'\\n==',nm,'==\\n')
+  cat('input genes', length(genes), 'mapped', n, 'N', N, 'tested pathways', nrow(res), 'sig padj<.05', nrow(sig), '\\n')
+  print(head(sig[,c('ID','k','M','pvalue','padj')], 30))
+  write.csv(res, paste0('/workspace/tmp/kegg_',nm,'_default_universe.csv'), row.names=FALSE)
+}
+RS"

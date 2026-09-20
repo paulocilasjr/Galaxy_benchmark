@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5a735afcee9a98cdf",
+  "history_id": "bbd44e69cb8906b55888d5ebabbd06e0",
+  "tool_id": "raw-pis-mannwhitney-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-16T03:43:17.270595",
+  "update_time": "2026-07-16T03:44:14.266973",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > job.py <<'PY'\nimport os\nimport sys\nimport zipfile\nimport tempfile\nimport subprocess\nimport shutil\nfrom pathlib import Path\n\nanimals_zip = Path(sys.argv[1])\nfungi_zip = Path(sys.argv[2])\n\n\ndef safe_members(zip_path):\n    with zipfile.ZipFile(zip_path) as zf:\n        names = []\n        for info in zf.infolist():\n            if info.is_dir():\n                continue\n            name = info.filename\n            if name.startswith('/') or '..' in Path(name).parts:\n                raise ValueError(f'unsafe archive member: {name}')\n            if name.endswith('.mafft'):\n                names.append(name)\n        return sorted(names)\n\n\ndef run_phykit_pis(path):\n    attempts = [\n        ['phykit', 'pis', str(path)],\n        ['phykit', 'parsimony_informative_sites', str(path)],\n    ]\n    last = None\n    for cmd in attempts:\n        proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n        if proc.returncode == 0:\n            fields = proc.stdout.strip().replace(',', '\\t').split()\n            if len(fields) < 3:\n                raise ValueError(f'unexpected PhyKit output for {path.name}: {proc.stdout!r}')\n            return int(float(fields[0])), int(float(fields[1])), float(fields[2])\n        last = proc\n    raise RuntimeError(f'PhyKit failed for {path.name}: {last.stderr}')\n\n\ndef process_archive(group, zip_path, tmpdir):\n    rows = []\n    with zipfile.ZipFile(zip_path) as zf:\n        for idx, name in enumerate(safe_members(zip_path), 1):\n            out = tmpdir / f'{group}_{idx}_{Path(name).name}'\n            with zf.open(name) as src, open(out, 'wb') as dst:\n                shutil.copyfileobj(src, dst)\n            pis, sites, pct = run_phykit_pis(out)\n            rows.append((group, name, pis, sites, pct))\n    return rows\n\n\ndef mannwhitney_u_animals_first(x, y):\n    try:\n        from scipy.stats import mannwhitneyu\n    except Exception as exc:\n        raise RuntimeError('SciPy is required for Mann-Whitney U statistic') from exc\n    res = mannwhitneyu(x, y, alternative='two-sided', method='auto', use_continuity=True)\n    return float(res.statistic), float(res.pvalue)\n\nwith tempfile.TemporaryDirectory() as d:\n    tmpdir = Path(d)\n    animal_rows = process_archive('animals', animals_zip, tmpdir)\n    fungi_rows = process_archive('fungi', fungi_zip, tmpdir)\n\nall_rows = animal_rows + fungi_rows\nif not animal_rows or not fungi_rows:\n    raise RuntimeError('Both groups must contain at least one .mafft alignment')\n\nx = [r[2] for r in animal_rows]\ny = [r[2] for r in fungi_rows]\nu, p = mannwhitney_u_animals_first(x, y)\n\nwith open('counts.tsv', 'w') as out:\n    out.write('group\\tmember\\traw_parsimony_informative_sites\\talignment_sites\\tpercent_parsimony_informative\\n')\n    for row in all_rows:\n        out.write(f'{row[0]}\\t{row[1]}\\t{row[2]}\\t{row[3]}\\t{row[4]:.12g}\\n')\n\nwith open('result.tsv', 'w') as out:\n    out.write('sample_a\\tsample_b\\tn_a\\tn_b\\tstatistic_U\\tpvalue\\talternative\\tmethod\\tcontinuity\\n')\n    out.write(f'animals\\tfungi\\t{len(x)}\\t{len(y)}\\t{u:.17g}\\t{p:.17g}\\ttwo-sided\\tauto\\ttrue\\n')\nPY\npython job.py \"/jetstream2/scratch/main/jobs/78548961/inputs/dataset_8b4b72ea-0eeb-4bac-8c9d-fe8981e98bc5.dat\" \"/jetstream2/scratch/main/jobs/78548961/inputs/dataset_178f523f-6705-4cca-b5c3-a22f134c02e6.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "animals_zip": {
+      "id": "f9cad7b01a4721350e3cf5e1284778c6",
+      "src": "hda",
+      "uuid": "8b4b72ea-0eeb-4bac-8c9d-fe8981e98bc5"
+    },
+    "fungi_zip": {
+      "id": "f9cad7b01a472135b9a12b261694a045",
+      "src": "hda",
+      "uuid": "178f523f-6705-4cca-b5c3-a22f134c02e6"
+    }
+  },
+  "outputs": {
+    "counts": {
+      "id": "f9cad7b01a4721354f6fbcd9705689ac",
+      "src": "hda",
+      "uuid": "e3d027f3-401e-45cf-8102-1000404939c0"
+    },
+    "result": {
+      "id": "f9cad7b01a472135ee60fc5245a2514f",
+      "src": "hda",
+      "uuid": "2fd4aa8f-f1d3-466f-8035-08c84d2faba1"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

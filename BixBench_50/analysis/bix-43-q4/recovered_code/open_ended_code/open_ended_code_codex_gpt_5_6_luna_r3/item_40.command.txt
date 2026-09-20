@@ -1,0 +1,21 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, gseapy
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+raw=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+mp=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+raw=raw[raw.index.isin(mp.ENSG)]
+cols=['3_1','3_2','3_3','9_1','9_2','9_3']
+md=pd.DataFrame({'condition':['DMSO']*3+['CBD_cisplatin']*3},index=cols)
+dds=DeseqDataSet(counts=raw[cols].astype(int).T,metadata=md,design_factors='condition',refit_cooks=True,n_cpus=1)
+dds.deseq2()
+st=DeseqStats(dds,contrast=['condition','CBD_cisplatin','DMSO'],n_cpus=1)
+st.summary()
+res=st.results_df
+ids=set(res.index[(res.padj<0.05)&(res.log2FoldChange.abs()>=0.5)])
+syms=set(mp.set_index('ENSG').gene_name.reindex(list(ids)).dropna())
+gs=gseapy.get_library(name='Reactome_2022',organism='Human')
+name=[k for k in gs if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes')][0]
+term=set(gs[name])
+print('mapped-only',len(ids),len(syms),len(syms&term),sorted(syms&term),f'{len(syms&term)}/{len(term)}')
+PY"

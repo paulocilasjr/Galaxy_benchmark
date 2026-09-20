@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import exp, log1p
+ws=load_workbook('/workspace/inputs/data.xlsx',data_only=True,read_only=True).active
+obs=[]
+for row in ws.iter_rows(min_row=2, values_only=True):
+    eff,bmi=row[2],row[10]
+    if eff is not None and bmi is not None:
+        obs.append((1.0 if str(eff).strip()=='PR' else 0.0,float(bmi)))
+n=len(obs); xm=sum(x for y,x in obs)/n
+# eta = a + b*(x-xm); Newton maximization
+A=B=0.0
+for it in range(100):
+    s0=s1=0.0
+    h00=h01=h11=0.0
+    for y,x in obs:
+        z=x-xm; eta=A+B*z
+        if eta>=0:
+            p=1.0/(1.0+exp(-eta))
+        else:
+            ee=exp(eta); p=ee/(1.0+ee)
+        r=y-p; w=p*(1-p)
+        s0 += r; s1 += r*z
+        h00 += w; h01 += w*z; h11 += w*z*z
+    det=h00*h11-h01*h01
+    dA=(s0*h11-s1*h01)/det
+    dB=(h00*s1-h01*s0)/det
+    A += dA; B += dB
+    if max(abs(dA),abs(dB)) < 1e-14: break
+# stable log likelihood
+def softplus(t):
+    return t+log1p(exp(-t)) if t>0 else log1p(exp(t))
+ll=0.0
+score0=score1=0.0
+for y,x in obs:
+    z=x-xm; eta=A+B*z
+    ll += y*eta-softplus(eta)
+    p=1/(1+exp(-eta))
+    score0 += y-p; score1 += (y-p)*z
+intercept=A-B*xm
+aic=-2*ll+2*2
+print('n',n,'PR',sum(y for y,x in obs),'nonPR',n-sum(y for y,x in obs))
+print('mean_bmi',format(xm,'.17g'),'range',min(x for y,x in obs),max(x for y,x in obs))
+print('iterations',it+1)
+print('centered_coefficients',format(A,'.17g'),format(B,'.17g'))
+print('ordinary_coefficients',format(intercept,'.17g'),format(B,'.17g'))
+print('scores',format(score0,'.17g'),format(score1,'.17g'))
+print('loglikelihood',format(ll,'.17g'))
+print('AIC',format(aic,'.17g'))
+print('null_AIC',format(-2*(sum(y for y,x in obs)*__import__('math').log(sum(y for y,x in obs)/n)+(n-sum(y for y,x in obs))*__import__('math').log((n-sum(y for y,x in obs))/n))+2,'.17g'))
+PY"

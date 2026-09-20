@@ -1,0 +1,85 @@
+python3 << 'EOF'
+import csv
+import math
+
+# Read the data
+rows = []
+with open('inputs/Swarm_2.csv', 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        rows.append(row)
+
+# Group by strain and ratio
+from collections import defaultdict
+
+# Strain 1 data
+strain1_areas = []
+strain1_circs = []
+
+# Mixed culture data by ratio
+mixed = defaultdict(lambda: {'areas': [], 'circs': []})
+
+for row in rows:
+    strain = row['StrainNumber']
+    area = float(row['Area'])
+    circ = float(row['Circularity'])
+    
+    if strain == '1':
+        strain1_areas.append(area)
+        strain1_circs.append(circ)
+    elif strain == '287_98':
+        ratio = row['Ratio']
+        mixed[ratio]['areas'].append(area)
+        mixed[ratio]['circs'].append(circ)
+
+# Compute mean area and circularity for Strain 1
+strain1_mean_area = sum(strain1_areas) / len(strain1_areas)
+strain1_mean_circ = sum(strain1_circs) / len(strain1_circs)
+
+print(f"Strain 1: mean Area = {strain1_mean_area:.2f}, mean Circularity = {strain1_mean_circ:.4f}")
+
+# Compute means for each mixed ratio
+ratio_stats = {}
+for ratio, data in mixed.items():
+    mean_area = sum(data['areas']) / len(data['areas'])
+    mean_circ = sum(data['circs']) / len(data['circs'])
+    ratio_stats[ratio] = (mean_area, mean_circ)
+    print(f"Ratio {ratio}: mean Area = {mean_area:.2f}, mean Circularity = {mean_circ:.4f}")
+
+# To combine area and circularity in a distance metric, we need to normalize
+# since they're on very different scales. Let's use z-score normalization
+# across all mixed ratios.
+
+all_mixed_areas = [v[0] for v in ratio_stats.values()]
+all_mixed_circs = [v[1] for v in ratio_stats.values()]
+
+mean_all_area = sum(all_mixed_areas) / len(all_mixed_areas)
+mean_all_circ = sum(all_mixed_circs) / len(all_mixed_circs)
+
+std_all_area = math.sqrt(sum((a - mean_all_area)**2 for a in all_mixed_areas) / len(all_mixed_areas))
+std_all_circ = math.sqrt(sum((c - mean_all_circ)**2 for c in all_mixed_circs) / len(all_mixed_circs))
+
+print(f"\nAll mixed: mean Area = {mean_all_area:.2f}, std Area = {std_all_area:.2f}")
+print(f"All mixed: mean Circ = {mean_all_circ:.4f}, std Circ = {std_all_circ:.4f}")
+
+# Normalize Strain 1
+z_area_s1 = (strain1_mean_area - mean_all_area) / std_all_area if std_all_area > 0 else 0
+z_circ_s1 = (strain1_mean_circ - mean_all_circ) / std_all_circ if std_all_circ > 0 else 0
+
+print(f"\nStrain 1 z-scores: Area = {z_area_s1:.4f}, Circ = {z_circ_s1:.4f}")
+
+# Compute Euclidean distances
+print("\nDistances from Strain 1:")
+distances = {}
+for ratio, (mean_area, mean_circ) in ratio_stats.items():
+    z_area = (mean_area - mean_all_area) / std_all_area if std_all_area > 0 else 0
+    z_circ = (mean_circ - mean_all_circ) / std_all_circ if std_all_circ > 0 else 0
+    dist = math.sqrt((z_area - z_area_s1)**2 + (z_circ - z_circ_s1)**2)
+    distances[ratio] = dist
+    print(f"Ratio {ratio}: z-Area = {z_area:.4f}, z-Circ = {z_circ:.4f}, distance = {dist:.4f}")
+
+# Find closest
+closest = min(distances, key=distances.get)
+print(f"\nClosest ratio: {closest} (distance = {distances[closest]:.4f})")
+EOF
+

@@ -1,0 +1,48 @@
+python3 << 'PYEOF'
+from openpyxl import load_workbook
+import os
+import re
+
+# Load Trio Status
+wb = load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws = wb['Sheet1']
+
+# Build mapping of sample ID -> BLM mutation status
+trio_data = {}
+for row in ws.iter_rows(min_row=2, values_only=True):
+    sample_id = str(row[0])
+    blm_status = row[3]
+    status = row[1]
+    trio_data[sample_id] = {'blm_status': blm_status, 'status': status}
+
+# Get CHIP file sample IDs
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+files = sorted(os.listdir(chip_dir))
+chip_samples = {}
+for f in files:
+    match = re.search(r'CHIP_(.+)\.xlsx', f)
+    if match:
+        sample_str = match.group(1)
+        sample_id = re.sub(r'-[A-Z0-9]+$', '', sample_str)
+        chip_samples[sample_id] = f
+
+# Find BLM carriers
+blm_carriers = {sid: info for sid, info in trio_data.items() 
+                if info['blm_status'] in ('Carrier', 'Affected')}
+print(f"BLM carriers: {len(blm_carriers)}")
+for sid, info in sorted(blm_carriers.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 0):
+    has_file = '✓' if sid in chip_samples else '✗ MISSING'
+    print(f"  Sample {sid}: {info['blm_status']} ({info['status']}) {has_file}")
+
+# Check for carriers without CHIP files
+missing = [sid for sid in blm_carriers if sid not in chip_samples]
+print(f"\nCarriers missing CHIP files: {len(missing)}")
+for m in missing:
+    print(f"  {m}")
+
+# Check for CHIP files without trio data
+extra = [sid for sid in chip_samples if sid not in trio_data]
+print(f"\nCHIP files without Trio data: {len(extra)}")
+for e in sorted(extra):
+    print(f"  {e}: {chip_samples[e]}")
+PYEOF

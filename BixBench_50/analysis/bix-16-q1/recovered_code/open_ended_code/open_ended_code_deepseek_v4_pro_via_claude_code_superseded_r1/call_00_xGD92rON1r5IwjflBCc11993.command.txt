@@ -1,0 +1,93 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+from scipy.stats import spearmanr
+
+print("=== Quick verification of top genes ===", flush=True)
+
+# Load the data again but compute top 20 most negative correlations
+with open('/workspace/inputs/CRISPRGeneEffect.csv') as f:
+    crispr_genes = next(csv.reader(f))[1:]
+with open('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    expr_genes = next(csv.reader(f))[1:]
+
+common_genes = sorted(set(crispr_genes) & set(expr_genes))
+crispr_gene_pos = {g: i for i, g in enumerate(crispr_genes)}
+expr_gene_pos = {g: i for i, g in enumerate(expr_genes)}
+
+def read_row_ids(fp):
+    ids = []
+    with open(fp) as f:
+        r = csv.reader(f)
+        next(r)
+        for row in r:
+            ids.append(row[0])
+    return ids
+
+crispr_rows = read_row_ids('/workspace/inputs/CRISPRGeneEffect.csv')
+expr_rows = read_row_ids('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+common_rows_set = set(crispr_rows) & set(expr_rows)
+aligned_rows = sorted(common_rows_set)
+n_rows = len(aligned_rows)
+n_genes = len(common_genes)
+
+crispr_cols = [crispr_gene_pos[g] for g in common_genes]
+expr_cols = [expr_gene_pos[g] for g in common_genes]
+
+crispr_data = np.full((n_rows, n_genes), np.nan, dtype=np.float64)
+expr_data = np.full((n_rows, n_genes), np.nan, dtype=np.float64)
+
+with open('/workspace/inputs/CRISPRGeneEffect.csv') as f:
+    r = csv.reader(f)
+    next(r)
+    for i, row in enumerate(r):
+        rid = row[0]
+        if rid not in common_rows_set:
+            continue
+        ai = aligned_rows.index(rid)
+        for j, cp in enumerate(crispr_cols):
+            val = row[cp + 1]
+            if val.strip():
+                crispr_data[ai, j] = float(val)
+
+with open('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    r = csv.reader(f)
+    next(r)
+    for i, row in enumerate(r):
+        rid = row[0]
+        if rid not in common_rows_set:
+            continue
+        ai = aligned_rows.index(rid)
+        for j, cp in enumerate(expr_cols):
+            val = row[cp + 1]
+            if val.strip():
+                expr_data[ai, j] = float(val)
+
+# Compute all correlations and track top 30
+import heapq
+top_k = []  # heap of (corr, gene_symbol) for most negative
+
+for j in range(n_genes):
+    e = expr_data[:, j]
+    c = crispr_data[:, j]
+    mask = ~np.isnan(e) & ~np.isnan(c)
+    nv = mask.sum()
+    if nv < 5:
+        continue
+    x = e[mask]
+    y_ess = -c[mask]  # essentiality = -gene_effect
+    corr, _ = spearmanr(x, y_ess)
+    if not np.isnan(corr):
+        gene_sym = common_genes[j].split(' (')[0]
+        heapq.heappush(top_k, (corr, gene_sym, nv))
+        if len(top_k) > 30:
+            heapq.heappop(top_k)
+
+# Sort by correlation (most negative first)
+top_k.sort()
+print("Top 30 genes by most negative Spearman rho(expr, essentiality):")
+for i, (corr, gene, nv) in enumerate(top_k):
+    print(f"  {i+1}. {gene}: rho={corr:.6f}, n={nv}")
+
+PYEOF
+

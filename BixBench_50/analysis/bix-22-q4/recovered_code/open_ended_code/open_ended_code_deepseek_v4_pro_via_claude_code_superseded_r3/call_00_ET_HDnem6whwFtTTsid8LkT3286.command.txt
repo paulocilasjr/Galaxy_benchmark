@@ -1,0 +1,83 @@
+/tmp/myenv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+import sys
+import os
+
+# 1. Load sample annotations and identify CD14 samples
+print("Loading sample annotations...", flush=True)
+samples = pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv')
+cd14_samples = samples[samples['celltype'] == 'CD14']['sample'].tolist()
+print(f"  Found {len(cd14_samples)} CD14 samples", flush=True)
+
+# 2. Load gene metadata, filter to protein_coding
+print("Loading gene metadata...", flush=True)
+gene_meta = pd.read_csv('/workspace/inputs/GeneMetaInfo_Zenodo.csv')
+# Columns: Unnamed: 0, Geneid, Chr, Length, gene_biotype
+gene_meta.columns = ['gene_name', 'Geneid', 'Chr', 'Length', 'gene_biotype']
+print(f"  Gene meta columns: {gene_meta.columns.tolist()}", flush=True)
+print(f"  Total genes in meta: {len(gene_meta)}", flush=True)
+
+pc_genes = gene_meta[gene_meta['gene_biotype'] == 'protein_coding'].copy()
+print(f"  Protein-coding genes: {len(pc_genes)}", flush=True)
+
+# 3. Load expression matrix
+print("Loading expression matrix...", flush=True)
+expr = pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv')
+print(f"  Expression matrix shape: {expr.shape}", flush=True)
+print(f"  First column name: '{expr.columns[0]}'", flush=True)
+
+# Rename first column for clarity
+expr = expr.rename(columns={expr.columns[0]: 'gene_name'})
+
+# 4. Verify CD14 sample names exist in expression matrix
+expr_cols = set(expr.columns)
+missing_cd14 = [s for s in cd14_samples if s not in expr_cols]
+if missing_cd14:
+    print(f"  WARNING: {len(missing_cd14)} CD14 samples not found in expression matrix", flush=True)
+    print(f"  First few missing: {missing_cd14[:5]}", flush=True)
+    cd14_samples = [s for s in cd14_samples if s in expr_cols]
+    print(f"  Using {len(cd14_samples)} CD14 samples found in expression matrix", flush=True)
+else:
+    print(f"  All {len(cd14_samples)} CD14 samples found in expression matrix", flush=True)
+
+# 5. Subset expression to CD14 samples and protein-coding genes
+expr_cd14 = expr[['gene_name'] + cd14_samples].copy()
+print(f"  CD14 expression submatrix shape: {expr_cd14.shape}", flush=True)
+
+# Merge with protein-coding gene info
+merged = pd.merge(pc_genes[['gene_name', 'Length']], expr_cd14, on='gene_name', how='inner')
+print(f"  Merged protein-coding genes with expression: {len(merged)}", flush=True)
+
+# 6. Compute total counts across CD14 samples
+merged['total_counts'] = merged[cd14_samples].sum(axis=1)
+print(f"  Genes with total_counts >= 0: {(merged['total_counts'] >= 0).sum()}", flush=True)
+print(f"  Genes with total_counts > 0: {(merged['total_counts'] > 0).sum()}", flush=True)
+print(f"  Genes with total_counts >= 10: {(merged['total_counts'] >= 10).sum()}", flush=True)
+
+# Filter to expressed genes (total counts >= 10)
+expressed = merged[merged['total_counts'] >= 10].copy()
+print(f"  Expressed protein-coding genes: {len(expressed)}", flush=True)
+
+# 7. Compute mean expression across CD14 samples
+expressed['mean_expression'] = expressed[cd14_samples].mean(axis=1)
+
+# 8. Check for zeros in length
+print(f"  Genes with Length == 0: {(expressed['Length'] == 0).sum()}", flush=True)
+print(f"  Genes with Length > 0: {(expressed['Length'] > 0).sum()}", flush=True)
+print(f"  Length stats: min={expressed['Length'].min()}, max={expressed['Length'].max()}, mean={expressed['Length'].mean():.1f}", flush=True)
+print(f"  Mean expression stats: min={expressed['mean_expression'].min():.4f}, max={expressed['mean_expression'].max():.4f}, mean={expressed['mean_expression'].mean():.4f}", flush=True)
+
+# 9. Compute Pearson correlation
+r, p = pearsonr(expressed['Length'], expressed['mean_expression'])
+print(f"\n  Pearson r = {r}", flush=True)
+print(f"  p-value = {p}", flush=True)
+print(f"  n = {len(expressed)}", flush=True)
+
+# Write answer
+os.makedirs('/workspace/codex_output', exist_ok=True)
+with open('/workspace/codex_output/answer.txt', 'w') as f:
+    f.write(f"{r}\n")
+print(f"\nAnswer written to codex_output/answer.txt: {r}", flush=True)
+PYEOF

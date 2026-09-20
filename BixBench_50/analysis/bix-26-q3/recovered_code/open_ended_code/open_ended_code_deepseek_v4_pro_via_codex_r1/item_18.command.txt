@@ -1,0 +1,90 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, subprocess, math, itertools
+from pathlib import Path
+from collections import defaultdict, OrderedDict
+# R extraction to text file
+r='''
+f <- '/workspace/inputs/res_GluFevsGluFePlus.rds'
+x <- readRDS(f); a <- attributes(x); rn <- a"'$rownames; ld <- a$listData
+up <- rn[ld$log2FoldChange >= 1.5 & ld$padj < 0.05]
+writeLines(up, '"'/workspace/tmp/up_glu.txt')
+'''
+subprocess.run(['Rscript','-e',r], check=True)
+up=set(Path('/workspace/tmp/up_glu.txt').read_text().splitlines())
+print('n up', len(up))
+# Fetch all pathway gene links for pau
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau', timeout=120).read().decode().splitlines()
+path2genes=defaultdict(set)
+gene2paths=defaultdict(set)
+for line in link:
+    if '\\t' not in line: continue
+    g,p=line.split('\\t')
+    # g = pau:PA14_xxxx ; p=path:pauYYYYY
+    gene=g.split(':',1)[1]
+    path=p.split(':',1)[1]  # includes pau02010? from link output path:pau02010, so after ':' = pau02010
+    path2genes[path].add(gene)
+    gene2paths[gene].add(path)
+print('pathways',len(path2genes),'annotated genes',len(gene2paths))
+# all annotated genes in organism universe
+universe=set(gene2paths)
+N=len(universe); n=len(up & universe)
+print('universe',N,'query annotated',n)
+# pathway metadata names
+lst=urllib.request.urlopen('https://rest.kegg.jp/list/pathway/pau', timeout=120).read().decode().splitlines()
+pathname={}
+for line in lst:
+    if '\\t' in line:
+        p,name=line.split('\\t',1)
+        pathname[p]=name
+# hypergeom sf
+def sf(x,N,K,n):
+    # P(X>=x), exact log sum
+    total=math.lgamma(N+1)-math.lgamma(n+1)-math.lgamma(N-n+1)
+    logden=total
+    logs=[]
+    lo=max(0,n-(N-K)); hi=min(n,K)
+    for i in range(x,hi+1):
+        lp=(math.lgamma(K+1)-math.lgamma(i+1)-math.lgamma(K-i+1)) + (math.lgamma(N-K+1)-math.lgamma(n-i+1)-math.lgamma(N-K-(n-i)+1))
+        logs.append(lp-logden)
+    m=max(logs)
+    return math.exp(m)*sum(math.exp(l-m) for l in logs)
+rows=[]
+for path, genes in path2genes.items():
+    K=len(genes)
+    x=len(up & genes)
+    if x==0: continue
+    p=sf(x,N,K,n)
+    rows.append((p,path,x,K,genes))
+# BH over all pathways with at least? clusterProfiler does all pathways in background. Need include x=0? not relevant.
+ps=[r[0] for r in rows]
+ps.sort()
+# BH correction function
+m=len(ps)
+adj=[]
+prev=0
+for i,p in enumerate(ps):
+    val=p*m/(i+1)
+    val=min(1,max(prev,val))
+    adj.append(val); prev=val
+rank_p={p: adj[i] for i,p in enumerate(ps)}
+# print ABC
+for p,path,x,K,genes in rows:
+    if path.endswith('02010'):
+        # get rank and adj
+        i=sorted(ps).index(p)
+        # better map exact rank with duplicates
+        adj_p=min(1,p*m/(sorted(ps).index(p)+1))
+        print('ABC', path, pathname.get(path), 'count',x,'K',K,'p',p,'BH approx',adj_p)
+        print('genes',sorted(up & genes))
+# top significant by BH
+res=[]
+for p,path,x,K,genes in rows:
+    r=next((j+1 for j,q in enumerate(ps) if q==p), None)
+    adjv=p*m/r
+    # this BH ignores ties; approximate
+    res.append((adjv,path,p,x,K))
+res.sort()
+print('top 15:')
+for adjv,path,p,x,K in res[:15]:
+    print(path,pathname.get(path),'count',x,'p',p,'BH',adjv)
+PY"

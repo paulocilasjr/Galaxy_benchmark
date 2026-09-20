@@ -1,0 +1,82 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy
+
+# Inputs
+counts_all = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+mapping = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t')
+ensg_to_symbol = mapping.set_index('ENSG')['gene_name']
+
+# Pre-filter across all 30 samples
+keep_all = (counts_all > 10).any(axis=1)
+
+# Keep only the four related groups for dispersion estimation and the requested contrast
+groups = [
+    'DMSO',
+    'DMSO_Serum_starvation',
+    'Cisplatin_IC50_CBD_IC50',
+    'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h',
+]
+meta = layout[layout['Group'].isin(groups)].copy()
+meta['SampleID'] = meta['SampleID'].str.replace('-', '_', regex=False)
+meta = meta.set_index('SampleID')[['Group']]
+counts_sub = counts_all.loc[keep_all, meta.index]
+
+# pydeseq2 expects samples x genes in this version
+counts_model = counts_sub.T
+dds = DeseqDataSet(
+    counts=counts_model,
+    metadata=meta,
+    design='~Group',
+    n_cpus=4,
+    quiet=True,
+)
+dds.deseq2()
+ds = DeseqStats(
+    dds,
+    contrast=['Group', 'Cisplatin_IC50_CBD_IC50', 'DMSO'],
+    alpha=0.05,
+    n_cpus=4,
+    quiet=True,
+)
+ds.summary()
+res = ds.results_df
+
+sig = res[
+    (res['padj'] <= 0.05)
+    & (res['log2FoldChange'].abs() >= 0.5)
+    & (res['baseMean'] >= 10)
+].copy()
+
+# Map to the gene-symbol namespace required by Reactome_2022/Enrichr.
+symbols = pd.Series(sig.index.map(ensg_to_symbol), index=sig.index)
+symbols = symbols.dropna().astype(str)
+symbols = symbols[symbols.str.len() > 0]
+symbols = pd.Series(symbols.unique())
+
+enr = gseapy.enrichr(
+    gene_list=symbols.tolist(),
+    gene_sets='Reactome_2022',
+    organism='human',
+    outdir=None,
+    no_plot=True,
+)
+results = enr.results
+term = 'TP53 Regulates Transcription Of Cell Cycle Genes R-HSA-6791312'
+row = results.loc[results['Term'] == term].iloc[0]
+odds_ratio = float(row['Odds Ratio'])
+
+print('DEG_count', len(sig))
+print('mapped_foreground_count', len(symbols))
+print('term', row['Term'])
+print('overlap', row['Overlap'])
+print('odds_ratio_repr', repr(row['Odds Ratio']))
+print('odds_ratio_float', odds_ratio)
+
+with open('codex_output/answer.txt', 'w') as f:
+    f.write(f'{odds_ratio:.15g}\\n')
+PY"

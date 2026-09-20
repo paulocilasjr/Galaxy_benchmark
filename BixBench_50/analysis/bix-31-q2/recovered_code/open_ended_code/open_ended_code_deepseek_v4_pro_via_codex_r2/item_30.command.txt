@@ -1,0 +1,29 @@
+/bin/bash -c "python - <<'PY'
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import pandas as pd, numpy as np
+ann=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+metadata=ann[['batch','sex']].copy()
+metadata['batch']=pd.Categorical(metadata['batch'])
+metadata['sex']=pd.Categorical(metadata['sex'], categories=['F','M'])
+# Make deterministic with some sex effect
+rng=np.random.default_rng(0)
+n=len(metadata)
+counts=pd.DataFrame(rng.poisson(20, size=(n,10)), index=metadata.index, columns=[f'g{i}' for i in range(10)])
+# add effect for g0 M vs F
+counts['g0']=rng.poisson(np.where(metadata['sex']=='M',50,10))
+dds=DeseqDataSet(counts=counts, metadata=metadata, design='~batch+sex', quiet=True)
+print('design cols', dds.obsm['design_matrix'].columns.tolist())
+print(dds.obsm['design_matrix'].head())
+print('vars', dds.variables)
+print('contrast', dds.contrast('sex','F','M').to_list())
+dds.deseq2()
+stats=DeseqStats(dds, contrast=['sex','M','F'], quiet=True)
+stats.summary()
+print('results columns', stats.results_df.columns.tolist())
+print('stats LFC columns', stats.LFC.columns.tolist())
+print(stats.results_df[['baseMean','log2FoldChange','lfcSE','stat','pvalue','padj']].head())
+stats.lfc_shrink(coeff='sex[T.M]')
+print(stats.results_df[['baseMean','log2FoldChange','lfcSE','stat','pvalue','padj']].head())
+print('g0 row', stats.results_df.loc['g0'].to_dict())
+PY"

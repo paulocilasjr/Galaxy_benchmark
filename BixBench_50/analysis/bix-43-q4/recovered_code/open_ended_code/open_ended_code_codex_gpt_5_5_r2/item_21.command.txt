@@ -1,0 +1,86 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import pandas as pd
+import numpy as np
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_path='inputs/counts_raw_unfiltered.csv'
+map_path='inputs/ensg_to_gene_name.tsv'
+layout_path='inputs/sample_layout.csv'
+
+counts = pd.read_csv(counts_path, index_col=0)
+counts.index.name = 'ENSG'
+# match sample layout IDs: 3-1 -> 3_1
+layout = pd.read_csv(layout_path)
+layout['count_id'] = layout['SampleID'].str.replace('-', '_', regex=False)
+
+control='DMSO'
+treat='Cisplatin_IC50_CBD_IC50'
+sel = layout[layout['Group'].isin([control, treat])].copy()
+sel = sel.set_index('count_id')
+missing = [s for s in sel.index if s not in counts.columns]
+if missing:
+    raise SystemExit(f'missing count columns: {missing}')
+
+# samples x genes, raw integer counts
+count_df = counts.loc[:, sel.index].T.astype(int)
+metadata = sel[['Group']].rename(columns={'Group':'condition'})
+metadata['condition'] = pd.Categorical(metadata['condition'], categories=[control, treat])
+
+print('selected samples')
+print(metadata['condition'].value_counts())
+print('count matrix', count_df.shape, 'total counts range', int(count_df.sum(axis=1).min()), int(count_df.sum(axis=1).max()))
+
+dds = DeseqDataSet(
+    counts=count_df,
+    metadata=metadata,
+    design='~condition',
+    ref_level=['condition', control],
+    quiet=False,
+    n_cpus=1,
+)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=['condition', treat, control], alpha=0.05, quiet=False, n_cpus=1)
+stat_res.summary()
+res = stat_res.results_df.copy()
+print('results columns', res.columns.tolist())
+print('results shape', res.shape)
+
+# Apply requested thresholds after DE results exist.
+deg = res[(res['padj'] < 0.05) & (res['log2FoldChange'].abs() >= 0.5)].copy()
+print('DEG ENSG count', len(deg))
+
+mapping = pd.read_csv(map_path, sep='\\t', dtype=str)
+# Keep only non-empty mapped gene symbols; de-duplicate for Enrichr foreground.
+deg = deg.reset_index().rename(columns={'index':'ENSG'}).merge(mapping, on='ENSG', how='left')
+deg_symbols = sorted(set(g for g in deg['gene_name'].dropna().astype(str) if g.strip()))
+print('DEG mapped unique symbols', len(deg_symbols))
+print('first symbols', deg_symbols[:20])
+if not deg_symbols:
+    raise SystemExit('No mapped DEGs')
+
+enr = gp.enrichr(
+    gene_list=deg_symbols,
+    gene_sets='Reactome_2022',
+    organism='Human',
+    outdir=None,
+    cutoff=1.0,
+    no_plot=True,
+    verbose=True,
+)
+res_enr = enr.results.copy()
+print('enrich columns', res_enr.columns.tolist())
+print('enrich rows', res_enr.shape)
+term='TP53 Regulates Transcription Of Cell Cycle Genes'
+rows = res_enr[res_enr['Term'].eq(term)]
+if rows.empty:
+    print(res_enr[res_enr['Term'].str.contains('TP53', case=False, na=False)][['Term','Overlap','Adjusted P-value','Genes']].to_string(index=False))
+    raise SystemExit('Term not found exactly')
+print(rows[['Term','Overlap','P-value','Adjusted P-value','Genes']].to_string(index=False))
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w') as f:
+    f.write(str(rows.iloc[0]['Overlap']).strip()+'\\n')
+print('ANSWER', str(rows.iloc[0]['Overlap']).strip())
+PY"

@@ -1,0 +1,74 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess, sys, json, xlrd
+book=xlrd.open_workbook('inputs/pone.0150501.s002.xls')
+s=book.sheet_by_index(0)
+rows=[]
+for r in range(2,s.nrows):
+    name=s.cell_value(r,0)
+    vals=[]
+    for c in range(1,s.ncols):
+        v=s.cell_value(r,c)
+        if isinstance(v,str) and v.strip().upper()=='NAN':
+            vals.append(None)
+        else:
+            vals.append(float(v))
+    rows.append([name, vals[:10], vals[10:20]])
+# Use R for exact base t.test/p.adjust semantics.
+r_code = r'''
+con <- file(\"stdin\")
+obj <- jsonlite::fromJSON(readLines(con, warn=FALSE))
+close(con)
+p_welch <- numeric(length(obj))
+p_student <- numeric(length(obj))
+p_paired <- numeric(length(obj))
+for (i in seq_along(obj)) {
+  p <- unlist(obj[[i]][[2]])
+  c <- unlist(obj[[i]][[3]])
+  p <- as.numeric(p); c <- as.numeric(c)
+  p_welch[i] <- t.test(p, c)"'$p.value
+  p_student[i] <- t.test(p, c, var.equal=TRUE)$p.value
+  good <- !(is.na(p) | is.na(c))
+  p_paired[i] <- t.test(p[good], c[good], paired=TRUE)$p.value
+}
+for (label in c('"'welch','student','paired')) {
+  pv <- get(paste0('p_', label))
+  cat(label, 'raw<=0.05', sum(pv <= 0.05),
+      'bonf', sum(p.adjust(pv, method='bonferroni') <= 0.05),
+      'BY', sum(p.adjust(pv, method='BY') <= 0.05), '\\n')
+}
+'''
+# jsonlite may not exist. If not, use stdin table instead.
+proc = subprocess.run(['Rscript','-e','cat(requireNamespace(\"jsonlite\", quietly=TRUE))'], text=True, capture_output=True)
+if proc.stdout.strip() == 'TRUE':
+    out = subprocess.run(['Rscript','-e',r_code], input=json.dumps(rows), text=True, capture_output=True)
+    print(out.stdout, end='')
+    if out.stderr: print(out.stderr, file=sys.stderr)
+    sys.exit(out.returncode)
+# Fallback: tab-separated rows with semicolon-separated values, NA for missing.
+lines=[]
+for name,p,c in rows:
+    def fmt(xs): return ';'.join('NA' if x is None else repr(x) for x in xs)
+    lines.append(name+'\\t'+fmt(p)+'\\t'+fmt(c))
+r_code2 = r'''
+d <- read.delim('stdin', header=FALSE, sep='\\t', stringsAsFactors=FALSE)
+parsev <- function(x) as.numeric(strsplit(x, ';', fixed=TRUE)[[1]])
+p_welch <- numeric(nrow(d)); p_student <- numeric(nrow(d)); p_paired <- numeric(nrow(d))
+for (i in seq_len(nrow(d))) {
+  p <- parsev(d[i,2]); c <- parsev(d[i,3])
+  p_welch[i] <- t.test(p, c)"'$p.value
+  p_student[i] <- t.test(p, c, var.equal=TRUE)$p.value
+  good <- !(is.na(p) | is.na(c))
+  p_paired[i] <- t.test(p[good], c[good], paired=TRUE)$p.value
+}
+for (label in c('"'welch','student','paired')) {
+  pv <- get(paste0('p_', label))
+  cat(label, 'raw<=0.05', sum(pv <= 0.05),
+      'bonf', sum(p.adjust(pv, method='bonferroni') <= 0.05),
+      'BY', sum(p.adjust(pv, method='BY') <= 0.05), '\\n')
+}
+'''
+out = subprocess.run(['Rscript','-e',r_code2], input='\\n'.join(lines)+'\\n', text=True, capture_output=True)
+print(out.stdout, end='')
+if out.stderr: print(out.stderr, file=sys.stderr)
+sys.exit(out.returncode)
+PY"

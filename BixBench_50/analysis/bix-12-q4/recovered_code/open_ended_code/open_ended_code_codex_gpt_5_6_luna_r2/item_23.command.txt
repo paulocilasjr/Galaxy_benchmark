@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+from collections import Counter
+from zipfile import ZipFile
+
+
+def read_fasta(data):
+    records = []
+    name = None
+    chunks = []
+    for line in data.decode('utf-8').splitlines():
+        if line.startswith('>'):
+            if name is not None:
+                records.append((name, ''.join(chunks)))
+            name = line[1:].strip()
+            chunks = []
+        else:
+            chunks.append(line.strip())
+    if name is not None:
+        records.append((name, ''.join(chunks)))
+    return records
+
+
+def pis_percentage(records):
+    sequences = [seq.upper() for _, seq in records]
+    assert sequences and len({len(seq) for seq in sequences}) == 1
+    informative = 0
+    for column in zip(*sequences):
+        counts = Counter(ch for ch in column if ch not in {'-', '?'})
+        if len(counts) >= 2 and sum(count >= 2 for count in counts.values()) >= 2:
+            informative += 1
+    return informative / len(sequences[0]) * 100.0
+
+
+def read_group(path):
+    values = []
+    with ZipFile(path) as archive:
+        for member in archive.namelist():
+            if member.endswith('.mafft'):
+                values.append(pis_percentage(read_fasta(archive.read(member))))
+    return values
+
+animals = read_group('inputs/scogs_animals.zip')
+fungi = read_group('inputs/scogs_fungi.zip')
+assert len(animals) == 241 and len(fungi) == 255
+# U for the animal sample; direct pair counting is equivalent to midrank U.
+ties = sum(a == f for a in animals for f in fungi)
+less = sum(a > f for a in animals for f in fungi)
+u = less + ties / 2.0
+assert ties == 9640 and less == 2128 and u == 6948.0
+print(f'animal_alignments={len(animals)} fungal_alignments={len(fungi)} ties={ties} greater={less} U={u}')
+PY"

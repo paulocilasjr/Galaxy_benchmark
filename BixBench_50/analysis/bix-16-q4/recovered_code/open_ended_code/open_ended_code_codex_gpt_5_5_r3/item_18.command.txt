@@ -1,0 +1,70 @@
+/bin/bash -lc "Rscript - <<'RS'
+options(stringsAsFactors=FALSE)
+crispr_path <- 'inputs/CRISPRGeneEffect.csv'
+expr_path <- 'inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+model_path <- 'inputs/Model.csv'
+
+cat('Reading Model.csv\\n')
+models <- read.csv(model_path, check.names=FALSE)"'$ModelID
+
+cat('"'Reading CRISPR matrix\\n')
+ge_df <- read.csv(crispr_path, row.names=1, check.names=FALSE)
+cat('Reading expression matrix\\n')
+expr_df <- read.csv(expr_path, row.names=1, check.names=FALSE)
+
+common_models <- intersect(intersect(rownames(ge_df), rownames(expr_df)), models)
+common_genes <- intersect(colnames(ge_df), colnames(expr_df))
+cat('shared models', length(common_models), '\\n')
+cat('shared genes', length(common_genes), '\\n')
+
+# Align observations and same-gene features. Essentiality is positive-going dependency strength.
+X <- as.matrix(expr_df[common_models, common_genes, drop=FALSE])
+Y <- -as.matrix(ge_df[common_models, common_genes, drop=FALSE])
+rm(ge_df, expr_df); invisible(gc())
+
+n_genes <- ncol(X)
+rho <- rep(NA_real_, n_genes)
+pval <- rep(NA_real_, n_genes)
+nobs <- integer(n_genes)
+
+# Pairwise-complete Spearman. This keeps genes with occasional missing values instead of dropping whole rows globally.
+for (j in seq_len(n_genes)) {
+  x <- X[, j]
+  y <- Y[, j]
+  ok <- is.finite(x) & is.finite(y)
+  n <- sum(ok)
+  nobs[j] <- n
+  if (n >= 3L) {
+    rx <- rank(x[ok], ties.method='average')
+    ry <- rank(y[ok], ties.method='average')
+    sx <- sd(rx)
+    sy <- sd(ry)
+    if (is.finite(sx) && is.finite(sy) && sx > 0 && sy > 0) {
+      r <- cor(rx, ry)
+      rho[j] <- r
+      if (is.finite(r)) {
+        if (abs(r) >= 1) {
+          pval[j] <- 0
+        } else {
+          tstat <- r * sqrt((n - 2) / (1 - r*r))
+          pval[j] <- 2 * pt(-abs(tstat), df=n-2)
+        }
+      }
+    }
+  }
+  if (j %% 2000L == 0L) cat('processed', j, 'genes\\n')
+}
+
+tested <- is.finite(pval)
+qval <- rep(NA_real_, n_genes)
+qval[tested] <- p.adjust(pval[tested], method='BH')
+sig <- tested & qval < 0.05
+pct <- 100 * sum(sig) / sum(tested)
+cat('tested', sum(tested), '\\n')
+cat('significant', sum(sig), '\\n')
+cat('percent', format(pct, digits=15), '\\n')
+cat('min_nobs', min(nobs[tested]), 'max_nobs', max(nobs[tested]), '\\n')
+cat('pos_sig', sum(sig & rho > 0), 'neg_sig', sum(sig & rho < 0), '\\n')
+dir.create('codex_output', showWarnings=FALSE)
+writeLines(paste0(format(pct, digits=15, scientific=FALSE, trim=TRUE), '%'), 'codex_output/answer.txt')
+RS"

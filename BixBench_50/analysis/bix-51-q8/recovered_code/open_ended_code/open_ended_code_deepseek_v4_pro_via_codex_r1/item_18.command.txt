@@ -1,0 +1,30 @@
+/bin/bash -c "python3 - <<'PY'
+import openpyxl, numpy as np
+from scipy.optimize import minimize
+p='/workspace/inputs/data.xlsx'
+wb=openpyxl.load_workbook(p,data_only=True,read_only=True); ws=wb.active; rows=list(ws.iter_rows(values_only=True)); h=rows[0]
+D=[dict(zip(h,r)) for r in rows[1:] if isinstance(r[3],(int,float))]
+x=np.array([d['Age'] for d in D],float)
+y=np.array([1 if d['Efficacy']=='PR' else 0 for d in D],float)
+X=np.column_stack([np.ones(len(x)), x])
+# scipy optimize minimize neg ll
+def negll(b):
+    eta=X@b
+    return -np.sum(y*eta - np.logaddexp(0,eta))
+res=minimize(negll, [0,0], method='BFGS', options={'gtol':1e-14})
+print('n',len(x))
+print('beta',repr(res.x[0]),repr(res.x[1]))
+# statsmodels full precision
+import statsmodels.api as sm
+m=sm.Logit(y, X).fit(disp=0)
+print('statsmodels params',repr(m.params[0]),repr(m.params[1]))
+print('statsmodels bse',repr(m.bse[0]),repr(m.bse[1]))
+print('llf',repr(m.llf))
+# covariance-based standard error from Hessian analytic
+p=1/(1+np.exp(-X@res.x))
+W=p*(1-p)
+H=X.T@(W[:,None]*X)
+cov=np.linalg.inv(H)
+print('scipy se',repr(np.sqrt(cov[1,1])))
+print('odds ratio',repr(np.exp(res.x[1])))
+PY"

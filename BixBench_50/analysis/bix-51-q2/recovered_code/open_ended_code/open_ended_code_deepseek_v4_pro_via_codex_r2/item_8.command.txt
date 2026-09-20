@@ -1,0 +1,66 @@
+/bin/bash -c "python - <<'PY'
+import math, openpyxl
+wb=openpyxl.load_workbook('/workspace/inputs/data.xlsx', read_only=True, data_only=True)
+ws=wb['Sheet1']
+rows=list(ws.iter_rows(values_only=True))
+# header row 0, data rows after
+y=[]; x=[]
+for r in rows[1:]:
+    grp=r[1]; eff=r[2]; bmi=r[10]
+    if eff in ('PR','SD','PD') and bmi is not None:
+        y.append(1 if eff=='PR' else 0)
+        x.append(float(bmi))
+print(len(y), sum(y), sum(1 for v in y if v==0), min(x), max(x))
+# MLE newton
+n=len(y)
+b0=0.0; b1=0.0
+for it in range(100):
+    # compute p, gradient hessian
+    grad0=0; grad1=0; h00=0; h01=0; h11=0; ll=0
+    for yi, xi in zip(y,x):
+        eta=b0+b1*xi
+        # p logistic stable
+        if eta>=0:
+            p=1/(1+math.exp(-eta))
+        else:
+            e=math.exp(eta); p=e/(1+e)
+        # clip p
+        p=max(1e-15,min(1-1e-15,p))
+        # ll contribution
+        ll += yi*math.log(p)+(1-yi)*math.log(1-p)
+        d=yi-p
+        grad0 += d
+        grad1 += d*xi
+        w=p*(1-p)
+        h00 += w
+        h01 += w*xi
+        h11 += w*xi*xi
+    # solve 2x2 Hessian invert
+    det=h00*h11-h01*h01
+    if abs(det)<1e-15:
+        break
+    db0=(h11*grad0-h01*grad1)/det
+    db1=(-h01*grad0+h00*grad1)/det
+    b0 += db0; b1 += db1
+    if max(abs(db0),abs(db1))<1e-12:
+        print('converged',it)
+        break
+# recompute final ll
+ll=0
+for yi,xi in zip(y,x):
+    eta=b0+b1*xi
+    if eta>=0: p=1/(1+math.exp(-eta))
+    else: e=math.exp(eta); p=e/(1+e)
+    p=max(1e-15,min(1-1e-15,p))
+    ll += yi*math.log(p)+(1-yi)*math.log(1-p)
+k=2
+aic=-2*ll+2*k
+print('b0,b1',b0,b1)
+print('ll',ll)
+print('AIC',aic)
+# null ll for reference
+p0=sum(y)/n
+ll0=sum(y)*math.log(p0)+sum(1-yi for yi in y)*math.log(1-p0)
+print('null ll', ll0, 'null AIC',-2*ll0+2)
+print('deviance', -2*ll, 2*(ll-ll0))
+PY"

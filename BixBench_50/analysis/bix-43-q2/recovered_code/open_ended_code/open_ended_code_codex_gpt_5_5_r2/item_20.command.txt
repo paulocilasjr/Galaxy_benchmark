@@ -1,0 +1,116 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import numpy as np
+import pandas as pd
+
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts_path = 'inputs/counts_raw_unfiltered.csv'
+layout_path = 'inputs/sample_layout.csv'
+map_path = 'inputs/ensg_to_gene_name.tsv'
+
+related_groups = [
+    'DMSO',
+    'DMSO_Serum_starvation',
+    'Cisplatin_IC50_CBD_IC50',
+    'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h',
+]
+
+target_term_hint = 'p53-mediated regulation of cell cycle genes'
+
+counts_all = pd.read_csv(counts_path, index_col=0)
+counts_all.columns = [str(c) for c in counts_all.columns]
+counts_all = counts_all.astype(int)
+
+# Stated prefilter: genes with counts > 10 in at least one of all 30 samples.
+prefilter_mask = (counts_all > 10).any(axis=1)
+counts_pref = counts_all.loc[prefilter_mask].copy()
+print(f'prefiltered_genes={counts_pref.shape[0]}')
+
+layout = pd.read_csv(layout_path)
+layout['sample_col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout[layout['Group'].isin(related_groups)].copy()
+missing = sorted(set(layout['sample_col']) - set(counts_pref.columns))
+if missing:
+    raise RuntimeError(f'Missing sample columns: {missing}')
+layout = layout.set_index('sample_col').loc[[c for c in counts_pref.columns if c in set(layout['sample_col'])]]
+layout['Group'] = pd.Categorical(layout['Group'], categories=related_groups)
+
+counts_model = counts_pref.loc[:, layout.index].T
+print(f'model_samples={counts_model.shape[0]} model_genes={counts_model.shape[1]}')
+print(layout['Group'].value_counts().sort_index().to_dict())
+
+dds = DeseqDataSet(
+    counts=counts_model,
+    metadata=layout[['Group']],
+    design='~Group',
+    ref_level=['Group', 'DMSO'],
+    n_cpus=4,
+    quiet=False,
+)
+dds.deseq2()
+
+stat_res = DeseqStats(
+    dds,
+    contrast=['Group', 'Cisplatin_IC50_CBD_IC50', 'DMSO'],
+    alpha=0.05,
+    n_cpus=4,
+    quiet=False,
+)
+stat_res.summary()
+res = stat_res.results_df.copy()
+print(res.head())
+
+sig = res[
+    (res['baseMean'] >= 10) &
+    (res['padj'].notna()) &
+    (res['padj'] <= 0.05) &
+    (res['log2FoldChange'].abs() >= 0.5)
+].copy()
+print(f'sig_ensg={sig.shape[0]}')
+
+mapping = pd.read_csv(map_path, sep='\\t', dtype=str)
+mapping = mapping.dropna(subset=['ENSG', 'gene_name'])
+# Preserve one-to-one gene symbols for enrichment; duplicate symbols would otherwise overweight a gene.
+ensg_to_symbol = mapping.drop_duplicates('ENSG').set_index('ENSG')['gene_name']
+
+background_symbols = pd.Index(counts_pref.index).map(ensg_to_symbol).dropna()
+background_symbols = sorted(set(str(x) for x in background_symbols if str(x) and str(x) "'!= '"'nan'))
+foreground_symbols = pd.Index(sig.index).map(ensg_to_symbol).dropna()
+foreground_symbols = sorted(set(str(x) for x in foreground_symbols if str(x) and str(x) "'!= '"'nan'))
+print(f'foreground_symbols={len(foreground_symbols)} background_symbols={len(background_symbols)}')
+
+if not foreground_symbols:
+    raise RuntimeError('No foreground symbols after mapping')
+
+# Download the requested library and run GSEApy ORA with the eligible universe.
+gene_sets = gp.get_library(name='Reactome_2022', organism='Human')
+matching_terms = [term for term in gene_sets if target_term_hint.lower() in term.lower()]
+print('matching_terms=', matching_terms)
+
+enr = gp.enrichr(
+    gene_list=foreground_symbols,
+    gene_sets=gene_sets,
+    organism='Human',
+    background=background_symbols,
+    outdir=None,
+    cutoff=1.0,
+    no_plot=True,
+    verbose=False,
+)
+results = enr.results.copy()
+print(results.columns.tolist())
+term_rows = results[results['Term'].str.contains(target_term_hint, case=False, regex=False, na=False)]
+print(term_rows.to_string(index=False))
+if term_rows.shape[0] "'!= 1:
+    raise RuntimeError(f'"'Expected exactly one matching term, found {term_rows.shape[0]}')
+
+odds = term_rows.iloc[0]['Odds Ratio']
+# Write only after successful computation.
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', encoding='utf-8') as f:
+    f.write(format(float(odds), '.12g') + '\\n')
+print('ANSWER', format(float(odds), '.12g'))
+PY"

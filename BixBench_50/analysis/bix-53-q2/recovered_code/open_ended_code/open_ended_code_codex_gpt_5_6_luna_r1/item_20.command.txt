@@ -1,0 +1,25 @@
+/bin/bash -lc "PYTHONPATH=/workspace/tmp/py python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('/workspace/inputs/count.csv')
+counts_all = raw.set_index('geneID').T
+metadata_all = pd.DataFrame({'condition': ['KL','KL','KL','WL','WL','WL']}, index=counts_all.index)
+print('counts', counts_all.shape, 'metadata', metadata_all.to_dict('list'))
+dds = DeseqDataSet(counts=counts_all, metadata=metadata_all, design='~condition', quiet=True, n_cpus=2)
+print('created', dds.shape)
+dds.deseq2()
+print('fit done', dds.shape, 'nonzero', len(dds.non_zero_genes), 'design columns', dds.obsm['design_matrix'].columns.tolist(), 'LFC columns', dds.varm['LFC'].columns.tolist())
+st = DeseqStats(dds, contrast=['condition','KL','WL'], quiet=True, n_cpus=2)
+st.summary()
+print('summary done', st.results_df.head())
+print('pre shrink p', st.results_df['pvalue'].notna().sum(), 'baseMean range', st.results_df.baseMean.min(), st.results_df.baseMean.max())
+st.lfc_shrink(coeff=st.LFC.columns[1], adapt=True)
+print('shrink done', st.results_df.head(), 'shrunk', st.shrunk_LFCs)
+r=st.results_df
+print('counts threshold raw p', ((r.pvalue < .05)&(r.baseMean>10)&(r.log2FoldChange.abs()>1)).sum())
+print('raw p breakdown', ((r.pvalue < .05)&(r.baseMean>10)&(r.log2FoldChange>1)).sum(), ((r.pvalue<.05)&(r.baseMean>10)&(r.log2FoldChange < -1)).sum())
+print('padj threshold', ((r.padj < .05)&(r.baseMean>10)&(r.log2FoldChange.abs()>1)).sum())
+print('p values range', r.pvalue.min(), r.pvalue.max(), 'padj', r.padj.min(), r.padj.max())
+PY"

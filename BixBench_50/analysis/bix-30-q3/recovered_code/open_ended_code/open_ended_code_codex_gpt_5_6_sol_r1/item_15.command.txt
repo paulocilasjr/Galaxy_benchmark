@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import ttest_ind, ttest_rel
+from statsmodels.stats.multitest import multipletests
+p='inputs/pone.0150501.s002.xls'; d=pd.read_excel(p,header=1); d=d.rename(columns={d.columns[0]:'miRNA'}).set_index('miRNA').apply(pd.to_numeric,errors='coerce')
+cols=[c for c in d if c not in ['P_3','C_18']]; P=[c for c in cols if c[0]=='P'];C=[c for c in cols if c[0]=='C']
+for meanmode in ['lt34','all','le34','raw_ct']:
+ means=d[cols].where(d[cols]<34).mean() if meanmode=='lt34' else d[cols].where(d[cols]<=34).mean() if meanmode=='le34' else d[cols].mean()
+ for mask in ['lt34','none']:
+  x=d[cols].where(d[cols]<34) if mask=='lt34' else d[cols]
+  z=x if meanmode=='raw_ct' else means-x
+  for test in ['equal','welch','paired']:
+   ps=[]
+   for _,r in z.iterrows():
+    if test=='paired':
+     a=r[P].values; b=r[C].values; ok=np.isfinite(a)&np.isfinite(b); a=a[ok];b=b[ok]
+     pv=ttest_rel(a,b).pvalue if len(a)>=2 else np.nan
+    else:
+     a=r[P].dropna();b=r[C].dropna();pv=ttest_ind(a,b,equal_var=test=='equal').pvalue if len(a)>=2 and len(b)>=2 else np.nan
+    ps.append(pv)
+   ps=np.array(ps); ok=np.isfinite(ps); bon=multipletests(ps[ok],method='bonferroni')[1]; by=multipletests(ps[ok],method='fdr_by')[1]
+   print(meanmode,mask,test,'n',ok.sum(),'raw',sum(ps<=.05),'bon',sum(bon<=.05),'by',sum(by<=.05),'min',np.nanmin(ps),'gene',d.index[np.nanargmin(ps)])
+PY"

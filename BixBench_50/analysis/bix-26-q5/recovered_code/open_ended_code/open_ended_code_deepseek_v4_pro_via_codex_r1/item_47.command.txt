@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, os
+from scipy.stats import hypergeom
+
+def read_csv(p): 
+ d=pd.read_csv(p); d.padj=pd.to_numeric(d.padj,errors='coerce'); d.log2FoldChange=pd.to_numeric(d.log2FoldChange,errors='coerce'); return d
+# parse mapping
+link=open('/tmp/kegg_link_pathway_pau.txt').read().splitlines(); names=open('/tmp/kegg_list_pathway_pau.txt').read().splitlines()
+rows=[]
+for line in link:
+ parts=line.split('\\t');
+ if len(parts)>=2: rows.append((parts[1].split(':',1)[-1],parts[0].split(':',1)[-1]))
+p2g=pd.DataFrame(rows,columns=['path','gene']).drop_duplicates()
+p2n={l.split('\\t')[0]:l.split('\\t',1)[1] for l in names if '\\t' in l}
+p2g=p2g[p2g.path.isin(p2n)]
+def rbh(p):
+ p=np.asarray(p,float); n=len(p); i=np.arange(n,0,-1); o=np.argsort(p,kind='stable')[::-1]; ro=np.argsort(o,kind='stable'); return np.minimum(1,np.minimum.accumulate((n/i)*p[o]))[ro]
+def ora(genes, universe=None):
+ genes=list(dict.fromkeys(str(g) for g in genes)); g2p=p2g.groupby('gene')['path'].apply(list).to_dict(); qmap={g:g2p[g] for g in genes if g in g2p}
+ if not qmap:return None
+ rows=[]
+ for g,ps in qmap.items():
+  for path in ps: rows.append((path,g))
+ df=pd.DataFrame(rows,columns=['path','gene']).drop_duplicates(); q2e={p:list(grp.gene) for p,grp in df.groupby('path')}
+ extID=list(dict.fromkeys(p2g.gene))
+ if universe is not None: extID=[g for g in extID if g in universe]
+ q2e={p:[g for g in gs if g in extID] for p,gs in q2e.items()}
+ qterms=list(q2e.keys()); t2e={p:[g for g in p2g.loc[p2g.path==p,'gene'] if g in extID] for p in qterms}
+ qterms=[p for p in qterms if 10<=len(t2e[p])<=500]; q2e={p:q2e[p] for p in qterms}; t2e={p:t2e[p] for p in qterms}
+ qterms=list(dict.fromkeys(q2e.keys()))
+ if not qterms:return None
+ k=np.array([len(q2e[p]) for p in qterms]); M=np.array([len(t2e[p]) for p in qterms]); N=len(extID); n=len(qmap)
+ pv=np.array([hypergeom.sf(kk-1,N,mm,n) for kk,mm in zip(k,M)]); adj=rbh(pv)
+ return set(pd.DataFrame({'ID':qterms,'p.adjust':adj})[lambda x:x['p.adjust']<0.05].ID)
+for universe_name, universe in [('kegg_default',None),('all_5828',pd.read_csv('/workspace/res_GluFevsGluFePlus.csv').gene.tolist())]:
+ print('\\nuniverse',universe_name)
+ sets={}
+ for label,file in [('GluFe','/workspace/res_GluFevsGluFePlus.csv'),('Succ','/workspace/res_SuccvsGluFePlus.csv')]:
+  d=read_csv(file); genes=d[(d.log2FoldChange.abs()>1.5)&(d.padj<0.05)].gene.tolist(); sets[label]=ora(genes, universe)
+  print(label, sorted(sets[label]))
+ print('GluFe not Succ',len(sets['GluFe']-sets['Succ']), sorted(sets['GluFe']-sets['Succ']))
+ print('Succ not GluFe',len(sets['Succ']-sets['GluFe']), sorted(sets['Succ']-sets['GluFe']))
+PY"

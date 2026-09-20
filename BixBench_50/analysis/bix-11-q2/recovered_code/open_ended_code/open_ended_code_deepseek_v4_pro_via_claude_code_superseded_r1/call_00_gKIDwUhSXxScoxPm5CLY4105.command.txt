@@ -1,0 +1,176 @@
+python3 << 'PYEOF'
+import os, re
+
+# Check if mldist values differ from tree-based patristic distances
+gene_id = '1001705at2759'
+
+# Parse tree - simple Newick parser for these small trees
+tree_str = open(f"{gene_id}.faa.mafft.clipkit.treefile").read().strip()
+print(f"Tree: {tree_str}")
+
+# Compute patristic distances from tree
+# Simple approach: parse Newick, build adjacency
+# Format: (A:len1,B:len2):len3 or (A:len1,(B:len2,C:len3):len4):len5
+
+def parse_newick(s):
+    """Simple recursive Newick parser, returns (taxa_dict, root_node)"""
+    s = s.strip().rstrip(';')
+    # Map node IDs to names
+    nodes = {}
+    
+    def parse_node(i):
+        """Parse from position i, returns (node_id, next_position)"""
+        if s[i] == '(':
+            # Internal node
+            i += 1  # skip '('
+            children = []
+            while True:
+                child_id, i = parse_node(i)
+                children.append(child_id)
+                if s[i] == ',':
+                    i += 1
+                elif s[i] == ')':
+                    i += 1
+                    break
+            # Read branch length if present
+            length = 0.0
+            if i < len(s) and (s[i] == ':' or s[i].isdigit() or s[i] == '.'):
+                if s[i] == ':':
+                    i += 1
+                j = i
+                while j < len(s) and (s[j].isdigit() or s[j] == '.' or s[j] == '-' or s[j] == 'e' or s[j] == 'E' or s[j] == '+' or s[j] == '-'):
+                    j += 1
+                if j > i:
+                    length = float(s[i:j])
+                    i = j
+            # Return length and children as a tuple
+            node_id = len(nodes)
+            nodes[node_id] = {'children': children, 'length': length, 'name': None}
+            return node_id, i
+        else:
+            # Leaf node - read name
+            j = i
+            while j < len(s) and s[j] not in ':),;':
+                j += 1
+            name = s[i:j]
+            i = j
+            length = 0.0
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and (s[j].isdigit() or s[j] == '.' or s[j] == '-' or s[j] == 'e' or s[j] == 'E' or s[j] == '+'):
+                    j += 1
+                if j > i:
+                    length = float(s[i:j])
+                    i = j
+            node_id = len(nodes)
+            nodes[node_id] = {'children': [], 'length': length, 'name': name}
+            return node_id, i
+    
+    root_id, _ = parse_node(0)
+    return nodes, root_id
+
+def get_leaf_names(nodes, root_id):
+    """Get all leaf names under root"""
+    leaves = []
+    def dfs(node_id, path_len):
+        node = nodes[node_id]
+        if node['name'] is not None:
+            leaves.append((node['name'], path_len))
+        for child_id in node['children']:
+            dfs(child_id, path_len + nodes[child_id]['length'])
+    dfs(root_id, 0)
+    return leaves
+
+def compute_patristic(nodes, root_id):
+    """Compute all pairwise patristic distances"""
+    # First collect all leaf paths from root
+    leaf_paths = {}
+    def collect_paths(node_id, path_to_here):
+        node = nodes[node_id]
+        if node['name'] is not None:
+            leaf_paths[node['name']] = path_to_here + [node_id]
+        for child_id in node['children']:
+            collect_paths(child_id, path_to_here + [node_id])
+    collect_paths(root_id, [])
+    
+    # Build distance matrix
+    leaf_names = sorted(leaf_paths.keys())
+    n = len(leaf_names)
+    dists = {}
+    
+    # For each pair, find LCA and compute distance
+    for i in range(n):
+        for j in range(i+1, n):
+            name1, name2 = leaf_names[i], leaf_names[j]
+            path1 = leaf_paths[name1]
+            path2 = leaf_paths[name2]
+            
+            # Find LCA index
+            lca_idx = 0
+            while lca_idx < min(len(path1), len(path2)) and path1[lca_idx] == path2[lca_idx]:
+                lca_idx += 1
+            lca_idx -= 1  # Last common
+            
+            # Sum branch lengths from node to LCA
+            dist = 0.0
+            # From leaf1 to LCA
+            for k in range(len(path1)-1, lca_idx, -1):
+                dist += nodes[path1[k]]['length']
+            # From LCA to leaf2
+            for k in range(lca_idx+1, len(path2)):
+                dist += nodes[path2[k]]['length']
+            
+            dists[(name1, name2)] = dist
+    
+    return dists, leaf_names
+
+nodes, root_id = parse_newick(tree_str)
+patristic_dists, leaf_names = compute_patristic(nodes, root_id)
+
+print(f"\nTree patristic distances:")
+for (n1, n2), d in sorted(patristic_dists.items()):
+    print(f"  {n1} - {n2}: {d:.6f}")
+
+# Now compare with mldist
+with open(f"{gene_id}.faa.mafft.clipkit.mldist") as f:
+    n = int(f.readline().strip())
+    mldist_order = []
+    mldist_matrix = []
+    for i in range(n):
+        parts = f.readline().strip().split()
+        mldist_order.append(parts[0])
+        mldist_matrix.append([float(x) for x in parts[1:]])
+
+print(f"\nML distances from mldist file:")
+for i in range(n):
+    for j in range(i+1, n):
+        print(f"  {mldist_order[i]} - {mldist_order[j]}: {mldist_matrix[i][j]:.6f}")
+
+print(f"\nComparison (mldist vs tree patristic):")
+for i in range(n):
+    for j in range(i+1, n):
+        n1, n2 = mldist_order[i], mldist_order[j]
+        # The leaf names in the tree might differ
+        # Let's just print all
+        pass
+
+# Let's print both for comparison
+print(f"\nTree leaves: {leaf_names}")
+print(f"mldist order: {mldist_order}")
+
+# Compare distances
+for i in range(n):
+    for j in range(i+1, n):
+        n1, n2 = mldist_order[i], mldist_order[j]
+        md = mldist_matrix[i][j]
+        # Find tree distance
+        td = patristic_dists.get((n1, n2))
+        if td is None:
+            td = patristic_dists.get((n2, n1))
+        if td is not None:
+            print(f"  {n1} - {n2}: mldist={md:.6f}, tree_patristic={td:.6f}, diff={md-td:.6f}")
+        else:
+            print(f"  {n1} - {n2}: mldist={md:.6f}, tree_patristic=NOT_FOUND")
+
+PYEOF

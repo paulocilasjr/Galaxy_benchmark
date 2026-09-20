@@ -1,0 +1,126 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, time, os
+from pathlib import Path
+import numpy as np
+
+crispr_path = Path('inputs/CRISPRGeneEffect.csv')
+expr_path = Path('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+
+start = time.time()
+
+def read_header_and_ids(path):
+    with path.open(newline='') as f:
+        r = csv.reader(f)
+        header = next(r)[1:]
+        ids = [row[0] for row in r]
+    return header, ids
+
+crispr_header, crispr_ids = read_header_and_ids(crispr_path)
+expr_header, expr_ids = read_header_and_ids(expr_path)
+expr_feature_set = set(expr_header)
+common_features = [h for h in crispr_header if h in expr_feature_set]
+common_model_set = set(crispr_ids).intersection(expr_ids)
+common_models = [m for m in crispr_ids if m in common_model_set]
+model_to_i = {m:i for i,m in enumerate(common_models)}
+
+crispr_pos = {h:i+1 for i,h in enumerate(crispr_header)}
+expr_pos = {h:i+1 for i,h in enumerate(expr_header)}
+crispr_cols = [crispr_pos[h] for h in common_features]
+expr_cols = [expr_pos[h] for h in common_features]
+
+n_models = len(common_models)
+n_features = len(common_features)
+print('common_models', n_models, 'common_features', n_features, 'setup_s', round(time.time()-start, 2), flush=True)
+
+expr = np.empty((n_models, n_features), dtype=np.float64)
+ge = np.empty((n_models, n_features), dtype=np.float64)
+expr.fill(np.nan)
+ge.fill(np.nan)
+
+def parse_selected(row, cols):
+    out = np.empty(len(cols), dtype=np.float64)
+    for k, c in enumerate(cols):
+        s = row[c]
+        out[k] = float(s) if s else np.nan
+    return out
+
+loaded = 0
+with crispr_path.open(newline='') as f:
+    r = csv.reader(f)
+    next(r)
+    for row in r:
+        i = model_to_i.get(row[0])
+        if i is not None:
+            ge[i, :] = parse_selected(row, crispr_cols)
+            loaded += 1
+print('loaded crispr', loaded, 's', round(time.time()-start, 2), flush=True)
+
+loaded = 0
+with expr_path.open(newline='') as f:
+    r = csv.reader(f)
+    next(r)
+    for row in r:
+        i = model_to_i.get(row[0])
+        if i is not None:
+            expr[i, :] = parse_selected(row, expr_cols)
+            loaded += 1
+print('loaded expr', loaded, 's', round(time.time()-start, 2), flush=True)
+
+print('nan expr', int(np.isnan(expr).sum()), 'nan ge', int(np.isnan(ge).sum()), flush=True)
+
+def rank_1d_no_nan(v):
+    n = v.size
+    order = np.argsort(v, kind='mergesort')
+    sv = v[order]
+    ranks = np.empty(n, dtype=np.float64)
+    i = 0
+    while i < n:
+        j = i + 1
+        # Exact equality is appropriate for CSV-decoded expression ties such as repeated zero values.
+        while j < n and sv[j] == sv[i]:
+            j += 1
+        avg = (i + 1 + j) / 2.0
+        ranks[order[i:j]] = avg
+        i = j
+    return ranks
+
+best_dep = (math.inf, None, None)  # most negative rho for biological essentiality = -gene effect
+best_raw = (math.inf, None, None)  # most negative rho for raw gene effect, diagnostic only
+valid = 0
+for j, label in enumerate(common_features):
+    x0 = expr[:, j]
+    ge0 = ge[:, j]
+    mask = np.isfinite(x0) & np.isfinite(ge0)
+    n = int(mask.sum())
+    if n < 3:
+        continue
+    x = x0[mask]
+    raw_y = ge0[mask]
+    rx = rank_1d_no_nan(x)
+    # biological essentiality/dependency strength is positive-going relative to DepMap gene-effect scores
+    ry_dep = rank_1d_no_nan(-raw_y)
+    ry_raw = rank_1d_no_nan(raw_y)
+    rx -= rx.mean()
+    ry_dep -= ry_dep.mean()
+    ry_raw -= ry_raw.mean()
+    ssx = float(np.dot(rx, rx))
+    ssd = float(np.dot(ry_dep, ry_dep))
+    ssr = float(np.dot(ry_raw, ry_raw))
+    if ssx == 0 or ssd == 0:
+        continue
+    rho_dep = float(np.dot(rx, ry_dep) / math.sqrt(ssx * ssd))
+    rho_raw = float(np.dot(rx, ry_raw) / math.sqrt(ssx * ssr)) if ssr else math.nan
+    valid += 1
+    if rho_dep < best_dep[0]:
+        best_dep = (rho_dep, label, n)
+    if not math.isnan(rho_raw) and rho_raw < best_raw[0]:
+        best_raw = (rho_raw, label, n)
+    if (j + 1) % 2000 == 0:
+        print('processed', j + 1, 'best_dep', best_dep, 'elapsed_s', round(time.time()-start, 2), flush=True)
+
+print('valid', valid)
+print('best_dependency_strength_negative_spearman', best_dep)
+print('best_raw_gene_effect_negative_spearman', best_raw)
+# Independent consistency: raw correlation should be exact sign inverse of dependency for monotone negation.
+print('elapsed_s', round(time.time()-start, 2))
+PY"

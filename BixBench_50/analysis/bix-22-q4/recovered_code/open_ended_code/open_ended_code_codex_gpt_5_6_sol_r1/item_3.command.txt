@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+from pathlib import Path
+p=Path('inputs')
+ann=pd.read_csv(p/'Sample_annotated_Zenodo.csv')
+meta=pd.read_csv(p/'GeneMetaInfo_Zenodo.csv', index_col=0)
+counts=pd.read_csv(p/'BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+print('shapes ann/meta/counts',ann.shape,meta.shape,counts.shape)
+print('ann celltype counts',ann['celltype'].value_counts(dropna=False).to_dict())
+print('sample unique',ann['sample'].is_unique,'count columns unique',counts.columns.is_unique)
+print('sample sets counts-ann',len(set(counts.columns)-set(ann['sample'])),len(set(ann['sample'])-set(counts.columns)))
+print('gene indices unique meta/counts',meta.index.is_unique,counts.index.is_unique)
+print('gene set counts-meta',len(set(counts.index)-set(meta.index)),len(set(meta.index)-set(counts.index)))
+print('meta geneid match index', (meta.index.astype(str)==meta.Geneid.astype(str)).value_counts().to_dict())
+print('biotypes top',meta.gene_biotype.value_counts().head(10).to_dict())
+print('missing meta',meta[['Length','gene_biotype']].isna().sum().to_dict())
+cd14=ann.loc[ann.celltype.eq('CD14'),'sample'].tolist()
+print('CD14 n',len(cd14),'all present',set(cd14)<=set(counts.columns))
+x=counts[cd14]
+print('selected missing cells',int(x.isna().sum().sum()),'min max',x.min().min(),x.max().max(),'negative',int((x<0).sum().sum()))
+pc=meta.index[meta.gene_biotype.eq('protein_coding')]
+df=pd.DataFrame({'Length':meta.loc[pc,'Length'], 'mean':x.reindex(pc).mean(axis=1), 'total':x.reindex(pc).sum(axis=1), 'alltotal':counts.reindex(pc).sum(axis=1)})
+for label,mask in [('cd14_total_ge10',df.total.ge(10)),('all_total_ge10',df.alltotal.ge(10)),('cd14_any_ge10',(x.reindex(pc)>=10).any(axis=1)),('all_pc',pd.Series(True,index=df.index))]:
+    d=df.loc[mask,['Length','mean']].dropna()
+    print(label,'n',len(d),'r scipy',repr(pearsonr(d.Length,d['mean']).statistic),'r numpy',repr(np.corrcoef(d.Length,d['mean'])[0,1]),'mean range',d['mean'].min(),d['mean'].max())
+print('cd14 total excluded',int((df.total<10).sum()),'equals mean*n maxerr',float((df['total']-df['mean']*len(cd14)).abs().max()))
+print('length dtype/range',df.Length.dtype,df.Length.min(),df.Length.max())
+PY"

@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess, json
+s=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+headers=s.row_values(1)
+P=[i for i,h in enumerate(headers) if isinstance(h,str) and h.startswith('P_')]
+C=[i for i,h in enumerate(headers) if isinstance(h,str) and h.startswith('C_')]
+lines=['ps_w <- c(); ps_s <- c(); ps_paired <- c(); names <- c()']
+for r in range(2,s.nrows):
+    name=s.cell_value(r,0)
+    a=[s.cell_value(r,c) for c in P if isinstance(s.cell_value(r,c),float)]
+    b=[s.cell_value(r,c) for c in C if isinstance(s.cell_value(r,c),float)]
+    ap=[]; bp=[]
+    for pc,cc in zip(P,C):
+        av=s.cell_value(r,pc); bv=s.cell_value(r,cc)
+        if isinstance(av,float) and isinstance(bv,float):
+            ap.append(av); bp.append(bv)
+    fmt=lambda xs:'c('+','.join(format(x,'.15g') for x in xs)+')'
+    lines.append(f'names <- c(names, {json.dumps(name)})')
+    lines.append(f'ps_w <- c(ps_w, t.test({fmt(a)}, {fmt(b)}, var.equal=FALSE)"'$p.value)'"')
+    lines.append(f'ps_s <- c(ps_s, t.test({fmt(a)}, {fmt(b)}, var.equal=TRUE)"'$p.value)'"')
+    lines.append(f'ps_paired <- c(ps_paired, t.test({fmt(ap)}, {fmt(bp)}, paired=TRUE)"'$p.value)'"')
+lines.append('cat(\"welch\", min(ps_w), sum(p.adjust(ps_w,\"bonferroni\")<=0.05), sum(p.adjust(ps_w,\"BY\")<=0.05), \"\\\\n\")')
+lines.append('cat(\"student\", min(ps_s), sum(p.adjust(ps_s,\"bonferroni\")<=0.05), sum(p.adjust(ps_s,\"BY\")<=0.05), \"\\\\n\")')
+lines.append('cat(\"paired_sensitivity\", min(ps_paired), sum(p.adjust(ps_paired,\"bonferroni\")<=0.05), sum(p.adjust(ps_paired,\"BY\")<=0.05), \"\\\\n\")')
+script='\\n'.join(lines)
+res=subprocess.run(['Rscript','-'], input=script, text=True, capture_output=True, check=True)
+print(res.stdout)
+if res.stderr:
+    print(res.stderr)
+PY"

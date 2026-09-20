@@ -1,0 +1,81 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile
+from collections import Counter
+from statistics import mean, median
+
+
+def parse_fasta(text):
+    records=[]; name=None; chunks=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None:
+                records.append((name,''.join(chunks)))
+            name=line[1:].split()[0]; chunks=[]
+        else:
+            chunks.append(line)
+    if name is not None:
+        records.append((name,''.join(chunks)))
+    return records
+
+def pis_count(records, gap_mode):
+    seqs=[s.upper() for _,s in records]
+    lens={len(s) for s in seqs}
+    if len(lens)"'!=1:
+        raise ValueError(lens)
+    n=0
+    for col in zip(*seqs):
+        if gap_mode=='"'exclude':
+            vals=[c for c in col if c not in '-?NnXx'] # for aa, X unknown too
+        elif gap_mode=='exclude_gap_only':
+            vals=[c for c in col if c not in '-?']
+        elif gap_mode=='include':
+            vals=list(col)
+        counts=Counter(vals)
+        if sum(1 for v in counts.values() if v>=2) >= 2:
+            n += 1
+    return n
+
+def group_counts(zip_path, mode):
+    out=[]
+    with zipfile.ZipFile(zip_path) as z:
+        for name in sorted(n for n in z.namelist() if n.endswith('.faa.mafft')):
+            records=parse_fasta(z.read(name).decode())
+            out.append((name,pis_count(records, mode)))
+    return out
+
+def ranks(data):
+    # data list (value, group idx). average ranks 1-based for ties
+    order=sorted(range(len(data)), key=lambda i:data[i][0])
+    r=[None]*len(data)
+    i=0
+    while i<len(order):
+        j=i+1
+        while j<len(order) and data[order[j]][0]==data[order[i]][0]:
+            j+=1
+        avg=(i+1+j)/2
+        for k in order[i:j]: r[k]=avg
+        i=j
+    return r
+
+def mann_u(x,y):
+    data=[(v,0) for v in x]+[(v,1) for v in y]
+    rs=ranks(data)
+    n1=len(x); n2=len(y)
+    R1=sum(rs[:n1])
+    U1=R1-n1*(n1+1)/2
+    U2=n1*n2-U1
+    return U1,U2
+
+for mode in ['exclude_gap_only','exclude','include']:
+    a=group_counts('inputs/scogs_animals.zip', mode)
+    f=group_counts('inputs/scogs_fungi.zip', mode)
+    av=[v for _,v in a]; fv=[v for _,v in f]
+    u1,u2=mann_u(av,fv)
+    print('\\nMODE',mode)
+    print('n',len(av),len(fv),'sum',sum(av),sum(fv),'mean',mean(av),mean(fv),'median',median(av),median(fv),'minmax',min(av),max(av),min(fv),max(fv))
+    print('U animals',u1,'U fungi',u2,'smaller',min(u1,u2))
+    print('first5 animal',a[:5])
+    print('first5 fungi',f[:5])
+PY"

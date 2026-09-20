@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5785f2fad820bf4f3",
+  "history_id": "bbd44e69cb8906b512f46daa1ca2ebf4",
+  "tool_id": "codex_rosmap_log10_pca_20260803_v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-03T05:58:44.553951",
+  "update_time": "2026-08-03T05:59:08.002916",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'RSCRIPT'\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 2) stop(\"Expected expression and metadata paths\")\nexpr <- read.csv(args[[1]], header=TRUE, check.names=FALSE, stringsAsFactors=FALSE,\n                 na.strings=c(\"\", \"NA\"))\nmeta <- read.csv(args[[2]], header=TRUE, check.names=FALSE, stringsAsFactors=FALSE,\n                 na.strings=c(\"\", \"NA\"))\nif (ncol(expr) < 2L) stop(\"Expression matrix must have gene IDs plus sample columns\")\nif (!(\"projid\" %in% names(meta))) stop(\"Metadata must contain projid\")\n\ngene_ids <- as.character(expr[[1L]])\nsample_ids <- as.character(names(expr)[-1L])\nmeta_ids <- as.character(meta$projid)\nif (any(is.na(gene_ids)) || any(gene_ids==\"\")) stop(\"Blank gene ID\")\nif (anyDuplicated(gene_ids)) stop(\"Duplicate gene identifiers are not resolved\")\nif (any(is.na(sample_ids)) || any(sample_ids==\"\")) stop(\"Blank expression sample ID\")\nif (any(is.na(meta_ids)) || any(meta_ids==\"\")) stop(\"Blank metadata projid\")\nif (!setequal(unique(sample_ids), unique(meta_ids))) stop(\"Expression and metadata ID sets do not match\")\nif (!setequal(sample_ids, meta_ids)) stop(\"Expression and metadata ID multiplicities do not match\")\n\nexpr_dup_ids <- sort(names(which(table(sample_ids) > 1L)))\nmeta_dup_ids <- sort(names(which(table(meta_ids) > 1L)))\nif (!setequal(expr_dup_ids, meta_dup_ids)) stop(\"Repeated-ID groups do not match\")\n\nstable_fields <- setdiff(names(meta), \"projid\")\nmetadata_conflict <- setNames(logical(length(meta_dup_ids)), meta_dup_ids)\nif (length(meta_dup_ids)>0L && length(stable_fields)>0L) {\n  for (id in meta_dup_ids) {\n    block <- meta[meta$projid==id, stable_fields, drop=FALSE]\n    metadata_conflict[[id]] <- any(vapply(block, function(v) {\n      length(unique(v[!is.na(v)])) > 1L\n    }, logical(1)))\n  }\n}\nkeep_sample <- !(sample_ids %in% expr_dup_ids)\nif (sum(keep_sample) < 2L) stop(\"No resolved samples remain\")\n\nraw <- as.matrix(expr[, -1L, drop=FALSE])\nsuppressWarnings(storage.mode(raw) <- \"numeric\")\nif (any(!is.finite(raw)) || any(raw < 0)) stop(\"Raw expression has invalid values\")\nX <- t(raw[, keep_sample, drop=FALSE])\nrownames(X) <- sample_ids[keep_sample]\ncolnames(X) <- gene_ids\n\npseudocount <- 1\nX <- log10(X + pseudocount)\nif (any(!is.finite(X))) stop(\"log10-transformed matrix has non-finite values\")\nfeature_variance <- apply(X, 2L, var)\nkeep_feature <- is.finite(feature_variance) & feature_variance > 0\nif (!any(keep_feature)) stop(\"No positive-variance genes remain\")\nX <- X[, keep_feature, drop=FALSE]\n\nrequested_components <- 100L\nif (nrow(X) <= requested_components) stop(\"Fewer than 101 resolved samples\")\nfit <- prcomp(X, center=TRUE, scale.=FALSE, rank.=requested_components)\nif (length(fit$sdev) < requested_components) stop(\"PCA returned fewer than 100 singular values\")\neigenvalues <- fit$sdev[seq_len(requested_components)]^2\ncentered <- sweep(X, 2L, fit$center, \"-\")\ntotal_variance <- sum(centered^2)/(nrow(X)-1L)\nexplained_ratio <- eigenvalues/total_variance\nexplained_percent <- 100*explained_ratio\n\nvariance_out <- data.frame(\n  component=seq_len(requested_components),\n  eigenvalue=eigenvalues,\n  explained_variance_ratio=explained_ratio,\n  explained_variance_percent=explained_percent,\n  cumulative_explained_variance_percent=100*cumsum(explained_ratio)\n)\nwrite.table(variance_out, \"pca_variance.tsv\", sep=\"\\t\", row.names=FALSE,\n            quote=FALSE, na=\"NA\")\n\nsummary_metric <- c(\n  \"analysis_method\",\"matrix_orientation\",\"raw_expression_sample_columns\",\n  \"raw_expression_unique_sample_ids\",\"metadata_rows\",\"metadata_unique_projids\",\n  \"repeated_primary_id_groups\",\"excluded_unresolved_sample_columns\",\n  \"fitted_resolved_samples\",\"raw_gene_rows\",\"retained_positive_variance_genes\",\n  \"removed_zero_variance_genes\",\"transform\",\"pseudocount\",\"centering\",\"scaling\",\n  \"requested_components\",\"fitted_components\",\"total_variance_denominator\",\n  \"pc1_explained_variance_ratio\",\"pc1_explained_variance_percent\"\n)\nsummary_value <- c(\n  \"classical PCA via R prcomp\",\"samples as rows; genes as columns\",\n  as.character(length(sample_ids)),as.character(length(unique(sample_ids))),\n  as.character(nrow(meta)),as.character(length(unique(meta_ids))),\n  as.character(length(expr_dup_ids)),as.character(sum(!keep_sample)),\n  as.character(nrow(X)),as.character(length(gene_ids)),as.character(ncol(X)),\n  as.character(length(gene_ids)-ncol(X)),\"log10(x + 1)\",as.character(pseudocount),\n  \"feature-centered\",\"unscaled\",as.character(requested_components),\n  as.character(requested_components),\"sum of variances over all retained genes\",\n  sprintf(\"%.17g\", explained_ratio[[1L]]),\n  sprintf(\"%.17g\", explained_percent[[1L]])\n)\nwrite.table(data.frame(metric=summary_metric,value=summary_value,\n                       stringsAsFactors=FALSE), \"pca_summary.tsv\",\n            sep=\"\\t\", row.names=FALSE, quote=FALSE, na=\"NA\")\n\nif (length(expr_dup_ids)>0L) {\n  audit <- meta[meta$projid %in% expr_dup_ids, , drop=FALSE]\n  audit$metadata_conflict_on_stable_field <- unname(metadata_conflict[as.character(audit$projid)])\n  audit$identity_status <- \"unresolved collision; excluded\"\n  audit$identity_reason <- \"repeated primary projid without explicit secondary identity\"\n} else {\n  audit <- data.frame(projid=character(0),\n    metadata_conflict_on_stable_field=logical(0),\n    identity_status=character(0), identity_reason=character(0))\n}\nwrite.table(audit, \"identity_audit.tsv\", sep=\"\\t\", row.names=FALSE,\n            quote=FALSE, na=\"NA\")\n\nRSCRIPT\nRscript analysis.R \"/jetstream2/scratch/main/jobs/78877759/inputs/dataset_82587448-4b78-4eca-b95d-32ab21930d64.dat\" \"/jetstream2/scratch/main/jobs/78877759/inputs/dataset_3a2c4501-6f77-46f5-950c-58423ad1a640.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135ab8e114d8c81ac48",
+      "src": "hda",
+      "uuid": "82587448-4b78-4eca-b95d-32ab21930d64"
+    },
+    "metadata": {
+      "id": "f9cad7b01a472135cee29504ea4ec615",
+      "src": "hda",
+      "uuid": "3a2c4501-6f77-46f5-950c-58423ad1a640"
+    }
+  },
+  "outputs": {
+    "summary": {
+      "id": "f9cad7b01a472135e253486ca2427dd3",
+      "src": "hda",
+      "uuid": "4d4cacb0-84e3-43de-b145-db6245acc55e"
+    },
+    "variance": {
+      "id": "f9cad7b01a47213502db8da94c6fc4b5",
+      "src": "hda",
+      "uuid": "91c3a018-7793-4954-9211-7ef0da8c51f3"
+    },
+    "identity_audit": {
+      "id": "f9cad7b01a472135ce2318d708a047c8",
+      "src": "hda",
+      "uuid": "1ebc1415-7520-487f-b7c4-f505d5122800"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

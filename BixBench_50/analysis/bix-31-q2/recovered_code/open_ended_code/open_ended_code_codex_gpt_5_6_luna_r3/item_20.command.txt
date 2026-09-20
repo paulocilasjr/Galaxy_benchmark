@@ -1,0 +1,27 @@
+/bin/bash -lc "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python -u - <<'PY'
+import pandas as pd, numpy as np, warnings, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+warnings.filterwarnings('default')
+t0=time.time()
+counts=pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv',index_col=0)
+meta=pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample').loc[counts.columns].copy()
+meta['batch']=pd.Categorical(meta['batch'].astype(str),categories=['1','2','3','4'],ordered=False)
+meta['sex']=pd.Categorical(meta['sex'],categories=['F','M'],ordered=False)
+counts=counts.T
+print('loaded',counts.shape,'seconds',time.time()-t0,flush=True)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~ batch + sex',n_cpus=8,quiet=False,low_memory=False)
+print('design',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+dds.deseq2()
+print('fit complete',time.time()-t0,flush=True)
+stats=DeseqStats(dds,contrast=['sex','M','F'],alpha=0.05,cooks_filter=True,independent_filter=True,n_cpus=8,quiet=False)
+stats.summary()
+print('summary complete',time.time()-t0,flush=True)
+print('pre_shrink',stats.results_df.loc['FAM138A'].to_dict(),flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+print('shrink complete',time.time()-t0,flush=True)
+r=stats.results_df.loc['FAM138A']
+print('post_shrink',r.to_dict(),flush=True)
+print('passes',bool((abs(r['log2FoldChange'])>0.5) and (r['baseMean']>10)),flush=True)
+print('fit_state',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+PY"

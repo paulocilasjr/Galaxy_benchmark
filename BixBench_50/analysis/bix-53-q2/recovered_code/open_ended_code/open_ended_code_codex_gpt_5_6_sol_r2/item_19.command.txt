@@ -1,0 +1,43 @@
+/bin/bash -lc "Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+counts_df <- read.csv('inputs/count.csv', check.names=FALSE, stringsAsFactors=FALSE)
+stopifnot(identical(names(counts_df), c('geneID','KL1','KL2','KL3','WL1','WL2','WL3')))
+stopifnot("'!anyDuplicated(counts_df$geneID), !anyNA(counts_df))
+cts <- as.matrix(counts_df[,-1])
+storage.mode(cts) <- '"'integer'
+rownames(cts) <- counts_df"'$geneID
+stopifnot(all(cts >= 0), all(cts == round(cts)))
+
+run_de <- function(samples) {
+  m <- cts[, samples, drop=FALSE]
+  condition <- factor(ifelse(grepl('"'"'^KL'"', samples), 'KL', 'WL'), levels=c('WL','KL'))
+  coldata <- data.frame(condition=condition, row.names=samples)
+  stopifnot(identical(colnames(m), rownames(coldata)))
+  dds <- DESeqDataSetFromMatrix(m, coldata, design=~condition)
+  dds <- DESeq(dds, quiet=TRUE)
+  coef_name <- 'condition_KL_vs_WL'
+  stopifnot(coef_name %in% resultsNames(dds))
+  raw <- results(dds, name=coef_name, independentFiltering=TRUE, cooksCutoff=TRUE)
+  shr <- lfcShrink(dds, coef=coef_name, res=raw, type='normal', quiet=TRUE)
+  tab <- as.data.frame(shr)
+  selected <- "'!is.na(tab$pvalue) & tab$pvalue < 0.05 &
+              !is.na(tab$log2FoldChange) & abs(tab$log2FoldChange) > 1 &
+              !is.na(tab$baseMean) & tab$baseMean > 10
+  selected_padj <- !is.na(tab$padj) & tab$padj < 0.05 &
+                   !is.na(tab$log2FoldChange) & abs(tab$log2FoldChange) > 1 &
+                   !is.na(tab$baseMean) & tab$baseMean > 10
+  list(n=sum(selected), up=sum(selected & tab$log2FoldChange > 1),
+       down=sum(selected & tab$log2FoldChange < -1),
+       n_padj=sum(selected_padj), sizeFactors=sizeFactors(dds),
+       genes=rownames(tab)[selected], table=tab)
+}
+full <- run_de(c('"'KL1','KL2','KL3','WL1','WL2','WL3'))
+reduced <- run_de(c('KL1','KL2','WL1','WL2'))
+cat('DESeq2_version', as.character(packageVersion('DESeq2')), '\\n')
+cat('full_n', full"'$n, '"'full_up', full"'$up, '"'full_down', full"'$down, '"'full_padj_n', full"'$n_padj, '"'\\n')
+cat('reduced_n', reduced"'$n, '"'reduced_up', reduced"'$up, '"'reduced_down', reduced"'$down, '"'reduced_padj_n', reduced"'$n_padj, '"'\\n')
+cat('difference', reduced"'$n-full$n, '"'\\n')
+cat('overlap', length(intersect(full"'$genes,reduced$genes)), '"'full_only', length(setdiff(full"'$genes,reduced$genes)), '"'reduced_only', length(setdiff(reduced"'$genes,full$genes)), '"'\\n')
+cat('full_size_factors', paste(names(full"'$sizeFactors), signif(full$sizeFactors,6), collapse='"';'), '\\n')
+cat('reduced_size_factors', paste(names(reduced"'$sizeFactors), signif(reduced$sizeFactors,6), collapse='"';'), '\\n')
+RS"

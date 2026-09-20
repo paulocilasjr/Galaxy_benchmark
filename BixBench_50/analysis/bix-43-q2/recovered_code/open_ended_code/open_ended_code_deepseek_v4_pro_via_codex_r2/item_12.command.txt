@@ -1,0 +1,39 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('/workspace/inputs/sample_layout.csv')
+layout['sample_col'] = layout['SampleID'].str.replace('-','_', regex=False)
+# ensure all count columns in layout
+print(set(counts.columns)-set(layout['sample_col']))
+print(set(layout['sample_col'])-set(counts.columns))
+# subset groups
+groups = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+layout_sub = layout[layout['Group'].isin(groups)].copy()
+print(layout_sub)
+# prefilter across all 30 samples: counts > 10 in at least one sample
+keep = (counts > 10).any(axis=1)
+print('keep', keep.sum(), 'total', len(keep))
+counts_pre = counts.loc[keep, layout_sub['sample_col']].copy()
+print(counts_pre.shape)
+# ensure no all-zero
+print((counts_pre.sum(axis=1)==0).sum())
+metadata = layout_sub[['sample_col','Group']].rename(columns={'sample_col':'sample'}).reset_index(drop=True)
+metadata['Group']=metadata['Group'].astype(str)
+# pydeseq2 needs sample as index
+metadata = metadata.set_index('sample')
+print(metadata)
+print(counts_pre.columns.tolist())
+print(metadata.index.tolist())
+dds = DeseqDataSet(counts=counts_pre, metadata=metadata, design='~Group', quiet=False)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], quiet=False)
+stat.summary()
+res = stat.results_df
+print(res.head())
+print(res.shape, res.columns)
+res.to_csv('/workspace/tmp/de_result_test.csv')
+print('done')
+PY"

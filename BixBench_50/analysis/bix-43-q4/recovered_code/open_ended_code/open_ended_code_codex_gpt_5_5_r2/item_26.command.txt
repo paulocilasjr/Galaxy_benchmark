@@ -1,0 +1,62 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import pandas as pd
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+counts.index.name = 'ENSG'
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['count_id'] = layout['SampleID'].str.replace('-', '_', regex=False)
+control = 'DMSO'
+treat = 'Cisplatin_IC50_CBD_IC50'
+sel = layout[layout['Group'].isin([control, treat])].copy().set_index('count_id')
+count_df = counts.loc[:, sel.index].T.astype(int)
+metadata = sel[['Group']].rename(columns={'Group': 'condition'})
+metadata['condition'] = pd.Categorical(metadata['condition'], categories=[control, treat])
+
+dds = DeseqDataSet(
+    counts=count_df,
+    metadata=metadata,
+    design='~condition',
+    quiet=True,
+    n_cpus=1,
+)
+dds.deseq2()
+stats = DeseqStats(dds, contrast=['condition', treat, control], alpha=0.05, quiet=True, n_cpus=1)
+stats.summary()
+res = stats.results_df.copy()
+deg = res[(res['padj'] < 0.05) & (res['log2FoldChange'].abs() >= 0.5)].reset_index().rename(columns={'index':'ENSG'})
+map_df = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t', dtype=str)
+deg = deg.merge(map_df, on='ENSG', how='left')
+deg_symbols = sorted({x.strip() for x in deg['gene_name'].dropna().astype(str) if x.strip()})
+print('DEG_ENSG', len(deg), 'DEG_SYMBOLS', len(deg_symbols))
+
+enr = gp.enrichr(
+    gene_list=deg_symbols,
+    gene_sets='Reactome_2022',
+    organism='human',
+    outdir=None,
+    cutoff=1.0,
+    no_plot=True,
+    verbose=False,
+)
+enr_df = enr.results.copy()
+needle = 'TP53 Regulates Transcription Of Cell Cycle Genes'
+rows = enr_df[enr_df['Term'].astype(str).str.startswith(needle)]
+if rows.empty:
+    rows = enr_df[enr_df['Term'].astype(str).str.contains(needle, regex=False, na=False)]
+if rows.empty:
+    print(enr_df[enr_df['Term'].astype(str).str.contains('TP53', case=False, na=False)][['Term','Overlap','Adjusted P-value','Genes']].to_string(index=False))
+    raise SystemExit('target pathway not found')
+if len(rows) "'!= 1:
+    print(rows[['"'Term','Overlap','Adjusted P-value','Genes']].to_string(index=False))
+    raise SystemExit(f'ambiguous target pathway matches: {len(rows)}')
+row = rows.iloc[0]
+print(row[['Term','Overlap','P-value','Adjusted P-value','Genes']].to_string())
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w') as f:
+    f.write(str(row['Overlap']).strip() + '\\n')
+print('ANSWER', str(row['Overlap']).strip())
+PY"

@@ -1,0 +1,110 @@
+/bin/bash -lc "python - <<'PY'
+import itertools
+import os
+import statistics
+import zipfile
+
+class Node:
+    __slots__ = ('name', 'length', 'children')
+    def __init__(self, name='', length=0.0, children=None):
+        self.name = name
+        self.length = length
+        self.children = children or []
+
+def parse_newick(text):
+    text = text.strip()
+    if text.endswith(';'):
+        text = text[:-1]
+    i = 0
+    n = len(text)
+
+    def parse_subtree():
+        nonlocal i
+        children = []
+        if i < n and text[i] == '(':
+            i += 1
+            while True:
+                children.append(parse_subtree())
+                if i < n and text[i] == ',':
+                    i += 1
+                    continue
+                if i < n and text[i] == ')':
+                    i += 1
+                    break
+                raise ValueError(f'Expected comma or close-paren at position {i}')
+
+        start = i
+        while i < n and text[i] not in ':,()':
+            i += 1
+        name = text[start:i].strip()
+
+        length = 0.0
+        if i < n and text[i] == ':':
+            i += 1
+            start = i
+            while i < n and text[i] not in ',()':
+                i += 1
+            length = float(text[start:i])
+        return Node(name=name, length=length, children=children)
+
+    root = parse_subtree()
+    if i "'!= n:
+        raise ValueError(f'"'Trailing Newick text at position {i}')
+    return root
+
+def mean_patristic_distance(root):
+    paths = {}
+    leaves = []
+
+    def walk(node, distance, path):
+        node_distance = distance + node.length
+        node_path = path + [(node, node_distance)]
+        if node.children:
+            for child in node.children:
+                walk(child, node_distance, node_path)
+        else:
+            leaves.append(node.name)
+            paths[node.name] = node_path
+
+    walk(root, 0.0, [])
+    if len(leaves) < 2:
+        raise ValueError('Tree has fewer than two leaves')
+
+    distances = []
+    for left, right in itertools.combinations(leaves, 2):
+        left_path = paths[left]
+        right_path = paths[right]
+        lca_distance = 0.0
+        for (left_node, left_distance), (right_node, _) in zip(left_path, right_path):
+            if left_node is right_node:
+                lca_distance = left_distance
+            else:
+                break
+        distances.append(left_path[-1][1] + right_path[-1][1] - 2.0 * lca_distance)
+    return sum(distances) / len(distances)
+
+def archive_medians(path):
+    values = []
+    with zipfile.ZipFile(path) as archive:
+        names = sorted(name for name in archive.namelist() if name.endswith('.treefile'))
+        for name in names:
+            tree = archive.read(name).decode('utf-8')
+            values.append(mean_patristic_distance(parse_newick(tree)))
+    if not values:
+        raise ValueError(f'No treefile members in {path}')
+    return statistics.median(values), len(values)
+
+animal_median, animal_count = archive_medians('inputs/scogs_animals.zip')
+fungi_median, fungi_count = archive_medians('inputs/scogs_fungi.zip')
+ratio = fungi_median / animal_median
+
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', encoding='ascii') as handle:
+    handle.write(f'{ratio:.15g}\\n')
+
+print(f'animals trees={animal_count} median={animal_median:.17g}')
+print(f'fungi trees={fungi_count} median={fungi_median:.17g}')
+print(f'ratio={ratio:.17g}')
+PY
+wc -l codex_output/answer.txt
+printf 'answer='; cat codex_output/answer.txt"

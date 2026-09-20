@@ -1,0 +1,71 @@
+/bin/bash -lc "cd /workspace && python3 - <<'PY'
+import json
+from math import comb
+D=json.load(open('tmp/kegg_pau.json'))
+g2p=D['g2p']
+p2g={}
+for gene, paths in g2p.items():
+    for p in paths:
+        p2g.setdefault(p, set()).add(gene)
+all_annotated=set(g2p.keys())
+print('unique genes',len(all_annotated),'paths',len(p2g),'total edges',sum(len(v) for v in g2p.values()))
+
+def phyper_upper(k,M,N,n):
+    if k>min(n,M): return 0.0
+    num=0.0
+    for i in range(k,min(n,M)+1):
+        num += comb(M,i)*comb(N-M,n-i)
+    den=comb(N,n)
+    return num/den
+
+def run(degs, universe):
+    genes=set(degs)
+    mapped=[g for g in genes if g in g2p]
+    qpaths=set()
+    for g in mapped: qpaths.update(g2p[g])
+    ext=set(universe) if universe is not None else all_annotated
+    if universe is not None:
+        ext={g for g in ext if g in g2p}
+    res=[]
+    for p in sorted(qpaths):
+        pathway_genes=p2g[p].copy()
+        pathway_genes &= ext
+        M=len(pathway_genes)
+        if not (10 <= M <= 500):
+            continue
+        qgenes=[g for g in mapped if p in g2p[g] and g in ext]
+        k=len(qgenes)
+        if k==0: continue
+        N=len(ext); n=len(mapped)
+        pv=phyper_upper(k,M,N,n)
+        res.append((p,k,M,pv))
+    res.sort(key=lambda x:x[3])
+    m=len(res)
+    vals=[]
+    cm=0.0
+    for rank,r in enumerate(res,1):
+        cm=max(cm, r[3]*m/rank)
+        vals.append(min(1.0,cm))
+    print('tested',m)
+    sig=set()
+    for r,v in zip(res,vals):
+        if v<0.05:
+            sig.add(r[0])
+            print(r[0],'k',r[1],'M',r[2],'p',r[3],'padj',v)
+    return sig, {r[0]:v for r,v in zip(res,vals)}
+
+gl=open('tmp/GluFe_degs.txt').read().split()
+sl=open('tmp/Succ_degs.txt').read().split()
+allgenes=open('tmp/GluFe_all.txt').read().split()
+print('GluFe DEGs',len(gl),'Succ DEGs',len(sl),'all',len(allgenes))
+print('\\nDEFAULT UNIVERSE GluFe')
+g1,adj1=run(gl,None)
+print('\\nDEFAULT Succ')
+s1,adj2=run(sl,None)
+print('GluFe-only default',len(g1-s1), sorted(g1-s1))
+print('\\nALL UNIVERSE GluFe')
+g2,_=run(gl,allgenes)
+print('\\nALL Succ')
+s2,_=run(sl,allgenes)
+print('GluFe-only all',len(g2-s2), sorted(g2-s2))
+PY"

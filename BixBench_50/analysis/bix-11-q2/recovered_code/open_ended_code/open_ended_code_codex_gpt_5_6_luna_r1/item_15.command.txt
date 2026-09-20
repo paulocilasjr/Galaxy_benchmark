@@ -1,0 +1,77 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+import math
+class Node:
+    __slots__=('children','length','label')
+    def __init__(self,children=None,length=None,label=''): self.children=children or []; self.length=length; self.label=label
+
+def parse(s):
+    s=s.strip(); s=s[:-1] if s.endswith(';') else s; i=0
+    def skip():
+        nonlocal i
+        while i<len(s) and s[i].isspace(): i+=1
+    def label():
+        nonlocal i
+        skip(); j=i
+        while i<len(s) and s[i] not in ',():;[]': i+=1
+        return s[j:i].strip()
+    def bl():
+        nonlocal i
+        skip()
+        if i<len(s) and s[i]==':':
+            i+=1; skip(); j=i
+            while i<len(s) and s[i] not in ',();[]': i+=1
+            return float(s[j:i].strip())
+        return None
+    def sub():
+        nonlocal i
+        skip()
+        if s[i]=='(':
+            i+=1; kids=[sub()]
+            while True:
+                skip()
+                if i<len(s) and s[i]==',': i+=1; kids.append(sub())
+                else: break
+            skip(); assert s[i]==')'; i+=1
+            lab=label(); x=bl(); return Node(kids,x,lab)
+        return Node([],bl=bl(),label=label())
+    # fix keyword issue via alternate leaf construction
+    def sub2():
+        nonlocal i
+        skip()
+        if s[i]=='(':
+            i+=1; kids=[sub2()]
+            while True:
+                skip()
+                if i<len(s) and s[i]==',': i+=1; kids.append(sub2())
+                else: break
+            skip(); assert s[i]==')'; i+=1
+            lab=label(); x=bl(); return Node(kids,x,lab)
+        lab=label(); x=bl(); return Node([],x,lab)
+    return sub2()
+
+def getmetrics(root):
+    vals=[]; leaves=[]
+    def w(n):
+        if n.length is not None: vals.append((n.length,bool(n.children)))
+        if n.children:
+            for c in n.children:w(c)
+        else: leaves.append(n.label)
+    w(root); total=sum(v for v,_ in vals); internal=sum(v for v,ii in vals if ii); ext=total-internal
+    return len(leaves),len(vals),sum(ii for v,ii in vals),total,internal,ext,internal/total if total else math.nan,internal/ext if ext else math.nan
+with ZipFile('inputs/scogs_fungi.zip') as z:
+  rows=[]
+  for n in z.namelist():
+    if n.endswith('.treefile'):
+      k=n.split('.')[0]; s=z.read(n).decode(); rows.append((k,*getmetrics(parse(s)),s.strip()))
+print('rows',len(rows))
+print('leaf count',Counter(x[1] for x in rows),'internal count',Counter(x[3] for x in rows))
+for label,idx in [('internal/total',7),('internal/external',8)]:
+  vals=[x[idx] for x in rows]
+  cnt=sum(v>.06 for v in vals)
+  print(label,'min',min(vals),'max',max(vals),'mean',sum(vals)/len(vals),'above',cnt,'of',len(vals),'pct',100*cnt/len(vals))
+print('ratios around threshold')
+for x in sorted(rows,key=lambda x:x[7]):
+  if .04 < x[7] < .08: print(x[0], 'n',x[1], 'tot',x[4], 'int',x[5], 'ext',x[6], 'ratio',x[7])
+PY"

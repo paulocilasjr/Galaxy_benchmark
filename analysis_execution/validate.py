@@ -82,7 +82,7 @@ def validate(output: Path, *, mark_passed: bool = True) -> dict:
             assert item.get("reported_size_matches_download", True), local
     secret_patterns = [rb"hf_[A-Za-z0-9]{20,}", rb"sk-[A-Za-z0-9_-]{20,}",
                        rb"GALAXY_API_KEY\s*[=:]\s*[A-Za-z0-9._-]{20,}",
-                       rb"Bearer\s+[A-Za-z0-9._-]{20,}", rb"/Users/[^/\s\"']+"]
+                       rb"Bearer\s+[A-Za-z0-9._-]{20,}", rb"/Users/(?!\[redacted\])[^/\s\"']+"]
     for folder in (output / "source_snapshots/huggingface_traces/files", output / "source_snapshots/galaxy", output / "recovered_code"):
         for file in folder.rglob("*"):
             if file.is_file() and file.stat().st_size <= 10_000_000:

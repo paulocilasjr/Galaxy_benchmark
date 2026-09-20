@@ -1,0 +1,79 @@
+export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:$PYTHONPATH"
+python3 << 'PYEOF'
+import re, requests, time
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# Read gene lists
+with open("/tmp/de_iron.txt") as f:
+    iron_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/de_innate.txt") as f:
+    innate_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/all_genes.txt") as f:
+    all_genes = [l.strip() for l in f if l.strip()]
+
+def fetch_kegg(url):
+    for i in range(3):
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200:
+                return r.text
+            time.sleep(2)
+        except: time.sleep(2)
+    return None
+
+link_text = fetch_kegg("https://rest.kegg.jp/link/pau/pathway")
+lines = [l for l in link_text.strip().split('\n') if l]
+pw2genes = {}
+for line in lines:
+    parts = line.strip().split('\t')
+    if len(parts) >= 2:
+        pw = parts[0].strip()
+        gene = parts[1].strip()
+        if pw not in pw2genes: pw2genes[pw] = set()
+        pw2genes[pw].add(gene)
+
+pw_text = fetch_kegg("https://rest.kegg.jp/list/pathway/pau")
+pw_name = {}
+for line in pw_text.strip().split('\n'):
+    if not line: continue
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pid = parts[0].strip()
+        name = re.sub(r'\s+-\s+Pseudomonas aeruginosa.*', '', parts[1].strip())
+        pw_name['path:' + pid] = name
+
+def to_kegg(g): return f"pau:{g}"
+all_kegg_genes = set()
+for genes in pw2genes.values(): all_kegg_genes.update(genes)
+
+universe = set(to_kegg(g) for g in all_genes) & all_kegg_genes
+iron_fg = set(to_kegg(g) for g in iron_de) & all_kegg_genes
+innate_fg = set(to_kegg(g) for g in innate_de) & all_kegg_genes
+
+# Check key pathways
+for pw in ['path:pau01110', 'path:pau01053', 'path:pau01100']:
+    pw_genes = pw2genes.get(pw, set()) & universe
+    iron_overlap = pw_genes & iron_fg
+    innate_overlap = pw_genes & innate_fg
+    print(f"{pw} {pw_name.get(pw, pw)}: {len(pw_genes)} genes")
+    print(f"  Iron DE: {len(iron_overlap)}, Innate DE: {len(innate_overlap)}")
+    
+    if len(iron_overlap) > 0:
+        N, n = len(universe), len(iron_fg)
+        a, K_val = len(iron_overlap), len(pw_genes)
+        b, c = K_val - a, n - a
+        d = N - a - b - c
+        _, pv = fisher_exact([[a, b], [c, d]], alternative='greater')
+        print(f"  Iron Fisher pval: {pv:.6e}")
+    
+    if len(innate_overlap) > 0:
+        N, n = len(universe), len(innate_fg)
+        a, K_val = len(innate_overlap), len(pw_genes)
+        b, c = K_val - a, n - a
+        d = N - a - b - c
+        _, pv = fisher_exact([[a, b], [c, d]], alternative='greater')
+        print(f"  Innate Fisher pval: {pv:.6e}")
+    print()
+PYEOF
+

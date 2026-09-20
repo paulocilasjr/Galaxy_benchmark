@@ -1,0 +1,103 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import rdata, numpy as np, requests, warnings
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+warnings.filterwarnings('ignore')
+
+# Load all three datasets
+res97 = rdata.read_rda('/workspace/inputs/res_1vs97.rds')
+res98 = rdata.read_rda('/workspace/inputs/res_1vs98.rds')
+res99 = rdata.read_rda('/workspace/inputs/res_1vs99.rds')
+
+def get_results(res):
+    return {'genes': [str(g) for g in res.rownames],
+            'lfc': res.listData['log2FoldChange']}
+
+data97 = get_results(res97)
+data98 = get_results(res98)
+data99 = get_results(res99)
+
+# KEGG pathway-gene links
+r_link = requests.get('https://rest.kegg.jp/link/pau/pathway', timeout=30)
+pathway_genes = {}
+for line in r_link.text.strip().split('\n'):
+    parts = line.strip().split('\t')
+    if len(parts) == 2:
+        pid = parts[0].replace('path:', '')
+        gene = parts[1].replace('pau:', '')
+        pathway_genes.setdefault(pid, set()).add(gene)
+
+r_list = requests.get('https://rest.kegg.jp/list/pathway/pau', timeout=30)
+pathway_names = {}
+for line in r_list.text.strip().split('\n'):
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pathway_names[parts[0].replace('path:', '')] = parts[1]
+
+# Universe: all tested genes that map to KEGG
+all_genes_set = set(str(g) for g in res97.rownames)
+kegg_mapped = set()
+for gs in pathway_genes.values():
+    kegg_mapped |= gs
+universe = kegg_mapped & all_genes_set
+
+# Filter pathway gene sets to universe, remove small pathways
+for pid in pathway_genes:
+    pathway_genes[pid] = pathway_genes[pid] & universe
+pathway_genes = {pid: gs for pid, gs in pathway_genes.items() if len(gs) >= 5}
+
+N = len(universe)
+all_pids = sorted(pathway_genes.keys())
+
+print(f"Universe size: {N}")
+print(f"Pathways tested: {len(all_pids)}")
+
+# Run ORA for each comparison and direction
+final_results = {}
+for label, data in [('97', data97), ('98', data98), ('99', data99)]:
+    for direction in ['up', 'down']:
+        genes_arr = np.array(data['genes'])
+        lfc = data['lfc']
+        mask = lfc > 1.5 if direction == 'up' else lfc < -1.5
+        fg = set(genes_arr[mask]) & universe
+        K = len(fg)
+        
+        pvals_vec = []
+        k_vec = []
+        for pid in all_pids:
+            n = len(pathway_genes[pid])
+            k = len(fg & pathway_genes[pid])
+            pv = hypergeom.sf(k - 1, N, n, K) if k > 0 else 1.0
+            pvals_vec.append(pv)
+            k_vec.append(k)
+        
+        _, padjs, _, _ = multipletests(pvals_vec, method='fdr_bh')
+        
+        sig_pids = set()
+        for i, pid in enumerate(all_pids):
+            if padjs[i] < 0.05:
+                sig_pids.add(pid)
+        
+        final_results[(label, direction)] = sig_pids
+        print(f"{label} {direction}: {K} fg genes, {len(sig_pids)} sig pathways")
+
+# Intersect
+up_intersect = final_results[('97', 'up')] & final_results[('98', 'up')] & final_results[('99', 'up')]
+down_intersect = final_results[('97', 'down')] & final_results[('98', 'down')] & final_results[('99', 'down')]
+
+print(f"\nUp pathways in all 3: {len(up_intersect)}")
+for p in sorted(up_intersect):
+    print(f"  {p}: {pathway_names.get(p, '')}")
+
+print(f"\nDown pathways in all 3: {len(down_intersect)}")
+for p in sorted(down_intersect):
+    print(f"  {p}: {pathway_names.get(p, '')}")
+
+total = len(up_intersect) + len(down_intersect)
+print(f"\nTOTAL: {total}")
+
+# Write answer
+with open('/workspace/codex_output/answer.txt', 'w') as f:
+    f.write(f"{total}\n")
+print("Written to answer.txt")
+PYEOF

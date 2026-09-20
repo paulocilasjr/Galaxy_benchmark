@@ -1,0 +1,89 @@
+PYTHONPATH=/tmp/pylibs python3 << 'PYEOF'
+import xlrd
+import numpy as np
+from scipy import stats
+import math
+
+wb = xlrd.open_workbook('/workspace/inputs/pone.0150501.s002.xls')
+sheet = wb.sheet_by_index(0)
+
+# Extract miRNA data (rows 2-176, 0-indexed)
+mirnas = []
+for r in range(2, sheet.nrows):
+    name = sheet.cell_value(r, 0)
+    patient_vals = []
+    control_vals = []
+    for c in range(1, 11):
+        v = sheet.cell_value(r, c)
+        if v != '' and v != 'NAN':
+            patient_vals.append(float(v))
+    for c in range(11, 21):
+        v = sheet.cell_value(r, c)
+        if v != '' and v != 'NAN':
+            control_vals.append(float(v))
+    mirnas.append((name, patient_vals, control_vals))
+
+print(f"Total miRNAs: {len(mirnas)}")
+
+# Perform t-tests (Welch's t-test)
+p_values = []
+for name, pv, cv in mirnas:
+    if len(pv) < 2 or len(cv) < 2:
+        p_values.append(np.nan)
+        continue
+    t_stat, p_val = stats.ttest_ind(pv, cv, equal_var=False)
+    p_values.append(p_val)
+
+p_values = np.array(p_values)
+valid_idx = ~np.isnan(p_values)
+valid_p = p_values[valid_idx]
+n_valid = len(valid_p)
+print(f"Valid t-tests: {n_valid}")
+
+# Bonferroni correction
+n_tests = len(mirnas)  # 175
+bonf_p = np.full(len(p_values), np.nan)
+bonf_p[valid_idx] = np.minimum(valid_p * n_tests, 1.0)
+
+# Benjamini-Yekutieli correction
+def by_correction(p_vals, n_total):
+    sorted_idx = np.argsort(p_vals)
+    m = len(p_vals)
+    c_m = np.sum(1.0 / np.arange(1, n_total + 1))
+    adjusted = np.empty(m)
+    cummin = np.inf
+    for i in range(m - 1, -1, -1):
+        rank = i + 1
+        adj = p_vals[sorted_idx[i]] * n_total * c_m / rank
+        adj = min(adj, 1.0)
+        cummin = min(cummin, adj)
+        adjusted[sorted_idx[i]] = cummin
+    return adjusted
+
+by_p = np.full(len(p_values), np.nan)
+by_p[valid_idx] = by_correction(valid_p, n_tests)
+
+# Count significant
+bonf_sig = int(np.sum(bonf_p[valid_idx] <= 0.05))
+by_sig = int(np.sum(by_p[valid_idx] <= 0.05))
+
+print(f"Significant (Bonferroni, p_adj <= 0.05): {bonf_sig}")
+print(f"Significant (Benjamini-Yekutieli, p_adj <= 0.05): {by_sig}")
+
+# Check which ones
+print("\nTop 20 raw p-values:")
+sorted_order = np.argsort(valid_p)
+for rank, idx in enumerate(sorted_order[:20]):
+    orig_idx = np.where(valid_idx)[0][idx]
+    print(f"  {rank+1}. {mirnas[orig_idx][0]}: raw_p={valid_p[idx]:.8f}, bonf={bonf_p[orig_idx]:.6f}, by={by_p[orig_idx]:.6f}")
+
+# Ratio
+if by_sig == 0:
+    ratio_str = f"{bonf_sig}:0"
+else:
+    from math import gcd
+    g = gcd(bonf_sig, by_sig)
+    ratio_str = f"{bonf_sig//g}:{by_sig//g}"
+
+print(f"\nRatio Bonferroni:Benjamini-Yekutieli = {ratio_str}")
+PYEOF

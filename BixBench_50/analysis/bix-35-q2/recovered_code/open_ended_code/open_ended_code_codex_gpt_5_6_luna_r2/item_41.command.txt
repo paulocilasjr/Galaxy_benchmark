@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+from tempfile import TemporaryDirectory
+from subprocess import check_output
+from io import StringIO
+from Bio import Phylo
+from scipy.stats import mannwhitneyu, rankdata
+import math
+
+root=Path('inputs')
+rows=[]
+with TemporaryDirectory() as td:
+ td=Path(td)
+ for group in ['animals','fungi']:
+  with ZipFile(root/f'scogs_{group}.zip') as z:
+   entries=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+   for i,e in enumerate(entries):
+    p=td/f'{group}_{i}.nwk'; p.write_bytes(z.read(e))
+    phykit=float(check_output(['/opt/agent-venv/bin/pk_evo_rate',str(p)],text=True).strip())
+    tree=Phylo.read(StringIO(z.read(e).decode()),'newick')
+    total=sum((clade.branch_length or 0.0) for clade in tree.find_clades())
+    nt=len(tree.get_terminals())
+    raw=total/nt
+    expected=round(raw,4)
+    if phykit "'!= expected:
+      raise AssertionError((group,e,phykit,expected,total,nt))
+    rows.append((group,e,raw,phykit,nt,total))
+print('"'validated PhyKIT against independent Newick sum:',len(rows),'trees')
+for group in ['animals','fungi']:
+ vals=[r[3] for r in rows if r[0]==group]
+ tips={r[4] for r in rows if r[0]==group}
+ print(group,'n=',len(vals),'tips=',sorted(tips),'sum=',sum(vals),'median=',float(__import__('statistics').median(vals)))
+animals=[r[3] for r in rows if r[0]=='animals']
+fungi=[r[3] for r in rows if r[0]=='fungi']
+res=mannwhitneyu(animals,fungi,alternative='two-sided',method='auto')
+combined=animals+fungi
+ranks=rankdata(combined,method='average')
+u_rank=sum(ranks[:len(animals)])-len(animals)*(len(animals)+1)/2
+print('scipy U=',float(res.statistic),'rank-sum U=',float(u_rank),'U complement=',len(animals)*len(fungi)-float(res.statistic))
+print('rates with ties:',[(x,combined.count(x)) for x in sorted(set(combined)) if combined.count(x)>1])
+# raw ranks as a sensitivity check
+rawa=[r[2] for r in rows if r[0]=='animals']; rawf=[r[2] for r in rows if r[0]=='fungi']
+rr=mannwhitneyu(rawa,rawf,alternative='two-sided',method='auto')
+print('raw unrounded U=',float(rr.statistic),'same=',float(rr.statistic)==float(res.statistic))
+PY"

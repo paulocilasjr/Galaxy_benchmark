@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import pearsonr
+
+meta=pd.read_csv('inputs/GeneMetaInfo_Zenodo.csv')
+ann=pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+counts=pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv')
+print('counts shape', counts.shape)
+print('first col name', counts.columns[0])
+counts=counts.set_index(counts.columns[0])
+print('index name', counts.index.name, 'nunique', counts.index.nunique())
+meta=meta.set_index(meta.columns[0])
+meta.index.name='gene'
+pc=meta.index[meta['gene_biotype']=='protein_coding']
+print('pc count', len(pc))
+X=counts.loc[pc]
+print('X shape', X.shape)
+celltypes=['CD4','CD8','CD14','CD19']
+samples_by={ct: ann.loc[ann.celltype==ct,'sample'].tolist() for ct in celltypes}
+for ct in celltypes:
+ print(ct, len(samples_by[ct]), 'all in X', set(samples_by[ct])<=set(X.columns))
+for ct in celltypes:
+ cols=samples_by[ct]
+ mean = X[cols].mean(axis=1).astype(float)
+ length=meta.loc[mean.index,'Length'].astype(float)
+ variants=[
+  ('mean_raw', mean),
+  ('log1p_mean', np.log1p(mean)),
+  ('mean_log1p', X[cols].apply(lambda s: np.log1p(s)).mean(axis=1)),
+  ('log2_mean+1', np.log2(mean+1)),
+ ]
+ for variant, y in variants:
+  mask=np.isfinite(y) & np.isfinite(length)
+  r,p=pearsonr(length[mask], y[mask])
+  print(f'{ct:4} {variant:15} r={r:.8f} abs={abs(r):.8f} p={p:.3g} n={mask.sum()}')
+print('\\nValue stats by type raw means')
+for ct in celltypes:
+ cols=samples_by[ct]; mean=X[cols].mean(axis=1)
+ print(ct, 'min', mean.min(), 'median', mean.median(), 'mean', mean.mean(), 'max', mean.max(), 'zeros', (mean==0).sum())
+print('\\nLength stats', meta.loc[pc,'Length'].astype(float).describe())
+PY"

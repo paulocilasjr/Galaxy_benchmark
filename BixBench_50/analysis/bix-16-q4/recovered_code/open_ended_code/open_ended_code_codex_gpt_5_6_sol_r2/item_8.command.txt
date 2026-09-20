@@ -1,0 +1,72 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections, time
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+ge_path='inputs/CRISPRGeneEffect.csv'
+ex_path='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+model_path='inputs/Model.csv'
+
+def entrez(label):
+    return label.rsplit(' (',1)[1][:-1]
+
+with open(ge_path,newline='') as f: gh=next(csv.reader(f))
+with open(ex_path,newline='') as f: eh=next(csv.reader(f))
+g_by_id={entrez(x):x for x in gh[1:]}
+e_by_id=collections.defaultdict(list)
+for x in eh[1:]: e_by_id[entrez(x)].append(x)
+ids=sorted(set(g_by_id)&set(e_by_id), key=lambda z:int(z))
+gcols=[g_by_id[z] for z in ids]
+ecols=[]
+for z,g in zip(ids,gcols):
+    candidates=e_by_id[z]
+    if len(candidates)==1:
+        ecols.append(candidates[0])
+    elif g in candidates:
+        ecols.append(g)
+    else:
+        raise RuntimeError((z,g,candidates))
+print('selected genes',len(ids),'unique expression columns',len(set(ecols)),flush=True)
+
+t0=time.time()
+g=pd.read_csv(ge_path,index_col=0,usecols=['']+gcols)
+e=pd.read_csv(ex_path,index_col=0,usecols=['']+list(dict.fromkeys(ecols)))
+print('loaded',g.shape,e.shape,'seconds',time.time()-t0,flush=True)
+shared=g.index.intersection(e.index,sort=False)
+model_ids=set(pd.read_csv(model_path,usecols=['ModelID'])['ModelID'])
+print('shared models',len(shared),'all in Model',set(shared)<=model_ids,flush=True)
+# Reorder both axes explicitly by selected Entrez IDs.
+g=g.loc[shared,gcols].to_numpy(dtype=np.float64,copy=False)
+e=e.loc[shared,ecols].to_numpy(dtype=np.float64,copy=False)
+print('nan cells geneeffect/expression',np.isnan(g).sum(),np.isnan(e).sum(),flush=True)
+
+m=len(ids)
+rhos=np.full(m,np.nan)
+pvals=np.full(m,np.nan)
+ns=np.zeros(m,dtype=int)
+for j in range(m):
+    ok=np.isfinite(g[:,j]) & np.isfinite(e[:,j])
+    ns[j]=ok.sum()
+    if ns[j] >= 3:
+        res=stats.spearmanr(e[ok,j], -g[ok,j]) # positive-going biological essentiality
+        rhos[j]=res.statistic
+        pvals[j]=res.pvalue
+valid=np.isfinite(pvals)
+print('tested',valid.sum(),'untested',(~valid).sum(),'n min/max',ns[valid].min(),ns[valid].max(),flush=True)
+# Benjamini-Hochberg adjusted p-values over all valid gene-level tests.
+p=pvals[valid]
+order=np.argsort(p)
+q_sorted=np.minimum.accumulate((p[order]*len(p)/np.arange(1,len(p)+1))[::-1])[::-1]
+q=np.empty_like(p); q[order]=np.minimum(q_sorted,1.0)
+sig=q<=0.05
+print('significant',sig.sum(),'percentage_tested',100*sig.sum()/len(p),flush=True)
+print('positive/negative essentiality rho',((rhos[valid][sig]>0).sum()),((rhos[valid][sig]<0).sum()),flush=True)
+print('BH max significant q',q[sig].max() if sig.any() else None,'min nonsig q',q[~sig].min() if (~sig).any() else None,flush=True)
+# Sensitivity: exact-label subset under the same analysis, BH corrected only across that subset.
+exact=np.array([gc==ec for gc,ec in zip(gcols,ecols)])
+p2=pvals[exact & valid]
+o=np.argsort(p2); qs=np.minimum.accumulate((p2[o]*len(p2)/np.arange(1,len(p2)+1))[::-1])[::-1]
+q2=np.empty_like(p2);q2[o]=np.minimum(qs,1)
+print('exact-label sensitivity genes/significant/percent',len(p2),(q2<=.05).sum(),100*(q2<=.05).sum()/len(p2),flush=True)
+PY"

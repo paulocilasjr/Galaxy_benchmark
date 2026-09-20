@@ -1,0 +1,54 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+import gc
+import pickle
+
+# Load data
+counts_df = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+
+annot = annot.set_index('sample')
+annot = annot.loc[counts_df.columns]
+annot['batch'] = annot['batch'].astype(str)
+annot['sex'] = annot['sex'].astype(str)
+
+print(f"Samples: {len(annot)}, Genes: {len(counts_df)}")
+
+# Minimal prefilter: remove genes with essentially zero counts
+# (standard DESeq2 practice to reduce memory)
+row_sums = counts_df.sum(axis=1)
+keep = row_sums >= 5
+print(f"Keeping {keep.sum()} / {len(keep)} genes")
+counts_filtered = counts_df.loc[keep]
+del counts_df, row_sums
+gc.collect()
+
+from pydeseq2.dds import DeseqDataSet
+
+counts_int = counts_filtered.T.round().astype(int)
+print(f"Counts matrix: {counts_int.shape}")
+
+dds = DeseqDataSet(
+    counts=counts_int,
+    metadata=annot,
+    design_factors="batch + sex",
+    refit_cooks=False,
+    n_cpus=1,
+)
+del counts_int, counts_filtered
+gc.collect()
+
+print("Starting deseq2 fitting...")
+dds.deseq2()
+print("DESeq2 fitting done!")
+
+# Save dds to avoid re-fitting
+import os
+os.makedirs('codex_output', exist_ok=True)
+dds.save_dds('codex_output/dds_fitted.pkl')
+print("DDS saved")
+PYEOF
+

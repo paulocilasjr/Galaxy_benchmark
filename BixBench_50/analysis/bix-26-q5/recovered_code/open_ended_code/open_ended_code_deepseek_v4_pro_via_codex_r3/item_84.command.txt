@@ -1,0 +1,47 @@
+/bin/bash -lc "cd /workspace && Rscript - <<'RS'
+library(jsonlite)
+D <- fromJSON('tmp/kegg_pau.json')
+g2p <- D"'$g2p
+p2g <- split(rep(names(g2p), lengths(g2p)), unlist(g2p))
+all_annotated <- unique(names(g2p))
+
+ora <- function(degs, universe=NULL) {
+  genes <- unique(degs)
+  mapped <- genes[genes %in% names(g2p)]
+  qpaths <- unique(unlist(g2p[mapped], use.names=FALSE))
+  extID <- if (is.null(universe)) all_annotated else intersect(universe, all_annotated)
+  res <- list()
+  for (p in sort(qpaths)) {
+    pathway_genes <- intersect(p2g[[p]], extID)
+    M <- length(pathway_genes)
+    if (M < 10 || M > 500) next
+    qgenes <- mapped[mapped %in% pathway_genes]
+    k <- length(qgenes)
+    if (k == 0) next
+    N <- length(extID)
+    n <- length(mapped)
+    pv <- phyper(k - 1, M, N - M, n, lower.tail = FALSE)
+    res[[p]] <- c(k=k, M=M, pvalue=pv)
+  }
+  if (length(res) == 0) return(data.frame(ID=character(), padj=numeric()))
+  df <- do.call(rbind, lapply(names(res), function(p) data.frame(ID=p, k=res[[p]]['"'k'], M=res[[p]]['M'], pvalue=res[[p]]['pvalue'], stringsAsFactors=FALSE)))
+  df"'$padj <- p.adjust(df$pvalue, method='"'BH')
+  df <- df[order(df"'$pvalue),]
+  df
+}
+gl <- readLines('"'tmp/GluFe_degs.txt')
+sl <- readLines('tmp/Succ_degs.txt')
+allg <- readLines('tmp/GluFe_all.txt')
+for (uni_name in c('default','all')) {
+  universe <- if (uni_name=='default') NULL else allg
+  g <- ora(gl, universe)
+  s <- ora(sl, universe)
+  gsig <- g"'$ID[g$padj < .05]
+  ssig <- s$ID[s$padj < .05]
+  cat('"'\\n=== universe', uni_name, '===\\n')
+  cat('GluFe tested', nrow(g), 'sig', length(gsig), paste(gsig, collapse=','), '\\n')
+  cat('Succ tested', nrow(s), 'sig', length(ssig), paste(ssig, collapse=','), '\\n')
+  cat('GluFe-only', length(setdiff(gsig, ssig)), paste(setdiff(gsig, ssig), collapse=','), '\\n')
+  cat('Overlap', length(intersect(gsig, ssig)), paste(intersect(gsig, ssig), collapse=','), '\\n')
+}
+RS"

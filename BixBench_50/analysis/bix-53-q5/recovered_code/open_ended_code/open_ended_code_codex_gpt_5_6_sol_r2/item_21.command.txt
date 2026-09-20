@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gseapy as gp
+from gseapy import Biomart
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+x=pd.read_csv('inputs/count.csv',index_col=0).T
+meta=pd.DataFrame({'condition':pd.Categorical(['KL']*3+['WL']*3, categories=['WL','KL'])}, index=x.index)
+dds=DeseqDataSet(counts=x, metadata=meta, design='~condition', refit_cooks=True, n_cpus=4, quiet=True)
+dds.deseq2()
+st=DeseqStats(dds, contrast=['condition','KL','WL'], alpha=.05, n_cpus=4, quiet=True)
+st.summary()
+st.lfc_shrink(coeff='condition[T.KL]')
+r=st.results_df
+ids=r.index[(r.pvalue<.05)&(r.log2FoldChange.abs()>1)&(r.baseMean>10)].tolist()
+print('DE_IDS',len(ids),flush=True)
+bm=Biomart(verbose=False)
+mp=bm.query(dataset='mmusculus_gene_ensembl',attributes=['ensembl_gene_id','external_gene_name'],filters={'ensembl_gene_id':ids})
+mp=mp[mp['external_gene_name'].notna() & mp['external_gene_name'].ne('')]
+symbols=sorted(set(mp.loc[mp['ensembl_gene_id'].isin(ids),'external_gene_name'].astype(str)))
+print('MAPPED_ROWS',len(mp),'UNIQUE_SYMBOLS',len(symbols),flush=True)
+enr=gp.enrichr(gene_list=symbols,gene_sets='WikiPathways_2019_Mouse',organism='Mouse',outdir=None,no_plot=True,verbose=True)
+res=enr.results
+print('COLUMNS',list(res.columns))
+print(res.head(30).to_string(index=False))
+top=res.head(20)
+print('OX_COUNT_API_ORDER',top.Term.str.contains('oxidative',case=False,na=False).sum())
+for col in ['P-value','Adjusted P-value','Combined Score','Odds Ratio']:
+ if col in res.columns:
+  asc=not col in ['Combined Score','Odds Ratio']
+  q=res.sort_values(col,ascending=asc,kind='stable').head(20)
+  print('OX_COUNT_SORT',col,q.Term.str.contains('oxidative',case=False,na=False).sum())
+  print(q[['Term',col]].to_string(index=False))
+PY"

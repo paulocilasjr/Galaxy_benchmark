@@ -1,0 +1,90 @@
+python3 -c "
+from compute_treeness import parse_newick, sum_branch_lengths
+import zipfile, tempfile, os, re, statistics
+from collections import Counter
+
+def detailed_analysis(zip_path, label):
+    results_by_size = {}
+    zeros = 0
+    errors = 0
+    
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        tree_files = sorted([f for f in zf.namelist() if f.endswith('.treefile')])
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for tf in tree_files:
+                zf.extract(tf, tmpdir)
+                tree_path = os.path.join(tmpdir, tf)
+                ortholog_id = os.path.basename(tf).split('.')[0]
+                
+                with open(tree_path, 'r') as f:
+                    s = f.read().strip()
+                
+                if not s or s == ';':
+                    errors += 1
+                    continue
+                
+                try:
+                    root = parse_newick(s)
+                except Exception as e:
+                    print(f'  PARSE ERROR: {tf}: {e}')
+                    errors += 1
+                    continue
+                
+                intern = [0.0]; term = [0.0]
+                sum_branch_lengths(root, intern, term)
+                
+                # Count nodes
+                def count_nodes(node):
+                    leaves = 0; internals = 0
+                    is_leaf = len(node.children)==0 and node.label is not None
+                    if is_leaf:
+                        leaves = 1
+                    else:
+                        internals = 1
+                    for c in node.children:
+                        cl, ci = count_nodes(c)
+                        leaves += cl; internals += ci
+                    return leaves, internals
+                
+                nleaves, ninternals = count_nodes(root)
+                total = intern[0] + term[0]
+                treeness = intern[0]/total if total > 0 else 0
+                
+                if treeness == 0:
+                    zeros += 1
+                
+                if nleaves not in results_by_size:
+                    results_by_size[nleaves] = []
+                results_by_size[nleaves].append(treeness)
+    
+    print(f'{label}:')
+    print(f'  Total trees: {len(tree_files)}, errors: {errors}, zeros: {zeros}')
+    for nl, vals in sorted(results_by_size.items()):
+        m = statistics.median(vals)
+        print(f'  {nl}-leaf trees: N={len(vals)}, median={m:.8f}, mean={statistics.mean(vals):.8f}')
+    
+    # Overall
+    all_vals = []
+    for vals in results_by_size.values():
+        all_vals.extend(vals)
+    print(f'  OVERALL: N={len(all_vals)}, median={statistics.median(all_vals):.8f}, mean={statistics.mean(all_vals):.8f}')
+    return all_vals
+
+animal_vals = detailed_analysis('/workspace/inputs/scogs_animals.zip', 'ANIMALS')
+print()
+fungi_vals = detailed_analysis('/workspace/inputs/scogs_fungi.zip', 'FUNGI')
+
+print()
+print(f'Difference (fungi - animals) = {statistics.median(fungi_vals):.8f} - {statistics.median(animal_vals):.8f} = {statistics.median(fungi_vals) - statistics.median(animal_vals):.8f}')
+
+# Also compute with only 4-leaf trees
+print()
+animal_4 = [v for v in animal_vals if v > 0]
+fungi_4 = [v for v in fungi_vals if v > 0]
+print(f'Only non-zero (4-leaf): animals={len(animal_4)}, fungi={len(fungi_4)}')
+print(f'  Animals median: {statistics.median(animal_4):.8f}')
+print(f'  Fungi median: {statistics.median(fungi_4):.8f}')
+print(f'  Diff: {statistics.median(fungi_4) - statistics.median(animal_4):.8f}')
+"
+

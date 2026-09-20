@@ -1,0 +1,86 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts_all = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0).astype(int)
+counts_all.columns = [str(c) for c in counts_all.columns]
+prefilter_mask = (counts_all > 10).any(axis=1)
+counts_pref = counts_all.loc[prefilter_mask]
+
+related_groups = [
+    'DMSO',
+    'DMSO_Serum_starvation',
+    'Cisplatin_IC50_CBD_IC50',
+    'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h',
+]
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample_col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout[layout['Group'].isin(related_groups)].copy()
+layout = layout.set_index('sample_col').loc[[c for c in counts_pref.columns if c in set(layout['sample_col'])]]
+layout['Group'] = pd.Categorical(layout['Group'], categories=related_groups)
+counts_model = counts_pref.loc[:, layout.index].T
+
+print(f'prefiltered_genes={counts_pref.shape[0]} model_samples={counts_model.shape[0]}')
+dds = DeseqDataSet(
+    counts=counts_model,
+    metadata=layout[['Group']],
+    design='~Group',
+    n_cpus=4,
+    quiet=True,
+)
+dds.deseq2()
+stat_res = DeseqStats(
+    dds,
+    contrast=['Group', 'Cisplatin_IC50_CBD_IC50', 'DMSO'],
+    alpha=0.05,
+    n_cpus=4,
+    quiet=True,
+)
+stat_res.summary()
+res = stat_res.results_df.copy()
+sig = res[
+    (res['baseMean'] >= 10) &
+    (res['padj'].notna()) &
+    (res['padj'] <= 0.05) &
+    (res['log2FoldChange'].abs() >= 0.5)
+].copy()
+print(f'sig_ensg={sig.shape[0]}')
+
+mapping = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t', dtype=str).dropna(subset=['ENSG', 'gene_name'])
+ensg_to_symbol = mapping.drop_duplicates('ENSG').set_index('ENSG')['gene_name']
+background_symbols = pd.Index(counts_pref.index).map(ensg_to_symbol).dropna()
+background_symbols = sorted(set(str(x) for x in background_symbols if str(x) and str(x) "'!= '"'nan'))
+foreground_symbols = pd.Index(sig.index).map(ensg_to_symbol).dropna()
+foreground_symbols = sorted(set(str(x) for x in foreground_symbols if str(x) and str(x) "'!= '"'nan'))
+print(f'foreground_symbols={len(foreground_symbols)} background_symbols={len(background_symbols)}')
+
+gene_sets = gp.get_library(name='Reactome_2022', organism='Human')
+target_term = 'TP53 Regulates Transcription Of Cell Cycle Genes R-HSA-6791312'
+if target_term not in gene_sets:
+    raise RuntimeError('Target term not found in Reactome_2022')
+
+enr = gp.enrichr(
+    gene_list=foreground_symbols,
+    gene_sets=gene_sets,
+    organism='human',
+    background=background_symbols,
+    outdir=None,
+    cutoff=1.0,
+    no_plot=True,
+    verbose=False,
+)
+results = enr.results.copy()
+row = results.loc[results['Term'].eq(target_term)]
+print(row.to_string(index=False))
+if row.shape[0] "'!= 1:
+    raise RuntimeError(f'"'Expected one target row, found {row.shape[0]}')
+odds = float(row.iloc[0]['Odds Ratio'])
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', encoding='utf-8') as f:
+    f.write(format(odds, '.12g') + '\\n')
+print('ANSWER', format(odds, '.12g'))
+PY"

@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import csv,re,time
+from collections import defaultdict
+import numpy as np,pandas as pd
+from scipy.stats import rankdata
+crf='inputs/CRISPRGeneEffect.csv'; exf='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+def hdr(f):
+ with open(f,newline='',encoding='utf-8') as h:return next(csv.reader(h))
+ch,eh=hdr(crf),hdr(exf); pat=re.compile(r'"'^(.*) '"\\((\\d+)\\)"'$'"')
+cm=defaultdict(list); em=defaultdict(list)
+for i,x in enumerate(ch[1:],1): cm[pat.match(x).group(2)].append((i,x,pat.match(x).group(1)))
+for i,x in enumerate(eh[1:],1): em[pat.match(x).group(2)].append((i,x,pat.match(x).group(1)))
+ids=sorted(set(cm)&set(em)); cr_labels=[cm[k][0][1] for k in ids]; ex_labels=[x[1] for k in ids for x in em[k]]
+# use all CR feature columns and all matching expression feature columns; exact header names are unique
+cr_pos=[0]+[cm[k][0][0] for k in ids]; ex_pos=[0]+[x[0] for k in ids for x in em[k]]
+print('stable ids',len(ids),'expr cols',len(ex_pos)-1,'duplicate ids',sum(len(em[k])>1 for k in ids),flush=True)
+t=time.time(); cr=pd.read_csv(crf,usecols=cr_pos,index_col=0,dtype={x:np.float64 for x in cr_labels}); ex=pd.read_csv(exf,usecols=ex_pos,index_col=0,dtype={x:np.float64 for x in ex_labels}); print('read',time.time()-t,cr.shape,ex.shape,flush=True)
+ix=cr.index.intersection(ex.index); cr=cr.loc[ix]; ex=ex.loc[ix]; # expression columns grouped by stable ID
+rhos=[]; rec=[]
+for k in ids:
+ a=cr[cm[k][0][1]].to_numpy(); cols=[x[1] for x in em[k]]
+ # report each expression source column separately, and mean where duplicates
+ for col in cols:
+  b=ex[col].to_numpy(); ok=np.isfinite(a)&np.isfinite(b); ra=rankdata(a[ok]); rb=rankdata(b[ok]); ra-=ra.mean();rb-=rb.mean();rho=np.dot(ra,rb)/np.sqrt(np.dot(ra,ra)*np.dot(rb,rb)); rec.append((rho,k,cm[k][0][2],col, 'single',int(ok.sum())))
+ if len(cols)>1:
+  b=ex[cols].mean(axis=1).to_numpy(); ok=np.isfinite(a)&np.isfinite(b); ra=rankdata(a[ok]); rb=rankdata(b[ok]);ra-=ra.mean();rb-=rb.mean();rho=np.dot(ra,rb)/np.sqrt(np.dot(ra,ra)*np.dot(rb,rb)); rec.append((rho,k,cm[k][0][2],'/'.join(cols),'mean',int(ok.sum())))
+rec.sort(reverse=True)
+print('highest raw-correlation stable-ID pair/mean:')
+for x in rec[:15]: print(x[2],x[3],x[4],'raw',format(x[0],'.9f'),'ess',format(-x[0],'.9f'),'n',x[5])
+PY"

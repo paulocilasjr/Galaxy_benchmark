@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+NS={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main','r':'http://schemas.openxmlformats.org/officeDocument/2006/relationships'}
+RELNS={'rel':'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+def colnum(cellref):
+    s=''.join(ch for ch in cellref if ch.isalpha())
+    n=0
+    for ch in s:
+        n=n*26+ord(ch.upper())-64
+    return n-1
+
+def shared(z):
+    if 'xl/sharedStrings.xml' not in z.namelist(): return []
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    out=[]
+    for si in root.findall('a:si', NS):
+        texts=[]
+        for t in si.findall('.//a:t', NS):
+            texts.append(t.text or '')
+        out.append(''.join(texts))
+    return out
+
+def sheet_map(z):
+    wb=ET.fromstring(z.read('xl/workbook.xml'))
+    rels=ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))
+    rid_to_target={rel.attrib['Id']: rel.attrib['Target'] for rel in rels.findall('rel:Relationship', RELNS)}
+    m=[]
+    for sh in wb.findall('a:sheets/a:sheet', NS):
+        rid=sh.attrib['{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id']
+        target=rid_to_target[rid]
+        if not target.startswith('xl/'):
+            target='xl/'+target
+        m.append((sh.attrib['name'], target))
+    return m
+
+def rows(path, sheet_target, max_rows=8):
+    with ZipFile(path) as z:
+        ss=shared(z)
+        root=ET.fromstring(z.read(sheet_target))
+        for r in root.findall('a:sheetData/a:row', NS)[:max_rows]:
+            vals=[]
+            for c in r.findall('a:c', NS):
+                idx=colnum(c.attrib.get('r','A1'))
+                while len(vals)<idx: vals.append('')
+                typ=c.attrib.get('t')
+                if typ=='inlineStr':
+                    val=''.join(t.text or '' for t in c.findall('.//a:t', NS))
+                else:
+                    v=c.find('a:v', NS)
+                    val='' if v is None else v.text or ''
+                    if typ=='s' and val"'!='"'': val=ss[int(val)]
+                vals.append(val)
+            print(vals)
+
+for p in [Path('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx'), Path('inputs/230215_Trio_Status.xlsx'), next(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))]:
+    print('\\nFILE', p)
+    with ZipFile(p) as z:
+        m=sheet_map(z)
+        print('sheets', m)
+    for name,target in m:
+        print('SHEET',name,target)
+        rows(p,target,8)
+PY"

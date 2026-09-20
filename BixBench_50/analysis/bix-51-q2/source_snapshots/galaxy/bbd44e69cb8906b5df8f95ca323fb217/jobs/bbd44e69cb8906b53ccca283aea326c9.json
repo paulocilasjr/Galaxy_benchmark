@@ -1,0 +1,56 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b53ccca283aea326c9",
+  "history_id": "bbd44e69cb8906b5df8f95ca323fb217",
+  "tool_id": "aic_bmi_efficacy_pr_v2",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-07-15T03:58:04.509434",
+  "update_time": "2026-07-15T04:00:27.407738",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'RSCRIPT'\nargs <- commandArgs(trailingOnly = TRUE)\ninput_path <- args[[1]]\noutput_path <- args[[2]]\n\nxml_unescape <- function(x) {\n  x <- gsub('&lt;', '<', x, fixed = TRUE)\n  x <- gsub('&gt;', '>', x, fixed = TRUE)\n  x <- gsub('&quot;', '\"', x, fixed = TRUE)\n  x <- gsub('&apos;', \"'\", x, fixed = TRUE)\n  x <- gsub('&amp;', '&', x, fixed = TRUE)\n  x\n}\n\nget_attr <- function(x, attr) {\n  pat <- paste0(attr, '=\"([^\"]*)\"')\n  m <- regexpr(pat, x, perl = TRUE)\n  if (m[1] < 0) return(NA_character_)\n  sub(paste0('.*', pat, '.*'), '\\1', x, perl = TRUE)\n}\n\ncol_index <- function(ref) {\n  letters <- gsub('[^A-Z]', '', ref)\n  vals <- utf8ToInt(letters) - utf8ToInt('A') + 1L\n  sum(vals * 26L ^ rev(seq_along(vals) - 1L))\n}\n\nread_file_one <- function(path) {\n  paste(readLines(path, warn = FALSE), collapse = '')\n}\n\nread_shared_strings <- function(root) {\n  p <- file.path(root, 'xl', 'sharedStrings.xml')\n  if (!file.exists(p)) return(character())\n  xml <- read_file_one(p)\n  sis <- regmatches(xml, gregexpr('<si[^>]*>.*?</si>', xml, perl = TRUE))[[1]]\n  vapply(sis, function(si) {\n    ts <- regmatches(si, gregexpr('<t[^>]*>.*?</t>', si, perl = TRUE))[[1]]\n    if (length(ts) == 0L || identical(ts, character(0))) return('')\n    txt <- gsub('^<t[^>]*>|</t>$', '', ts, perl = TRUE)\n    xml_unescape(paste(txt, collapse = ''))\n  }, character(1))\n}\n\ncell_value <- function(cell, shared) {\n  typ <- get_attr(cell, 't')\n  if (!is.na(typ) && typ == 'inlineStr') {\n    ts <- regmatches(cell, gregexpr('<t[^>]*>.*?</t>', cell, perl = TRUE))[[1]]\n    if (length(ts) == 0L || identical(ts, character(0))) return(NA_character_)\n    txt <- gsub('^<t[^>]*>|</t>$', '', ts, perl = TRUE)\n    return(xml_unescape(paste(txt, collapse = '')))\n  }\n  m <- regexpr('<v[^>]*>.*?</v>', cell, perl = TRUE)\n  if (m[1] < 0) return(NA_character_)\n  raw <- regmatches(cell, m)\n  val <- gsub('^<v[^>]*>|</v>$', '', raw, perl = TRUE)\n  val <- xml_unescape(val)\n  if (!is.na(typ) && typ == 's') return(shared[as.integer(val) + 1L])\n  val\n}\n\nread_xlsx_first_sheet <- function(path) {\n  root <- tempfile('xlsx_')\n  dir.create(root)\n  utils::unzip(path, exdir = root)\n  sheet_paths <- list.files(file.path(root, 'xl', 'worksheets'), pattern = '^sheet[0-9]+[.]xml$', full.names = TRUE)\n  if (length(sheet_paths) < 1L) stop('No worksheet XML found')\n  sheet_paths <- sort(sheet_paths)\n  shared <- read_shared_strings(root)\n  xml <- read_file_one(sheet_paths[1])\n  row_xml <- regmatches(xml, gregexpr('<row[^>]*>.*?</row>', xml, perl = TRUE))[[1]]\n  rows <- list()\n  max_col <- 0L\n  for (row in row_xml) {\n    r <- as.integer(get_attr(row, 'r'))\n    cells <- regmatches(row, gregexpr('<c[^>]*>.*?</c>', row, perl = TRUE))[[1]]\n    if (length(cells) == 0L || identical(cells, character(0))) next\n    vals <- list()\n    for (cell in cells) {\n      ref <- get_attr(cell, 'r')\n      ci <- col_index(ref)\n      vals[[as.character(ci)]] <- cell_value(cell, shared)\n      if (ci > max_col) max_col <- ci\n    }\n    rows[[as.character(r)]] <- vals\n  }\n  max_row <- max(as.integer(names(rows)))\n  mat <- matrix(NA_character_, nrow = max_row, ncol = max_col)\n  for (rn in names(rows)) {\n    for (cn in names(rows[[rn]])) mat[as.integer(rn), as.integer(cn)] <- rows[[rn]][[cn]]\n  }\n  headers <- mat[1, ]\n  keep <- which(!is.na(headers) & nzchar(trimws(headers)))\n  df <- as.data.frame(mat[-1, keep, drop = FALSE], stringsAsFactors = FALSE)\n  names(df) <- make.names(headers[keep], unique = TRUE)\n  attr(df, 'raw_headers') <- headers[keep]\n  df\n}\n\ndf <- read_xlsx_first_sheet(input_path)\nraw_headers <- attr(df, 'raw_headers')\neff_col <- which(raw_headers == 'Efficacy')\nbmi_col <- which(raw_headers == 'BMI')\nif (length(eff_col) != 1L || length(bmi_col) != 1L) stop('Required Efficacy and BMI columns not found exactly once')\n\nefficacy <- trimws(df[[eff_col]])\nbmi <- suppressWarnings(as.numeric(df[[bmi_col]]))\ny <- ifelse(!is.na(efficacy) & toupper(efficacy) == 'PR', 1, ifelse(is.na(efficacy) | efficacy == '', NA, 0))\nanalysis_df <- data.frame(PR = y, BMI = bmi)\nanalysis_df <- analysis_df[complete.cases(analysis_df), , drop = FALSE]\nif (nrow(analysis_df) == 0L) stop('No complete rows for model')\nif (length(unique(analysis_df$PR)) != 2L) stop('Outcome does not contain both PR and non-PR classes')\nfit <- glm(PR ~ BMI, family = binomial(), data = analysis_df)\nresult <- data.frame(\n  metric = c('aic', 'n_complete', 'event_PR', 'non_event', 'coefficients', 'formula'),\n  value = c(format(AIC(fit), digits = 17, scientific = FALSE),\n            as.character(nrow(analysis_df)),\n            as.character(sum(analysis_df$PR == 1)),\n            as.character(sum(analysis_df$PR == 0)),\n            paste(names(coef(fit)), format(coef(fit), digits = 17, scientific = FALSE), sep = '=', collapse = ';'),\n            'glm(PR ~ BMI, family=binomial)')\n)\nwrite.table(result, file = output_path, sep = '\\t', row.names = FALSE, quote = FALSE)\nRSCRIPT\nRscript analysis.R \"/jetstream2/scratch/main/jobs/78533287/inputs/dataset_2e06cb32-2182-4455-8f4c-430e160588df.dat\" aic_result.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a4721354fb184d0d52f4206",
+      "src": "hda",
+      "uuid": "2e06cb32-2182-4455-8f4c-430e160588df"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a472135f415e9dde823aefe",
+      "src": "hda",
+      "uuid": "cec36d8b-7eb8-44f5-a7b8-9abe1930c2f6"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Error in matrix(NA_character_, nrow = max_row, ncol = max_col) : \n  invalid 'nrow' value (too large or NA)\nCalls: read_xlsx_first_sheet -> matrix\nIn addition: There were 50 or more warnings (use warnings() to see the first 50)\nExecution halted\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Error in matrix(NA_character_, nrow = max_row, ncol = max_col) : \n  invalid 'nrow' value (too large or NA)\nCalls: read_xlsx_first_sheet -> matrix\nIn addition: There were 50 or more warnings (use warnings() to see the first 50)\nExecution halted\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

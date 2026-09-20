@@ -1,0 +1,114 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, xml.etree.ElementTree as ET, glob, os
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+NS={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+def col_to_idx(col):
+    n=0
+    for ch in col: n=n*26+ord(ch)-64
+    return n-1
+
+def read_xlsx_xml(path):
+    with zipfile.ZipFile(path) as z:
+        ssroot=ET.fromstring(z.read('xl/sharedStrings.xml'))
+        ss=[''.join(t.text or '' for t in si.findall('.//m:t', NS)) for si in ssroot.findall('m:si', NS)]
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows={}; maxcol=0
+        for row in root.findall('.//m:sheetData/m:row', NS):
+            r=int(row.attrib['r']); cells={}
+            for c in row.findall('m:c', NS):
+                idx=col_to_idx(re.match(r'([A-Z]+)', c.attrib['r']).group(1)); maxcol=max(maxcol,idx+1)
+                v=c.find('m:v', NS)
+                if v is None: val=None
+                elif c.attrib.get('t')=='s': val=ss[int(v.text)]
+                else:
+                    text=v.text
+                    try: val=float(text) if any(ch in text for ch in '.Ee') else int(text)
+                    except: val=text
+                cells[idx]=val
+            rows[r]=cells
+        headers=[rows[2].get(i) for i in range(maxcol)]
+        return [{headers[i]:rows[r].get(i) for i in range(maxcol) if headers[i] is not None} for r in sorted(k for k in rows if k>=3)]
+
+def sid_from_file(f):
+    return re.search(r'_CHIP_(.+)\\.xlsx"'$'"', os.path.basename(f)).group(1).split('-')[0]
+
+def truthy(x): return str(x).strip().lower()=='true'
+def fnum(x):
+    try: return float(str(x).strip())
+    except Exception: return None
+
+def has_clinvar(x): return x is not None and str(x).strip()"'!='"''
+
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+rows=list(wb.active.iter_rows(values_only=True)); hdr=list(rows[0])
+carrier=[str(dict(zip(hdr,row))['Sample ID']).strip() for row in rows[1:] if dict(zip(hdr,row)).get('BLM Mutation Status')=='Carrier']
+file_by_id={sid_from_file(f):f for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+carrier_files=[file_by_id[sid] for sid in carrier if sid in file_by_id]
+print('carrier ids with files:', len(carrier_files), [sid_from_file(f) for f in carrier_files])
+print('missing carrier ids:', [sid for sid in carrier if sid not in file_by_id])
+
+counts=Counter(); class_final=Counter(); so_final=Counter(); by_file=defaultdict(Counter); rows_final=[]
+for f in carrier_files:
+    sid=sid_from_file(f)
+    for rec in read_xlsx_xml(f):
+        counts['raw'] += 1
+        if not truthy(rec.get('In_CHIP')): continue
+        counts['in_chip'] += 1
+        z=str(rec.get('Zygosity') or '').strip()
+        if not z or z == 'Reference': continue
+        counts['non_reference'] += 1
+        vaf=fnum(rec.get('Variant Allele Freq'))
+        if vaf is None: continue
+        if not (vaf < 0.3): continue
+        counts['vaf_lt_0.3'] += 1
+        so=str(rec.get('Sequence Ontology (Combined)') or '')
+        sol=so.lower()
+        if any(term in sol for term in ['intron','intergenic','utr']): continue
+        counts['region_filtered'] += 1
+        cls=rec.get('Classification')
+        if not has_clinvar(cls): continue
+        cls=str(cls).strip()
+        counts['with_classification'] += 1
+        class_final[cls]+=1
+        so_final[so]+=1
+        by_file[sid][cls]+=1
+        if cls in {'Benign','Likely Benign'}:
+            counts['benign_or_likely_benign'] += 1
+        rows_final.append((sid, rec.get('Chr:Pos'), rec.get('Ref/Alt'), z, vaf, so, rec.get('Effect (Combined)'), cls))
+print('filter counts:', counts)
+print('final classifications:', class_final)
+print('final sequence ontology:', so_final)
+print('proportion:', counts['benign_or_likely_benign']/counts['with_classification'])
+print('num den:', counts['benign_or_likely_benign'], counts['with_classification'])
+print('by file:')
+for sid in sorted(by_file, key=lambda x:(len(x),x)):
+    print(sid, dict(by_file[sid]))
+print('final rows:')
+for r in rows_final: print(r)
+
+# Some alternate plausible filters for validation only
+modes = {
+    'exclude_so_intron_intergenic_utr': lambda so,eff: not any(t in so.lower() for t in ['intron','intergenic','utr']),
+    'exclude_so_intron_intergenic_utr_upstream_downstream': lambda so,eff: not any(t in so.lower() for t in ['intron','intergenic','utr','upstream','downstream']),
+    'keep_effect_missense_lof_unknown': lambda so,eff: str(eff).lower()"'!='"'other',
+    'keep_so_exonic_splice': lambda so,eff: any(t in so.lower() for t in ['missense','synonymous','frameshift','inframe','splice']) and not any(t in so.lower() for t in ['intron','intergenic','utr'])
+}
+for name,keep in modes.items():
+    c=Counter()
+    cf=Counter()
+    for f in carrier_files:
+        for rec in read_xlsx_xml(f):
+            if not truthy(rec.get('In_CHIP')): continue
+            z=str(rec.get('Zygosity') or '').strip()
+            if not z or z=='Reference': continue
+            vaf=fnum(rec.get('Variant Allele Freq'))
+            if vaf is None or not (vaf<0.3): continue
+            if not keep(str(rec.get('Sequence Ontology (Combined)') or ''), str(rec.get('Effect (Combined)') or '')): continue
+            cls=rec.get('Classification')
+            if not has_clinvar(cls): continue
+            cls=str(cls).strip(); c['den']+=1; cf[cls]+=1
+            if cls in {'Benign','Likely Benign'}: c['num']+=1
+    print('sensitivity', name, c, dict(cf), c['num']/c['den'] if c['den'] else None)
+PY"

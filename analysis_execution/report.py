@@ -14,6 +14,8 @@ def _fmt(value, digits=3):
 
 def render(output: Path, evidence: dict) -> None:
     task = evidence["task"]
+    prompt = (task.get("prompt") or "**unavailable in the retrieved metadata**").strip()
+    prompt_sentence = prompt if prompt.endswith((".", "?", "!")) else prompt + "."
     runs = evidence["runs"]
     comparisons = evidence["comparisons"]
     scored = [r for r in runs if r["outcome"]["original_evaluator_score"] is not None]
@@ -22,16 +24,17 @@ def render(output: Path, evidence: dict) -> None:
             for a in r["artifacts"] if a.get("history_id") and e["execution_location"] == "galaxy_job"
             and e["event_type"] == "analysis"}
     failed_jobs = [e for e in jobs.values() if e.get("status") in {"error", "failed"}]
+    failed_label = "failed job" if len(failed_jobs) == 1 else "failed jobs"
     by_model = defaultdict(dict)
     for c in comparisons:
         prefix = "score_" if c["comparison_id"].startswith("score_") else "input_tokens_"
         by_model[c["comparison_id"].removeprefix(prefix)][prefix[:-1]] = c
     lines = [f"# {task['benchmark']} {task['task_id']}: retrospective execution-history analysis", "",
              "## 1. Task, design, evidence, and matching", "",
-             f"The supplied task prompt is: {task.get('prompt') or '**unavailable in the retrieved metadata**'}. This audit includes **{len(runs)} workbook rows** for one selected task. The workbook is the observed-link inventory; an independent protocol manifest was not supplied, so expected coverage and replicate matching are unknown. Conditions are kept as Galaxy and open-ended code, with original labels in `run_manifest.json`. Runtime model IDs are reported only when a retrieved invocation file verifies them. Replicate numbers do not establish matched seeds.", "",
+             f"The supplied task prompt is: {prompt_sentence} This audit includes **{len(runs)} workbook rows** for one selected task. The workbook is the observed-link inventory; an independent protocol manifest was not supplied, so expected coverage and replicate matching are unknown. Conditions are kept as Galaxy and open-ended code, with original labels in `run_manifest.json`. Runtime model IDs are reported only when a retrieved invocation file verifies them. Replicate numbers do not establish matched seeds.", "",
              f"Original traces were retrieved for **{sum(r['evidence_completeness']['agent_transcript']=='retrieved' for r in runs)}/{len(runs)}** rows. Public Galaxy contents were retrieved for **{len(unique_histories)} distinct histories represented by dataset records**; history metadata-only and unavailable records remain in the source manifests. This is retrospective: no agent code or Galaxy analysis was rerun, and hidden reference files were not opened.", "",
              "## 2. Main outcomes", "",
-             f"The original evaluator supplied a numeric score for **{len(scored)}/{len(runs)}** runs. These are original run evaluations, separate from saved outputs and the auditor's interpretation. The scoring field and mode are retained per run; scores from different benchmarks must not be pooled. The retrieved public histories expose **{len(jobs)} distinct analytical creating jobs**, including **{len(failed_jobs)} failed jobs**. Native shell and MCP calls are separate from those jobs and are not equated with scientific attempts.", "",
+             f"The original evaluator supplied a numeric score for **{len(scored)}/{len(runs)}** runs. These are original run evaluations, separate from saved outputs and the auditor's interpretation. The scoring field and mode are retained per run; scores from different benchmarks must not be pooled. The retrieved public histories expose **{len(jobs)} distinct analytical creating jobs**, including **{len(failed_jobs)} {failed_label}**. Native shell and MCP calls are separate from those jobs and are not equated with scientific attempts.", "",
              "| Model slug | Galaxy score mean | Code score mean | Difference (original metric unit) | Galaxy/code median input-token ratio |", "|---|---:|---:|---:|---:|"]
     for model, c in sorted(by_model.items()):
         s, t = c.get("score", {}), c.get("input_tokens", {})
@@ -60,7 +63,7 @@ def render(output: Path, evidence: dict) -> None:
               "## 5. Inputs, external computation, and reproducibility", "",
               "`input_manifest.json` compares names and original run-reported SHA-256 values from staged-input manifests. It does not claim the auditor rehashed large source inputs. Galaxy dataset association IDs, underlying dataset IDs, creating jobs, and accessible selected output bytes are retained where returned. Copied associations are not treated as fresh independent uploads. Remote input retrieval is separate from external analytical computation; execution location is recorded per event. Current public histories can include inherited or later state, so the original transcript is preferred for chronology.", "",
               "## 6. Methods and safeguards", "",
-              "The XLSX parser reads displayed cell text and hyperlink targets without executing formulas or workbook code. Source collection is read-only. Hugging Face files above the configured byte cap are linked; retained text and gzip traces are scanned for credential and account-path patterns, with original and derivative hashes recorded. The repository Galaxy credential gate is checked before Galaxy API access. Creating jobs are deduplicated by server and native job ID; trace calls are counted separately. Exact original evaluator fields are kept rather than replaced with current scoring rules. JSON Schema 2.0, reference checks, retained hashes, and report counts are validated by `validate.py`.", "",
+              "The XLSX parser reads displayed cell text and hyperlink targets without executing formulas or workbook code. Source collection is read-only. Hugging Face files above the configured byte cap are linked; retained text and gzip traces are scanned for credential and account-path patterns, with original and derivative hashes recorded. The repository Galaxy credential gate is checked before Galaxy API access. Source manifests record whether TLS certificates were verified; if not, retained-byte hashes do not authenticate the remote server. Creating jobs are deduplicated by server and native job ID; trace calls are counted separately. Exact original evaluator fields are kept rather than replaced with current scoring rules. JSON Schema 2.0, reference checks, retained hashes, and report counts are validated by `validate.py`.", "",
               "## 7. Claim-to-evidence map", "",
               "| Bounded claim | Finding ID | Evidence |", "|---|---|---|",
               "| Original evaluator score coverage for supplied rows | `finding_accuracy` | Per-run evaluator artifacts and original `evaluation.json` |",
@@ -70,7 +73,7 @@ def render(output: Path, evidence: dict) -> None:
               "## 8. Missing evidence and additional data", "",
               "An independent experiment manifest is needed to establish expected coverage, seeds, stopping rules, and compatible pairing. Missing or partial trace/history records are listed in source manifests. Scientific interpretation of domain-specific outputs, a common cross-condition scientific-attempt codebook, per-call token attribution, prices, and blinded reviewer outcomes require separate evidence. No missing value is encoded as an observed zero.", "",
               "### Abstract-ready paragraph", "",
-              f"For one selected {task['benchmark']} task, {len(runs)} supplied runs yielded {len(scored)} original numeric evaluator scores. Retrieved public Galaxy records exposed {len(jobs)} distinct analytical creating jobs, including {len(failed_jobs)} failed jobs. These case-study counts describe the supplied links and do not establish benchmark-wide condition effects or human readability gains.", "",
+              f"For one selected {task['benchmark']} task, {len(runs)} supplied runs yielded {len(scored)} original numeric evaluator scores. Retrieved public Galaxy records exposed {len(jobs)} distinct analytical creating jobs, including {len(failed_jobs)} {failed_label}. These case-study counts describe the supplied links and do not establish benchmark-wide condition effects or human readability gains.", "",
               "### Results draft", "",
               f"We audited {len(runs)} workbook-listed runs for {task['task_id']}, retaining original agent traces, evaluator records, usage totals, and read-only Galaxy history snapshots where accessible. The original evaluator returned a numeric score for {len(scored)} runs. We kept those scores separate from saved Galaxy outputs and did not regrade answers. Distinct public Galaxy histories exposed {len(jobs)} analytical creating jobs, of which {len(failed_jobs)} had failed/error status. Within-model score and input-token comparisons were calculated only where both conditions supplied compatible original fields; they are descriptive ratios or differences for a single task. Replicate seeds, complete protocol coverage, stage-attributed tokens, and blinded readability outcomes were unavailable, limiting causal and benchmark-wide inference.", ""]
     report = output / "history_analysis.md"

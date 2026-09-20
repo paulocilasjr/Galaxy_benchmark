@@ -1,0 +1,26 @@
+/bin/bash -lc "PYTHONUNBUFFERED=1 /workspace/tmp/pydeseq2-venv/bin/python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+base='/workspace/inputs'
+metadata=pd.read_csv(base+'/Sample_annotated_Zenodo.csv').set_index('sample')
+metadata['batch']=pd.Categorical(metadata['batch'].astype(str), categories=['1','2','3','4'], ordered=True)
+metadata['sex']=pd.Categorical(metadata['sex'], categories=['F','M'], ordered=True)
+gene_counts=pd.read_csv(base+'/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+threshold=7230
+keep=(gene_counts.sum(axis=1)>threshold)
+keep.loc['FAM138A']=True
+gene_counts=gene_counts.loc[keep]
+counts=gene_counts.T.loc[metadata.index]
+print('model shape',counts.shape,'kept high-sum',int(keep.sum()),'FAM sum',counts['FAM138A'].sum(),flush=True)
+dds=DeseqDataSet(counts=counts,metadata=metadata,design='~ batch + sex',n_cpus=1,quiet=False,low_memory=True)
+dds.deseq2()
+print('design columns',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+ds=DeseqStats(dds,contrast=['sex','M','F'],n_cpus=1,quiet=False)
+ds.summary()
+print('pre-shrink',ds.results_df.loc['FAM138A'].to_dict(),flush=True)
+ds.lfc_shrink(coeff='sex[T.M]')
+print('post-shrink',ds.results_df.loc['FAM138A'].to_dict(),flush=True)
+row=ds.results_df.loc['FAM138A']
+print('thresholds',abs(row['log2FoldChange'])>0.5,row['baseMean']>10,flush=True)
+PY"

@@ -1,0 +1,111 @@
+python3 << 'PYEOF'
+import xlrd
+import numpy as np
+from scipy import stats
+import math
+
+wb = xlrd.open_workbook('/workspace/inputs/pone.0150501.s002.xls')
+sheet = wb.sheet_by_index(0)
+
+# Extract miRNA data (rows 2-176, 0-indexed)
+mirnas = []
+for r in range(2, sheet.nrows):
+    name = sheet.cell_value(r, 0)
+    # Patient values: cols 1-10, Control values: cols 11-20
+    patient_vals = []
+    control_vals = []
+    for c in range(1, 11):
+        v = sheet.cell_value(r, c)
+        if v != '' and v != 'NAN':
+            patient_vals.append(float(v))
+    for c in range(11, 21):
+        v = sheet.cell_value(r, c)
+        if v != '' and v != 'NAN':
+            control_vals.append(float(v))
+    mirnas.append((name, patient_vals, control_vals))
+
+print(f"Total miRNAs: {len(mirnas)}")
+nan_count = sum(1 for _, pv, cv in mirnas if len(pv) < 10 or len(cv) < 10)
+print(f"miRNAs with NAN values: {nan_count}")
+
+# Perform t-tests
+p_values = []
+for name, pv, cv in mirnas:
+    if len(pv) < 2 or len(cv) < 2:
+        p_values.append(np.nan)
+        continue
+    t_stat, p_val = stats.ttest_ind(pv, cv, equal_var=False)  # Welch's t-test
+    p_values.append(p_val)
+
+p_values = np.array(p_values)
+valid_idx = ~np.isnan(p_values)
+valid_p = p_values[valid_idx]
+n_valid = len(valid_p)
+print(f"Valid t-tests: {n_valid}")
+print(f"NaN p-values (insufficient data): {np.sum(np.isnan(p_values))}")
+
+# Bonferroni correction
+# Adjust for all tests attempted (including those that couldn't be tested)
+n_tests = len(mirnas)  # 175
+bonf_p = np.full(len(p_values), np.nan)
+bonf_p[valid_idx] = np.minimum(valid_p * n_tests, 1.0)
+
+# Benjamini-Yekutieli correction
+# c(m) = sum_{j=1}^{m} 1/j where m = number of tests
+def by_correction(p_vals, n_total):
+    """Benjamini-Yekutieli FDR correction. Returns adjusted p-values."""
+    # Sort indices
+    sorted_idx = np.argsort(p_vals)
+    m = len(p_vals)
+    # c(m) harmonic sum
+    c_m = np.sum(1.0 / np.arange(1, n_total + 1))
+    # Compute adjusted p-values
+    adjusted = np.empty(m)
+    # Use n_total for the correction factor
+    cummin = np.inf
+    for i in range(m - 1, -1, -1):
+        rank = i + 1  # 1-indexed rank
+        adj = p_vals[sorted_idx[i]] * n_total * c_m / rank
+        adj = min(adj, 1.0)
+        cummin = min(cummin, adj)
+        adjusted[sorted_idx[i]] = cummin
+    return adjusted
+
+by_p = np.full(len(p_values), np.nan)
+by_p[valid_idx] = by_correction(valid_p, n_tests)
+
+# Print some diagnostics
+print(f"\nHarmonic sum c({n_tests}) = {np.sum(1.0 / np.arange(1, n_tests + 1)):.4f}")
+print(f"Min raw p-value: {np.nanmin(valid_p):.10f}")
+print(f"Min Bonferroni adj p: {np.nanmin(bonf_p):.10f}")
+print(f"Min BY adj p: {np.nanmin(by_p):.10f}")
+
+# Count significant
+bonf_sig = np.sum(bonf_p <= 0.05)
+by_sig = np.sum(by_p <= 0.05)
+
+print(f"\nSignificant (Bonferroni, p_adj <= 0.05): {bonf_sig}")
+print(f"Significant (Benjamini-Yekutieli, p_adj <= 0.05): {by_sig}")
+
+# Find names of significant ones for each method
+print("\nBonferroni significant miRNAs:")
+for i in range(len(mirnas)):
+    if bonf_p[i] <= 0.05:
+        print(f"  {mirnas[i][0]}: raw_p={valid_p[np.where(valid_idx)[0] == i][0] if i in np.where(valid_idx)[0] else 'N/A'}, bonf_p={bonf_p[i]:.6f}")
+
+print("\nBY significant miRNAs:")
+for i in range(len(mirnas)):
+    if by_p[i] <= 0.05:
+        print(f"  {mirnas[i][0]}: raw_p={valid_p[np.where(valid_idx)[0] == i][0] if i in np.where(valid_idx)[0] else 'N/A'}, by_p={by_p[i]:.6f}")
+
+# Format ratio
+if by_sig == 0:
+    ratio_str = f"{int(bonf_sig)}:0"
+else:
+    # Simplify ratio
+    from math import gcd
+    g = gcd(int(bonf_sig), int(by_sig))
+    ratio_str = f"{int(bonf_sig)//g}:{int(by_sig)//g}"
+
+print(f"\nRatio Bonferroni:Benjamini-Yekutieli = {ratio_str}")
+PYEOF

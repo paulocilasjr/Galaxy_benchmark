@@ -1,0 +1,99 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, xml.etree.ElementTree as ET, openpyxl
+from collections import Counter
+from pathlib import Path
+
+trio_path = Path('/workspace/inputs/230215_Trio_Status.xlsx')
+wb = openpyxl.load_workbook(trio_path, read_only=True, data_only=True)
+ws = wb.active
+header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+print('trio header:', header)
+male_carriers=[]
+for row in ws.iter_rows(min_row=2, values_only=True):
+    sid, status, sex, blm, age, cancer, extra = row
+    if str(blm).strip().lower() == 'carrier' and str(sex).strip().upper() == 'M':
+        try:
+            age_f=float(age)
+        except (TypeError,ValueError):
+            age_f=None
+        male_carriers.append((sid,status,sex,blm,age,age_f))
+print('male carriers:')
+for x in male_carriers: print(x)
+oldest=max([x for x in male_carriers if x[-1] is not None], key=lambda x:x[-1])
+print('oldest:', oldest)
+sid_raw = oldest[0]
+# normalize sample id from trio: numeric int or SRR string
+if isinstance(sid_raw,float) and sid_raw.is_integer():
+    sid = str(int(sid_raw))
+else:
+    sid = str(sid_raw).strip()
+# find matching xlsx files, prefer numeric token and sample header
+files=list(Path('/workspace/inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+candidates=[]
+for f in files:
+    if sid in f.name:
+        candidates.append(f)
+print('candidate files for', sid, candidates)
+# use file whose stem ends with token equal sid (handle SRR exact and numeric exact)
+if len(candidates)==1:
+    sample_file=candidates[0]
+else:
+    # prefer filename containing '_CHIP_' + sid + '-' exact, then sid at end before suffix
+    exact=[f for f in candidates if f.stem.split('_')[-1].split('-')[0] == sid]
+    sample_file=exact[0] if exact else candidates[0]
+print('using', sample_file)
+
+def parse_chip_xlsx(path):
+    z=zipfile.ZipFile(path)
+    M='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+    ns={'m':M[1:-1]}
+    shared=[]
+    for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall('m:si',ns):
+        shared.append(''.join(t.text or '' for t in si.iter(M+'t')))
+    def col_index(ref):
+        letters=''
+        for ch in ref:
+            if ch.isalpha(): letters+=ch
+            else: break
+        n=0
+        for ch in letters: n=n*26+ord(ch)-64
+        return n-1
+    parsed=[]
+    for row_el in ET.fromstring(z.read('xl/worksheets/sheet1.xml')).iter(M+'row'):
+        r=int(row_el.get('r'))
+        vals={}
+        for c in row_el.findall(M+'c'):
+            idx=col_index(c.get('r'))
+            typ=c.get('t')
+            v=c.find(M+'v')
+            if v is None:
+                inline=c.find(M+'is')
+                val=''.join(t.text or '' for t in inline.iter(M+'t')) if inline is not None else ''
+            else:
+                val=v.text or ''
+                if typ=='s':
+                    val=shared[int(val)]
+            vals[idx]=val
+        parsed.append((r,vals))
+    return parsed
+
+rows=parse_chip_xlsx(sample_file)
+# header should row2; data from row3
+data=rows[2:]
+print('data rows:', len(data), 'max row:', max(r for r,v in data))
+zyg_counter=Counter(v.get(4) for r,v in data)
+print('zygosity distribution:', zyg_counter)
+non_ref=[v for r,v in data if v.get(4) not in ('Reference', None, '')]
+print('non-reference row count:', len(non_ref))
+# genes via CHIP Match column (index 30), case-normalized
+gene_counter=Counter()
+for v in non_ref:
+    g=(v.get(30) or '').strip().upper()
+    if g:
+        gene_counter[g]+=1
+print('top genes:')
+for g,n in gene_counter.most_common(15):
+    print(g,n)
+top_gene=gene_counter.most_common(1)[0][0]
+print('ANSWER:', top_gene)
+PY"

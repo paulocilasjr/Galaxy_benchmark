@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+# B count variations cached data
+import urllib.request, csv
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau').read().decode().splitlines()
+listp=set(l.split('\\t')[0] for l in urllib.request.urlopen('https://rest.kegg.jp/list/pathway/pau').read().decode().splitlines() if l.strip())
+g2p=defaultdict(set)
+for l in link:
+ if '\\t' not in l:continue
+ g,p=l.split('\\t'); g=g.split(':')[1]; p=p[5:]
+ if p in listp:g2p[g].add(p)
+p2g=defaultdict(set)
+for g,ps in g2p.items():
+ for p in ps:p2g[p].add(g)
+db=set(g2p)
+data=[]
+for f in ['tmp/res_1vs97.csv','tmp/res_1vs98.csv','tmp/res_1vs99.csv']:
+ with open(f) as fh:data.append({r['gene']:float(r['log2FoldChange']) for r in csv.DictReader(fh)})
+common_up=set(g for g in data[0] if all(v[g]>1.5 for v in data))
+common_down=set(g for g in data[0] if all(v[g]<-1.5 for v in data))
+def run(mn,mx):
+ for d,genes in [('up',common_up),('down',common_down)]:
+  genes=genes&db; n=len(genes); rows=[]
+  for p in p2g:
+   K=len(p2g[p])
+   if K<mn or K>mx:continue
+   k=len(genes&p2g[p])
+   if k==0:continue
+   pv=hypergeom.sf(k-1,len(db),K,n); rows.append((p,pv))
+  padj=multipletests([x[1] for x in rows],method='fdr_bh')[1] if rows else []
+  sig={p for (p,pv),pa in zip(rows,padj) if pa<.05}
+  print('min',mn,'max',mx,d,'genes',n,'sig',len(sig),sorted(sig))
+for mn in [1,2,5,10,15]:run(mn,500)
+run(10,1000)
+PY"

@@ -1,0 +1,47 @@
+/bin/bash -c "python3 - <<'PY'
+import csv, numpy as np, collections, time
+with open('inputs/ROSMAP_genexp_ad.csv', newline='') as f:
+    r=csv.reader(f); h=next(r); rows=list(r)
+X=np.array([[float(x) for x in row[1:]] for row in rows], float).T
+ids=h[1:]
+Y=np.log10(X+1)
+
+def pca(Y):
+    # center columns (genes/features), ddof=1 total variance
+    Yc=Y-Y.mean(axis=0, keepdims=True)
+    # compute total variance across full feature space
+    total=float((Yc**2).sum()/(Y.shape[0]-1))
+    # SVD: U (n,k), s (k), Vt (k,p); centered rows
+    U,s,Vt=np.linalg.svd(Yc, full_matrices=False)
+    ev=(s**2)/(Y.shape[0]-1)
+    return ev, total, ev[0]/total*100, U,s
+
+ev_all,tot_all,pct_all,_,_=pca(Y)
+print('all n', Y.shape, 'total variance', tot_all, 'PC1 eigen', ev_all[0], 'pct', pct_all)
+print('first 5 ratios all', ev_all[:5]/tot_all*100)
+print('sum ev all / total', ev_all.sum()/tot_all, 'ncomp min', min(Y.shape)-1)
+
+# unique only (exclude any id occurring more than once)
+cnt=collections.Counter(ids)
+keep=[i for i,pid in enumerate(ids) if cnt[pid]==1]
+Y_unique=Y[keep]
+ev_u,tot_u,pct_u,_,_=pca(Y_unique)
+print('unique n', Y_unique.shape, 'total variance', tot_u, 'PC1 eigen', ev_u[0], 'pct', pct_u)
+print('first 5 ratios unique', ev_u[:5]/tot_u*100)
+print('sum ev unique / total', ev_u.sum()/tot_u, 'ncomp min', min(Y_unique.shape)-1)
+
+# averaging duplicates as technical replicate scenario
+groups=collections.defaultdict(list)
+for i,pid in enumerate(ids): groups[pid].append(i)
+# iterate in occurrence order preserve order of first appearance, average Y for each group
+order=[]
+for pid in ids:
+    if pid not in order: order.append(pid)
+Y_avg=[]
+for pid in order:
+    Y_avg.append(Y[groups[pid]].mean(axis=0))
+Y_avg=np.array(Y_avg)
+ev_a,tot_a,pct_a,_,_=pca(Y_avg)
+print('avg groups n', Y_avg.shape, 'pct', pct_a)
+print('first5 avg', ev_a[:5]/tot_a*100)
+PY"

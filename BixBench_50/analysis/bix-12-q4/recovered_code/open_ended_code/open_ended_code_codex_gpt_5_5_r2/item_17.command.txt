@@ -1,0 +1,85 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from math import isclose
+
+archives = {'animals': 'inputs/scogs_animals.zip', 'fungi': 'inputs/scogs_fungi.zip'}
+
+def parse_fasta(text):
+    records=[]; name=None; chunks=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None:
+                records.append((name, ''.join(chunks)))
+            name=line[1:].split()[0]; chunks=[]
+        else:
+            chunks.append(line)
+    if name is not None:
+        records.append((name, ''.join(chunks)))
+    return records
+
+def pi_stats(records, gap_as_state=False, denom='all'):
+    seqs=[s.upper() for _,s in records]
+    if not seqs: raise ValueError('empty')
+    L=len(seqs[0])
+    if any(len(s)"'!=L for s in seqs):
+        raise ValueError('"'unaligned lengths')
+    pi=0; denom_count=0
+    for col in zip(*seqs):
+        chars=list(col)
+        if denom == 'nongap_any':
+            if all(c in '-?' for c in chars):
+                continue
+        denom_count += 1
+        if not gap_as_state:
+            chars=[c for c in chars if c not in '-?']
+        counts=Counter(chars)
+        if sum(1 for v in counts.values() if v>=2) >= 2:
+            pi += 1
+    return pi, denom_count, (pi/denom_count*100 if denom_count else float('nan'))
+
+def values(archive, **kwargs):
+    vals=[]; bad=[]; details=[]
+    with ZipFile(archive) as z:
+        names=sorted(n for n in z.namelist() if n.endswith('.mafft') and not n.endswith('/'))
+        for n in names:
+            rec=parse_fasta(z.read(n).decode())
+            try:
+                pi,L,p=pi_stats(rec, **kwargs)
+            except Exception as e:
+                bad.append((n,str(e)))
+                continue
+            vals.append(p); details.append((n,len(rec),L,pi,p))
+    return vals,bad,details
+
+def mannwhitney_u(x,y):
+    vals=[(v,0) for v in x]+[(v,1) for v in y]
+    vals.sort(key=lambda t:t[0])
+    ranks=[0]*len(vals)
+    i=0
+    while i<len(vals):
+        j=i+1
+        while j<len(vals) and vals[j][0] == vals[i][0]:
+            j+=1
+        avg=(i+1+j)/2.0
+        for k in range(i,j): ranks[k]=avg
+        i=j
+    r1=sum(r for (v,g),r in zip(vals,ranks) if g==0)
+    n1=len(x); n2=len(y)
+    u1=r1 - n1*(n1+1)/2.0
+    # pairwise check
+    u_pair=sum((1 if a>b else 0.5 if a==b else 0) for a in x for b in y)
+    return u1,u_pair,n1*n2-u1
+
+for gap_as_state in (False, True):
+    for denom in ('all','nongap_any'):
+        av,bad_a,det_a=values(archives['animals'], gap_as_state=gap_as_state, denom=denom)
+        fv,bad_f,det_f=values(archives['fungi'], gap_as_state=gap_as_state, denom=denom)
+        u1,up,u2=mannwhitney_u(av,fv)
+        print('variant', 'gapstate' if gap_as_state else 'nogapstate', denom)
+        print('n',len(av),len(fv),'bad',len(bad_a),len(bad_f),'U_animals',u1,'U_pair',up,'U_fungi',u2)
+        print('means', sum(av)/len(av), sum(fv)/len(fv), 'minmax', (min(av),max(av)), (min(fv),max(fv)))
+        print('sample', det_a[0], det_f[0])
+PY"

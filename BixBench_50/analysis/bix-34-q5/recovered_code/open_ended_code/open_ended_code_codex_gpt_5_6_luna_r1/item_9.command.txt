@@ -1,0 +1,71 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from statistics import median, mean
+# Reuse a compact Newick parser with explicit branch path calculation.
+class N:
+    def __init__(self): self.ch=[]; self.p=None; self.bl=0.; self.name=''
+def parse(s):
+    s=s.strip().rstrip(';'); i=0
+    def sub():
+        nonlocal i
+        n=N()
+        if s[i]=='(':
+            i+=1
+            while True:
+                c=sub(); c.p=n; n.ch.append(c)
+                if s[i]==',': i+=1; continue
+                assert s[i]==')'; i+=1; break
+            st=i
+            while i<len(s) and s[i] not in ',():;': i+=1
+            n.name=s[st:i].strip()
+        else:
+            st=i
+            while i<len(s) and s[i] not in ',():;': i+=1
+            n.name=s[st:i].strip()
+        if i<len(s) and s[i]==':':
+            i+=1; st=i
+            while i<len(s) and s[i] not in ',():;': i+=1
+            n.bl=float(s[st:i])
+        return n
+    return sub()
+def calc(s):
+    root=parse(s); ls=[]
+    def go(n,d):
+        if not n.ch: ls.append((n,d))
+        for c in n.ch: go(c,d+c.bl)
+    go(root,0)
+    ds=[]
+    for a in range(len(ls)):
+      for b in range(a):
+        x,da=ls[a]; y,db=ls[b]
+        anc={}; z=x; q=0
+        while z: anc[z]=q; q+=z.bl; z=z.p
+        z=y; q2=0
+        while z not in anc: q2+=z.bl; z=z.p
+        ds.append(da+db-2*(da-anc[z])) # root-depth lca via depths? this formula wrong maybe
+    return mean(ds),len(ls)
+# calculate via ancestor distance safer
+# Use first method above corrected path sum.
+def calc2(s):
+ root=parse(s); ls=[]
+ def go(n,d):
+  if not n.ch: ls.append(n)
+  for c in n.ch: go(c,d+c.bl)
+ go(root,0)
+ def dist(a,b):
+  aa={}; x=a; d=0
+  while x: aa[x]=d; d+=x.bl; x=x.p
+  y=b; d2=0
+  while y not in aa: d2+=y.bl; y=y.p
+  return aa[y]+d2
+ ds=[dist(ls[i],ls[j]) for i in range(len(ls)) for j in range(i)]
+ return mean(ds),len(ls)
+def vals(f):
+ with ZipFile(f) as z:
+  return [(calc2(z.read(p).decode())[0],calc2(z.read(p).decode())[1]) for p in z.namelist() if p.endswith('.treefile')]
+A=vals('inputs/scogs_animals.zip');F=vals('inputs/scogs_fungi.zip')
+for label,v in [('A',A),('F',F)]:
+ print(label,'all',len(v),median(x[0] for x in v), 'complete',sum(x[1]==4 for x in v),median(x[0] for x in v if x[1]==4), '3tax',sum(x[1]==3 for x in v),median(x[0] for x in v if x[1]==3))
+print('ratios complete',median(x[0] for x in F if x[1]==4)/median(x[0] for x in A if x[1]==4))
+print('ratios all',median(x[0] for x in F)/median(x[0] for x in A))
+PY"

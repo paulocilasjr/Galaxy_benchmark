@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter, defaultdict
+import re
+for path in ['inputs/scogs_animals.zip','inputs/scogs_fungi.zip']:
+    print('\\n===',path,'===')
+    with ZipFile(path) as z:
+        names=[n for n in z.namelist() if not n.endswith('/')]
+        print('files',len(names),'suffixes',Counter(n.rsplit('.',1)[-1] for n in names))
+        groups=defaultdict(dict)
+        for n in names:
+            base=n.rsplit('.',2)[0] if n.endswith('.faa.mafft') else n.rsplit('.',1)[0]
+            if n.endswith('.faa.mafft'): typ='aln'
+            elif n.endswith('.faa'): typ='raw'
+            else: typ='other'
+            groups[base][typ]=n
+        print('groups',len(groups),'paired',sum('aln' in g and 'raw' in g for g in groups.values()),'aln only',sum('aln' in g and 'raw' not in g for g in groups.values()),'raw only',sum('raw' in g and 'aln' not in g for g in groups.values()))
+        taxa_counts=Counter(); aln_lens=Counter(); raw_lens=Counter(); seqcounts=Counter(); chars=Counter(); examples=[]
+        for base,g in sorted(groups.items()):
+            if 'aln' not in g: continue
+            txt=z.read(g['aln']).decode()
+            seqs=[]; h=None; s=[]
+            for line in txt.splitlines():
+                if line.startswith('>'):
+                    if h is not None: seqs.append((h,''.join(s)))
+                    h=line[1:].strip(); s=[]
+                else: s.append(line.strip())
+            if h is not None: seqs.append((h,''.join(s)))
+            seqcounts[len(seqs)]+=1
+            aln_lens[tuple(sorted(set(map(len, (x[1] for x in seqs)))))]+=1
+            chars.update(''.join(x[1] for x in seqs))
+            taxa_counts.update(re.sub(r'\\s.*','',h) for h,_ in seqs)
+            if len(examples)<3: examples.append((base,seqs))
+            if 'raw' in g:
+                t=z.read(g['raw']).decode(); rs=[]; hh=None; ss=[]
+                for line in t.splitlines():
+                    if line.startswith('>'):
+                        if hh is not None: rs.append((hh,''.join(ss)))
+                        hh=line[1:].strip();ss=[]
+                    else:ss.append(line.strip())
+                if hh is not None:rs.append((hh,''.join(ss)))
+                raw_lens[tuple(sorted(set(len(s) for _,s in rs)))]+=1
+        print('seqcounts',seqcounts)
+        print('alignment length sets (top)',aln_lens.most_common(10),'unique sets',len(aln_lens))
+        print('raw length sets (top)',raw_lens.most_common(10),'unique sets',len(raw_lens))
+        print('chars',chars)
+        print('taxon headers counts',taxa_counts)
+        print('examples:')
+        for b,ss in examples:
+            print(b,[(h,len(s),s[:40]) for h,s in ss])
+PY"

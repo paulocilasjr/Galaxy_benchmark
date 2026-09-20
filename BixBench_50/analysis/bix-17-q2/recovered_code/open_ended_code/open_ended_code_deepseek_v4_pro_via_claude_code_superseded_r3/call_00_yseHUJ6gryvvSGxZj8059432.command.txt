@@ -1,0 +1,96 @@
+python3 << 'PYEOF'
+from openpyxl import load_workbook
+import os
+import re
+import statistics
+
+# 1. Load Trio Status - identify BLM carriers
+wb_trio = load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws_trio = wb_trio['Sheet1']
+
+blm_carriers = {}  # sample_id -> {'blm_status': ..., 'status': ...}
+for row in ws_trio.iter_rows(min_row=2, values_only=True):
+    sample_id = str(row[0])
+    blm_status = row[3]
+    if blm_status in ('Carrier', 'Affected'):
+        blm_carriers[sample_id] = {'blm_status': blm_status, 'status': row[1]}
+
+print(f"BLM carriers from Trio Status: {len(blm_carriers)}")
+
+# 2. Build CHIP file index
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+files = sorted(os.listdir(chip_dir))
+chip_files = {}
+for f in files:
+    match = re.search(r'CHIP_(.+)\.xlsx', f)
+    if match:
+        sample_str = match.group(1)
+        sample_id = re.sub(r'-[A-Z0-9]+$', '', sample_str)
+        chip_files[sample_id] = f
+
+# 3. Define exclusion criteria
+# Sequence Ontology values to exclude (Intronic, Intergenic, UTR)
+exclude_ontology = {
+    'intron_variant',
+    'intergenic_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+# 4. For each BLM carrier, count CHIP variants (VAF < 0.3 after exclusions)
+results = []
+details = []
+
+for sample_id, info in sorted(blm_carriers.items()):
+    if sample_id not in chip_files:
+        print(f"  Sample {sample_id}: NO CHIP FILE - skipping")
+        continue
+    
+    filename = chip_files[sample_id]
+    wb = load_workbook(os.path.join(chip_dir, filename))
+    ws = wb.active
+    
+    total_variants = 0
+    excluded_ref_zyg = 0
+    excluded_ontology = 0
+    excluded_vaf = 0
+    chip_count = 0
+    
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        total_variants += 1
+        
+        zygosity = row[4]    # Zygosity column
+        seq_onto = str(row[13]) if row[13] else ''  # Sequence Ontology
+        vaf = row[9]          # VAF column
+        
+        # Exclude Reference zygosity
+        if zygosity == 'Reference':
+            excluded_ref_zyg += 1
+            continue
+        
+        # Exclude Intronic, Intergenic, UTR
+        if seq_onto in exclude_ontology:
+            excluded_ontology += 1
+            continue
+        
+        # Check VAF
+        if vaf is not None and isinstance(vaf, (int, float)) and vaf < 0.3:
+            chip_count += 1
+        else:
+            excluded_vaf += 1
+    
+    results.append(chip_count)
+    details.append((sample_id, info['blm_status'], info['status'], chip_count, total_variants))
+    print(f"  Sample {sample_id} ({info['blm_status']}, {info['status']}): {chip_count} CHIP variants (total: {total_variants}, ref_zyg excl: {excluded_ref_zyg}, onto excl: {excluded_ontology})")
+
+print(f"\nNumber of BLM carriers analyzed: {len(results)}")
+print(f"CHIP variant counts: {sorted(results)}")
+print(f"Median: {statistics.median(results)}")
+print(f"Mean: {statistics.mean(results):.2f}")
+
+# Show all details sorted
+print("\n=== All carriers sorted by CHIP count ===")
+for sid, blm, status, cnt, total in sorted(details, key=lambda x: x[3]):
+    print(f"  {sid} ({blm}, {status}): {cnt} CHIP / {total} total")
+PYEOF

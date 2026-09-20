@@ -1,0 +1,65 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+
+meta_path='inputs/GeneMetaInfo_Zenodo.csv'
+expr_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+ann_path='inputs/Sample_annotated_Zenodo.csv'
+
+# Metadata: expression row id -> (gene length, biotype)
+meta={}
+with open(meta_path, newline='') as f:
+    rd=csv.DictReader(f)
+    for row in rd:
+        if row['gene_biotype']=='protein_coding':
+            meta[row['']] = (float(row['Length']), row['Geneid'])
+
+with open(ann_path, newline='') as f:
+    ann={row['sample']: row['celltype'] for row in csv.DictReader(f)}
+with open(expr_path, newline='') as f:
+    rd=csv.reader(f)
+    header=next(rd)
+    sample_names=header[1:]
+
+celltypes=['CD4','CD8','CD14','CD19']
+indices={ct:[i+1 for i,s in enumerate(sample_names) if ann[s]==ct] for ct in celltypes}
+print('sample counts:', {ct:len(ix) for ct,ix in indices.items()})
+
+lengths=[]
+values={ct:[] for ct in celltypes}
+seen=0
+coding_seen=0
+with open(expr_path, newline='') as f:
+    rd=csv.reader(f)
+    next(rd)
+    for row in rd:
+        seen += 1
+        key=row[0]
+        if key not in meta:
+            continue
+        coding_seen += 1
+        lengths.append(meta[key][0])
+        for ct in celltypes:
+            total=0.0
+            for i in indices[ct]:
+                total += float(row[i])
+            values[ct].append(total/len(indices[ct]))
+
+print('expression rows:', seen, 'protein-coding rows matched:', coding_seen)
+
+def pearson(a,b):
+    n=len(a)
+    ma=sum(a)/n
+    mb=sum(b)/n
+    sxx=sum((v-ma)*(v-ma) for v in a)
+    syy=sum((v-mb)*(v-mb) for v in b)
+    sxy=sum((a[i]-ma)*(b[i]-mb) for i in range(n))
+    return sxy/math.sqrt(sxx*syy)
+
+results={}
+for ct in celltypes:
+    y=values[ct]
+    r=pearson(lengths,y)
+    results[ct]=r
+    print(f'{ct}: r={r:.12f}, abs={abs(r):.12f}, mean_range=({min(y):.6g},{max(y):.6g}), zero_means={sum(v==0 for v in y)}')
+print('weakest:', min(results, key=lambda ct: abs(results[ct])))
+PY"

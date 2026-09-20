@@ -1,0 +1,19 @@
+/bin/bash -lc "Rscript - <<'RS'
+paths <- c(\"/workspace/inputs/res_1vs97.rds\", \"/workspace/inputs/res_1vs98.rds\", \"/workspace/inputs/res_1vs99.rds\")
+res <- lapply(paths, function(p) { x <- readRDS(p); ld <- attr(x,\"listData\"); data.frame(gene=attr(x,\"rownames\"),lfc=ld"'$log2FoldChange,padj=ld$padj) })
+names(res) <- c("97","98","99")
+links <- read.delim("https://rest.kegg.jp/link/pathway/pau",header=FALSE,sep="'"\\t\",quote=\"\",stringsAsFactors=FALSE)
+links"'$V1 <- sub("''^pau:","",links$V1); links$V2 <- sub("''^path:","",links$V2)
+gs0 <- lapply(split(links$V1,links$V2),unique)
+run <- function(fg, uni, minGS=1,maxGS=Inf, family=c("hits","all","all137"), alpha=.05) {
+  family <- match.arg(family); gs <- lapply(gs0,intersect,y=uni); sz <- lengths(gs); k <- vapply(gs,function(z)length(intersect(z,fg)),integer(1)); keep <- sz>=minGS & sz<=maxGS; test <- keep & k>0; N <- length(uni); n <- length(intersect(fg,uni)); p <- rep(NA_real_,length(gs)); p[test] <- phyper(k[test]-1,sz[test],N-sz[test],n,lower.tail=FALSE); pa <- rep(NA_real_,length(gs)); idx <- if(family=="hits") test else if(family=="all") keep else rep(TRUE,length(gs)); pa[idx] <- p.adjust(p[idx],"BH"); list(sig=names(gs)[!is.na(pa)&pa<alpha],raw=names(gs)[!is.na(p)&p<alpha],p=p,pa=pa,k=k,sz=sz,test=test)
+}
+for (un in c("res","kegg")) {
+  uni <- if(un=="res") unique(unlist(lapply(res,`[[`,"gene"))) else unique(links$V1)
+  cat("'"\\nUNIVERSE\",un,length(uni),\"\\n\")
+  for (fam in c(\"hits\",\"all\",\"all137\")) for (thr in c(\"padj\",\"raw\")) {
+    ss <- lapply(res,function(d) { z <- if(thr==\"padj\") d"'$padj<.05 & abs(d$lfc)>1.5 else abs(d$lfc)>1.5; lapply(list(pos=d$gene[z & d$lfc>0],neg=d$gene[z & d$lfc<0]), function(fg) run(fg,uni,family=fam)) })
+    for (sgn in c("pos","neg")) { ints <- Reduce(intersect,lapply(ss,`[[`,sgn)); cat(fam,thr,sgn,"inter",length(ints),paste(ints,collapse=","),"sum sig",sum(sapply(ss, function(x)length(x[[sgn]]$sig))),"'"\\n\") }
+  }
+}
+RS"

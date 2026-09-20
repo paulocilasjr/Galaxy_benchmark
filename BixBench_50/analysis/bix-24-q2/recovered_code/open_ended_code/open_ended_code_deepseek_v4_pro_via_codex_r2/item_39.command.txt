@@ -1,0 +1,24 @@
+/bin/bash -c "Rscript - <<'RS'
+suppressPackageStartupMessages({library(DESeq2)})
+counts <- read.csv('/workspace/inputs/counts_raw_unfiltered.csv', check.names=FALSE, row.names=1)
+layout <- read.csv('/workspace/inputs/sample_layout.csv', stringsAsFactors=FALSE)
+layout"'$SampleID <- gsub('"'-','_',layout"'$SampleID)
+keep <- layout$Group %in% c('"'DMSO','CBD_IC50')
+layout <- layout[keep,]
+layout <- layout[match(colnames(counts), layout"'$SampleID),]
+layout <- layout[!is.na(layout$SampleID),]
+layout$Group <- factor(layout$Group, levels=c('"'DMSO','CBD_IC50'))
+cts <- counts[, layout"'$SampleID]
+dds <- DESeqDataSetFromMatrix(as.matrix(cts), data.frame(row.names=layout$SampleID, Group=layout$Group), ~Group)
+dds <- DESeq(dds)
+res <- results(dds, alpha=0.05)
+for (type in c('"'apeglm','ashr','normal')) {
+  cat('\\n---', type, '---\\n')
+  sh <- tryCatch(lfcShrink(dds, coef='Group_CBD_IC50_vs_DMSO', type=type, quiet=TRUE), error=function(e)e)
+  if (inherits(sh,'error')) {cat('error', conditionMessage(sh),'\\n'); next}
+  s <- as.data.frame(sh)
+  up <- sum("'!is.na(s$padj) & s$padj<0.05 & s$log2FoldChange>0.5, na.rm=TRUE)
+  down <- sum(!is.na(s$padj) & s$padj<0.05 & s$log2FoldChange< -0.5, na.rm=TRUE)
+  cat('"'up',up,'down',down,'\\n')
+}
+RS"

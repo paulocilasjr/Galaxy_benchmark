@@ -1,0 +1,55 @@
+/workspace/venv/bin/python3 -c "
+import sys
+sys.path.insert(0, '/workspace/venv/lib/python3.11/site-packages')
+import dendropy
+import os
+import numpy as np
+
+# Compare tree-based patristic distances with ML distances for shared OGs
+animal_dir = '/workspace/extracted'
+fungi_dir = '/workspace/extracted_fungi'
+
+# Get shared OGs
+animals_s = set()
+for f in os.listdir(animal_dir):
+    if f.endswith('.treefile'):
+        animals_s.add(f.replace('.mafft.clipkit.treefile', ''))
+
+fungi_s = set()
+for f in os.listdir(fungi_dir):
+    if f.endswith('.treefile'):
+        fungi_s.add(f.replace('.mafft.clipkit.treefile', ''))
+
+shared = sorted(animals_s & fungi_s)
+
+# Compare a few
+for og in shared[:5]:
+    # Patristic from tree
+    tree = dendropy.Tree.get(path=os.path.join(animal_dir, og + '.mafft.clipkit.treefile'), schema='newick', preserve_underscores=True)
+    taxa = [leaf.taxon for leaf in tree.leaf_node_iter()]
+    pdm = tree.phylogenetic_distance_matrix()
+    n = len(taxa)
+    
+    # ML distances from mldist file
+    mldist_file = os.path.join(animal_dir, og + '.mafft.clipkit.mldist')
+    with open(mldist_file) as fh:
+        lines = fh.read().strip().split('\\n')
+    n_mldist = int(lines[0])
+    ml_taxa = []
+    ml_matrix = {}
+    for line in lines[1:]:
+        parts = line.strip().split()
+        name = parts[0]
+        ml_taxa.append(name)
+        ml_matrix[name] = [float(x) for x in parts[1:]]
+    
+    print(f'{og} (n={n}):')
+    for i in range(n):
+        for j in range(i+1, n):
+            pat = pdm(taxa[i], taxa[j])
+            ti = ml_taxa.index(taxa[i].label)
+            tj = ml_taxa.index(taxa[j].label)
+            ml = ml_matrix[taxa[i].label][tj]
+            print(f'  {taxa[i].label} - {taxa[j].label}: patristic={pat:.6f}, ML={ml:.6f}, diff={abs(pat-ml):.6f}')
+    print()
+" 2>&1

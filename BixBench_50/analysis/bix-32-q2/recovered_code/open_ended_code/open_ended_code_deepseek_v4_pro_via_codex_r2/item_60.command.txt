@@ -1,0 +1,40 @@
+/bin/bash -lc "Rscript - <<'RS'
+# Exact KEGG ORA as performed by clusterProfiler::enrichKEGG defaults for organism 'pau'
+link <- read.table('/workspace/tmp/pau_link.tsv', sep='\\t', header=FALSE, stringsAsFactors=FALSE, quote='')
+link[,1] <- sub('["'^:]+:'"', '', link[,1])
+link[,2] <- sub('["'^:]+:'"', '', link[,2])
+path_names <- read.table('/workspace/tmp/pau_pathways.tsv', sep='\\t', header=FALSE, stringsAsFactors=FALSE, quote='')
+link <- link[link[,2] %in% path_names[,1], ]
+path2gene <- split(link[,1], link[,2])
+gene2path <- split(link[,2], link[,1])
+N <- length(unique(link[,1]))
+
+ora <- function(genes) {
+  genes <- intersect(unique(genes), names(gene2path))
+  if (length(genes) == 0) return(character())
+  mapped <- gene2path[genes]
+  terms <- unique(unlist(mapped))
+  terms <- terms[sapply(path2gene[terms], length) >= 10 & sapply(path2gene[terms], length) <= 500]
+  n <- length(mapped)
+  pvals <- sapply(terms, function(term) {
+    k <- sum(path2gene[[term]] %in% genes)
+    M <- length(path2gene[[term]])
+    phyper(k - 1, M, N - M, n, lower.tail = FALSE)
+  })
+  padj <- p.adjust(pvals, method = 'BH')
+  terms[pvals <= 0.05 & padj <= 0.05]
+}
+
+sets_up <- list()
+sets_down <- list()
+for (strain in c('97', '98', '99')) {
+  d <- read.csv(sprintf('/workspace/tmp/res_%s.csv', strain), stringsAsFactors = FALSE)
+  sets_up[[strain]] <- ora(d"'$gene[d$lfc > 1.5])
+  sets_down[[strain]] <- ora(d$gene[d$lfc < -1.5])
+}
+up_common <- Reduce(intersect, sets_up)
+down_common <- Reduce(intersect, sets_down)
+answer <- length(union(up_common, down_common))
+writeLines(as.character(answer), '"'/workspace/codex_output/answer.txt')
+cat(answer, '\\n')
+RS"

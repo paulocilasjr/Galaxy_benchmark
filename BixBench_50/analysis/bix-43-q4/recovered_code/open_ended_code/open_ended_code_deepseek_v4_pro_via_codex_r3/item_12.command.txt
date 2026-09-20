@@ -1,0 +1,29 @@
+/bin/bash -lc "cd /workspace && python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+# header currently '1_1', layout IDs '1-1'; rename numeric first part underscores to hyphen
+counts.columns=[c.replace('_','-') if c.split('-')[0].isdigit() else c for c in counts.columns]
+layout=pd.read_csv('inputs/sample_layout.csv')[['SampleID','Group']].rename(columns={'SampleID':'sample'})
+meta=layout[layout['Group'].isin(['DMSO','Cisplatin_IC50_CBD_IC50'])].copy()
+meta['condition']=meta['Group']
+counts_sub=counts[meta['sample'].values]
+meta=meta.set_index('sample')
+print(meta)
+dds=DeseqDataSet(counts=counts_sub, metadata=meta, design='~condition', ref_level=['condition','DMSO'])
+dds.deseq2()
+res=DeseqStats(dds, contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05)
+res.summary()
+r=res.results_df
+print(r.shape)
+print(r.head())
+print('na padj',r.padj.isna().sum(), 'na pvalue',r.pvalue.isna().sum())
+r.to_csv('/workspace/tmp/pydeseq2_full.csv')
+sig=r[(r.padj<0.05)&(r.log2FoldChange.abs()>=0.5)]
+print('DEG count',len(sig), 'up', (sig.log2FoldChange>0).sum(),'down',(sig.log2FoldChange<0).sum())
+print(sig[['log2FoldChange','padj']].describe())
+print(sig.sort_values('padj').head(20))
+PY"

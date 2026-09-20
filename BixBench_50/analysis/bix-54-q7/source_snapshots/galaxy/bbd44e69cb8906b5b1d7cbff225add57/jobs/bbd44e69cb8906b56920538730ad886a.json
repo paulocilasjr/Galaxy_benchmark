@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b56920538730ad886a",
+  "history_id": "bbd44e69cb8906b5b1d7cbff225add57",
+  "tool_id": "colony_area_scope_domain_comparison_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-15T14:56:41.095457",
+  "update_time": "2026-08-15T14:57:37.305337",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'EOF'\n\nsuppressPackageStartupMessages(library(splines))\n\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 2) stop(\"expected input and output paths\")\nin_path <- args[1]\nout_path <- args[2]\n\nd0 <- read.csv(in_path, stringsAsFactors = FALSE, check.names = FALSE)\nneeded <- c(\"StrainNumber\", \"Ratio\", \"Area\")\nif (!all(needed %in% names(d0))) stop(\"required columns not found\")\n\nmake_prop <- function(ratio) {\n  z <- strsplit(as.character(ratio), \":\", fixed = TRUE)[[1]]\n  a <- as.numeric(z[1]); b <- as.numeric(z[2])\n  a / (a + b)\n}\n\nmixtures <- d0[d0$StrainNumber == \"287_98\", , drop = FALSE]\nif (nrow(mixtures) != 36) stop(\"expected 36 mixture rows\")\nmixtures$p <- vapply(mixtures$Ratio, make_prop, numeric(1))\n\npure_98 <- d0[d0$StrainNumber == \"98\", , drop = FALSE]\npure_287 <- d0[d0$StrainNumber == \"287\", , drop = FALSE]\npure_98$p <- 0\npure_287$p <- 1\nfull_raw <- rbind(mixtures[, c(\"p\", \"Area\")], pure_98[, c(\"p\", \"Area\")], pure_287[, c(\"p\", \"Area\")])\n\naggregate_mean <- function(x) {\n  aggregate(Area ~ p, data = x, FUN = mean)\n}\n\ninterior_raw <- mixtures[, c(\"p\", \"Area\")]\ninterior_mean <- aggregate_mean(interior_raw)\nfull_mean <- aggregate_mean(full_raw)\n\ndatasets <- list(\n  interior_raw = interior_raw,\n  interior_mean = interior_mean,\n  full_raw = full_raw,\n  full_mean = full_mean\n)\n\nfit_for_data <- function(dat) {\n  list(\n    quadratic = lm(Area ~ p + I(p^2), data = dat),\n    cubic = lm(Area ~ p + I(p^2) + I(p^3), data = dat),\n    natural_spline = lm(Area ~ ns(p, df = 4), data = dat)\n  )\n}\n\npred_at <- function(fit, x) predict(fit, newdata = data.frame(p = x))\n\nmax_on_interval <- function(fit, lower, upper) {\n  grid <- seq(lower, upper, length.out = 5001)\n  vals <- pred_at(fit, grid)\n  i <- which.max(vals)\n  left <- grid[max(1L, i - 2L)]\n  right <- grid[min(length(grid), i + 2L)]\n  local <- optimize(function(x) pred_at(fit, x), interval = c(left, right),\n                    maximum = TRUE, tol = 1e-10)\n  full <- optimize(function(x) pred_at(fit, x), interval = c(lower, upper),\n                   maximum = TRUE, tol = 1e-10)\n  if (full$objective >= local$objective) full else local\n}\n\nrows <- list()\nfor (scope_name in names(datasets)) {\n  dat <- datasets[[scope_name]]\n  models <- fit_for_data(dat)\n  observed_lower <- min(dat$p)\n  observed_upper <- max(dat$p)\n\n  for (model_name in names(models)) {\n    fit <- models[[model_name]]\n    observed_opt <- max_on_interval(fit, observed_lower, observed_upper)\n    unit_opt <- max_on_interval(fit, 0, 1)\n    rows[[length(rows) + 1L]] <- data.frame(\n      scope = scope_name,\n      model = model_name,\n      n = nrow(dat),\n      edf = as.numeric(extractAIC(fit)[1]),\n      aic = as.numeric(AIC(fit)),\n      bic = as.numeric(BIC(fit)),\n      adj_r2 = summary(fit)$adj.r.squared,\n      observed_lower = observed_lower,\n      observed_upper = observed_upper,\n      optimum_p_observed_range = observed_opt$maximum,\n      max_area_observed_range = observed_opt$objective,\n      optimum_p_unit_range = unit_opt$maximum,\n      max_area_unit_range = unit_opt$objective,\n      stringsAsFactors = FALSE\n    )\n  }\n}\n\nsummary_df <- do.call(rbind, rows)\nwrite.csv(summary_df, file = out_path, row.names = FALSE, quote = FALSE)\n\nEOF\nRscript analysis.R \"/jetstream2/scratch/main/jobs/79155896/inputs/dataset_780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f.dat\" scope_summary.csv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a4721350b66653976dccbc5",
+      "src": "hda",
+      "uuid": "780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f"
+    }
+  },
+  "outputs": {
+    "scope_summary": {
+      "id": "f9cad7b01a472135b4f9bfab57b779f8",
+      "src": "hda",
+      "uuid": "6cb06dc7-20ca-44f4-9d56-8523d88c424f"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

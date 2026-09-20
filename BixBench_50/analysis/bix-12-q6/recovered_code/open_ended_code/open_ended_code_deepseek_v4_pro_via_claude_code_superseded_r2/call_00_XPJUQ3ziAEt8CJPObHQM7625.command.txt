@@ -1,0 +1,159 @@
+python3 << 'PYEOF'
+import zipfile
+
+def parse_mafft_alignment(text):
+    sequences = []
+    current_header = None
+    current_seq_parts = []
+    for line in text.strip().split('\n'):
+        line = line.rstrip('\r')
+        if line.startswith('>'):
+            if current_header is not None:
+                sequences.append((current_header, ''.join(current_seq_parts)))
+            current_header = line[1:].strip()
+            current_seq_parts = []
+        elif line.strip():
+            current_seq_parts.append(line.strip())
+    if current_header is not None:
+        sequences.append((current_header, ''.join(current_seq_parts)))
+    return sequences
+
+def count_pis(sequences):
+    """Count parsimony-informative sites. Gaps treated as character state."""
+    if len(sequences) < 4:
+        return 0  # Need at least 4 sequences for any PIS
+    seqs = [s for _, s in sequences]
+    aln_len = len(seqs[0])
+    pis = 0
+    for col in range(aln_len):
+        char_counts = {}
+        for s in seqs:
+            c = s[col]
+            char_counts[c] = char_counts.get(c, 0) + 1
+        states_ge2 = sum(1 for cnt in char_counts.values() if cnt >= 2)
+        if states_ge2 >= 2:
+            pis += 1
+    return pis
+
+def read_all_mafft(zip_path):
+    results = {}
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        for name in zf.namelist():
+            if name.endswith('.faa.mafft'):
+                ortho_id = name.replace('.faa.mafft', '').split('/')[-1]
+                content = zf.read(name).decode('utf-8')
+                sequences = parse_mafft_alignment(content)
+                results[ortho_id] = sequences
+    return results
+
+# Read all data
+print("Reading alignments...")
+animals = read_all_mafft('/workspace/inputs/scogs_animals.zip')
+fungi = read_all_mafft('/workspace/inputs/scogs_fungi.zip')
+
+# Compute PIS counts
+print("Computing PIS counts...")
+animal_pis = {k: count_pis(v) for k, v in animals.items()}
+fungi_pis = {k: count_pis(v) for k, v in fungi.items()}
+
+x = list(animal_pis.values())
+y = list(fungi_pis.values())
+
+print(f"Animals: n={len(x)}, values={sorted(x)[:10]}...{sorted(x)[-5:]}")
+print(f"Fungi:   n={len(y)}, values={sorted(y)[:10]}...{sorted(y)[-5:]}")
+
+# Mann-Whitney U computation
+# Method 1: Rank-sum approach
+n1, n2 = len(x), len(y)
+combined = [(v, 0) for v in x] + [(v, 1) for v in y]
+combined.sort(key=lambda t: t[0])
+
+# Assign ranks (mid-ranks for ties)
+ranks = [0.0] * len(combined)
+i = 0
+while i < len(combined):
+    j = i
+    while j < len(combined) and combined[j][0] == combined[i][0]:
+        j += 1
+    mid_rank = (i + 1 + j) / 2.0
+    for k in range(i, j):
+        ranks[k] = mid_rank
+    i = j
+
+R1 = sum(ranks[k] for k in range(len(combined)) if combined[k][1] == 0)
+R2 = sum(ranks[k] for k in range(len(combined)) if combined[k][1] == 1)
+
+U1_rank = n1 * n2 + n1 * (n1 + 1) / 2.0 - R1
+U2_rank = n1 * n2 + n2 * (n2 + 1) / 2.0 - R2
+U_min_rank = min(U1_rank, U2_rank)
+
+print(f"\nMann-Whitney U (rank-sum method):")
+print(f"  U1 (Animals) = {U1_rank}")
+print(f"  U2 (Fungi)   = {U2_rank}")
+print(f"  U_min        = {U_min_rank}")
+
+# Method 2: Direct pairwise comparison
+U1_direct = 0.0
+for a in x:
+    for b in y:
+        if a > b:
+            U1_direct += 1.0
+        elif a == b:
+            U1_direct += 0.5
+U2_direct = n1 * n2 - U1_direct
+
+print(f"\nMann-Whitney U (pairwise method):")
+print(f"  U1 (Animals) = {U1_direct}")
+print(f"  U2 (Fungi)   = {U2_direct}")
+print(f"  U_min        = {min(U1_direct, U2_direct)}")
+
+# Also try with gaps as missing data
+print("\n--- With gaps treated as MISSING DATA ---")
+def count_pis_nogap(sequences):
+    if len(sequences) < 4:
+        return 0
+    seqs = [s for _, s in sequences]
+    aln_len = len(seqs[0])
+    pis = 0
+    for col in range(aln_len):
+        char_counts = {}
+        for s in seqs:
+            c = s[col]
+            if c != '-':  # Treat gap as missing
+                char_counts[c] = char_counts.get(c, 0) + 1
+        # Count only non-gap characters; they need to be >= 2
+        states_ge2 = sum(1 for cnt in char_counts.values() if cnt >= 2)
+        if states_ge2 >= 2:
+            pis += 1
+    return pis
+
+animal_pis_ng = {k: count_pis_nogap(v) for k, v in animals.items()}
+fungi_pis_ng = {k: count_pis_nogap(v) for k, v in fungi.items()}
+
+x_ng = list(animal_pis_ng.values())
+y_ng = list(fungi_pis_ng.values())
+
+print(f"Animals (no-gap): n={len(x_ng)}, mean={sum(x_ng)/len(x_ng):.1f}, values={sorted(x_ng)[:10]}...{sorted(x_ng)[-5:]}")
+print(f"Fungi (no-gap):   n={len(y_ng)}, mean={sum(y_ng)/len(y_ng):.1f}, values={sorted(y_ng)[:10]}...{sorted(y_ng)[-5:]}")
+
+n1g, n2g = len(x_ng), len(y_ng)
+combined_ng = [(v, 0) for v in x_ng] + [(v, 1) for v in y_ng]
+combined_ng.sort(key=lambda t: t[0])
+
+ranks_ng = [0.0] * len(combined_ng)
+i = 0
+while i < len(combined_ng):
+    j = i
+    while j < len(combined_ng) and combined_ng[j][0] == combined_ng[i][0]:
+        j += 1
+    mid_rank = (i + 1 + j) / 2.0
+    for k in range(i, j):
+        ranks_ng[k] = mid_rank
+    i = j
+
+R1_ng = sum(ranks_ng[k] for k in range(len(combined_ng)) if combined_ng[k][1] == 0)
+U1_ng = n1g * n2g + n1g * (n1g + 1) / 2.0 - R1_ng
+print(f"\nMann-Whitney U (gaps as missing):")
+print(f"  U1 (Animals) = {U1_ng}")
+
+PYEOF

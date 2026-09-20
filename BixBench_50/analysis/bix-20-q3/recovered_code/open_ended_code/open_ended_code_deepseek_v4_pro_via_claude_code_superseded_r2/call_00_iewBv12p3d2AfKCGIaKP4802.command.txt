@@ -1,0 +1,72 @@
+python3 -c "
+import openpyxl, os, re
+
+variant_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS/'
+
+# Check what ontologies get excluded for VAF < 0.3 variants across all carrier files
+carrier_ids = ['185', '184', '285', '287', '353', '354', '556', '557', '381', '396', '397', '489', '490', '499', '500', '503', '504', '613', '614']
+
+exclude_ontology_patterns = ['intron_variant', 'intergenic_variant', 'UTR_variant', 'upstream_gene_variant', 'downstream_gene_variant']
+
+def is_excluded_ontology(ont_str):
+    if ont_str is None:
+        return False
+    ont_str = str(ont_str).lower()
+    for pattern in exclude_ontology_patterns:
+        if pattern.lower() in ont_str:
+            return True
+    return False
+
+all_files = os.listdir(variant_dir)
+sample_to_file = {}
+for f in all_files:
+    match = re.search(r'CHIP_(\d+)-', f)
+    if match:
+        sample_to_file[match.group(1)] = f
+
+debug_variants = []
+for sid in carrier_ids:
+    if sid not in sample_to_file:
+        continue
+    filepath = os.path.join(variant_dir, sample_to_file[sid])
+    wb = openpyxl.load_workbook(filepath)
+    ws = wb[wb.sheetnames[0]]
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        vaf_raw = row[9]
+        if vaf_raw is None:
+            continue
+        try:
+            vaf = float(vaf_raw)
+        except:
+            continue
+        if vaf >= 0.3:
+            continue
+        zyg = row[4]
+        ont = row[13]
+        clas = row[25]
+        debug_variants.append({
+            'sample': sid,
+            'vaf': vaf,
+            'zyg': zyg,
+            'ont': ont,
+            'class': clas,
+            'excl_ont': is_excluded_ontology(ont),
+            'is_ref': str(zyg).strip() == 'Reference' if zyg else False
+        })
+
+print('All VAF < 0.3 variants across Carrier samples:')
+for v in debug_variants:
+    print(f'  {v[\"sample\"]}: VAF={v[\"vaf\"]:.4f}, Zyg={v[\"zyg\"]}, Ont={v[\"ont\"]}, ClinVar={v[\"class\"]}, excl_ont={v[\"excl_ont\"]}, is_ref={v[\"is_ref\"]}')
+
+# Count kept
+kept = [v for v in debug_variants if not v['is_ref'] and not v['excl_ont']]
+with_clinvar = [v for v in kept if v['class'] is not None and str(v['class']).strip() not in ('', 'None')]
+benign = [v for v in with_clinvar if str(v['class']).strip() in ('Benign', 'Likely Benign')]
+
+print(f'\nTotal VAF < 0.3: {len(debug_variants)}')
+print(f'After excluding Ref: {len([v for v in debug_variants if not v[\"is_ref\"]])}')
+print(f'After excluding intron/UTR/intergenic: {len(kept)}')
+print(f'With ClinVar: {len(with_clinvar)}')
+print(f'Benign/Likely Benign: {len(benign)}')
+print(f'Proportion: {len(benign)}/{len(with_clinvar)} = {len(benign)/len(with_clinvar) if with_clinvar else 0}')
+"

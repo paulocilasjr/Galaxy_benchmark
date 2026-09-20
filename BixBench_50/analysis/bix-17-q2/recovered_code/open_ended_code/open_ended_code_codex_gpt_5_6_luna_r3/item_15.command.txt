@@ -1,0 +1,75 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+from statistics import median
+import re, math
+
+# Load carrier IDs from status workbook; normalize IDs (including tabs in SRR IDs).
+status_ws=load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+carrier_ids=[]
+for row in status_ws.iter_rows(min_row=2,values_only=True):
+    sid=row[0]
+    if sid is not None and str(row[3]).strip()=='Carrier':
+        carrier_ids.append(str(sid).strip())
+
+# Candidate sequence ontology labels based on supplied semantics.
+exclude_exact={
+    'intron_variant',
+    'intergenic_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+def file_sample_id(p):
+    fid=p.stem.split('_CHIP_',1)[1]
+    if fid.startswith('SRR'):
+        return fid
+    return fid.split('-',1)[0]
+
+counts={}; details={}; missing=[]
+all_files={file_sample_id(p):p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+for sid in carrier_ids:
+    p=all_files.get(sid)
+    if p is None:
+        missing.append(sid); continue
+    ws=load_workbook(p,data_only=True).active
+    rows=list(ws.iter_rows(min_row=3,values_only=True))
+    kept=[]; reasons=Counter()
+    for row in rows:
+        if not row or all(v is None for v in row): continue
+        ontology=str(row[13]).strip() if row[13] is not None else None
+        zyg=str(row[4]).strip() if row[4] is not None else None
+        vaf=row[9]
+        if ontology in exclude_exact:
+            reasons[f'exclude ontology:{ontology}']+=1; continue
+        if zyg=='Reference':
+            reasons['exclude Reference']+=1; continue
+        try:
+            vaf=float(vaf)
+        except (TypeError,ValueError):
+            reasons['exclude missing/non-numeric VAF']+=1; continue
+        if not vaf < 0.3:
+            reasons['exclude VAF>=0.3']+=1; continue
+        kept.append((row[0],row[1],row[12],ontology,zyg,vaf))
+    counts[sid]=len(kept); details[sid]=(p.name,kept,reasons)
+
+print('carrier IDs',len(carrier_ids),carrier_ids)
+print('missing variant files',missing)
+print('available carrier count',len(counts))
+print('counts by carrier')
+for sid in carrier_ids:
+    if sid in counts:
+        print(sid,counts[sid],details[sid][0],dict(details[sid][2]))
+print('sorted counts',sorted(counts.values()))
+print('median available',median(counts.values()))
+
+# Also report alternative exact filter categories observed and checks for duplicate variant keys.
+obs=Counter()
+for sid,(fn,kept,rs) in details.items():
+    for rec in kept: obs[rec[3]]+=1
+print('kept ontology overall',dict(obs))
+# Verify retained entries have non-reference zygosity, numeric VAF<.3, and no excluded terms.
+print('retained total',sum(counts.values()))
+PY"

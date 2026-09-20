@@ -1,0 +1,145 @@
+python3 << 'PYEOF'
+import os
+
+os.chdir('/workspace/tmp')
+
+def analyze_tree_structure(tree_str):
+    """Parse tree and compute internal/external branch length proportions."""
+    s = tree_str.strip().rstrip(';')
+    nodes = []
+    i = 0
+    
+    def parse_node():
+        nonlocal i
+        node = {'children': [], 'length': 0.0, 'name': None}
+        node_id = len(nodes)
+        nodes.append(node)
+        
+        if s[i] == '(':
+            i += 1
+            while True:
+                child_id = parse_node()
+                nodes[node_id]['children'].append(child_id)
+                if s[i] == ',':
+                    i += 1
+                elif s[i] == ')':
+                    i += 1
+                    break
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        else:
+            j = i
+            while j < len(s) and s[j] not in ':),;':
+                j += 1
+            nodes[node_id]['name'] = s[i:j]
+            i = j
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        
+        return node_id
+    
+    root = parse_node()
+    
+    # Classify branches: leaf nodes are external, internal nodes are internal
+    total_length = 0.0
+    internal_length = 0.0
+    external_length = 0.0
+    n_leaves = 0
+    n_internal = 0
+    
+    for nid, node in enumerate(nodes):
+        if nid == root and node['name'] is None:
+            # Root may or may not have a length
+            if node['length'] > 0:
+                total_length += node['length']
+                internal_length += node['length']
+                n_internal += 1
+            continue
+        
+        total_length += node['length']
+        if node['name'] is not None:
+            external_length += node['length']
+            n_leaves += 1
+        else:
+            internal_length += node['length']
+            n_internal += 1
+    
+    if total_length == 0:
+        return 0.0, 0.0, 0.0, n_leaves, n_internal
+    
+    internal_prop = internal_length / total_length
+    return total_length, internal_length, internal_prop, n_leaves, n_internal
+
+# Analyze all trees
+tree_genes = set()
+for f in os.listdir('.'):
+    if f.endswith('.treefile'):
+        tree_genes.add(f.replace('.faa.mafft.clipkit.treefile', ''))
+
+internal_props = {}
+internal_lengths = []
+total_lengths = []
+
+for gene_id in sorted(tree_genes):
+    tree_file = f"{gene_id}.faa.mafft.clipkit.treefile"
+    tree_str = open(tree_file).read().strip()
+    tl, il, ip, nl, ni = analyze_tree_structure(tree_str)
+    internal_props[gene_id] = ip
+    internal_lengths.append(il)
+    total_lengths.append(tl)
+
+props = list(internal_props.values())
+mean_p = sum(props) / len(props)
+sorted_p = sorted(props)
+median_p = sorted_p[len(sorted_p)//2]
+
+all_faa = set()
+for f in os.listdir('.'):
+    if f.endswith('.faa') and '.mafft' not in f:
+        all_faa.add(f.replace('.faa', ''))
+
+print(f"Internal branch length proportion (treeness):")
+print(f"  n={len(props)}, mean={mean_p:.6f}, median={median_p:.6f}, min={min(props):.6f}, max={max(props):.6f}")
+
+above_006 = sum(1 for v in props if v > 0.06)
+print(f"\n  >0.06: {above_006}/{len(props)} genes with trees = {100*above_006/len(props):.1f}%")
+print(f"  >0.06: {above_006}/{len(all_faa)} all genes = {100*above_006/len(all_faa):.1f}%")
+
+# Distribution
+for threshold in [0, 0.02, 0.04, 0.06, 0.08, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]:
+    c = sum(1 for v in props if v > threshold)
+    print(f"  >{threshold:.2f}: {c} ({100*c/len(props):.1f}%)")
+
+# Count zero internal branches (star trees)
+zero_int = sum(1 for v in props if v == 0)
+print(f"\n  Star trees (internal=0): {zero_int} ({100*zero_int/len(props):.1f}%)")
+
+# Check internal lengths
+print(f"\n  Internal lengths: mean={sum(internal_lengths)/len(internal_lengths):.6f}, min={min(internal_lengths):.6f}, max={max(internal_lengths):.6f}")
+print(f"  Total lengths: mean={sum(total_lengths)/len(total_lengths):.6f}, min={min(total_lengths):.6f}, max={max(total_lengths):.6f}")
+
+# Show some examples
+print(f"\n  Bottom 10 internal proportions:")
+sorted_items = sorted(internal_props.items(), key=lambda x: x[1])
+for gene_id, ip in sorted_items[:10]:
+    tree_str = open(f"{gene_id}.faa.mafft.clipkit.treefile").read().strip()
+    print(f"    {gene_id}: {ip:.6f}  tree: {tree_str[:80]}")
+
+print(f"\n  Top 5 internal proportions:")
+for gene_id, ip in sorted_items[-5:]:
+    tree_str = open(f"{gene_id}.faa.mafft.clipkit.treefile").read().strip()
+    print(f"    {gene_id}: {ip:.6f}  tree: {tree_str[:80]}")
+
+PYEOF

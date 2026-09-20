@@ -1,0 +1,72 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, math
+from collections import Counter
+
+def parse_fasta(text):
+    seqs=[]; cur=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if cur: seqs.append(''.join(cur)); cur=[]
+        else:
+            cur.append(line)
+    if cur: seqs.append(''.join(cur))
+    return seqs
+
+def pi_count(seqs, gap_policy='ignore'):
+    if not seqs: return 0
+    L=len(seqs[0])
+    total=0
+    for col in zip(*seqs):
+        if gap_policy=='ignore':
+            states=[c for c in col if c not in '-?.Xx']  # maybe ignore ambiguity too
+        elif gap_policy=='ignore_gap_only':
+            states=[c for c in col if c"'!='"'-']
+        elif gap_policy=='include_gap':
+            states=list(col)
+        elif gap_policy=='complete_no_gaps':
+            if any(c in '-?.Xx' for c in col):
+                continue
+            states=list(col)
+        else: raise ValueError
+        counts=Counter(states)
+        if sum(1 for v in counts.values() if v>=2) >= 2:
+            total += 1
+    return total
+
+def counts(zip_path, policy):
+    out=[]
+    with zipfile.ZipFile(zip_path) as f:
+        for name in sorted(f.namelist()):
+            if name.endswith('.faa.mafft'):
+                out.append((name, pi_count(parse_fasta(f.read(name).decode()), policy)))
+    return out
+
+def mann_u(x,y):
+    vals=[(v,0) for v in x]+[(v,1) for v in y]
+    vals.sort(key=lambda t:t[0])
+    rank_sum_x=0.0
+    i=0
+    n=len(vals)
+    while i<n:
+        j=i+1
+        while j<n and vals[j][0]==vals[i][0]: j+=1
+        avg=(i+1+j)/2.0  # ranks i+1..j average
+        for k in range(i,j):
+            if vals[k][1]==0:
+                rank_sum_x += avg
+        i=j
+    nx=len(x)
+    return rank_sum_x - nx*(nx+1)/2.0
+
+for policy in ['ignore','ignore_gap_only','complete_no_gaps','include_gap']:
+    a=counts('inputs/scogs_animals.zip', policy)
+    f=counts('inputs/scogs_fungi.zip', policy)
+    ax=[v for _,v in a]; fy=[v for _,v in f]
+    print('\\npolicy', policy)
+    print('n',len(ax),len(fy),'sum',sum(ax),sum(fy),'zero',ax.count(0),fy.count(0),'minmax',min(ax),max(ax),min(fy),max(fy))
+    print('U_animals',mann_u(ax,fy),'U_fungi',mann_u(fy,ax),'nxny',len(ax)*len(fy))
+    print('first10 animals',a[:10])
+    print('first10 fungi',f[:10])
+PY"

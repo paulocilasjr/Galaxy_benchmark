@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import csv, time
+from pathlib import Path
+import numpy as np
+import pandas as pd
+base=Path('inputs')
+def header(name):
+    with (base/name).open(newline='') as f: return next(csv.reader(f))
+ch=header('CRISPRGeneEffect.csv'); eh=header('OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+expr_pos={g:i for i,g in enumerate(eh)}; shared=[g for g in ch[1:] if g in expr_pos]
+ci=[0]+[i for i,g in enumerate(ch[1:],1) if g in expr_pos]; ei=[0]+[expr_pos[g] for g in shared]
+dtypes={g:np.float64 for g in shared}
+cr=pd.read_csv(base/'CRISPRGeneEffect.csv',usecols=ci,dtype=dtypes,index_col=0)
+ex=pd.read_csv(base/'OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv',usecols=ei,dtype=dtypes,index_col=0)
+common=set(cr.index)&set(ex.index); ids=[x for x in cr.index if x in common]
+A=cr.loc[ids].to_numpy(copy=True) # gene effect, more negative = more essential
+B=ex.loc[ids].to_numpy(copy=True) # expression
+mask=np.isfinite(A) & np.isfinite(B)
+print('n cell lines',len(ids),'genes',len(shared),'n valid min/median/max',mask.sum(0).min(),np.median(mask.sum(0)),mask.sum(0).max(),flush=True)
+t=time.time()
+# Rank within each gene using only the paired, nonmissing cell lines.
+Ar=pd.DataFrame(np.where(mask,A,np.nan)).rank(axis=0,method='average',na_option='keep').to_numpy()
+Br=pd.DataFrame(np.where(mask,B,np.nan)).rank(axis=0,method='average',na_option='keep').to_numpy()
+print('ranked sec',round(time.time()-t,2),flush=True)
+n=mask.sum(axis=0).astype(float); mu=(n+1.0)/2.0
+da=Ar-mu; db=Br-mu
+num=np.nansum(da*db,axis=0); den=np.sqrt(np.nansum(da*da,axis=0)*np.nansum(db*db,axis=0))
+r=num/den
+# Direct gene-effect correlation and essentiality-oriented correlation.
+r_essentiality=-r
+for label,vals in [('essentiality (-gene effect)',r_essentiality),('raw gene effect',r)]:
+    print(label,'>=0.6',int(np.sum(vals>=0.6)),'>=0.6 strict finite',int(np.sum(np.isfinite(vals)&(vals>=0.6))), 'min/max',float(np.nanmin(vals)),float(np.nanmax(vals)),flush=True)
+print('direct effect <= -0.6',int(np.sum(r<=-0.6)),flush=True)
+# Show strongest positive essentiality correlations and threshold neighborhood for reproducibility.
+order=np.argsort(-r_essentiality)
+print('top10')
+for j in order[:10]: print(shared[j], 'essentiality_r',float(r_essentiality[j]),'effect_r',float(r[j]),'n',int(n[j]))
+sel=np.where((r_essentiality>=0.58)&(r_essentiality<=0.62))[0]
+print('near threshold count',len(sel))
+for j in sel[np.argsort(r_essentiality[sel])]: print('near',shared[j],float(r_essentiality[j]),int(n[j]))
+PY"

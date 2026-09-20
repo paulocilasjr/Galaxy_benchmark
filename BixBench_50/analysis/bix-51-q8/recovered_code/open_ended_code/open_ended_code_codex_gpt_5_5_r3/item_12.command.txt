@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+# parse table rows and summarize distributions
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+import re, collections, math
+path='/workspace/inputs/data.xlsx'
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def idx(ref):
+    m=re.match(r'([A-Z]+)', ref); n=0
+    for ch in m.group(1): n=n*26+ord(ch)-64
+    return n-1
+def read():
+    with ZipFile(path) as z:
+        ss=[]
+        root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+        for si in root.findall('a:si', ns): ss.append(''.join(t.text or '' for t in si.findall('.//a:t', ns)))
+        sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for row in sheet.findall('.//a:sheetData/a:row', ns):
+            vals={}
+            for c in row.findall('a:c', ns):
+                v=c.find('a:v', ns); typ=c.attrib.get('t')
+                if v is None: text=''
+                elif typ=='s': text=ss[int(v.text)]
+                else: text=v.text
+                vals[idx(c.attrib['r'])]=text
+            if vals: rows.append(vals)
+        header=[rows[0].get(i,'') for i in range(max(rows[0])+1)]
+        out=[]
+        for vals in rows[1:]:
+            if vals.get(0,'').strip().isdigit():
+                out.append({header[i]: vals.get(i,'') for i in range(len(header))})
+        return out
+rows=read()
+print('n', len(rows))
+print('Efficacy counts', collections.Counter(r['Efficacy'] for r in rows))
+print('Group counts', collections.Counter(r['Groups'] for r in rows))
+print('Efficacy by group')
+for g in sorted(set(r['Groups'] for r in rows)):
+    print(g, collections.Counter(r['Efficacy'] for r in rows if r['Groups']==g))
+print('Age mean by efficacy')
+for e in sorted(set(r['Efficacy'] for r in rows)):
+    ages=[float(r['Age']) for r in rows if r['Efficacy']==e]
+    print(e, len(ages), sum(ages)/len(ages), min(ages), max(ages))
+PY"

@@ -1,0 +1,119 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import PCA
+from collections import Counter
+
+# ---- 1. Read expression matrix ----
+with open('inputs/ROSMAP_genexp_ad.csv') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    all_sample_ids = header[1:]
+    genes = []
+    raw_data = []
+    for row in reader:
+        genes.append(row[0])
+        raw_data.append([float(x) for x in row[1:]])
+
+raw_matrix = np.array(raw_data, dtype=np.float64)  # genes x samples (2456 x 222)
+
+# ---- 2. Read metadata and validate identity ----
+meta_df = pd.read_csv('inputs/ROSMAP_meta_ad.csv')
+
+# Count repeated IDs in expression matrix
+id_counts = Counter(all_sample_ids)
+repeated_ids = {k for k, v in id_counts.items() if v > 1}
+print(f"Total sample columns in matrix: {len(all_sample_ids)}")
+print(f"Unique sample IDs: {len(set(all_sample_ids))}")
+print(f"Repeated IDs: {len(repeated_ids)}")
+print(f"Repeated IDs list: {sorted(repeated_ids)}")
+
+# Identify which repeated groups have invariant conflicts
+print("\n--- Identity Conflict Analysis ---")
+invariant_cols = ['msex', 'apoe_genotype']  # sex and germline genotype are invariant
+
+conflict_ids = set()
+no_conflict_ids = set()
+for pid in sorted(repeated_ids):
+    group = meta_df[meta_df['projid'] == pid]
+    if len(group) <= 1:
+        continue
+    sexes = set(group['msex'])
+    apoes = set(group['apoe_genotype'])
+    has_conflict = len(sexes) > 1 or len(apoes) > 1
+    if has_conflict:
+        conflict_ids.add(pid)
+        print(f"  CONFLICT: {pid} (n={len(group)}), sexes={sexes}, apoes={apoes}")
+    else:
+        no_conflict_ids.add(pid)
+        print(f"  NO CONFLICT: {pid} (n={len(group)}), sexes={sexes}, apoes={apoes}")
+
+print(f"\nIDs with invariant conflicts: {len(conflict_ids)}")
+print(f"IDs without invariant conflicts: {len(no_conflict_ids)}")
+
+# Per the skill: all repeated groups without secondary keys or affirmative provenance
+# should be excluded. Even the no-conflict groups lack secondary keys.
+# Exclude ALL repeated IDs.
+exclude_ids = repeated_ids
+print(f"\nExcluding all {len(exclude_ids)} repeated IDs")
+
+# ---- 3. Filter to unique-ID samples only ----
+keep_mask = np.array([sid not in exclude_ids for sid in all_sample_ids])
+keep_sample_ids = [sid for sid, keep in zip(all_sample_ids, keep_mask) if keep]
+filtered_matrix = raw_matrix[:, keep_mask]  # genes x filtered_samples
+
+print(f"Filtered matrix shape: {filtered_matrix.shape}")
+print(f"Kept {filtered_matrix.shape[1]} samples out of {raw_matrix.shape[1]}")
+
+# ---- 4. Transpose: samples as rows, genes as columns ----
+expr_samples_x_genes = filtered_matrix.T  # samples x genes
+print(f"After transpose (samples x genes): {expr_samples_x_genes.shape}")
+
+# ---- 5. Log10(x + 1) transform ----
+log_expr = np.log10(expr_samples_x_genes + 1.0)
+print(f"Log-transformed range: [{log_expr.min():.4f}, {log_expr.max():.4f}]")
+
+# ---- 6. Remove zero-variance features after transform ----
+gene_vars = np.var(log_expr, axis=0)
+zero_var_mask = gene_vars == 0
+n_zero_var = np.sum(zero_var_mask)
+print(f"Zero-variance genes after log transform: {n_zero_var}")
+
+if n_zero_var > 0:
+    log_expr = log_expr[:, ~zero_var_mask]
+    print(f"Matrix after removing zero-var genes: {log_expr.shape}")
+
+# ---- 7. Run PCA (center=True by default, no scaling → covariance PCA) ----
+n_components = 100
+pca = PCA(n_components=n_components)
+pca.fit(log_expr)
+
+# ---- 8. Extract explained variance ----
+explained_var_ratio = pca.explained_variance_ratio_
+pc1_pct = explained_var_ratio[0] * 100
+
+print(f"\n===== PCA Results =====")
+print(f"Number of components fitted: {n_components}")
+print(f"PC1 variance explained: {pc1_pct:.6f}%")
+print(f"Total variance explained by {n_components} PCs: {sum(explained_var_ratio)*100:.4f}%")
+
+# Additional diagnostics
+print(f"\nTop 5 PCs variance explained:")
+for i in range(min(5, n_components)):
+    print(f"  PC{i+1}: {explained_var_ratio[i]*100:.6f}%")
+
+print(f"\nCumulative variance:")
+cumsum = np.cumsum(explained_var_ratio) * 100
+for i in [0, 4, 9, 19, 49, 99]:
+    if i < len(cumsum):
+        print(f"  PC1-PC{i+1}: {cumsum[i]:.4f}%")
+
+# Verify denominator is total variance across all features
+print(f"\nDenominator check:")
+print(f"  Sum of explained_variance_ratio_ (all {n_components} PCs): {sum(explained_var_ratio):.10f}")
+print(f"  Total variance in data: {np.var(log_expr, axis=0).sum():.4f}")
+print(f"  PCA total variance (all components would sum to 1.0 if n_components=n_features): {pca.explained_variance_ratio_.sum():.10f}")
+
+PYEOF
+

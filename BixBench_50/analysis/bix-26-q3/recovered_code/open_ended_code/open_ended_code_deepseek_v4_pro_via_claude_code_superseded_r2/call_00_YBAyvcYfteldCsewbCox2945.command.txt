@@ -1,0 +1,190 @@
+PYTHONPATH=/workspace/pylib:$PYTHONPATH python3 << 'PYEOF'
+import csv
+import re
+from collections import defaultdict
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# 1. Load DE results
+de_data = []
+with open("/workspace/res_GluFevsGluFePlus.csv") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        de_data.append({
+            'gene_id': row['gene_id'].strip(),
+            'log2FC': float(row['log2FoldChange']),
+            'padj': float(row['padj']) if row['padj'] != 'NA' else None
+        })
+
+print(f"Total DE genes: {len(de_data)}")
+
+# 2. Define foreground: significantly upregulated
+# |log2FC| > 1.5 (absolute) AND upregulated means log2FC > 1.5
+# padj < 0.05
+foreground_genes = set()
+for g in de_data:
+    if g['padj'] is not None and g['padj'] < 0.05 and g['log2FC'] > 1.5:
+        foreground_genes.add(g['gene_id'])
+
+print(f"Foreground (upregulated, log2FC>1.5, padj<0.05): {len(foreground_genes)}")
+
+# Also get full DE gene set for universe
+all_de_genes = set(g['gene_id'] for g in de_data)
+print(f"All DE genes: {len(all_de_genes)}")
+
+# 3. Load KEGG genes (universe of all KEGG-mapped genes in PA14)
+kegg_genes = set()
+with open("/workspace/pau_genes.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        # Format: pau:PA14_XXXXX\t...
+        parts = line.split('\t')
+        kegg_id = parts[0]
+        # Extract PA14_XXXXX from pau:PA14_XXXXX
+        gene_locus = kegg_id.replace("pau:", "")
+        kegg_genes.add(gene_locus)
+
+print(f"KEGG genes (pau): {len(kegg_genes)}")
+
+# 4. Load pathway-gene mappings
+pathway_genes = defaultdict(set)  # pathway_id -> set of PA14 genes
+gene_pathways = defaultdict(set)  # gene -> set of pathway ids
+
+with open("/workspace/pau_pathway_links.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        # Format: path:pauXXXXX\tpau:PA14_XXXXX
+        parts = line.split('\t')
+        pathway_id = parts[0].replace("path:", "")  # e.g., pau02010
+        gene_id = parts[1].replace("pau:", "")  # e.g., PA14_00360
+        pathway_genes[pathway_id].add(gene_id)
+        gene_pathways[gene_id].add(pathway_id)
+
+print(f"Pathways: {len(pathway_genes)}")
+
+# 5. Load pathway names
+pathway_names = {}
+with open("/workspace/pau_pathways.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split('\t')
+        pid = parts[0]  # e.g., pau02010
+        pname = parts[1] if len(parts) > 1 else ""
+        pathway_names[pid] = pname
+
+# Find ABC transporters pathway
+abc_pathway_id = None
+for pid, pname in pathway_names.items():
+    if "ABC transporter" in pname:
+        abc_pathway_id = pid
+        print(f"\nABC transporters pathway ID: {abc_pathway_id}, Name: {pname}")
+        break
+
+# 6. Universe: all DE genes that can be mapped to KEGG
+# First check which DE genes have KEGG mappings
+de_genes_in_kegg = all_de_genes & kegg_genes
+print(f"\nDE genes with KEGG mapping: {len(de_genes_in_kegg)}")
+
+# Foreground genes with KEGG mapping
+fg_in_kegg = foreground_genes & kegg_genes
+print(f"Foreground genes with KEGG mapping: {len(fg_in_kegg)}")
+
+# Also check genes without KEGG mapping
+fg_not_in_kegg = foreground_genes - kegg_genes
+print(f"Foreground genes WITHOUT KEGG mapping: {len(fg_not_in_kegg)}")
+if fg_not_in_kegg:
+    print(f"  Examples: {list(fg_not_in_kegg)[:10]}")
+
+# Universe = all DE genes that have KEGG mapping
+universe = de_genes_in_kegg
+print(f"\nUniverse size (DE genes with KEGG mapping): {len(universe)}")
+
+# 7. ORA: Fisher's exact test for each pathway
+# Only test pathways that have genes in the universe
+results = []
+for pid, pathway_gene_set in pathway_genes.items():
+    pathway_in_universe = pathway_gene_set & universe
+    if len(pathway_in_universe) == 0:
+        continue
+    
+    # Contingency table:
+    #                    In pathway    Not in pathway
+    # In foreground          a              b
+    # Not in foreground      c              d
+    
+    a = len(fg_in_kegg & pathway_gene_set)  # foreground genes in pathway
+    b = len(fg_in_kegg) - a  # foreground genes not in pathway
+    c = len(pathway_in_universe) - a  # background genes in pathway
+    d = len(universe) - len(fg_in_kegg) - c  # background genes not in pathway
+    
+    if a == 0:
+        continue  # Skip pathways with no foreground genes
+    
+    # Fisher's exact test (one-tailed for over-representation)
+    table = [[a, b], [c, d]]
+    odds_ratio, p_value = fisher_exact(table, alternative='greater')
+    
+    pname = pathway_names.get(pid, pid)
+    results.append({
+        'pathway_id': pid,
+        'pathway_name': pname,
+        'overlap': a,
+        'pathway_size': len(pathway_in_universe),
+        'p_value': p_value,
+        'odds_ratio': odds_ratio
+    })
+
+print(f"\nPathways tested: {len(results)}")
+
+# 8. Multiple testing correction (Benjamini-Hochberg)
+if results:
+    pvals = [r['p_value'] for r in results]
+    reject, padj, _, _ = multipletests(pvals, method='fdr_bh')
+    for i, r in enumerate(results):
+        r['padj'] = padj[i]
+        r['significant'] = reject[i]
+
+# 9. Find ABC transporters result
+abc_result = None
+for r in results:
+    if r['pathway_id'] == abc_pathway_id:
+        abc_result = r
+        break
+
+print(f"\n--- ABC Transporters Enrichment ---")
+if abc_result:
+    print(f"Pathway: {abc_result['pathway_name']}")
+    print(f"Pathway ID: {abc_result['pathway_id']}")
+    print(f"Overlap (foreground genes in pathway): {abc_result['overlap']}")
+    print(f"Pathway size (in universe): {abc_result['pathway_size']}")
+    print(f"Fisher p-value: {abc_result['p_value']:.6e}")
+    print(f"Adjusted p-value (FDR): {abc_result['padj']:.6e}")
+    print(f"Significant at padj<0.05: {abc_result['significant']}")
+else:
+    print("ABC transporters NOT found in enrichment results!")
+
+# 10. Show top enriched pathways for context
+results_sorted = sorted(results, key=lambda r: r['padj'])
+print(f"\n--- Top 10 Enriched Pathways ---")
+for i, r in enumerate(results_sorted[:10]):
+    print(f"{i+1}. {r['pathway_name']} (ID: {r['pathway_id']}): overlap={r['overlap']}, padj={r['padj']:.4e}")
+
+# 11. Verify: list the specific genes that overlap
+if abc_result:
+    abc_genes_in_pathway = pathway_genes[abc_pathway_id]
+    overlapping_genes = fg_in_kegg & abc_genes_in_pathway
+    print(f"\n--- {len(overlapping_genes)} Overlapping Genes for ABC Transporters ---")
+    for g in sorted(overlapping_genes):
+        # Find the log2FC and padj for this gene
+        for d in de_data:
+            if d['gene_id'] == g:
+                print(f"  {g}: log2FC={d['log2FC']:.3f}, padj={d['padj']:.4e}")
+                break
+PYEOF
+

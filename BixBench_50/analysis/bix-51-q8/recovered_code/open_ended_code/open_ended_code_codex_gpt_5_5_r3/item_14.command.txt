@@ -1,0 +1,89 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+import re, math, collections
+path='/workspace/inputs/data.xlsx'
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def idx(ref):
+    m=re.match(r'([A-Z]+)', ref); n=0
+    for ch in m.group(1): n=n*26+ord(ch)-64
+    return n-1
+def read_rows():
+    with ZipFile(path) as z:
+        ss=[]
+        root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+        for si in root.findall('a:si', ns): ss.append(''.join(t.text or '' for t in si.findall('.//a:t', ns)))
+        sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        raw=[]
+        for row in sheet.findall('.//a:sheetData/a:row', ns):
+            vals={}
+            for c in row.findall('a:c', ns):
+                v=c.find('a:v', ns); typ=c.attrib.get('t')
+                if v is None: text=''
+                elif typ=='s': text=ss[int(v.text)]
+                else: text=v.text
+                vals[idx(c.attrib['r'])]=text
+            if vals: raw.append(vals)
+        header=[raw[0].get(i,'') for i in range(max(raw[0])+1)]
+        rows=[]
+        for vals in raw[1:]:
+            if vals.get(0,'').strip().isdigit():
+                rows.append({header[i]: vals.get(i,'') for i in range(len(header))})
+        return rows
+rows=read_rows()
+data=[]
+for r in rows:
+    age=float(r['Age'])
+    y=1 if r['Efficacy']=='PR' else 0
+    data.append((age,y))
+print('n', len(data), 'events', sum(y for _,y in data), 'nonevents', len(data)-sum(y for _,y in data))
+# Newton-Raphson for logistic with intercept and age
+b0=0.0; b1=0.0
+for it in range(100):
+    g0=g1=0.0
+    h00=h01=h11=0.0
+    ll=0.0
+    for x,y in data:
+        eta=b0+b1*x
+        if eta>=0:
+            p=1/(1+math.exp(-eta))
+            ll += y*eta - (eta + math.log1p(math.exp(-eta)))
+        else:
+            p=math.exp(eta)/(1+math.exp(eta))
+            ll += y*eta - math.log1p(math.exp(eta))
+        w=p*(1-p)
+        g0 += y-p
+        g1 += (y-p)*x
+        h00 -= w
+        h01 -= w*x
+        h11 -= w*x*x
+    det=h00*h11-h01*h01
+    # solve H delta = g; b_new = b - delta
+    d0=( g0*h11 - h01*g1)/det
+    d1=( h00*g1 - g0*h01)/det
+    b0_new=b0-d0; b1_new=b1-d1
+    if max(abs(b0_new-b0),abs(b1_new-b1))<1e-13:
+        b0,b1=b0_new,b1_new
+        print('iter', it+1, 'll', ll)
+        break
+    b0,b1=b0_new,b1_new
+else:
+    print('no convergence')
+print('coef_intercept', repr(b0))
+print('coef_age', repr(b1))
+# standard errors from inverse(-H) at optimum maybe not requested
+# Try scipy/statsmodels availability
+try:
+    import scipy.optimize as opt
+    def nll(params):
+        bb0,bb1=params
+        s=0.0
+        for x,y in data:
+            eta=bb0+bb1*x
+            s += (eta + math.log1p(math.exp(-eta)) if eta>=0 else math.log1p(math.exp(eta))) - y*eta
+        return s
+    res=opt.minimize(nll,[0,0],method='BFGS')
+    print('scipy', res.x, res.fun, res.success)
+except Exception as e:
+    print('scipy unavailable/error', type(e).__name__, e)
+PY"

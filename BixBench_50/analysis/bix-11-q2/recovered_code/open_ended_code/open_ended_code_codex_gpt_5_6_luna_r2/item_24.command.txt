@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+import re
+
+class Node:
+    __slots__=('children','length')
+    def __init__(self, children=None, length=None): self.children=children or []; self.length=length
+
+def parse(s):
+    # Simple Newick parser sufficient for the supplied IQ-TREE files.
+    i=0
+    def subtree():
+        nonlocal i
+        if s[i]=='(':
+            i+=1; kids=[subtree()]
+            while s[i]==',': i+=1; kids.append(subtree())
+            assert s[i]==')'; i+=1
+            # optional node label, absent here
+            while i<len(s) and s[i] not in ':,();': i+=1
+            length=None
+            if i<len(s) and s[i]==':':
+                i+=1; j=i
+                while i<len(s) and s[i] not in ',();': i+=1
+                length=float(s[j:i])
+            return Node(kids,length)
+        j=i
+        while i<len(s) and s[i] not in ':,();': i+=1
+        # tip label is nonempty
+        assert i>j
+        length=None
+        if i<len(s) and s[i]==':':
+            i+=1; j=i
+            while i<len(s) and s[i] not in ',();': i+=1
+            length=float(s[j:i])
+        return Node([],length)
+    root=subtree()
+    assert s[i]==';'
+    return root
+
+def metric(root):
+    all_lengths=[]; internal=[]
+    def walk(n, isroot=False):
+        if n.length is not None: all_lengths.append(n.length)
+        if n.children and not isroot and n.length is not None: internal.append(n.length)
+        for c in n.children: walk(c)
+    walk(root,True)
+    return sum(internal)/sum(all_lengths),len(internal),len(all_lengths)
+
+with ZipFile('/workspace/inputs/scogs_fungi.zip') as z:
+    vals=[]
+    for name in z.namelist():
+        if name.endswith('.treefile'):
+            vals.append(metric(parse(z.read(name).decode().strip())))
+assert len(vals)==249
+assert sum(n==1 for _,n,_ in vals)==211
+assert sum(n==0 for _,n,_ in vals)==38
+above=sum(x>0.06 for x,_,_ in vals)
+pct=100*above/len(vals)
+print(f'trees={len(vals)} above={above} percentage={pct:.15f}%')
+PY"

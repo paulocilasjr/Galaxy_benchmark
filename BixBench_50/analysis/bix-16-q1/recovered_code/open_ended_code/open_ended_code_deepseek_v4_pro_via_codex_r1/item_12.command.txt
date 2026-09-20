@@ -1,0 +1,85 @@
+/bin/bash -lc "python - <<'PY'
+import time
+import numpy as np
+import pandas as pd
+import scipy.stats as st
+
+t0=time.time()
+print('Reading headers...', flush=True)
+eff_all_cols = pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0).columns
+expr_all_cols = pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns
+
+def sym(col):
+    return str(col).split(' (')[0]
+
+eff_syms = eff_all_cols[1:].map(sym)
+expr_syms = expr_all_cols[1:].map(sym)
+common = sorted(set(eff_syms) & set(expr_syms))
+print('common genes', len(common), flush=True)
+
+eff_keep = [eff_all_cols[0]] + [eff_all_cols[i+1] for i,s in enumerate(eff_syms) if s in common]
+expr_keep = [expr_all_cols[0]] + [expr_all_cols[i+1] for i,s in enumerate(expr_syms) if s in common]
+
+print('Reading effect matrix...', flush=True)
+eff = pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=eff_keep, index_col=0, dtype=np.float32)
+print('effect shape', eff.shape, 'elapsed', round(time.time()-t0,1), flush=True)
+print('Reading expression matrix...', flush=True)
+expr = pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=expr_keep, index_col=0, dtype=np.float32)
+print('expr shape', expr.shape, 'elapsed', round(time.time()-t0,1), flush=True)
+
+# rename to symbols for matching
+eff.columns = [sym(c) for c in eff.columns]
+expr.columns = [sym(c) for c in expr.columns]
+# keep same column order
+eff = eff.loc[:, common]
+expr = expr.loc[:, common]
+common_ids = eff.index.intersection(expr.index)
+print('common sample IDs', len(common_ids), flush=True)
+eff = eff.loc[common_ids]
+expr = expr.loc[common_ids]
+
+print('effect NaNs', int(eff.isna().sum().sum()), 'expr NaNs', int(expr.isna().sum().sum()), flush=True)
+
+# pairwise-complete per gene if any NaNs exist (likely none)
+def mask_valid(a,b):
+    if np.isnan(a).any() or np.isnan(b).any():
+        return ~(np.isnan(a)|np.isnan(b))
+    return np.ones(a.shape[0], dtype=bool)
+
+print('Ranking effect columns...', flush=True)
+# Use float64 for ranks
+rank_eff = st.rankdata(eff.to_numpy(dtype=np.float64), axis=0, method='average')
+print('rank_eff shape', rank_eff.shape, 'elapsed', round(time.time()-t0,1), flush=True)
+del eff
+print('Ranking expression columns...', flush=True)
+rank_expr = st.rankdata(expr.to_numpy(dtype=np.float64), axis=0, method='average')
+print('rank_expr shape', rank_expr.shape, 'elapsed', round(time.time()-t0,1), flush=True)
+del expr
+
+# Center ranks by column
+rank_eff = rank_eff - rank_eff.mean(axis=0, keepdims=True)
+rank_expr = rank_expr - rank_expr.mean(axis=0, keepdims=True)
+
+# compute correlation diagonal
+cov = np.einsum('ij,ij->j', rank_eff, rank_expr)
+var_eff = np.einsum('ij,ij->j', rank_eff, rank_eff)
+var_expr = np.einsum('ij,ij->j', rank_expr, rank_expr)
+denom = np.sqrt(var_eff * var_expr)
+rho = cov / denom
+print('rho shape', rho.shape, 'elapsed', round(time.time()-t0,1), flush=True)
+
+# finite check
+finite = np.isfinite(rho)
+print('finite', finite.sum(), '/', len(rho), flush=True)
+if finite.sum() < len(rho):
+    print('nonfinite genes', [common[i] for i in np.where(~finite)[0]][:10])
+
+valid = finite
+min_idx = int(np.nanargmin(rho))
+print('min gene', common[min_idx], 'rho', float(rho[min_idx]))
+# top 20 negative
+order = np.argsort(rho)
+for i in order[:20]:
+    print(i, common[i], float(rho[i]))
+print('total elapsed', round(time.time()-t0,1), flush=True)
+PY"

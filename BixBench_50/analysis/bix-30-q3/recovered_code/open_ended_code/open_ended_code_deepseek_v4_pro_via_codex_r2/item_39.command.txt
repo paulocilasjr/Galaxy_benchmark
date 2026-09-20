@@ -1,0 +1,71 @@
+/bin/bash -c "python - <<'PY'
+import xlrd
+import numpy as np
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+
+path='inputs/pone.0150501.s002.xls'
+book=xlrd.open_workbook(path)
+sh=book.sheet_by_index(0)
+# Rows: 0 title, 1 sample header, 2..176 miRNA rows
+miRNAs=[]
+mat=[]
+for r in range(2, sh.nrows):
+    miRNAs.append(sh.cell_value(r,0))
+    vals=[]
+    for c in range(1, sh.ncols):
+        v=sh.cell_value(r,c)
+        if isinstance(v,str) and v.strip().upper()=='NAN':
+            vals.append(np.nan)
+        else:
+            vals.append(float(v))
+    mat.append(vals)
+A=np.array(mat)  # 175 x 20
+
+def analyze(data, patient_cols, control_cols, use_detected_mean=True):
+    # Per-sample normalization factor: mean Ct over all numeric values,
+    # or only detected Ct<34, depending on paper wording.
+    factors=[]
+    for j in range(data.shape[1]):
+        col=data[:,j]
+        valid=~np.isnan(col)
+        if use_detected_mean:
+            valid &= (col < 34)
+        factors.append(np.nanmean(col[valid]))
+    factors=np.array(factors)
+    # log2 mean-normalized expression is proportional to -(Ct - sample mean)
+    expr=factors[None,:]-data
+    pvals=[]
+    for i in range(data.shape[0]):
+        xp=expr[i, patient_cols]
+        xc=expr[i, control_cols]
+        xp=xp[~np.isnan(xp)]
+        xc=xc[~np.isnan(xc)]
+        t,p=stats.ttest_ind(xp,xc,equal_var=True)
+        pvals.append(p)
+    pvals=np.array(pvals)
+    results={}
+    for method in ['bonferroni','fdr_bh','fdr_by']:
+        rej, adj, _, _ = multipletests(pvals, alpha=0.05, method=method)
+        results[method]=(int(rej.sum()), [miRNAs[i] for i in np.where(rej)[0]])
+    return pvals, results
+
+# All provided samples: P_1..P_10 vs C_11..C_20
+p1,r1=analyze(A, list(range(0,10)), list(range(10,20)), use_detected_mean=False)
+print('all samples, mean all numeric: raw<0.05', int((p1<0.05).sum()))
+for m in r1:
+    print(m, r1[m])
+
+# Paper-described haemolysis exclusions: remove P_3 (index 2) and C_18 (index 17)
+keep=[i for i in range(20) if i not in (2,17)]
+A2=A[:,keep]
+p_cols=[keep.index(i) for i in range(10) if i"'!=2]
+c_cols=[keep.index(i) for i in range(10,20) if i!=17]
+p2,r2=analyze(A2,p_cols,c_cols,use_detected_mean=True)
+print('"'excluded P3/C18, mean detected Ct<34: raw<0.05', int((p2<0.05).sum()))
+for m in r2:
+    print(m, r2[m])
+
+print('ANSWER', r1['bonferroni'][0], ':', r1['fdr_by'][0])
+print('ANSWER excluded', r2['bonferroni'][0], ':', r2['fdr_by'][0])
+PY"

@@ -1,0 +1,171 @@
+python3 << 'PYEOF'
+import os, re
+
+os.chdir('/workspace/tmp')
+
+# Extract treeness directly from IQ-TREE report files
+# IQ-TREE reports: "Sum of internal branch lengths: X.XXXX (Y.YYYY% of tree length)"
+
+treeness_from_iqtree = {}
+for f in os.listdir('.'):
+    if f.endswith('.iqtree'):
+        gene_id = f.replace('.faa.mafft.clipkit.iqtree', '')
+        content = open(f).read()
+        # Search for "Sum of internal branch lengths:"
+        match = re.search(r'Sum of internal branch lengths:\s+[\d.]+\s+\(([\d.]+)% of tree length\)', content)
+        if match:
+            pct = float(match.group(1))
+            treeness_from_iqtree[gene_id] = pct / 100.0
+
+# Now also check with my tree-parsing method
+def compute_treeness_from_tree(tree_str):
+    """Compute internal branch proportion from Newick tree."""
+    s = tree_str.strip().rstrip(';')
+    nodes = []
+    i = 0
+    
+    def parse_node():
+        nonlocal i
+        node = {'children': [], 'length': 0.0, 'name': None}
+        node_id = len(nodes)
+        nodes.append(node)
+        
+        if s[i] == '(':
+            i += 1
+            while True:
+                child_id = parse_node()
+                nodes[node_id]['children'].append(child_id)
+                if s[i] == ',':
+                    i += 1
+                elif s[i] == ')':
+                    i += 1
+                    break
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        else:
+            j = i
+            while j < len(s) and s[j] not in ':),;':
+                j += 1
+            nodes[node_id]['name'] = s[i:j]
+            i = j
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        
+        return node_id
+    
+    root = parse_node()
+    
+    total_length = 0.0
+    internal_length = 0.0
+    
+    for nid, node in enumerate(nodes):
+        if nid == root and node['name'] is None and node['length'] > 0:
+            total_length += node['length']
+            internal_length += node['length']
+            continue
+        if node['length'] > 0:
+            total_length += node['length']
+            if node['name'] is None:
+                internal_length += node['length']
+    
+    if total_length == 0:
+        return 0.0
+    return internal_length / total_length
+
+tree_genes = set()
+for f in os.listdir('.'):
+    if f.endswith('.treefile'):
+        tree_genes.add(f.replace('.faa.mafft.clipkit.treefile', ''))
+
+treeness_from_tree = {}
+errors = []
+for gene_id in sorted(tree_genes):
+    tree_file = f"{gene_id}.faa.mafft.clipkit.treefile"
+    tree_str = open(tree_file).read().strip()
+    try:
+        treeness_from_tree[gene_id] = compute_treeness_from_tree(tree_str)
+    except Exception as e:
+        errors.append((gene_id, str(e)))
+
+# Compare IQ-TREE values with tree-parsed values
+print(f"IQ-TREE treeness values: {len(treeness_from_iqtree)}")
+print(f"Tree-parsed treeness values: {len(treeness_from_tree)}")
+print(f"Errors in tree parsing: {len(errors)}")
+
+if errors:
+    for gene_id, err in errors[:5]:
+        print(f"  {gene_id}: {err}")
+
+# Compare values
+common = set(treeness_from_iqtree.keys()) & set(treeness_from_tree.keys())
+print(f"\nCommon genes: {len(common)}")
+diffs = []
+for g in common:
+    diff = abs(treeness_from_iqtree[g] - treeness_from_tree[g])
+    diffs.append(diff)
+if diffs:
+    print(f"Max diff: {max(diffs):.6f}")
+    print(f"Mean diff: {sum(diffs)/len(diffs):.6f}")
+    big_diffs = [(g, treeness_from_iqtree[g], treeness_from_tree[g]) for g in common 
+                 if abs(treeness_from_iqtree[g] - treeness_from_tree[g]) > 0.001]
+    if big_diffs:
+        print(f"Genes with diff > 0.001: {len(big_diffs)}")
+        for g, iq, tp in big_diffs[:5]:
+            print(f"  {g}: IQ-TREE={iq:.6f}, tree={tp:.6f}")
+    else:
+        print("All differences < 0.001")
+
+# Use IQ-TREE values for the answer
+vals = list(treeness_from_iqtree.values())
+all_faa = set()
+for f in os.listdir('.'):
+    if f.endswith('.faa') and '.mafft' not in f:
+        all_faa.add(f.replace('.faa', ''))
+
+mean_v = sum(vals) / len(vals)
+sorted_v = sorted(vals)
+median_v = sorted_v[len(sorted_v)//2]
+
+print(f"\nFinal treeness (from IQ-TREE, internal branch proportion):")
+print(f"  n={len(vals)}, mean={mean_v:.6f}, median={median_v:.6f}, min={min(vals):.6f}, max={max(vals):.6f}")
+
+above_006 = sum(1 for v in vals if v > 0.06)
+print(f"\n  treeness > 0.06: {above_006}/{len(vals)} genes with trees = {100*above_006/len(vals):.2f}%")
+print(f"  treeness > 0.06: {above_006}/{len(all_faa)} all fungal genes = {100*above_006/len(all_faa):.2f}%")
+
+# Show genes that exist in IQ-TREE but not in treefile (if any)
+only_iqtree = set(treeness_from_iqtree.keys()) - tree_genes
+only_tree = tree_genes - set(treeness_from_iqtree.keys())
+print(f"\n  Genes in IQ-TREE only: {len(only_iqtree)}")
+print(f"  Genes in treefile only: {len(only_tree)}")
+
+# Check what the 6 missing trees are
+missing_trees = all_faa - tree_genes
+print(f"\n  Genes without trees: {len(missing_trees)}")
+for g in sorted(missing_trees):
+    # Check if the log file has error info
+    log_file = f"{g}.faa.mafft.clipkit.log"
+    if os.path.exists(log_file):
+        with open(log_file) as lf:
+            content = lf.read()
+            if 'ERROR' in content:
+                err_lines = [line.strip() for line in content.split('\n') if 'ERROR' in line or 'error' in line.lower()]
+                print(f"    {g}: {err_lines[:2]}")
+            else:
+                print(f"    {g}: no error in log")
+    else:
+        print(f"    {g}: no log file")
+
+PYEOF

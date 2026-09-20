@@ -1,0 +1,112 @@
+/bin/bash -lc "mkdir -p codex_output
+python - <<'PY'
+import zipfile, itertools, statistics
+
+class Node:
+    __slots__ = ('name', 'length', 'children', 'parent')
+    def __init__(self, name=None, length=0.0):
+        self.name = name
+        self.length = length
+        self.children = []
+        self.parent = None
+
+def parse_newick(text):
+    s = text.strip().rstrip(';')
+    n = len(s)
+
+    def skip(i):
+        while i < n and s[i].isspace():
+            i += 1
+        return i
+
+    def parse_name_length(i):
+        i = skip(i)
+        start = i
+        while i < n and s[i] not in ':,()':
+            i += 1
+        name = s[start:i].strip() or None
+        i = skip(i)
+        length = 0.0
+        if i < n and s[i] == ':':
+            i += 1
+            start = i
+            while i < n and s[i] not in ',()':
+                i += 1
+            length = float(s[start:i].strip())
+        return name, length, i
+
+    def parse_subtree(i):
+        i = skip(i)
+        if s[i] == '(':
+            node = Node()
+            i += 1
+            while True:
+                child, i = parse_subtree(i)
+                child.parent = node
+                node.children.append(child)
+                i = skip(i)
+                if i < n and s[i] == ',':
+                    i += 1
+                    continue
+                if i < n and s[i] == ')':
+                    i += 1
+                    break
+                raise ValueError(f'bad Newick near {i}: {s[i:i+20]}')
+            node.name, node.length, i = parse_name_length(i)
+            return node, i
+        name, length, i = parse_name_length(i)
+        return Node(name, length), i
+
+    root, i = parse_subtree(0)
+    if skip(i) "'!= n:
+        raise ValueError(f'"'unparsed Newick suffix: {s[i:]}')
+    root.length = 0.0
+    return root
+
+def tips(root):
+    out = []
+    def visit(node):
+        if node.children:
+            for child in node.children:
+                visit(child)
+        else:
+            out.append(node)
+    visit(root)
+    return out
+
+def patristic(a, b):
+    seen = {}
+    d = 0.0
+    node = a
+    while node is not None:
+        seen[id(node)] = d
+        d += node.length
+        node = node.parent
+    d = 0.0
+    node = b
+    while node is not None:
+        if id(node) in seen:
+            return d + seen[id(node)]
+        d += node.length
+        node = node.parent
+    raise RuntimeError('tree nodes lack a common ancestor')
+
+def mean_patristic(tree_text):
+    leaf_nodes = tips(parse_newick(tree_text))
+    return statistics.mean(patristic(a, b) for a, b in itertools.combinations(leaf_nodes, 2))
+
+def median_tree_means(zip_path):
+    values = []
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in sorted(n for n in zf.namelist() if n.endswith('.treefile')):
+            values.append(mean_patristic(zf.read(member).decode()))
+    return statistics.median(values)
+
+animal = median_tree_means('inputs/scogs_animals.zip')
+fungal = median_tree_means('inputs/scogs_fungi.zip')
+ratio = fungal / animal
+with open('codex_output/answer.txt', 'w') as fh:
+    fh.write(f'{ratio:.15g}\\n')
+print(f'animal={animal:.17g} fungal={fungal:.17g} ratio={ratio:.17g}')
+PY
+cat codex_output/answer.txt"

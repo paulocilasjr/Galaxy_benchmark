@@ -1,0 +1,146 @@
+/bin/bash -lc "cat > /tmp/analyze.py <<'PY'
+import openpyxl, glob, os, re, statistics, collections, json
+
+def norm(s):
+    if s is None: return None
+    return str(s).strip()
+
+# read trio
+wb=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx', data_only=True)
+ws=wb.active
+trio_rows=list(ws.iter_rows(values_only=True))[1:]
+trio=[]
+for r in trio_rows:
+    sid=norm(r[0])
+    if sid in (None,''): continue
+    # strip tabs/spaces and weird whitespace internal
+    sid=re.sub(r'\\s+','',sid)
+    status=norm(r[1])
+    blm=norm(r[3])
+    trio.append(dict(sample_id=sid,status=status,blm=blm,raw=r))
+print('trio rows',len(trio))
+print('status counts',collections.Counter(x['status'] for x in trio))
+print('blm counts',collections.Counter(x['blm'] for x in trio))
+print('status+blm counts',collections.Counter((x['status'],x['blm']) for x in trio))
+
+# read chip gene list
+wb=openpyxl.load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx', data_only=True)
+ws=wb.active
+chip_genes=set()
+for r in ws.iter_rows(values_only=True):
+    if r[0] is not None:
+        chip_genes.add(str(r[0]).strip().upper())
+print('chip genes',len(chip_genes))
+
+files=glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+print('files',len(files))
+
+# map file to sample id
+def file_sample(path):
+    stem=os.path.basename(path)
+    stem=stem.replace('.xlsx','')
+    token=stem.split('_')[-1]
+    if token.startswith('SRR'):
+        return token
+    m=re.match(r'"'^('"\\d+)', token)
+    return m.group(1) if m else token
+
+# map sample -> path
+path_by_sample={}
+for f in files:
+    sid=file_sample(f)
+    path_by_sample[sid]=f
+# trio sample keys set
+trio_by_id={t['sample_id']:t for t in trio}
+missing_files=[sid for sid in trio_by_id if sid not in path_by_sample]
+extra_files=[sid for sid in path_by_sample if sid not in trio_by_id]
+print('missing file samples',missing_files)
+print('extra file samples',extra_files)
+
+def so_excluded(so):
+    if so is None: return False
+    s=str(so).lower()
+    if 'intergenic' in s: return True
+    if 'utr' in s: return True
+    if s=='intron_variant': return True
+    # any combined with intron? none in distinct, but robust:
+    if 'intron_variant' in s: return True
+    return False
+
+def process_file(path, gene_filter):
+    wb=openpyxl.load_workbook(path, data_only=True)
+    ws=wb.active
+    rows=list(ws.iter_rows(values_only=True))
+    if len(rows)<2:
+        wb.close(); return None
+    # header row rows[1]
+    hdr=rows[1]
+    idx={name:i for i,name in enumerate(hdr) if name}
+    c_pos=0; c_zyg=idx.get('Zygosity'); c_vaf=idx.get('Variant Allele Freq'); c_so=idx.get('Sequence Ontology (Combined)'); c_gene=idx.get('Gene Names'); c_inchip=idx.get('In_CHIP')
+    counts=dict(total=0, after_excl=0, low=0, list_low=0)
+    rows_low=[]
+    for r in rows[2:]:
+        if r[c_pos] is None: continue
+        counts['total']+=1
+        zyg=r[c_zyg]
+        so=r[c_so]
+        if zyg is not None and str(zyg).strip().lower()=='reference':
+            continue
+        if so_excluded(so):
+            continue
+        counts['after_excl']+=1
+        v=r[c_vaf]
+        if v is None:
+            continue
+        try:
+            vf=float(v)
+        except:
+            continue
+        if vf < 0.3:
+            counts['low']+=1
+            genes=str(r[c_gene]) if r[c_gene] is not None else ''
+            genes_parts=[g.strip().upper() for g in genes.split(',') if g.strip()]
+            inlist=any(g in chip_genes for g in genes_parts)
+            if inlist:
+                counts['list_low']+=1
+            rows_low.append((r[c_pos], r[c_gene], r[c_so], zyg, vf, inlist))
+    wb.close()
+    return counts, rows_low
+
+results={}
+all_low_rows={}
+for f in files:
+    sid=file_sample(f)
+    counts, rows_low=process_file(f, False)
+    results[sid]={'path':f,'counts':counts}
+    all_low_rows[sid]=rows_low
+
+# print per sample counts for trio carrier/affected
+print('\\nPer-sample counts (low = after exclusions & VAF<0.3, list_low = additionally gene in list):')
+for sid in sorted(trio_by_id, key=lambda x: (not re.match(r'"'^'"\\d+"'$'"',x), (int(x) if x.isdigit() else x))):
+    t=trio_by_id[sid]
+    r=results.get(sid)
+    if not r:
+        print(sid, t['status'], t['blm'], 'NO FILE')
+        continue
+    c=r['counts']
+    print(f\"{sid:12s} {t['status']:8s} {t['blm']:10s} total={c['total']:3d} after_excl={c['after_excl']:3d} low={c['low']:3d} list_low={c['list_low']:3d}\")
+
+for group_name, selector in [
+    ('Carrier only', lambda t:t['blm']=='Carrier'),
+    ('Affected only', lambda t:t['blm']=='Affected'),
+    ('Carrier or Affected', lambda t:t['blm'] in ('Carrier','Affected')),
+    ('Status Patient + Affected', lambda t:t['status']=='Patient' and t['blm']=='Affected'),
+    ('Unaffected', lambda t:t['blm']=='Unaffected'),
+]:
+    for metric in ['low','list_low']:
+        vals=[]
+        for sid,t in trio_by_id.items():
+            if selector(t) and sid in results:
+                vals.append(results[sid]['counts'][metric])
+        if vals:
+            print(group_name, metric, 'n',len(vals),'values',sorted(vals),'median',statistics.median(vals),'mean',statistics.mean(vals))
+        else:
+            print(group_name, metric, 'empty')
+PY
+python /tmp/analyze.py"

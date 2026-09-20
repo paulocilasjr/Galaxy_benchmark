@@ -1,0 +1,28 @@
+/bin/bash -lc "rg --files -g '"'!inputs/CHIP_DP10_GQ20_PASS/*.xlsx'"' -g '"'!inputs/*.xlsx'"' . | sed -n '1,200p'
+python - <<'PY'
+from pathlib import Path
+from collections import Counter, defaultdict
+import openpyxl,re
+meta=list(openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True).active.iter_rows(values_only=True))[1:]
+ids={str(r[0]).strip() for r in meta if r[3]=='Carrier'}
+files=[p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx') if (m:=re.search(r'_CHIP_(["'^-'"\\.]+)',p.name)) and m.group(1) in ids]
+records=[]
+for p in sorted(files):
+ ws=openpyxl.load_workbook(p,read_only=True,data_only=True).active; ws.reset_dimensions()
+ rows=ws.iter_rows(min_row=2,values_only=True); hdr=next(rows); ix={v:i for i,v in enumerate(hdr)}
+ for row in rows:
+  try: v=float(row[ix['Variant Allele Freq']])
+  except (TypeError,ValueError): continue
+  if v<0.3:
+   records.append({'sample':p.stem.split('_CHIP_')[1], 'pos':row[ix['Chr:Pos']], 'refalt':row[ix['Ref/Alt']], 'so':row[ix['Sequence Ontology (Combined)']], 'effect':row[ix['Effect (Combined)']], 'vaf':v, 'zyg':row[ix['Zygosity']]})
+coding={'synonymous_variant','missense_variant','frameshift_variant','inframe_insertion','inframe_deletion','stop_gained','stop_lost','start_lost','protein_altering_variant','coding_sequence_variant'}
+r=[x for x in records if x['so'] in coding]
+print('coding record observations',len(r),Counter(x['so'] for x in r),'fraction',sum(x['so']=='synonymous_variant' for x in r)/len(r))
+u={(x['pos'],x['refalt'],x['so']) for x in r}
+print('unique annotated sites',len(u),Counter(x[2] for x in u),'fraction',sum(x[2]=='synonymous_variant' for x in u)/len(u))
+u2={(x['pos'],x['refalt']):x['so'] for x in r}
+print('unique alleles',len(u2),Counter(u2.values()),'fraction',sum(x=='synonymous_variant' for x in u2.values())/len(u2))
+print('per sample coding counts')
+for s in sorted({x['sample'] for x in r}): print(s,Counter(x['so'] for x in r if x['sample']==s))
+print('boundary vafs',sorted({x['vaf'] for x in records if 0.29<=x['vaf']<=0.31}))
+PY"

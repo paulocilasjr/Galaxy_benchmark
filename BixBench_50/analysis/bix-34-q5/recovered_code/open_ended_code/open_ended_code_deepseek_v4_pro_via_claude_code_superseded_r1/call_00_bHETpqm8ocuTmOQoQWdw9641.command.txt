@@ -1,0 +1,50 @@
+cd /workspace
+python3 << 'EOF'
+# Quick test: process 5 genes sequentially to check timing and error rate
+import sys, os, time
+sys.path.insert(0, '/workspace')
+from combined_tree_analysis import process_gene
+import subprocess, re
+
+animals_zip = '/workspace/inputs/scogs_animals.zip'
+fungi_zip = '/workspace/inputs/scogs_fungi.zip'
+mafft_bin = '/tmp/mafft-linux64/mafftdir/bin/mafft'
+mafft_env = '/tmp/mafft-linux64/mafftdir/libexec'
+iqtree_bin = '/tmp/iqtree-2.4.0-Linux-intel/bin/iqtree2'
+
+workdir = '/tmp/test_combined2'
+os.makedirs(workdir, exist_ok=True)
+
+# Get shared OGs
+result = subprocess.run(['unzip', '-l', animals_zip], capture_output=True, text=True)
+animal_ogs = set()
+for line in result.stdout.split('\n'):
+    if '.treefile' in line:
+        m = re.search(r'(\d+at\d+)\.faa\.mafft\.clipkit\.treefile', line)
+        if m:
+            animal_ogs.add(m.group(1))
+result = subprocess.run(['unzip', '-l', fungi_zip], capture_output=True, text=True)
+fungi_ogs = set()
+for line in result.stdout.split('\n'):
+    if '.treefile' in line:
+        m = re.search(r'(\d+at\d+)\.faa\.mafft\.clipkit\.treefile', line)
+        if m:
+            fungi_ogs.add(m.group(1))
+
+shared = sorted(animal_ogs & fungi_ogs)[:5]
+print(f"Testing {len(shared)} genes: {shared}")
+
+for og in shared:
+    import shutil
+    shutil.rmtree(os.path.join(workdir, og), ignore_errors=True)
+    t0 = time.time()
+    result = process_gene((og, animals_zip, fungi_zip, workdir, mafft_bin, mafft_env, iqtree_bin))
+    t1 = time.time()
+    if result:
+        n_species = len(result)
+        animal_m = [v for k,v in result.items() if k.startswith('Animals')]
+        fungi_m = [v for k,v in result.items() if k.startswith('Fungi')]
+        print(f"  {og}: {n_species} species, {t1-t0:.1f}s, animal_med={sum(animal_m)/len(animal_m):.4f}, fungi_med={sum(fungi_m)/len(fungi_m):.4f}")
+    else:
+        print(f"  {og}: FAILED, {t1-t0:.1f}s")
+EOF

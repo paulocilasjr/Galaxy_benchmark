@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv')
+
+
+def run(samples):
+    counts = raw[['geneID'] + samples].set_index('geneID').T.astype(int)
+    cond = ['KL' if s.startswith('KL') else 'WL' for s in samples]
+    metadata = pd.DataFrame({'condition': pd.Categorical(cond, categories=['WL', 'KL'])}, index=samples)
+    dds = DeseqDataSet(counts=counts, metadata=metadata, design='~ condition', min_replicates=7, n_cpus=1, quiet=True)
+    dds.deseq2()
+    coeffs = [c for c in dds.obsm['design_matrix'].columns if c "'!= '"'Intercept']
+    if coeffs "'!= ['"'condition[T.KL]']:
+        raise RuntimeError(f'unexpected coefficients: {coeffs}')
+    stat = DeseqStats(dds, contrast=['condition', 'KL', 'WL'], alpha=0.05, cooks_filter=True, independent_filter=True, n_cpus=1, quiet=True)
+    stat.summary()
+    stat.lfc_shrink(coeff='condition[T.KL]')
+    res = stat.results_df.copy()
+    sig = res[(res['pvalue'] < 0.05) & (res['baseMean'] > 10) & (res['log2FoldChange'].abs() > 1)]
+    print('samples=' + ','.join(samples))
+    print('design_columns=' + ','.join(dds.obsm['design_matrix'].columns))
+    print('n_sig=' + str(len(sig)))
+    print('non_na_p=' + str(int(res['pvalue'].notna().sum())))
+    print('lfc_min_max=' + str((float(res['log2FoldChange'].min()), float(res['log2FoldChange'].max()))))
+    return len(sig), res
+
+full_n, full = run(['KL1','KL2','KL3','WL1','WL2','WL3'])
+reduced_n, reduced = run(['KL1','KL2','WL1','WL2'])
+direction = 'increase' if reduced_n > full_n else 'decrease' if reduced_n < full_n else 'no change'
+print(f'FINAL full={full_n} reduced={reduced_n} direction={direction}')
+PY"

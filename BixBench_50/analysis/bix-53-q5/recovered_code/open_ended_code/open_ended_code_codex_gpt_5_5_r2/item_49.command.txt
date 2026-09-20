@@ -1,0 +1,101 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import math
+import pandas as pd
+import mygene
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+count_path = '/workspace/inputs/count.csv'
+answer_path = '/workspace/codex_output/answer.txt'
+
+counts_raw = pd.read_csv(count_path)
+counts = counts_raw.set_index('geneID').T.astype(int)
+metadata = pd.DataFrame(
+    {'condition': ['KL' if sample.startswith('KL') else 'WL' for sample in counts.index]},
+    index=counts.index,
+)
+
+# Fit DESeq2-like NB GLM, Wald p-values, then shrink the condition effect.
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~condition',
+    quiet=True,
+    n_cpus=1,
+)
+dds.deseq2()
+stats = DeseqStats(
+    dds,
+    contrast=['condition', 'WL', 'KL'],
+    alpha=0.05,
+    quiet=True,
+    n_cpus=1,
+)
+stats.summary()
+coeffs = [c for c in stats.LFC.columns if c "'!= '"'Intercept']
+if len(coeffs) "'!= 1:
+    raise RuntimeError(f'"'Expected one condition coefficient, found {coeffs}')
+stats.lfc_shrink(coeff=coeffs[0])
+res = stats.results_df.copy()
+
+sig_mask = (
+    (res['pvalue'] < 0.05)
+    & (res['log2FoldChange'].abs() > 1)
+    & (res['baseMean'] > 10)
+)
+fg_ensembl = res.index[sig_mask].tolist()
+if not fg_ensembl:
+    raise RuntimeError('No foreground genes after requested DE filters')
+
+# Map mouse Ensembl gene IDs to symbols for the WikiPathways mouse Enrichr library.
+mg = mygene.MyGeneInfo()
+records = mg.querymany(
+    fg_ensembl,
+    scopes='ensembl.gene',
+    fields='symbol',
+    species='mouse',
+    as_dataframe=False,
+    verbose=False,
+)
+symbols = []
+seen = set()
+for rec in records:
+    if rec.get('notfound') or 'symbol' not in rec:
+        continue
+    sym = str(rec['symbol']).strip()
+    if not sym:
+        continue
+    key = sym.upper()
+    if key not in seen:
+        symbols.append(sym)
+        seen.add(key)
+if len(symbols) < 2:
+    raise RuntimeError(f'Only {len(symbols)} mapped foreground symbols')
+
+enr = gp.enrichr(
+    gene_list=symbols,
+    gene_sets='WikiPathways_2019_Mouse',
+    organism='mouse',
+    outdir=None,
+    no_plot=True,
+    verbose=False,
+)
+terms = enr.res2d.copy()
+if terms is None or len(terms) < 20:
+    raise RuntimeError(f'Expected at least 20 enriched terms, found {0 if terms is None else len(terms)}')
+
+top20 = terms.head(20)
+oxidative_count = int(top20['Term'].str.contains('oxidative', case=False, na=False).sum())
+fraction = round(oxidative_count / 20, 1)
+
+print('foreground_ensembl', len(fg_ensembl))
+print('mapped_symbols', len(symbols))
+print('enriched_terms', len(terms))
+print('oxidative_count_top20', oxidative_count)
+print(top20[['Term','P-value','Adjusted P-value','Combined Score','Genes']].to_string(index=False))
+os.makedirs(os.path.dirname(answer_path), exist_ok=True)
+with open(answer_path, 'w', encoding='ascii') as f:
+    f.write(f'{fraction:.1f}\\n')
+PY"

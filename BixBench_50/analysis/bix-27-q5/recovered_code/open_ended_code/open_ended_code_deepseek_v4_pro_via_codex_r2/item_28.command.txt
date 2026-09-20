@@ -1,0 +1,45 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+from sklearn.decomposition import PCA
+# read expression with duplicate columns preserved as unique? pandas mangles; use raw column order and transpose ourselves
+import csv
+with open('inputs/ROSMAP_genexp_ad.csv') as f:
+    r=csv.reader(f)
+    header=next(r)
+    sample_ids=header[1:]
+    rows=[]
+    for row in r:
+        rows.append([float(x) for x in row[1:]])
+X=np.array(rows, dtype=float)  # genes x samples
+print('X',X.shape, 'any nan',np.isnan(X).any(), 'min',X.min(), 'max',X.max())
+# baseline all columns as samples rows
+Y=np.log10(X.T+1.0)
+print('Y shape',Y.shape)
+# centering and zero var
+means=Y.mean(axis=0)
+Yc=Y-means
+# remove zero variance features after transform/center
+vars=Yc.var(axis=0, ddof=0)
+print('zero var features before',np.sum(vars<=1e-15),'max',vars.max())
+nz=vars>0
+Yz=Yc[:,nz]
+print('features after zero var',Yz.shape[1])
+pca=PCA(n_components=100, svd_solver='full')
+pca.fit(Yz)
+print('baseline all 222 explained var ratio sum100',pca.explained_variance_ratio_.sum())
+print('PC1 %',pca.explained_variance_ratio_[0]*100)
+print('PC1 eigenvalue',pca.explained_variance_[0], 'total',pca.explained_variance_.sum()/pca.explained_variance_ratio_.sum())
+# unique IDs exclusion all duplicate groups
+import collections
+cnt=collections.Counter(sample_ids)
+keep=[i for i,s in enumerate(sample_ids) if cnt[s]==1]
+print('keep count',len(keep), 'drop',len(sample_ids)-len(keep))
+Yu=np.log10(X.T[keep]+1.0)
+Yc=Yu-Yu.mean(axis=0)
+vars=Yc.var(axis=0,ddof=0)
+nz=vars>1e-15
+Yz=Yc[:,nz]
+pca=PCA(n_components=100, svd_solver='full')
+pca.fit(Yz)
+print('unique 199 PC1 %',pca.explained_variance_ratio_[0]*100,'sum100',pca.explained_variance_ratio_.sum(),'features',Yz.shape[1])
+PY"

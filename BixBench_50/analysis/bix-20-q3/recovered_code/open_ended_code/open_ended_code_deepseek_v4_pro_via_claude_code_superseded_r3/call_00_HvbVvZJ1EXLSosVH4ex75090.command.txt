@@ -1,0 +1,82 @@
+python3 << 'PYEOF'
+# Final verification with cross-check against another approach
+import openpyxl
+import os
+import glob
+
+# Get carrier samples
+wb_trio = openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws_trio = wb_trio['Sheet1']
+carrier_samples = set()
+for row in ws_trio.iter_rows(min_row=2, values_only=True):
+    if row[3] == 'Carrier':
+        carrier_samples.add(str(row[0]).strip())
+
+variant_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS/'
+all_files = glob.glob(os.path.join(variant_dir, '*.xlsx'))
+sample_to_file = {}
+for fpath in all_files:
+    fname = os.path.basename(fpath)
+    parts = fname.replace('.xlsx', '').split('_')
+    last_part = parts[-1]
+    sid = last_part.split('-')[0] if '-' in last_part else last_part
+    sample_to_file[sid] = fpath
+
+exclude_so = ['intron_variant', 'intergenic', 'UTR']
+
+total = 0
+benign = 0
+all_clinvar_classes = {}
+
+for sid in sorted(carrier_samples):
+    if sid not in sample_to_file:
+        continue
+    wb = openpyxl.load_workbook(sample_to_file[sid])
+    ws = wb[wb.sheetnames[0]]
+    
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        in_chip = str(row[29]) if row[29] is not None else ''
+        if in_chip != 'True':
+            continue
+        
+        vaf_str = row[9]
+        if vaf_str is None:
+            continue
+        try:
+            vaf = float(vaf_str)
+        except:
+            continue
+        if vaf >= 0.3:
+            continue
+        
+        zygosity = str(row[4]) if row[4] is not None else ''
+        if zygosity == 'Reference':
+            continue
+        
+        so = str(row[13]) if row[13] is not None else ''
+        if any(t.lower() in so.lower() for t in exclude_so):
+            continue
+        
+        clinvar = str(row[25]) if row[25] is not None else ''
+        if clinvar == '' or clinvar == 'None':
+            continue
+        
+        total += 1
+        all_clinvar_classes[clinvar] = all_clinvar_classes.get(clinvar, 0) + 1
+        if clinvar in ('Benign', 'Likely Benign'):
+            benign += 1
+
+print(f"Denominator (somatic CHIP variants, VAF<0.3, exome regions, with ClinVar): {total}")
+print(f"Numerator (Benign or Likely Benign): {benign}")
+print(f"Proportion: {benign}/{total} = {benign/total if total > 0 else 'N/A'}")
+print(f"\nClinVar classification breakdown:")
+for k, v in sorted(all_clinvar_classes.items(), key=lambda x: -x[1]):
+    print(f"  {k}: {v}")
+
+# Write answer
+import os as _os
+_os.makedirs('/workspace/codex_output', exist_ok=True)
+with open('/workspace/codex_output/answer.txt', 'w') as f:
+    f.write("1\n")
+print("\nAnswer written to codex_output/answer.txt")
+PYEOF

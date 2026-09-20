@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile, collections, statistics
+z=zipfile.ZipFile('/workspace/inputs/scogs_animals.zip')
+
+def parse_fasta(text):
+    seqs=[]; name=None; cur=[]
+    for line in text.splitlines():
+        if line.startswith('>'):
+            if name is not None: seqs.append((name,''.join(cur).upper()))
+            name=line[1:].strip(); cur=[]
+        else:
+            cur.append(line.strip())
+    if name is not None: seqs.append((name,''.join(cur).upper()))
+    return seqs
+
+missing_ambiguous=set('BJZX.*-?')  # AMAS amino acid missing/ambiguous
+results=[]
+for n in z.namelist():
+    if not n.endswith('.mafft'): continue
+    seqs=parse_fasta(z.read(n).decode())
+    if not seqs: continue
+    L=len(seqs[0][1])
+    assert all(len(s[1])==L for s in seqs)
+    pi=0; variable=0
+    for col in range(L):
+        chars=[s[1][col] for s in seqs if s[1][col] not in missing_ambiguous]
+        if not chars: continue
+        if len(set(chars))>1: variable+=1
+        counts=collections.Counter(chars)
+        pat=[c for c in counts if counts[c]>=2]
+        if len(pat)>=2: pi+=1
+    results.append((pi,L,len(seqs),n, variable))
+results.sort(reverse=True)
+print('total alignments',len(results))
+print('top 30')
+for r in results[:30]: print(r)
+print('max', results[0])
+# distribution
+pis=[r[0] for r in results]
+print('PI distribution: >0',sum(p>0 for p in pis), 'min/max/median',min(pis),max(pis),statistics.median(pis))
+# top by taxa
+for k in [4,3,2,1]:
+    rs=[r for r in results if r[2]==k]
+    print('taxa',k,'max', max(rs, default=None))
+PY"

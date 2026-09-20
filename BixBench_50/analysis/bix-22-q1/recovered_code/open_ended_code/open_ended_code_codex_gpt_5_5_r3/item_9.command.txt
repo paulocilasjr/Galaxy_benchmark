@@ -1,0 +1,84 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, os
+base='/workspace'
+meta_path=os.path.join(base,'inputs/GeneMetaInfo_Zenodo.csv')
+annot_path=os.path.join(base,'inputs/Sample_annotated_Zenodo.csv')
+counts_path=os.path.join(base,'inputs/BatchCorrectedReadCounts_Zenodo.csv')
+celltypes=['CD4','CD8','CD14','CD19']
+
+# protein-coding gene -> length
+length={}
+meta_dups=[]
+with open(meta_path, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        gene=row['Geneid'] or row.get('', '')
+        if row['gene_biotype']=='protein_coding':
+            try:
+                L=float(row['Length'])
+            except ValueError:
+                continue
+            if gene in length:
+                meta_dups.append(gene)
+            length[gene]=L
+print('protein_coding genes in metadata', len(length), 'dups', len(meta_dups))
+
+# sample -> celltype for requested celltypes
+sample_cell={}
+cell_counts={ct:0 for ct in celltypes}
+with open(annot_path, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        ct=row['celltype']
+        if ct in cell_counts:
+            sample_cell[row['sample']]=ct
+            cell_counts[ct]+=1
+print('sample counts', cell_counts)
+
+with open(counts_path, newline='') as f:
+    r=csv.reader(f)
+    header=next(r)
+    col_idxs={ct:[] for ct in celltypes}
+    missing_annot=[]
+    for i,name in enumerate(header):
+        if i==0: continue
+        ct=sample_cell.get(name)
+        if ct in col_idxs:
+            col_idxs[ct].append(i)
+    print('matrix columns by cell type', {ct:len(v) for ct,v in col_idxs.items()})
+    # online sums for Pearson between length x and avg expression y
+    vals={ct:[] for ct in celltypes}
+    matched=0
+    count_rows=0
+    for row in r:
+        count_rows += 1
+        gene=row[0]
+        L=length.get(gene)
+        if L is None:
+            continue
+        matched += 1
+        for ct,idxs in col_idxs.items():
+            s=0.0
+            n=0
+            for idx in idxs:
+                if idx < len(row) and row[idx] "'!= '"'':
+                    s += float(row[idx])
+                    n += 1
+            if n:
+                vals[ct].append((L, s/n))
+    print('count matrix rows', count_rows, 'matched protein_coding rows', matched)
+
+def pearson(pairs):
+    n=len(pairs)
+    sx=sy=sxx=syy=sxy=0.0
+    for x,y in pairs:
+        sx+=x; sy+=y; sxx+=x*x; syy+=y*y; sxy+=x*y
+    num=n*sxy - sx*sy
+    den=math.sqrt((n*sxx - sx*sx)*(n*syy - sy*sy))
+    return num/den
+
+cors={ct:pearson(vals[ct]) for ct in celltypes}
+for ct in celltypes:
+    print(ct, 'n=', len(vals[ct]), 'r=', format(cors[ct], '.12g'), 'abs=', format(abs(cors[ct]), '.12g'))
+print('weakest', min(celltypes, key=lambda ct: abs(cors[ct])))
+PY"

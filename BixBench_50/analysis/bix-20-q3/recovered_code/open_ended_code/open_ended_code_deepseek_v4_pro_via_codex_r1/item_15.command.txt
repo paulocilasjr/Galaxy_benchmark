@@ -1,0 +1,101 @@
+/bin/bash -c "python3 - <<'PY'
+import os, glob, re, math
+from openpyxl import load_workbook
+from collections import Counter
+
+# read statuses
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=False, data_only=True)
+ws=wb.active
+status_rows=list(ws.iter_rows(min_row=2, values_only=True))
+status={}
+for row in status_rows:
+    if row[0] is None: continue
+    sid=str(row[0]).rstrip('\\t').strip()
+    status[sid]=row
+wb.close()
+
+# carrier status IDs (numeric core)
+carrier_cores=set()
+for sid,row in status.items():
+    if row[3] == 'Carrier':
+        carrier_cores.add(sid)
+print('carrier status IDs', sorted(carrier_cores, key=lambda x:(x.startswith('SRR'), x)))
+
+files=sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+carrier_files=[]
+for f in files:
+    base=os.path.basename(f)[:-5]
+    sample=base.split('_CHIP_',1)[1]
+    if sample.startswith('SRR'):
+        core=sample
+    else:
+        core=sample.split('-')[0]
+    if core in carrier_cores:
+        carrier_files.append((core,sample,f))
+print('carrier files count',len(carrier_files))
+for x in carrier_files: print(x[:2])
+
+region_bad=('intron','intergenic','utr')
+stage=Counter()
+class_counter=Counter()
+region_counter=Counter()
+vaf_problems=[]
+rows=[]
+for core,sample,f in carrier_files:
+    wb=load_workbook(f, read_only=False, data_only=True)
+    ws=wb.active
+    data=list(ws.iter_rows(min_row=3, max_col=33, values_only=True))
+    wb.close()
+    for row in data:
+        # extract col indexes 1-based: chr1 ref2 zyg5 vaf10 seq14 class26
+        zyg=row[4] if len(row)>4 else None
+        vaf_raw=row[9] if len(row)>9 else None
+        seq=row[13] if len(row)>13 else None
+        cls=row[25] if len(row)>25 else None
+        stage['total']+=1
+        # reference filter
+        if zyg=='Reference':
+            stage['reference']+=1
+            continue
+        stage['nonreference']+=1
+        # region filter
+        seq_s=str(seq or '')
+        seq_lower=seq_s.lower()
+        bad=any(t in seq_lower for t in region_bad)
+        if bad:
+            region_counter[seq_s]+=1
+            stage['region_removed']+=1
+            continue
+        stage['after_region']+=1
+        # vaf filter
+        if vaf_raw is None:
+            stage['vaf_missing']+=1
+            continue
+        try:
+            vaf=float(str(vaf_raw).strip())
+        except Exception:
+            vaf_problems.append((f,vaf_raw,row[0]))
+            stage['vaf_bad']+=1
+            continue
+        if not (vaf < 0.3):
+            stage['vaf_ge03']+=1
+            continue
+        stage['somatic_vaf<0.3']+=1
+        # clinvar classification present
+        cls_s=str(cls or '').strip()
+        if cls_s=='':
+            stage['class_missing']+=1
+            continue
+        stage['classified']+=1
+        class_counter[cls_s]+=1
+        if cls_s in ('Benign','Likely Benign'):
+            stage['benign_likelybenign']+=1
+print('\\nstages')
+for k in ['total','reference','nonreference','region_removed','after_region','vaf_missing','vaf_bad','vaf_ge03','somatic_vaf<0.3','class_missing','classified','benign_likelybenign']:
+    print(k, stage[k])
+print('class_counter',class_counter)
+print('region_counter after reference',region_counter)
+print('vaf_problems',vaf_problems[:20], len(vaf_problems))
+if stage['classified']:
+    print('proportion', stage['benign_likelybenign']/stage['classified'])
+PY"

@@ -1,0 +1,46 @@
+/bin/bash -lc "Rscript - <<'EOF'
+read_deseq <- function(path) {
+  x <- readRDS(path)
+  a <- attributes(x)
+  data.frame(
+    gene = a"'$rownames,
+    baseMean = a$listData$baseMean,
+    log2FoldChange = a$listData$log2FoldChange,
+    lfcSE = a$listData$lfcSE,
+    stat = a$listData$stat,
+    pvalue = a$listData$pvalue,
+    padj = a$listData$padj,
+    stringsAsFactors = FALSE
+  )
+}
+res <- read_deseq("inputs/res_GluFevsGluFePlus.rds")
+fg <- res$gene[!is.na(res$padj) & res$padj < 0.05 & res$log2FoldChange > 1.5]
+cat("foreground", length(fg), "'"\\n\")
+link <- read.delim(\"https://rest.kegg.jp/link/pathway/pau\", header=FALSE, stringsAsFactors=FALSE, col.names=c(\"gene\",\"pathway\"))
+link"'$gene <- sub("''^pau:", "", link$gene)
+link$pathway <- sub("''^path:", "", link$pathway)
+abc_genes <- unique(link$gene[link$pathway == "pau02010"])
+ov <- intersect(fg, abc_genes)
+cat("abc pathway genes", length(abc_genes), "'"\\n\")
+cat(\"overlap\", length(ov), \"\\n\")
+cat(paste(sort(ov), collapse=\"\\n\"), \"\\n\")
+# ORA with all mapped genes in the DE table as universe, for sanity
+universe <- intersect(res"'$gene, unique(link$gene))
+fg_mapped <- intersect(fg, universe)
+paths <- split(link$gene, link$pathway)
+terms <- read.delim("https://rest.kegg.jp/list/pathway/pau", header=FALSE, stringsAsFactors=FALSE, col.names=c("pathway","name"))
+term_name <- setNames(terms$name, terms$pathway)
+ora <- do.call(rbind, lapply(names(paths), function(pid) {
+  gs <- intersect(unique(paths[[pid]]), universe)
+  k <- length(intersect(fg_mapped, gs))
+  data.frame(pathway=pid, name=term_name[[pid]], K=length(gs), k=k,
+             pvalue=phyper(k-1, length(gs), length(universe)-length(gs), length(fg_mapped), lower.tail=FALSE),
+             stringsAsFactors=FALSE)
+}))
+ora <- ora[ora$K >= 10 & ora$K <= 500,]
+ora$padj <- p.adjust(ora$pvalue, method="BH")
+ora <- ora[order(ora$pvalue),]
+print(head(ora, 12), row.names=FALSE)
+abc <- ora[ora$pathway == "pau02010",]
+print(abc, row.names=FALSE)
+EOF'

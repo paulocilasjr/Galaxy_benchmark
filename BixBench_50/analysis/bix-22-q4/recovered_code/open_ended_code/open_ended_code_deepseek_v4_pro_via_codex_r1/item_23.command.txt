@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math
+cd14=set()
+with open('inputs/Sample_annotated_Zenodo.csv', newline='') as f:
+    for row in csv.DictReader(f):
+        if row['celltype']=='CD14': cd14.add(row['sample'])
+length=[]; pc=[]
+with open('inputs/GeneMetaInfo_Zenodo.csv', newline='') as f:
+    r=csv.reader(f); next(r)
+    for row in r:
+        length.append(int(row[3])); pc.append(row[4]=='protein_coding')
+X=[]; Y=[]
+with open('inputs/BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    r=csv.reader(f); header=next(r); cols=[i for i,c in enumerate(header) if c in cd14]
+    n=len(cols)
+    for i,row in enumerate(r):
+        if pc[i]:
+            s=sum(int(row[j]) for j in cols)
+            if s>=10:
+                X.append(length[i]); Y.append(s/n)
+print(len(X), X[:5], Y[:5])
+mx=sum(X)/len(X); my=sum(Y)/len(Y)
+cov=sum((x-mx)*(y-my) for x,y in zip(X,Y))
+vx=sum((x-mx)**2 for x in X)
+vy=sum((y-my)**2 for y in Y)
+r=cov/math.sqrt(vx*vy)
+print('mx my',mx,my)
+print('cov',cov,'vx',vx,'vy',vy)
+print('r centered',repr(r))
+# use statistics.correlation
+import statistics
+print('statistics',repr(statistics.correlation(X,Y)))
+# Pearson formula old
+sx=sum(X); sy=sum(Y); sxx=sum(x*x for x in X); syy=sum(y*y for y in Y); sxy=sum(x*y for x,y in zip(X,Y)); nn=len(X)
+r2=(nn*sxy-sx*sy)/math.sqrt((nn*sxx-sx*sx)*(nn*syy-sy*sy))
+print('formula',repr(r2))
+# Welford
+n=0; meanx=meany=0; C=0; M2x=M2y=0
+for x,y in zip(X,Y):
+    n+=1
+    dx=x-meanx; meanx+=dx/n; M2x+=dx*(x-meanx)
+    dy=y-meany; meany+=dy/n; M2y+=dy*(y-meany)
+    C += (x-meanx)*(y-meany) # careful this uses updated mean? covariance update in Welford typically C += dx*(y-meany_old)
+print('Welford maybe', n, C/math.sqrt(M2x*M2y))
+# More standard
+n=0; meanx=meany=0; C=0; M2x=M2y=0
+for x,y in zip(X,Y):
+    n+=1
+    dx=x-meanx; meanx_new=meanx+dx/n
+    dy=y-meany; meany_new=meany+dy/n
+    C += dx*(y-meany_new)
+    M2x += dx*(x-meanx_new)
+    M2y += dy*(y-meany_new)
+    meanx=meanx_new; meany=meany_new
+print('Welford std', C/math.sqrt(M2x*M2y))
+# Decimal high precision
+from decimal import Decimal, getcontext
+getcontext().prec=50
+DX=[Decimal(x) for x in X]; DY=[Decimal(y) for y in Y]
+mxd=sum(DX)/Decimal(len(X)); myd=sum(DY)/Decimal(len(Y))
+covd=sum((x-mxd)*(y-myd) for x,y in zip(DX,DY))
+vxd=sum((x-mxd)**2 for x in DX); vyd=sum((y-myd)**2 for y in DY)
+rd=covd/(vxd*vyd).sqrt()
+print('decimal',rd)
+PY"

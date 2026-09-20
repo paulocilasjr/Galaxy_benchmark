@@ -1,0 +1,62 @@
+PYTHONPATH=/workspace/packages:$PYTHONPATH python3 -c "
+import csv
+import numpy as np
+from scipy import stats
+
+# Recompute with more diagnostics
+cd14_samples = set()
+with open('/workspace/inputs/Sample_annotated_Zenodo.csv', 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        if row['celltype'] == 'CD14':
+            cd14_samples.add(row['sample'])
+
+gene_info = {}
+with open('/workspace/inputs/GeneMetaInfo_Zenodo.csv', 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        if row['gene_biotype'] == 'protein_coding':
+            gene_info[row['Geneid']] = int(row['Length'])
+
+with open('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', 'r') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    cd14_col_indices = [i for i, col in enumerate(header) if i > 0 and col in cd14_samples]
+    
+    gene_lengths = []
+    mean_expressions = []
+    
+    for row in reader:
+        gene_id = row[0]
+        if gene_id not in gene_info:
+            continue
+        expr_vals = [float(row[i]) for i in cd14_col_indices]
+        total = sum(expr_vals)
+        if total < 10:
+            continue
+        gene_lengths.append(gene_info[gene_id])
+        mean_expressions.append(np.mean(expr_vals))
+
+gene_lengths = np.array(gene_lengths)
+mean_expressions = np.array(mean_expressions)
+
+print(f'N genes: {len(gene_lengths)}')
+print(f'Length stats: min={gene_lengths.min()}, max={gene_lengths.max()}, median={np.median(gene_lengths)}')
+print(f'Mean expr stats: min={mean_expressions.min():.4f}, max={mean_expressions.max():.4f}, median={np.median(mean_expressions):.4f}')
+print(f'Genes with mean expr == 0: {(mean_expressions == 0).sum()}')
+
+# Pearson on raw
+r_raw, p_raw = stats.pearsonr(gene_lengths, mean_expressions)
+print(f'Pearson r (raw): {r_raw}')
+
+# With log transforms
+log_len = np.log10(gene_lengths)
+log_expr = np.log10(mean_expressions + 1)
+r_log, p_log = stats.pearsonr(log_len, log_expr)
+print(f'Pearson r (log10): {r_log}')
+
+# Spearman
+rho, p = stats.spearmanr(gene_lengths, mean_expressions)
+print(f'Spearman rho: {rho}')
+"
+

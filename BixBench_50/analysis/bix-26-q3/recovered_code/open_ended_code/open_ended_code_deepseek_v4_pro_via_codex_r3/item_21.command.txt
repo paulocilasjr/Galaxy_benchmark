@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request,re
+from math import comb
+# Extract DEGs via R? Let's write DEG list to file using R first? Use subprocess or parse R? easiest run R then output to file
+PY
+Rscript - <<'RS'
+x<-readRDS('inputs/res_GluFevsGluFePlus.rds')
+a<-attributes(x); rn<-a"'$rownames; ld<-a$listData
+lfc<-ld$log2FoldChange; padj<-ld$padj
+pos<-rn[padj<0.05 & lfc>1.5]
+allgenes<-rn
+writeLines(pos, '"'tmp/upgenes.txt')
+writeLines(allgenes, 'tmp/allgenes.txt')
+cat(length(pos), '\\n')
+RS
+python3 - <<'PY'
+import urllib.request,re
+up=set(open('tmp/upgenes.txt').read().split())
+allg=set(open('tmp/allgenes.txt').read().split())
+data=urllib.request.urlopen('https://rest.kegg.jp/get/pau02010',timeout=30).read().decode()
+# find GENE block
+m=re.search(r'"'^GENE'"\\s+(.*?)(?="'^[A-Z_]+'"\\s+|\\Z)', data, re.S|re.M)
+block=m.group(1)
+genes=set()
+for line in block.splitlines():
+    line=line.strip()
+    if not line: continue
+    # first token before space
+    g=line.split()[0]
+    genes.add(g)
+print('pathway genes',len(genes))
+print('overlap up',len(up&genes))
+print('overlap all',len(allg&genes))
+print('up genes in path', sorted(up&genes))
+from math import comb
+N=len(allg); K=len(allg&genes); n=len(up); k=len(up&genes)
+print('N K n k', N,K,n,k)
+# hypergeom upper tail P(X>=k)
+p=sum(comb(K,i)*comb(N-K,n-i) for i in range(k,min(K,n)+1))/comb(N,n)
+print('p',p)
+PY"

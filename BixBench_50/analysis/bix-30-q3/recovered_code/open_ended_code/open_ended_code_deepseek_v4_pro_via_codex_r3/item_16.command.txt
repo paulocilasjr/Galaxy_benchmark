@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, numpy as np
+from scipy import stats
+wb=xlrd.open_workbook('/workspace/inputs/pone.0150501.s002.xls'); ws=wb.sheet_by_index(0)
+names=[]; M=[]
+for r in range(2,ws.nrows):
+ row=ws.row_values(r); vals=[]
+ for c in range(1,21):
+  v=row[c]; vals.append(v if isinstance(v,(int,float)) and not (isinstance(v,float) and np.isnan(v)) else np.nan)
+ names.append(row[0]); M.append(vals)
+M=np.array(M,float)
+keep=np.array([i for i in range(20) if i not in (2,17)])
+M=M[:,keep]
+Pidx=np.arange(9); Cidx=np.arange(9,18)
+
+def ttest_arr(data, equal_var):
+ ps=[]
+ for row in data:
+  a=row[Pidx]; b=row[Cidx]
+  a=a[np.isfinite(a)]; b=b[np.isfinite(b)]
+  if len(a)<2 or len(b)<2:
+   ps.append(np.nan); continue
+  try: ps.append(stats.ttest_ind(a,b,equal_var=equal_var).pvalue)
+  except: ps.append(np.nan)
+ return np.array(ps)
+
+def sample_means(data, use_lt34):
+ means=[]
+ for j in range(data.shape[1]):
+  vals=data[:,j]
+  vals=vals[(np.isfinite(vals)) & (vals<34)] if use_lt34 else vals[np.isfinite(vals)]
+  means.append(np.mean(vals) if len(vals) else np.nan)
+ return np.array(means)
+
+for norm in ['none','ct_subtract','expr_log']:
+ for lt in [False,True]:
+  means=sample_means(M,lt) if norm"'!='"'none' else np.zeros(M.shape[1])
+  if norm=='none': data=M.copy()
+  elif norm=='ct_subtract': data=M - means[None,:]
+  else: data=means[None,:] - M
+  for eq in [True,False]:
+   ps=ttest_arr(data,eq)
+   valid=~np.isnan(ps)
+   n=int(np.sum(ps<0.05))
+   print(norm,lt,eq,'n_p05',n,'valid',valid.sum(),'minp',np.nanmin(ps),'minmiRNA',names[np.nanargmin(ps)] if valid.any() else None)
+PY"

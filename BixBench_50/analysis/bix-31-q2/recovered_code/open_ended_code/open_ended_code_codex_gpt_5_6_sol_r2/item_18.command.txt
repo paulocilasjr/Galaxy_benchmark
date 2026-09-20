@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import gc,time
+import numpy as np
+import pandas as pd
+import pydeseq2
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+print('PyDESeq2',pydeseq2.__version__,flush=True)
+gs=pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv',index_col=0)
+nonzero=gs.sum(axis=1)"'!=0
+print('"'all genes',len(gs),'method-inestimable all-zero',int((~nonzero).sum()),flush=True)
+gs=gs.loc[nonzero].astype(np.int32)
+counts=gs.T.copy()
+del gs,nonzero
+metadata=pd.read_csv('inputs/Sample_annotated_Zenodo.csv',index_col='sample').loc[counts.index].copy()
+metadata['batch']=pd.Categorical(metadata['batch'].astype(str),categories=['1','2','3','4'])
+metadata['sex']=pd.Categorical(metadata['sex'],categories=['F','M'])
+assert counts.index.equals(metadata.index)
+assert counts.index.is_unique and counts.columns.is_unique
+assert 'FAM138A' in counts.columns
+print('estimable counts',counts.shape,flush=True)
+
+dds=DeseqDataSet(counts=counts,metadata=metadata,design='~ batch + sex',n_cpus=1,low_memory=True,quiet=False)
+del counts,metadata
+gc.collect()
+print('design columns',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+assert dds.obsm['design_matrix'].columns.tolist()==['Intercept','batch[T.2]','batch[T.3]','batch[T.4]','sex[T.M]']
+print('Starting low-memory DESeq2 fit...',flush=True)
+t0=time.time(); dds.deseq2(); print('fit seconds',time.time()-t0,flush=True)
+
+stats=DeseqStats(dds,contrast=['sex','M','F'],n_cpus=1,quiet=False)
+stats.summary()
+raw=stats.results_df.loc['FAM138A'].copy()
+print('FAM138A raw',raw.to_dict(),flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+shrunk=stats.results_df.loc['FAM138A'].copy()
+print('FAM138A shrunk',shrunk.to_dict(),flush=True)
+print('passes abs_lfc_gt_0.5',bool(abs(shrunk['log2FoldChange'])>0.5),flush=True)
+print('passes_baseMean_gt_10',bool(shrunk['baseMean']>10),flush=True)
+print('ANSWER_REPR',repr(float(shrunk['log2FoldChange'])),flush=True)
+PY"

@@ -1,0 +1,66 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+from pathlib import Path
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts_all = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample')
+counts_pref = counts_all.loc[counts_all.gt(10).any(axis=1)]
+related = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+meta = layout.loc[layout['Group'].isin(related), ['Group']].rename(columns={'Group':'condition'}).copy()
+meta['condition'] = pd.Categorical(meta['condition'], categories=related)
+counts = counts_pref[meta.index].T.astype(int)
+
+dds = DeseqDataSet(counts=counts, metadata=meta, design='~condition', n_cpus=4, quiet=True)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=['condition', 'Cisplatin_IC50_CBD_IC50', 'DMSO'], alpha=0.05, quiet=True, n_cpus=4)
+stat_res.summary()
+res = stat_res.results_df.copy()
+sig = res[(res['padj'].notna()) & (res['padj'] <= 0.05) & (res['log2FoldChange'].abs() >= 0.5) & (res['baseMean'] >= 10)].copy()
+print(f'prefiltered={counts_pref.shape[0]} significant_ensg={len(sig)} up={(sig.log2FoldChange>0).sum()} down={(sig.log2FoldChange<0).sum()}', flush=True)
+
+mapping = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t')
+sig = sig.reset_index(names='ENSG').merge(mapping, on='ENSG', how='left')
+genes = [g for g in pd.unique(sig['gene_name'].dropna().astype(str)) if g]
+print(f'mapped_rows={sig.gene_name.notna().sum()} unique_symbols={len(genes)}', flush=True)
+
+enr = gp.enrichr(gene_list=genes, gene_sets='Reactome_2022', organism='human', outdir=None, cutoff=1.0, verbose=True)
+res_enr = enr.results.copy()
+print('enrichment_rows', len(res_enr), 'columns', res_enr.columns.tolist(), flush=True)
+cols = [c for c in ['Term','P-value','Adjusted P-value','Odds Ratio','Combined Score','Overlap','Genes'] if c in res_enr.columns]
+mask = res_enr['Term'].str.contains('p53|TP53', case=False, regex=True, na=False)
+print('p53 candidate terms:')
+print(res_enr.loc[mask, cols].to_string(index=False), flush=True)
+# The prompt name corresponds to Reactome R-HSA-6791312 wording in Enrichr snapshots.
+term_mask = (
+    res_enr['Term'].str.contains('p53-mediated cell cycle gene regulation', case=False, regex=False, na=False)
+    | res_enr['Term'].str.contains('TP53 Regulates Transcription of Cell Cycle Genes', case=False, regex=False, na=False)
+    | (res_enr['Term'].str.contains('cell cycle', case=False, regex=False, na=False) & res_enr['Term'].str.contains('p53|TP53', case=False, regex=True, na=False))
+)
+hits = res_enr.loc[term_mask].copy()
+print('selected candidates:')
+print(hits[cols].to_string(index=False), flush=True)
+if hits.empty:
+    raise RuntimeError('Requested term not found')
+# If multiple p53 cell-cycle wording variants appear, prefer exact prompt wording, then TP53 transcription wording.
+exact = hits[hits['Term'].str.contains('p53-mediated cell cycle gene regulation', case=False, regex=False, na=False)]
+if len(exact) == 1:
+    hit = exact.iloc[0]
+else:
+    tp53 = hits[hits['Term'].str.contains('TP53 Regulates Transcription of Cell Cycle Genes', case=False, regex=False, na=False)]
+    if len(tp53) == 1:
+        hit = tp53.iloc[0]
+    elif len(hits) == 1:
+        hit = hits.iloc[0]
+    else:
+        raise RuntimeError(f'Ambiguous selected terms: {hits.Term.tolist()}')
+val = float(hit['Odds Ratio'])
+out = format(val, '.15g')
+Path('codex_output').mkdir(exist_ok=True)
+Path('codex_output/answer.txt').write_text(out + '\\n')
+print('ANSWER', out, flush=True)
+PY"

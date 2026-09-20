@@ -1,0 +1,77 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import exp, log
+
+path='/workspace/inputs/data.xlsx'
+ws=load_workbook(path, data_only=True, read_only=True).active
+header=next(ws.iter_rows(values_only=True))
+col={name:i for i,name in enumerate(header) if name is not None}
+records=[]
+for row in ws.iter_rows(min_row=2, values_only=True):
+    seq=row[col['Sequence number']]
+    if seq is None:
+        continue
+    age=row[col['Age']]
+    group=row[col['Groups']]
+    efficacy=row[col['Efficacy']]
+    if age is None or group is None or efficacy is None:
+        raise RuntimeError('Incomplete analysis row')
+    if (group==1) "'!= (efficacy=='"'PR'):
+        raise RuntimeError('Group/response coding is inconsistent')
+    records.append((float(age), 1.0 if efficacy=='PR' else 0.0))
+if len(records)"'!=80 or sum(y for _,y in records)!=41:
+    raise RuntimeError('"'Unexpected analysis scope/counts')
+
+def sigmoid(z):
+    if z >= 0:
+        q=exp(-z)
+        return 1.0/(1.0+q)
+    q=exp(z)
+    return q/(1.0+q)
+
+def fit(xs, ys):
+    b0=b1=0.0
+    for _ in range(100):
+        s0=s1=a00=a01=a11=0.0
+        for x,y in zip(xs,ys):
+            p=sigmoid(b0+b1*x)
+            residual=y-p
+            w=p*(1.0-p)
+            s0 += residual
+            s1 += residual*x
+            a00 += w
+            a01 += w*x
+            a11 += w*x*x
+        det=a00*a11-a01*a01
+        if det <= 0.0:
+            raise RuntimeError('Singular information matrix')
+        d0=(a11*s0-a01*s1)/det
+        d1=(-a01*s0+a00*s1)/det
+        b0 += d0
+        b1 += d1
+        if max(abs(d0),abs(d1)) < 1e-13:
+            break
+    else:
+        raise RuntimeError('MLE did not converge')
+    score0=score1=0.0
+    for x,y in zip(xs,ys):
+        residual=y-sigmoid(b0+b1*x)
+        score0 += residual
+        score1 += residual*x
+    if max(abs(score0),abs(score1)) > 1e-9:
+        raise RuntimeError('Score check failed')
+    return b0,b1
+
+ages=[x for x,_ in records]
+y=[v for _,v in records]
+b0,b_age=fit(ages,y)
+# Independent parameterization check: center age, which must leave the age slope unchanged.
+mean_age=sum(ages)/len(ages)
+_,b_age_centered=fit([x-mean_age for x in ages],y)
+if abs(b_age-b_age_centered) > 1e-12:
+    raise RuntimeError('Centering invariance check failed')
+print('validated_n=80 events=41 non_events=39')
+print('intercept=',repr(b0))
+print('age_coefficient=',repr(b_age))
+print('centered_age_coefficient=',repr(b_age_centered))
+PY"

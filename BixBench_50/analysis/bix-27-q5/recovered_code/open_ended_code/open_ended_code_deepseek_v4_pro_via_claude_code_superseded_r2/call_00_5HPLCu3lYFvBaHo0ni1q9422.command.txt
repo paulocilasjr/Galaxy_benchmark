@@ -1,0 +1,74 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+from sklearn.decomposition import PCA
+from collections import Counter
+
+# ---- Read and filter data (same as before) ----
+with open('inputs/ROSMAP_genexp_ad.csv') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    all_sample_ids = header[1:]
+    genes = []
+    raw_data = []
+    for row in reader:
+        genes.append(row[0])
+        raw_data.append([float(x) for x in row[1:]])
+
+raw_matrix = np.array(raw_data, dtype=np.float64)
+id_counts = Counter(all_sample_ids)
+repeated_ids = {k for k, v in id_counts.items() if v > 1}
+keep_mask = np.array([sid not in repeated_ids for sid in all_sample_ids])
+filtered = raw_matrix[:, keep_mask]
+expr = filtered.T
+log_expr = np.log10(expr + 1.0)
+
+n_samples, n_features = log_expr.shape
+max_pcs = min(n_samples - 1, n_features)
+print(f"n_samples={n_samples}, n_features={n_features}, max PCs={max_pcs}")
+
+# ---- Fit full PCA (all possible components) ----
+pca_full = PCA(n_components=max_pcs)
+pca_full.fit(log_expr)
+
+# With all components, explained_variance_ratio_ should sum to 1.0
+print(f"Sum of explained_variance_ratio_ (all {max_pcs} PCs): {pca_full.explained_variance_ratio_.sum():.10f}")
+print(f"Full PCA PC1 explained_variance_ratio_[0]*100: {pca_full.explained_variance_ratio_[0]*100:.8f}%")
+
+# ---- Fit PCA with 100 components ----
+pca_100 = PCA(n_components=100)
+pca_100.fit(log_expr)
+
+print(f"\nPCA with 100 components:")
+print(f"Sum of explained_variance_ratio_ (100 PCs): {pca_100.explained_variance_ratio_.sum():.10f}")
+print(f"PC1 explained_variance_ratio_[0]*100: {pca_100.explained_variance_ratio_[0]*100:.8f}%")
+print(f"This normalizes by sum of 100 eigenvalues, not total variance")
+
+# ---- Correct calculation: PC1 eigenvalue / total variance ----
+total_variance = np.var(log_expr, axis=0, ddof=0).sum()  # ddof=0
+total_variance_ddof1 = np.var(log_expr, axis=0, ddof=1).sum()  # ddof=1
+pc1_eigenvalue = pca_100.explained_variance_[0]
+
+print(f"\nTotal variance (ddof=0, population): {total_variance:.10f}")
+print(f"Total variance (ddof=1, sample): {total_variance_ddof1:.10f}")
+print(f"PC1 eigenvalue (sklearn uses ddof=1): {pc1_eigenvalue:.10f}")
+
+# sklearn uses ddof=1 for explained_variance_
+# The eigenvalue IS the variance explained, computed with ddof=1
+# So denominator should also use ddof=1
+pc1_correct = pc1_eigenvalue / total_variance_ddof1 * 100
+print(f"\nPC1 / total_var(ddof=1) * 100 = {pc1_correct:.8f}%")
+
+# But the total variance of ALL features with ddof=1:
+# Let's verify: sum of all eigenvalues (all 177) should equal total variance (ddof=1)
+print(f"\nVerification:")
+print(f"Sum of all {max_pcs} eigenvalues: {pca_full.explained_variance_.sum():.10f}")
+print(f"Total variance ddof=1: {total_variance_ddof1:.10f}")
+print(f"Difference: {abs(pca_full.explained_variance_.sum() - total_variance_ddof1):.12f}")
+
+# So the correct PC1% is eigenvalue[0] / sum(all eigenvalues) = eigenvalue[0] / total_variance_ddof1
+print(f"\nCorrect PC1 variance explained: {pc1_correct:.8f}%")
+print(f"This matches full PCA explained_variance_ratio_[0]: {pca_full.explained_variance_ratio_[0]*100:.8f}%")
+
+PYEOF
+

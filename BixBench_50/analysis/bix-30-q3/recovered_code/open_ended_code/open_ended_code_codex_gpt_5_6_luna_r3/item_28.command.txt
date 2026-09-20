@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd,csv,io,subprocess
+sh=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+out=io.StringIO(); w=csv.writer(out,delimiter='\\t',lineterminator='\\n')
+w.writerow(['miRNA']+[sh.cell_value(1,c) for c in range(1,sh.ncols)])
+for r in range(2,sh.nrows):
+ row=[sh.cell_value(r,0)]
+ for c in range(1,sh.ncols):
+  v=sh.cell_value(r,c);row.append('NA' if isinstance(v,str) else v)
+ w.writerow(row)
+rscript=r'''
+d<-read.delim(file(\"stdin\"),check.names=FALSE,na.strings=\"NA\")
+allP<-grep(\""'^P_",names(d));allC<-grep("''^C_",names(d)); P<-allP[names(d)[allP]!="P_3"]; C<-allC[names(d)[allC]!="C_18"]
+X<-as.matrix(d[c(P,C)])
+for (cut in c(FALSE,TRUE)) for (scale in c("ct","exp")) for (high in c(FALSE,TRUE)) for (refmode in c("all","det")) {
+ means<-apply(X,2,function(z){z<-as.numeric(z);ok<-is.finite(z)&(!cut|z<34);if(scale=="ct")mean(z[ok]) else mean(2''^-z[ok])})
+ if(scale=="ct") E<-sweep(X,2,means,"-")*(-1) else E<-sweep(-X,2,log2(means),"-")
+ if(!high) E[is.finite(X)&X>=34]<-NA
+ p<-apply(E,1,function(z){x<-z[P];y<-z[C];x<-x[is.finite(x)];y<-y[is.finite(y)];t.test(x,y,var.equal=TRUE)$p.value})
+ i<-which(d$miRNA=="hsa-miR-21")
+ cat(sprintf("cut=%s scale=%s high=%s p21=%.10g raw=%d bonf=%d BY=%d rank=%d adjbonf=%.8g adjBY=%.8g'"\\\\n\",cut,scale,high,p[i],sum(p<=.05),sum(p.adjust(p,'bonferroni')<=.05),sum(p.adjust(p,'BY')<=.05),rank(p)[i],p.adjust(p,'bonferroni')[i],p.adjust(p,'BY')[i]))
+}
+'''
+res=subprocess.run(['Rscript','-e',rscript],input=out.getvalue(),text=True,capture_output=True)
+print(res.stdout);print(res.stderr)
+PY"

@@ -1,0 +1,45 @@
+/bin/bash -lc "cat > /tmp/fit_swarm.R <<'EOF'
+suppressPackageStartupMessages(library(splines))
+dat <- read.csv('/workspace/inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+# equivalent pandas query StrainNumber not in ['1','98']
+dat <- dat["'!(dat$StrainNumber %in% c('"'1','98')),]
+# split ratio
+parts <- strsplit(as.character(dat"'$Ratio), '"':', fixed=TRUE)
+a <- as.numeric(sapply(parts, "'`[`, 1))
+b <- as.numeric(sapply(parts, `[`, 2))
+dat$Frequency_strain <- a/(a+b)
+dat <- dat[!is.na(dat$Area) & !is.na(dat$Frequency_strain),]
+cat('"'nrow=', nrow(dat), '\\n')
+print(dat[,c('StrainNumber','Ratio','Frequency_strain','Area')])
+xrange <- range(dat"'$Frequency_strain)
+new_grid <- data.frame(Frequency_strain=seq(xrange[1], xrange[2], length.out=1000))
+build_model <- function(name, formula_str) {
+  fit <- lm(as.formula(formula_str), data=dat)
+  s <- summary(fit)
+  fst <- s$fstatistic
+  overall_p <- pf(fst[['"'value']], fst[['numdf']], fst[['dendf']], lower.tail=FALSE)
+  pred <- predict(fit, newdata=new_grid, interval='confidence')
+  peak_idx <- which.max(pred[,'fit'])
+  list(name=name, formula=formula_str, r2=s"'$r.squared, adj_r2=s$adj.r.squared,
+       f_stat=fst[['"'value']], f_df1=fst[['numdf']], f_df2=fst[['dendf']],
+       overall_p=overall_p, residual_se=s"'$sigma, df_residual=fit$df.residual,
+       nobs=nobs(fit), aic=AIC(fit), bic=BIC(fit),
+       peak_x=new_grid$Frequency_strain[peak_idx],
+       peak_y_fit=pred[peak_idx,'"'fit'], peak_y_lwr=pred[peak_idx,'lwr'], peak_y_upr=pred[peak_idx,'upr'])
+}
+models <- list(
+ quadratic=build_model('quadratic', sprintf('Area ~ poly(Frequency_strain, 2, raw = TRUE)')),
+ cubic=build_model('cubic', sprintf('Area ~ poly(Frequency_strain, 3, raw = TRUE)')),
+ spline=build_model('spline', sprintf('Area ~ ns(Frequency_strain, df = 4)'))
+)
+for(m in models) {
+ cat('\\nMODEL', m"'$name, '"'\\n')
+ cat('adj_r2', format(m"'$adj_r2, digits=15), '"'AIC', format(m"'$aic,digits=15), '"'BIC', format(m"'$bic,digits=15), '"'\\n')
+ cat('peak_x', format(m"'$peak_x,digits=15), '"'peak_y', format(m"'$peak_y_fit,digits=15), '"'lwr', format(m"'$peak_y_lwr,digits=15),'"'upr',format(m"'$peak_y_upr,digits=15),'"'\\n')
+}
+best <- models[[which.max(sapply(models,function(m)m"'$adj_r2))]]
+cat('"'\\nBEST BY ADJ_R2:', best"'$name, '"'\\n')
+cat('PEAK_X=', format(best"'$peak_x, digits=15), '"'\\n')
+cat('PEAK_Y=', format(best"'$peak_y_fit, digits=15), '"'\\n')
+EOF
+Rscript /tmp/fit_swarm.R"

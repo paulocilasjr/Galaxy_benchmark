@@ -1,0 +1,43 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_de <- function(f) {
+ x <- readRDS(f)
+ data.frame(gene=attr(x,'rownames'), as.data.frame(attr(x,'listData'), check.names=FALSE), check.names=FALSE)
+}
+fe <- read_de('inputs/res_GluFevsGluFePlus.rds')
+su <- read_de('inputs/res_SuccvsGluFePlus.rds')
+fg_fe <- fe"'$gene[abs(fe$log2FoldChange)>1.5 & fe$padj<0.05]
+fg_su <- su$gene[abs(su$log2FoldChange)>1.5 & su$padj<0.05]
+ln <- read.delim('"'/tmp/pau_pathway_links.tsv', header=FALSE, col.names=c('gene','path'), stringsAsFactors=FALSE)
+ln"'$gene <- sub('"'"'^pau:'"', '', ln"'$gene); ln$path <- sub('"'"'^path:'"', '', ln"'$path)
+nm <- read.delim('"'/tmp/pau_pathways.tsv', header=FALSE, col.names=c('path','name'), stringsAsFactors=FALSE)
+ora <- function(fg, universe, minsize=10, maxsize=500) {
+  l <- unique(ln[ln"'$gene %in% universe,])
+  gs <- split(l$gene, l$path)
+  gs <- gs[lengths(gs)>=minsize & lengths(gs)<=maxsize]
+  fg <- unique(intersect(fg, universe)); N <- length(unique(universe)); n <- length(fg)
+  z <- do.call(rbind, lapply(names(gs), function(id) {
+    M <- length(unique(gs[[id]])); k <- sum(fg %in% gs[[id]])
+    if(k==0) return(NULL)
+    data.frame(path=id,k=k,M=M,n=n,N=N,pvalue=phyper(k-1,M,N-M,n,lower.tail=FALSE))
+  }))
+  z$padj <- p.adjust(z$pvalue, method='"'BH')
+  z <- merge(z,nm,by='path',all.x=TRUE)
+  z[order(z"'$padj,z$pvalue,z$path),]
+}
+configs <- list(
+  kegg_default=list(u=unique(ln$gene), min=10,max=500),
+  experiment_default=list(u=intersect(fe$gene,su$gene),min=10,max=500),
+  kegg_no_size=list(u=unique(ln$gene),min=1,max=Inf),
+  experiment_no_size=list(u=intersect(fe$gene,su$gene),min=1,max=Inf)
+)
+cat('"'KEGG unique genes:',length(unique(ln"'$gene)),'"' experiment genes:',length(intersect(fe"'$gene,su$gene)),'"' experiment mapped:',sum(fe"'$gene %in% unique(ln$gene)),'"'\\n')
+for(cn in names(configs)) {
+ cc<-configs[[cn]]; a<-ora(fg_fe,cc"'$u,cc$min,cc$max); b<-ora(fg_su,cc$u,cc$min,cc$max)
+ sa<-a$path[a$padj<.05]; sb<-b$path[b$padj<.05]; only<-setdiff(sa,sb)
+ cat('"'\\nCONFIG',cn,'\\n')
+ cat('mapped fg:',sum(fg_fe %in% cc"'$u),sum(fg_su %in% cc$u),'"' tested:',nrow(a),nrow(b),' significant:',length(sa),length(sb),' iron-only:',length(only),'\\n')
+ cat('IRON significant\\n'); print(a[a"'$padj<.05,c('"'path','name','k','M','n','N','pvalue','padj')],row.names=FALSE)
+ cat('IRON ONLY\\n'); print(a[a"'$path %in% only,c('"'path','name','k','M','n','N','pvalue','padj')],row.names=FALSE)
+ cat('INNATE significant IDs:',paste(sb,collapse=', '),'\\n')
+}
+RS"

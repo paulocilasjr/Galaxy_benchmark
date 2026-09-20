@@ -1,0 +1,67 @@
+python3 << 'PYEOF'
+from openpyxl import load_workbook
+import os
+import re
+
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+
+# Look at sample 380 (has most variants, different pattern: low ref zyg excluded, high onto excluded)
+# This seems unusual - let's check what variants remain after filtering
+exclude_ontology = {
+    'intron_variant', 'intergenic_variant',
+    '3_prime_UTR_variant', '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+for sample_id in ['380', '179', '184']:
+    files = sorted(os.listdir(chip_dir))
+    for f in files:
+        match = re.search(r'CHIP_(.+)\.xlsx', f)
+        if match:
+            sid = re.sub(r'-[A-Z0-9]+$', '', match.group(1))
+            if sid == sample_id:
+                filename = f
+                break
+    
+    wb = load_workbook(os.path.join(chip_dir, filename))
+    ws = wb.active
+    
+    passed = []
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        zygosity = row[4]
+        seq_onto = str(row[13]) if row[13] else ''
+        vaf = row[9]
+        
+        if zygosity == 'Reference':
+            continue
+        if seq_onto in exclude_ontology:
+            continue
+        
+        passed.append({
+            'chr_pos': row[0],
+            'gene': row[12],
+            'seq_onto': seq_onto,
+            'zygosity': zygosity,
+            'vaf': vaf,
+            'in_chip': row[29],
+        })
+    
+    print(f"\n=== Sample {sample_id}: {len(passed)} variants after excluding ref zyg and ontology ===")
+    # Show VAF distribution
+    vafs = [p['vaf'] for p in passed if p['vaf'] is not None]
+    null_vafs = sum(1 for p in passed if p['vaf'] is None)
+    print(f"  VAF not None: {len(vafs)}, VAF None: {null_vafs}")
+    if vafs:
+        print(f"  VAF range: {min(vafs):.6f} - {max(vafs):.6f}")
+        print(f"  VAF < 0.3: {sum(1 for v in vafs if v < 0.3)}")
+        print(f"  VAF >= 0.3: {sum(1 for v in vafs if v >= 0.3)}")
+    # Show some examples
+    for p in passed[:5]:
+        print(f"  {p['chr_pos']} {p['gene']} {p['seq_onto']} {p['zygosity']} VAF={p['vaf']} In_CHIP={p['in_chip']}")
+    
+    # Show variants with VAF < 0.3
+    low_vaf = [p for p in passed if p['vaf'] is not None and p['vaf'] < 0.3]
+    print(f"\n  Variants with VAF < 0.3: {len(low_vaf)}")
+    for p in low_vaf[:10]:
+        print(f"    {p['chr_pos']} {p['gene']} {p['seq_onto']} {p['zygosity']} VAF={p['vaf']:.4f} In_CHIP={p['in_chip']}")
+PYEOF

@@ -1,0 +1,67 @@
+export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:$PYTHONPATH"
+python3 << 'PYEOF'
+import requests
+import time
+
+# Get pathway-gene links for PA14
+def fetch_kegg(url, desc="data", retries=3):
+    for i in range(retries):
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200:
+                return r.text
+            elif r.status_code == 404:
+                return None
+            else:
+                print(f"  {desc}: status {r.status_code}, retry {i+1}")
+                time.sleep(2)
+        except Exception as e:
+            print(f"  {desc}: error {e}, retry {i+1}")
+            time.sleep(2)
+    return None
+
+# Get pathway list
+pw_text = fetch_kegg("https://rest.kegg.jp/list/pathway/pau", "pathway list")
+if pw_text:
+    lines = [l for l in pw_text.strip().split('\n') if l]
+    print(f"Pathways: {len(lines)}")
+    # Parse pathway ID -> name
+    import re
+    pathways = {}
+    for line in lines:
+        parts = line.split('\t')
+        if len(parts) >= 2:
+            pid = parts[0].strip()
+            # Remove organism prefix
+            pid_short = pid.replace('pau', 'path:')
+            name = parts[1].strip()
+            # Remove " - Pseudomonas aeruginosa..." suffix
+            name = re.sub(r'\s+-\s+Pseudomonas aeruginosa.*', '', name)
+            pathways[pid_short] = name
+    
+    # Show some
+    for pid, name in list(pathways.items())[:5]:
+        print(f"  {pid}: {name}")
+    print(f"  ... total {len(pathways)} pathways")
+
+# Get pathway-gene links
+link_text = fetch_kegg("https://rest.kegg.jp/link/pau/pathway", "pathway-gene links")
+if link_text:
+    lines = [l for l in link_text.strip().split('\n') if l]
+    print(f"\nPathway-gene links: {len(lines)}")
+    # Parse: path:pau01100\tpau:PA14_00010
+    pw2genes = {}
+    for line in lines:
+        parts = line.strip().split('\t')
+        if len(parts) >= 2:
+            pw = parts[0].strip().replace('path:', '')
+            gene = parts[1].strip()
+            if pw not in pw2genes:
+                pw2genes[pw] = set()
+            pw2genes[pw].add(gene)
+    print(f"Unique pathways with genes: {len(pw2genes)}")
+    for pw, genes in list(pw2genes.items())[:3]:
+        print(f"  {pw}: {len(genes)} genes")
+        print(f"    {list(genes)[:5]}")
+PYEOF
+

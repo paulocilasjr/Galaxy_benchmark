@@ -1,0 +1,58 @@
+/bin/bash -lc "cat > /workspace/tmp/run_deseq2.R <<'RS'
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(readxl)
+})
+print(paste(\"DESeq2\", as.character(packageVersion(\"DESeq2\")), \"apeglm\", as.character(packageVersion(\"apeglm\"))))
+
+counts <- read.table(\"/workspace/inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt\",
+                     header=TRUE, sep=\"\", check.names=FALSE, row.names=1, stringsAsFactors=FALSE)
+coldata_raw <- as.data.frame(read_excel(\"/workspace/inputs/Issy_ASXL1_blood_coldata_gender.xlsx\"))
+coldata_raw"'$sample <- as.character(coldata_raw$sample)
+coldata_raw$condition <- as.character(coldata_raw$condition)
+coldata_raw$sex <- as.character(coldata_raw$sex)
+rownames(coldata_raw) <- coldata_raw$sample
+
+cat("counts dim", dim(counts), "'"\\n\")
+cat(\"coldata dim\", dim(coldata_raw), \"\\n\")
+cat(\"counts sample names:\\n\"); print(colnames(counts))
+cat(\"coldata samples:\\n\"); print(coldata_raw"'$sample)
+
+common <- intersect(coldata_raw$sample, colnames(counts))
+cat("common n", length(common), "'"\\n\")
+cat(\"counts not in coldata:\", setdiff(colnames(counts), common), \"\\n\")
+cat(\"coldata not in counts:\", setdiff(coldata_raw"'$sample, common), "'"\\n\")
+
+counts <- counts[, common, drop=FALSE]
+coldata <- coldata_raw[common, , drop=FALSE]
+coldata"'$condition <- factor(coldata$condition, levels=c("Control", "ASXL1"))
+coldata$sex <- factor(coldata$sex, levels=c("F", "M"))
+stopifnot(all(rownames(coldata) == colnames(counts)))
+
+cat("condition table:'"\\n\"); print(table(coldata"'$condition))
+cat("sex table:'"\\n\"); print(table(coldata"'$sex))
+
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = coldata,
+                              design = ~ sex + condition)
+dds <- DESeq(dds, quiet=FALSE)
+cat("resultsNames:'"\\n\"); print(resultsNames(dds))
+res <- results(dds, alpha=0.05, contrast=c(\"condition\",\"ASXL1\",\"Control\"))
+cat(\"res summary before shrink:\\n\"); summary(res)
+shrink <- lfcShrink(dds, coef=\"condition_ASXL1_vs_Control\", type=\"apeglm\")
+cat(\"shrink summary:\\n\"); summary(shrink)
+# ensure padj identical to res where present
+print(all.equal(res"'$padj, shrink$padj))
+cat("not NA padj:", sum(!is.na(res$padj)), "'"\\n\")
+cat(\"shrink not NA padj:\", sum("'!is.na(shrink$padj)), "'"\\n\")
+cat(\"significant res padj<0.05:\", sum(res"'$padj < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"significant shrink padj<0.05:\", sum(shrink"'$padj < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"pvalue<0.05:\", sum(res"'$pvalue < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"baseMean filter threshold? metadata:\\n\")
+print(metadata(res)"'$filterThreshold)
+# save RData for optional
+saveRDS(list(dds=dds, res=res, shrink=shrink), "/workspace/tmp/deseq2_results.rds")
+writeLines(as.character(sum(shrink$padj < 0.05, na.rm=TRUE)), "/workspace/tmp/significant_count.txt")
+RS
+/workspace/tmp/r-env/bin/Rscript /workspace/tmp/run_deseq2.R'

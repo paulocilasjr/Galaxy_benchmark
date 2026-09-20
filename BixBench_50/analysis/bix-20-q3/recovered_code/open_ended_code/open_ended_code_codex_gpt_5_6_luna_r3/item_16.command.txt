@@ -1,0 +1,81 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+import re, math
+
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+CELL_RE=re.compile(r'([A-Z]+)([0-9]+)"'$'"')
+
+def colnum(col):
+    n=0
+    for ch in col:
+        n=n*26+ord(ch)-64
+    return n-1
+
+def xlsx_rows(path):
+    with ZipFile(path) as z:
+        # shared strings, including rich-text runs
+        shared=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall(NS+'si'):
+                shared.append(''.join(t.text or '' for t in si.iter(NS+'t')))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        out=[]
+        for row in root.findall('.//'+NS+'row'):
+            cells={}
+            for c in row.findall(NS+'c'):
+                ref=c.attrib.get('r','')
+                m=CELL_RE.match(ref)
+                if not m: continue
+                idx=colnum(m.group(1)); typ=c.attrib.get('t')
+                if typ=='inlineStr':
+                    val=''.join(t.text or '' for t in c.iter(NS+'t'))
+                else:
+                    v=c.find(NS+'v')
+                    raw=None if v is None else v.text
+                    if raw is None: val=None
+                    elif typ=='s': val=shared[int(raw)]
+                    elif typ=='b': val=(raw=='1')
+                    else:
+                        try: val=float(raw) if any(ch in raw for ch in '.eE') else int(raw)
+                        except: val=raw
+                cells[idx]=val
+            width=max(cells.keys(),default=-1)+1
+            out.append([cells.get(i) for i in range(width)])
+        return out
+
+# Read status independently as XML too
+status_rows=xlsx_rows('inputs/230215_Trio_Status.xlsx')
+headers=status_rows[0]
+status_idx={v:i for i,v in enumerate(headers) if v is not None}
+carrier={str(r[status_idx['Sample ID']]).strip() for r in status_rows[1:] if r[status_idx['BLM Mutation Status']]=='Carrier'}
+print('Carrier IDs',len(carrier),sorted(carrier))
+
+D=[]; N=[]; per=Counter()
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    sid=p.stem.split('_CHIP_',1)[1].split('-',1)[0]
+    if sid not in carrier: continue
+    rows=xlsx_rows(p)
+    hdr=rows[1]
+    ix={v:i for i,v in enumerate(hdr) if v is not None}
+    for r in rows[2:]:
+        def get(k):
+            i=ix[k]; return r[i] if i<len(r) else None
+        v=get('Variant Allele Freq')
+        try: v=float(v)
+        except (TypeError,ValueError): v=None
+        ont=str(get('Sequence Ontology (Combined)') or '').lower()
+        cls=get('Classification')
+        cls_norm=str(cls).strip().lower() if cls is not None else ''
+        z=str(get('Zygosity') or '').strip().lower()
+        if v is not None and v<0.3 and z"'!='"'reference' and not any(x in ont for x in ('intron','intergenic','utr')) and cls_norm:
+            D.append(cls_norm); per[sid]+=1
+            if cls_norm in ('benign','likely benign'): N.append(cls_norm)
+print('XML denominator',len(D),'numerator',len(N),'fraction',len(N)/len(D))
+print('classes',Counter(D))
+print('per sample',dict(sorted(per.items(),key=lambda kv:int(kv[0]))))
+assert len(D)==37 and len(N)==37
+PY"

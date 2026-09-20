@@ -1,0 +1,47 @@
+/bin/bash -lc "PYTHONPATH=/workspace/pylib python3 - <<'PY'
+import os, sys
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', sep=r'\\s+', engine='python')
+counts = counts.set_index('Geneid')
+coldata = pd.read_excel('inputs/Issy_ASXL1_blood_coldata_gender.xlsx')
+coldata = coldata.dropna(how='all')
+coldata = coldata.loc[coldata['sample'].notna(), ['sample','condition','sex']].copy()
+coldata['sample'] = coldata['sample'].astype(str)
+coldata = coldata.set_index('sample')
+# keep only samples present in both, metadata order
+samples = [s for s in coldata.index if s in counts.columns]
+missing_counts = [s for s in coldata.index if s not in counts.columns]
+extra_counts = [s for s in counts.columns if s not in coldata.index]
+print('samples', len(samples), samples)
+print('missing_counts', missing_counts)
+print('extra_counts', extra_counts)
+metadata = coldata.loc[samples].copy()
+metadata['condition'] = pd.Categorical(metadata['condition'], categories=['Control','ASXL1'])
+metadata['sex'] = pd.Categorical(metadata['sex'], categories=['F','M'])
+cts = counts[samples].T.astype(int)
+print('shape', cts.shape)
+print(metadata.groupby(['condition','sex'], observed=False).size())
+
+dds = DeseqDataSet(counts=cts, metadata=metadata, design='~ sex + condition', ref_level=['condition','Control'], refit_cooks=True, n_cpus=1, quiet=False)
+dds.deseq2()
+print('variables', dds.variables)
+stat = DeseqStats(dds, contrast=['condition','ASXL1','Control'], alpha=0.05, cooks_filter=True, independent_filter=True, quiet=False, n_cpus=1)
+stat.summary()
+print('results cols', stat.results_df.columns.tolist())
+print(stat.results_df.head())
+print('LFC columns', stat.LFC.columns.tolist())
+coeff = 'condition_ASXL1_vs_Control'
+if coeff not in stat.LFC.columns:
+    print('coeff not found; available', stat.LFC.columns.tolist())
+    coeff = [c for c in stat.LFC.columns if 'condition' in c and 'ASXL1' in c and 'Control' in c][0]
+stat.lfc_shrink(coeff=coeff)
+res = stat.results_df
+print('after shrink cols', res.columns.tolist())
+print(res.head())
+count = int((res['padj'] < 0.05).sum())
+print('SIGNIF_COUNT', count)
+print('padj nonna', res['padj'].notna().sum(), 'NA', res['padj'].isna().sum())
+PY"

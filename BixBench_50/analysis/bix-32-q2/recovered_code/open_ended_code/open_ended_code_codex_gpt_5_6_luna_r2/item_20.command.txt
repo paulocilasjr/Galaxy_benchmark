@@ -1,0 +1,30 @@
+/bin/bash -lc "Rscript - <<'RS'
+parse_rds <- function(f) { a <- attributes(readRDS(f)); list(gene=a"'$rownames, lfc=a$listData$log2FoldChange, padj=a$listData$padj) }
+fs <- list.files("inputs", pattern="''^res_.*'"\\\\.rds"'$", full.names=TRUE)
+rr <- lapply(fs, parse_rds)
+ln <- readLines("https://rest.kegg.jp/link/pathway/pau", warn=FALSE)
+sp <- strsplit(ln,"'"\\t\",fixed=TRUE)
+map <- data.frame(gene=sub(\""'^pau:","",vapply(sp,`[`,"",1)),path=sub("''^path:","",vapply(sp,`[`,"",2)),stringsAsFactors=FALSE)
+sets <- lapply(split(map$gene,map$path),unique)
+bg <- unique(map$gene)
+calc <- function(r, dir, use_padj=FALSE, minGS=10, maxGS=500) {
+  bg0 <- intersect(bg,r$gene)
+  ss <- lapply(sets,intersect,y=bg0)
+  keep <- lengths(ss)>=minGS & lengths(ss)<=maxGS
+  ss <- ss[keep]
+  selcrit <- if (dir=="up") r$lfc>1.5 else r$lfc < -1.5
+  if (use_padj) selcrit <- selcrit & r$padj<.05
+  sel <- intersect(r$gene[selcrit], bg0)
+  N<-length(bg0); n<-length(sel); K<-lengths(ss); k<-vapply(ss,function(g)sum(sel%in%g),integer(1))
+  p<-phyper(k-1,K,N-K,n,lower.tail=FALSE); adj<-p.adjust(p,"BH")
+  data.frame(path=names(ss),K=K,k=k,p=p,adj=adj,n=n)
+}
+for (use_padj in c(FALSE,TRUE)) for (minGS in c(1,5,10)) for (maxGS in c(Inf,500)) {
+  z <- lapply(rr,function(r) lapply(c("up","down"),function(d) calc(r,d,use_padj,minGS,maxGS)))
+  for (cutname in c("p","adj")) for (cut in c(.01,.05,.1,.2)) for (di in c("up","down")) {
+    sig<-lapply(z,function(a) { q<-a[[if(di=="up")1 else 2]][[cutname]]; a[[if(di=="up")1 else 2]]$path[q<cut] })
+    inter<-Reduce(intersect,sig)
+    if(length(inter)>0 || (cutname=="adj" && cut==.05 && minGS==10 && maxGS==500)) cat("padjgenes",use_padj,"min",minGS,"max",maxGS,"",cutname,cut,"dir",di,"n",paste(vapply(sig,length,integer(1)),collapse=","),"inter",length(inter),if(length(inter))paste(inter,collapse=","),"'"\\n\")
+  }
+}
+RS"

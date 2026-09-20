@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, tempfile, os
+from pathlib import Path
+from types import SimpleNamespace
+from phykit.services.alignment.rcv import RelativeCompositionVariability
+from scipy.stats import mannwhitneyu
+
+scores={}
+counts={}
+with tempfile.TemporaryDirectory(dir='/workspace') as d:
+    for label,zpath in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+        vals=[]; nseqs=[]; lens=[]; ids=[]
+        with zipfile.ZipFile(zpath) as z:
+            for name in sorted(z.namelist()):
+                if not name.endswith('.faa.mafft'):
+                    continue
+                ids.append(name)
+                p=Path(d)/(label+'_'+Path(name).name)
+                p.write_bytes(z.read(name))
+                obj=RelativeCompositionVariability(SimpleNamespace(alignment=str(p),json=False))
+                vals.append(obj.calculate_rcv())
+                # crude fasta record count/length
+                recs=[]; seq=None
+                for line in z.read(name).decode().splitlines():
+                    if line.startswith('>'):
+                        if seq is not None: recs.append(seq)
+                        seq=''
+                    else:
+                        seq += line.strip()
+                if seq is not None: recs.append(seq)
+                nseqs.append(len(recs)); lens.append(len(recs[0]) if recs else 0)
+        scores[label]=vals; counts[label]=(ids,nseqs,lens)
+        print(label,'n',len(vals),'min',min(vals),'max',max(vals),'median',sorted(vals)[len(vals)//2],'mean',sum(vals)/len(vals),'nseq range',min(nseqs),max(nseqs),'length range',min(lens),max(lens))
+
+for rounded in [False,True]:
+    a=[round(x,4) for x in scores['animals']] if rounded else scores['animals']
+    f=[round(x,4) for x in scores['fungi']] if rounded else scores['fungi']
+    print('rounded',rounded)
+    for alt in ['two-sided','less','greater']:
+        r=mannwhitneyu(a,f,alternative=alt,method='auto')
+        print(alt,'U',r.statistic,'p',repr(r.pvalue))
+    print('unique',len(set(a)),len(set(f)),'ties pooled',len(a)+len(f)-len(set(a+f)))
+    print('rounded value examples',a[:5],f[:5])
+PY"

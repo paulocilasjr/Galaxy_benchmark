@@ -1,0 +1,50 @@
+/bin/bash -lc "cat > /workspace/tmp/ora_details.py <<'PY'
+import urllib.request, csv
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+
+def fetch(url):
+    with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=60) as r: return r.read().decode()
+link=fetch('https://rest.kegg.jp/link/pathway/pau')
+listed=fetch('https://rest.kegg.jp/list/pathway/pau')
+list_paths=set(l.split('\\t')[0] for l in listed.splitlines() if l.strip())
+g2p=defaultdict(set)
+for l in link.splitlines():
+    if '\\t' not in l: continue
+    g,p=l.split('\\t'); g=g.split(':')[1]; p=p[5:]
+    if p in list_paths: g2p[g].add(p)
+p2g=defaultdict(set)
+for g,ps in g2p.items():
+    for p in ps: p2g[p].add(g)
+db=set(g2p)
+data={}
+for f in ['tmp/res_1vs97.csv','tmp/res_1vs98.csv','tmp/res_1vs99.csv']:
+    with open(f) as fh:
+        data[f]={r['gene']:float(r['log2FoldChange']) for r in csv.DictReader(fh)}
+
+def ora(genes, min_g=10, max_g=500):
+    genes=set(genes)&db; n=len(genes)
+    rows=[]
+    for p in sorted(p2g):
+        K=len(p2g[p])
+        if K<min_g or K>max_g: continue
+        k=len(genes&p2g[p])
+        if k==0: continue
+        pval=hypergeom.sf(k-1,len(db),K,n)
+        rows.append([p,k,K,n,pval])
+    if not rows: return []
+    rej,padj,_,_=multipletests([x[4] for x in rows],method='fdr_bh')
+    out=[]
+    for x,pa in zip(rows,padj): out.append(x+[pa])
+    return out
+for f,vals in data.items():
+    up={g for g,l in vals.items() if l>1.5}; down={g for g,l in vals.items() if l< -1.5}
+    for d,gs in [('up',up),('down',down)]:
+        res=ora(gs)
+        print('\\n',f,d,'n mapped',len(gs&db))
+        for r in sorted([r for r in res if r[5]<0.05],key=lambda x:x[4]):
+            print(' ',r)
+        print('all sig',len([r for r in res if r[5]<0.05]))
+PY
+python3 /workspace/tmp/ora_details.py"

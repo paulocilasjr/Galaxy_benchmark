@@ -1,0 +1,73 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b550e1502919a11cff",
+  "history_id": "bbd44e69cb8906b5bb10a304142fdd9d",
+  "tool_id": "codex-pa14-kegg-ora-comparison-20260803b",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-03T15:00:19.363790",
+  "update_time": "2026-08-03T15:00:57.981939",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > ora.py <<'PY'\nimport csv\nimport re\nimport sys\n\nimport scipy\nfrom scipy.stats import hypergeom\n\nif tuple(int(x) for x in scipy.__version__.split(\".\")[:2]) < (1, 0):\n    raise RuntimeError(\"SciPy version is too old\")\n\ndef bare_id(token):\n    token = token.strip()\n    if \":\" in token:\n        return token.rsplit(\":\", 1)[1]\n    return token\n\ndef pathway_number(token):\n    token = bare_id(token)\n    match = re.search(r\"(\\d{5})$\", token)\n    if match is None:\n        return None\n    return match.group(1)\n\ndef read_gene_ids(path):\n    genes = set()\n    header_tokens = {\n        \"rowname\", \"gene\", \"gene_id\", \"geneid\", \"id\", \"locus_tag\",\n        \"geneid/term\", \"query\"\n    }\n    with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n        for line in handle:\n            token = line.rstrip(\"\\r\\n\").split(\"\\t\", 1)[0].strip()\n            if token and token.lower() not in header_tokens:\n                genes.add(bare_id(token))\n    return genes\n\ndef read_mapping(path):\n    pathways = {}\n    with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n        for line in handle:\n            fields = line.rstrip(\"\\r\\n\").split(\"\\t\")\n            if len(fields) < 2:\n                continue\n            gene = bare_id(fields[0])\n            number = pathway_number(fields[1])\n            if gene and number:\n                pathways.setdefault(number, set()).add(gene)\n    if not pathways:\n        raise RuntimeError(\"The Galaxy KEGG mapping input had no pathway rows\")\n    return pathways\n\ndef benjamini_hochberg(pvalues):\n    count = len(pvalues)\n    adjusted = [1.0] * count\n    order = sorted(range(count), key=lambda index: pvalues[index])\n    running = 1.0\n    for rank in range(count, 0, -1):\n        index = order[rank - 1]\n        running = min(running, pvalues[index] * count / float(rank))\n        adjusted[index] = min(1.0, running)\n    return adjusted\n\ndef ora(foreground, background, pathways):\n    universe = set()\n    for genes in pathways.values():\n        universe.update(genes.intersection(background))\n    mapped_foreground = foreground.intersection(universe)\n    tested = []\n    pvalues = []\n    hits = {}\n    for number in sorted(pathways):\n        pathway_genes = pathways[number]\n        overlap = len(mapped_foreground.intersection(pathway_genes))\n        if overlap == 0:\n            continue\n        pathway_universe = len(universe.intersection(pathway_genes))\n        if pathway_universe == 0:\n            continue\n        hits[number] = overlap\n        pvalues.append(float(hypergeom.sf(\n            overlap - 1, len(universe), pathway_universe, len(mapped_foreground)\n        )))\n        tested.append(number)\n    return {\n        \"universe_size\": len(universe),\n        \"foreground_size\": len(mapped_foreground),\n        \"padj\": dict(zip(tested, benjamini_hochberg(pvalues))),\n        \"hits\": hits,\n    }\n\ndef main():\n    if len(sys.argv) != 6:\n        raise RuntimeError(\"Expected four gene-list paths and one KEGG mapping path\")\n    iron_foreground = read_gene_ids(sys.argv[1])\n    iron_background = read_gene_ids(sys.argv[2])\n    innate_foreground = read_gene_ids(sys.argv[3])\n    innate_background = read_gene_ids(sys.argv[4])\n    pathways = read_mapping(sys.argv[5])\n    iron = ora(iron_foreground, iron_background, pathways)\n    innate = ora(innate_foreground, innate_background, pathways)\n\n    pathway_numbers = sorted(set(iron[\"padj\"]).union(innate[\"padj\"]))\n    answer_count = 0\n    with open(\"result.tsv\", \"w\", encoding=\"utf-8\", newline=\"\") as output:\n        writer = csv.writer(output, delimiter=\"\\t\", lineterminator=\"\\n\")\n        writer.writerow([\n            \"pathway_id\", \"pathway_name\", \"iron_depleted_padj\",\n            \"innate_media_padj\", \"iron_depleted_significant\",\n            \"innate_media_significant\", \"iron_depleted_hits\",\n            \"innate_media_hits\", \"kegg_organism_code\",\n            \"iron_universe_mapped\", \"innate_universe_mapped\"\n        ])\n        for number in pathway_numbers:\n            iron_padj = iron[\"padj\"].get(number, 1.0)\n            innate_padj = innate[\"padj\"].get(number, 1.0)\n            iron_sig = iron_padj < 0.05\n            innate_sig = innate_padj < 0.05\n            if iron_sig and not innate_sig:\n                answer_count += 1\n            writer.writerow([\n                \"map\" + number,\n                \"KEGG pathway \" + number,\n                \"%.17g\" % iron_padj,\n                \"%.17g\" % innate_padj,\n                \"1\" if iron_sig else \"0\",\n                \"1\" if innate_sig else \"0\",\n                str(iron[\"hits\"].get(number, 0)),\n                str(innate[\"hits\"].get(number, 0)),\n                \"pau\",\n                str(iron[\"universe_size\"]),\n                str(innate[\"universe_size\"])\n            ])\n    with open(\"answer.txt\", \"w\", encoding=\"utf-8\") as answer:\n        answer.write(str(answer_count) + \"\\n\")\n\nmain()\nPY\npython ora.py \\\n  \"/jetstream2/scratch/main/jobs/78888659/inputs/dataset_7e63c2fd-d844-4869-b95a-60f9e253b484.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78888659/inputs/dataset_e1f5b60a-f527-4022-a2bb-9f76aa4ec9a0.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78888659/inputs/dataset_89ad3b63-cf41-4ec4-b5b4-932ecb88a751.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78888659/inputs/dataset_d18cb2a9-2eae-4fe1-809c-14ebf5de84ac.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78888659/inputs/dataset_e44caf41-cad7-4b6a-a27a-541170f982cd.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "iron_foreground": {
+      "id": "f9cad7b01a47213573e0f7c264bbead6",
+      "src": "hda",
+      "uuid": "7e63c2fd-d844-4869-b95a-60f9e253b484"
+    },
+    "iron_background": {
+      "id": "f9cad7b01a472135cf346e3e3f495d3c",
+      "src": "hda",
+      "uuid": "e1f5b60a-f527-4022-a2bb-9f76aa4ec9a0"
+    },
+    "innate_foreground": {
+      "id": "f9cad7b01a47213529df001fc25c8762",
+      "src": "hda",
+      "uuid": "89ad3b63-cf41-4ec4-b5b4-932ecb88a751"
+    },
+    "innate_background": {
+      "id": "f9cad7b01a472135dddd4960b607718f",
+      "src": "hda",
+      "uuid": "d18cb2a9-2eae-4fe1-809c-14ebf5de84ac"
+    },
+    "kegg_mapping": {
+      "id": "f9cad7b01a472135683999a73b81acb3",
+      "src": "hda",
+      "uuid": "e44caf41-cad7-4b6a-a27a-541170f982cd"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a472135bab80b0dfe45d4b2",
+      "src": "hda",
+      "uuid": "e0aac8f5-61e5-4572-be96-0d116e6d681f"
+    },
+    "answer": {
+      "id": "f9cad7b01a4721351805472dfaa611e4",
+      "src": "hda",
+      "uuid": "310b0b94-2b65-47b4-9a9e-555422e51506"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

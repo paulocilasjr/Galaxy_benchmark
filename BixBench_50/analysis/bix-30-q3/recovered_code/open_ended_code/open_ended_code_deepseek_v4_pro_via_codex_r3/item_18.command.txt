@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, numpy as np
+from scipy import stats
+wb=xlrd.open_workbook('/workspace/inputs/pone.0150501.s002.xls'); ws=wb.sheet_by_index(0)
+names=[]; raw=[]
+for r in range(2,ws.nrows):
+ row=ws.row_values(r); vals=[]
+ for c in range(1,21):
+  v=row[c]; vals.append(v if isinstance(v,(int,float)) and not (isinstance(v,float) and np.isnan(v)) else np.nan)
+ names.append(row[0]); raw.append(vals)
+M=np.array(raw,float)
+keep=np.array([i for i in range(20) if i not in (2,17)])
+M=M[:,keep]
+Pidx=np.arange(9); Cidx=np.arange(9,18)
+
+def run(norm, use_lt34, eq):
+ if norm=='none':
+  data=M.copy()
+ else:
+  means=[]
+  for j in range(M.shape[1]):
+   vals=M[:,j]
+   if use_lt34: vals=vals[np.isfinite(vals)&(vals<34)]
+   else: vals=vals[np.isfinite(vals)]
+   means.append(vals.mean())
+  means=np.array(means)
+  data=M - means[None,:]
+ ps=[]
+ for i,row in enumerate(data):
+  a=row[Pidx]; b=row[Cidx]
+  a=a[np.isfinite(a)]; b=b[np.isfinite(b)]
+  p=stats.ttest_ind(a,b,equal_var=eq).pvalue if len(a)>=2 and len(b)>=2 else np.nan
+  ps.append(p)
+ p=np.array(ps); m=len(p); valid=~np.isnan(p)
+ # bonf on all valid; by on valid
+ bonf=p*175 # tests 175 (nan propagates)
+ # BY adjusted using valid only or all m? Use all m with nan omitted but ranking valid
+ order=np.argsort(p[valid]); q=p[valid][order]; nvalid=len(q); by_adj=np.empty(nvalid)
+ c=np.sum(1/np.arange(1,m+1))
+ running=np.inf
+ for j in range(nvalid-1,-1,-1):
+  running=min(running, q[j]*m*c/(j+1))
+  by_adj[j]=running
+ # map back
+ by=np.full(m,np.nan); by[valid]=by_adj[np.argsort(order)]
+ print(f'norm={norm} lt={use_lt34} eq={eq}: raw<.05={np.nansum(p<.05):.0f}, bonf={np.nansum(bonf<=.05):.0f}, by={np.nansum(by<=.05):.0f}, minp={np.nanmin(p):.6g}, min_bonf={np.nanmin(bonf):.6g}, min_by={np.nanmin(by):.6g}, minmiR={names[np.nanargmin(p)]}')
+
+for norm in ['none','global']:
+ for lt in [False,True]:
+  for eq in [True,False]:
+   run(norm,lt,eq)
+PY"

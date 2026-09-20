@@ -1,0 +1,104 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.analysis_deps python -u - <<'PY'
+import csv, time
+import numpy as np
+from scipy.stats import rankdata, spearmanr
+
+GE='inputs/CRISPRGeneEffect.csv'
+EX='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+MD='inputs/Model.csv'
+
+def read_header(path):
+    with open(path,newline='') as f: return next(csv.reader(f))[1:]
+def read_models(path):
+    out=[]
+    with open(path,newline='') as f:
+        r=csv.reader(f); next(r)
+        for row in r: out.append(row[0])
+    return out
+
+gh=read_header(GE); eh=read_header(EX)
+gmodels=set(read_models(GE)); emodels=set(read_models(EX)); mdmodels=set(read_models(MD))
+models=sorted(gmodels & emodels & mdmodels)
+model_to_i={m:i for i,m in enumerate(models)}
+
+# Prefer exact full feature labels. If nomenclature differs between releases,
+# align the remaining features by the stable Entrez ID.
+eh_exact={s:i for i,s in enumerate(eh)}
+eh_by_id={}
+for i,s in enumerate(eh): eh_by_id.setdefault(s.rsplit(' (',1)[1][:-1],[]).append(i)
+pairs=[]
+for gi,s in enumerate(gh):
+    if s in eh_exact:
+        ei=eh_exact[s]
+    else:
+        entrez=s.rsplit(' (',1)[1][:-1]
+        cand=eh_by_id.get(entrez,[])
+        if len(cand)"'!=1: continue
+        ei=cand[0]
+    pairs.append((gi,ei,s))
+print('"'analysis dimensions:',len(models),'models x',len(pairs),'genes',flush=True)
+
+gidx=np.array([x[0] for x in pairs],dtype=np.intp)
+eidx=np.array([x[1] for x in pairs],dtype=np.intp)
+labels=[x[2] for x in pairs]
+
+def load(path, expected_ncols, selected):
+    out=np.empty((len(models),len(selected)),dtype=np.float64)
+    seen=np.zeros(len(models),dtype=bool)
+    with open(path,'r') as f:
+        next(f)
+        for lineno,line in enumerate(f,2):
+            model,payload=line.rstrip('\\r\\n').split(',',1)
+            oi=model_to_i.get(model)
+            if oi is None: continue
+            if payload.startswith(','): payload='nan'+payload
+            if payload.endswith(','): payload=payload+'nan'
+            while ',,' in payload: payload=payload.replace(',,',',nan,')
+            vals=np.fromstring(payload,sep=',',dtype=np.float64)
+            if vals.size "'!= expected_ncols:
+                raise RuntimeError(f'"'{path}:{lineno}: parsed {vals.size}, expected {expected_ncols}')
+            out[oi]=vals[selected]
+            seen[oi]=True
+    if not seen.all(): raise RuntimeError(f'{path}: missing {np.sum(~seen)} aligned models')
+    print('loaded',path,'missing selected values',int(np.isnan(out).sum()),flush=True)
+    return out
+
+t=time.time()
+g=load(GE,len(gh),gidx)
+e=load(EX,len(eh),eidx)
+print('load seconds',round(time.time()-t,2),flush=True)
+
+# Biological essentiality is positive-going, while supplied gene effect is
+# negative-going, hence essentiality = -gene_effect.
+results=np.full(len(labels),np.nan)
+block=256
+for lo in range(0,len(labels),block):
+    hi=min(lo+block,len(labels))
+    x=e[:,lo:hi].copy()
+    y=-g[:,lo:hi].copy()
+    valid=np.isfinite(x)&np.isfinite(y)
+    x[~valid]=np.nan; y[~valid]=np.nan
+    xr=rankdata(x,axis=0,nan_policy='omit')
+    yr=rankdata(y,axis=0,nan_policy='omit')
+    n=valid.sum(axis=0)
+    means=(n+1)/2
+    dx=xr-means; dy=yr-means
+    dx[~valid]=0; dy[~valid]=0
+    num=np.sum(dx*dy,axis=0)
+    den=np.sqrt(np.sum(dx*dx,axis=0)*np.sum(dy*dy,axis=0))
+    results[lo:hi]=np.divide(num,den,out=np.full(hi-lo,np.nan),where=den"'!=0)
+    if lo % 2048 == 0: print('"'ranked through gene',hi,flush=True)
+
+order=np.argsort(np.where(np.isnan(results),np.inf,results))
+print('\\nmost negative expression vs biological essentiality:')
+for j in order[:15]: print(labels[j],repr(float(results[j])),'n=',int(np.sum(np.isfinite(e[:,j])&np.isfinite(g[:,j]))))
+print('\\nmost positive expression vs biological essentiality:')
+for j in order[-15:][::-1]: print(labels[j],repr(float(results[j])),'n=',int(np.sum(np.isfinite(e[:,j])&np.isfinite(g[:,j]))))
+
+# Independent scalar cross-check for the top negative candidate.
+j=order[0]; mask=np.isfinite(e[:,j])&np.isfinite(g[:,j])
+check=spearmanr(e[mask,j],-g[mask,j]).statistic
+raw=spearmanr(e[mask,j],g[mask,j]).statistic
+print('\\nTOP',labels[j],'vectorized',repr(float(results[j])),'scalar',repr(float(check)),'raw_gene_effect',repr(float(raw)))
+assert np.isclose(results[j],check,rtol=0,atol=1e-14)
+PY"

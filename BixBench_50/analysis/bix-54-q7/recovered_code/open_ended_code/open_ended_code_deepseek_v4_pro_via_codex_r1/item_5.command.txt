@@ -1,0 +1,42 @@
+/bin/bash -c "Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv')
+# create p using labels
+parse_prop <- function(sn, ratio) {
+  if ("'!grepl('"'_', sn)) {
+    # pure labels: 1,98,287; proportion strain287 = 1 for sn 287, 0 for others
+    if (sn == '287') return(1)
+    if (sn == '98') return(0)
+    return(NA)
+  }
+  parts <- strsplit(ratio, ':')[[1]]
+  a <- as.numeric(parts[1]); b <- as.numeric(parts[2])
+  a/(a+b)
+}
+d"'$p <- mapply(parse_prop, d$StrainNumber, d$Ratio)
+print(d[,c('"'StrainNumber','Ratio','Area','p')])
+cat('rows all valid:', sum("'!is.na(d$p)), '"'\\n')
+for(sc in c('interior','boundaries','all_mixture_plus_bounds')) {
+ if(sc=='interior') dd <- d[grepl('_',d"'$StrainNumber),]
+ else if(sc=='"'boundaries') dd <- d[grepl('_',d"'$StrainNumber) | d$StrainNumber %in% c('"'287','98'),]
+ else dd <- d[grepl('_',d"'$StrainNumber) | d$StrainNumber %in% c('"'287','98','1'),]
+ cat('\\nSCOPE',sc,'n',nrow(dd),'p range',range(dd"'$p),'"'\\n')
+ fit2 <- lm(Area ~ p + I(p"'^2), data=dd)
+ fit3 <- lm(Area ~ p + I(p''^2)+I(p''^3), data=dd)
+ fit4 <- lm(Area ~ ns(p, df=4), data=dd)
+ for(nm in c('"'quad','cubic','spline4')) {
+   f <- switch(nm, quad=fit2, cubic=fit3, spline4=fit4)
+   aic <- AIC(f)
+   # optimize over observed range
+   lo <- min(dd"'$p); hi <- max(dd$p)
+   if(nm=='"'spline4') {
+     pred <- function(x) predict(f, newdata=data.frame(p=x))
+   } else pred <- function(x) predict(f, newdata=data.frame(p=x))
+   # sample
+   grid <- seq(lo,hi,length.out=10001)
+   y <- pred(grid)
+   imax <- which.max(y)
+   cat(nm,'AIC',aic,'max at p',grid[imax],'pred',y[imax],'endpoints',pred(c(lo,hi)),'\\n')
+ }
+}
+RS"

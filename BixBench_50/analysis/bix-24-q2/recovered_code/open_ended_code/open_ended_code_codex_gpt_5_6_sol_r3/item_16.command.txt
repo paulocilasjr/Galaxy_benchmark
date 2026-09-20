@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0).T
+meta=pd.read_csv('inputs/sample_layout.csv')
+meta['key']=meta.SampleID.str.replace('-','_',regex=False)
+meta=meta.set_index('key').loc[counts.index]
+meta=meta.rename(columns={'Group':'condition'})[['condition']]
+print('all-zero rows',int((counts.sum()==0).sum()),'modeled',int((counts.sum()>0).sum()),flush=True)
+t=time.time()
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~condition',refit_cooks=True,n_cpus=4,quiet=True)
+dds.deseq2()
+print('fit seconds',round(time.time()-t,1),flush=True)
+for name,target,control in [('standard','CBD_IC50','DMSO'),('starved','CBD_IC50_Serum_starvation_16h','DMSO_Serum_starvation')]:
+ ds=DeseqStats(dds,contrast=['condition',target,control],alpha=.05,independent_filter=True,cooks_filter=True,n_cpus=4,quiet=True)
+ ds.summary()
+ z=ds.results_df
+ sig=z[(z.padj<.05)&(z.log2FoldChange.abs()>.5)]
+ print(name,'tested padj',z.padj.notna().sum(),'sig',len(sig),'up',sum(sig.log2FoldChange>.5),'down',sum(sig.log2FoldChange<-.5),flush=True)
+ print('lfc summary',sig.log2FoldChange.describe().to_dict(),flush=True)
+ # save only in process? serialize for next enrichment prohibited evidence files. We'll rerun or create tmp then delete.
+ z[['baseMean','log2FoldChange','pvalue','padj']].to_csv(f'/workspace/tmp_{name}_de.csv')
+PY"

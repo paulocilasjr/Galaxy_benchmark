@@ -1,0 +1,94 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, time, numpy as np, scipy.stats as st, os
+
+t0=time.time()
+def read_headers(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))
+
+eh=read_headers('inputs/CRISPRGeneEffect.csv')
+xh=read_headers('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+eg=eh[1:]; xg=xh[1:]
+print('genes', len(eg), len(xg), 'full overlap', len(set(eg)&set(xg)), flush=True)
+
+# Read IDs
+def read_ids(path):
+    ids=[]
+    with open(path,newline='') as f:
+        r=csv.reader(f); next(r)
+        for row in r: ids.append(row[0])
+    return ids
+eids=read_ids('inputs/CRISPRGeneEffect.csv')
+xids=read_ids('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+common_ids=[i for i in eids if i in set(xids)]
+xid_set={v:i for i,v in enumerate(xids)}
+e_rows=np.array([i for i,v in enumerate(eids) if v in xid_set],dtype=int)
+x_rows=np.array([xid_set[v] for v in eids if v in xid_set],dtype=int)
+print('rows',len(eids),len(xids),len(common_ids), 'read ids time',time.time()-t0, flush=True)
+
+# common gene indices exact header
+eset=set(eg); xset=set(xg)
+common_genes=sorted(eset&xset, key=lambda h: (h.rsplit(' (',1)[0], h))
+# preserve header order? Not necessary but output symbol. Use effect order perhaps
+common_genes=[h for h in eg if h in xset]
+e_cols=np.array([eg.index(h) for h in common_genes],dtype=int)
+x_cols=np.array([xg.index(h) for h in common_genes],dtype=int)
+print('common genes',len(common_genes), common_genes[:3], common_genes[-3:], flush=True)
+
+t=time.time()
+print('loading effect...', flush=True)
+E=np.genfromtxt('inputs/CRISPRGeneEffect.csv', delimiter=',', skip_header=1, usecols=np.arange(1,len(eh),dtype=int), dtype=np.float32, missing_values='', filling_values=np.nan)
+print('E',E.shape,'nan',np.isnan(E).sum(),'load',time.time()-t, flush=True)
+t=time.time()
+print('loading expr...', flush=True)
+X=np.loadtxt('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', delimiter=',', skiprows=1, usecols=np.arange(1,len(xh),dtype=int), dtype=np.float32)
+print('X',X.shape,'nan',np.isnan(X).sum(),'load',time.time()-t, flush=True)
+
+t=time.time()
+Ea=E[np.ix_(e_rows,e_cols)]
+Xa=X[np.ix_(x_rows,x_cols)]
+print('aligned',Ea.shape,Xa.shape, flush=True)
+# free full
+del E,X
+print('rank effect...', flush=True)
+Re=st.rankdata(Ea,axis=0,nan_policy='omit').astype(np.float64)
+print('rank expr...', flush=True)
+Rx=st.rankdata(Xa,axis=0,nan_policy='omit').astype(np.float64)
+print('ranked time',time.time()-t, flush=True)
+# mean center ignoring nan pairwise; expr no nan but use pairwise
+valid=~np.isnan(Re)
+n_valid=valid.sum(axis=0)
+print('valid count range',n_valid.min(),n_valid.max(), 'genes with <100',np.sum(n_valid<100),'<10',np.sum(n_valid<10),'<3',np.sum(n_valid<3), flush=True)
+# loop pearson with pairwise
+rhos=np.full(len(common_genes),np.nan)
+# Precompute expression centered means per gene (no missing in expr)
+xmean=np.mean(Rx,axis=0)
+xdiff=Rx-xmean
+xss=np.sum(xdiff*xdiff,axis=0)
+# effect has missing; compute per gene with mask
+# Could vectorize with masked arrays but loop
+for j in range(len(common_genes)):
+    m=valid[:,j]
+    n=n_valid[j]
+    if n<3:
+        continue
+    ym=Re[m,j].mean()
+    yd=Re[m,j]-ym
+    ydss=np.sum(yd*yd)
+    if ydss==0 or xss[j]==0:
+        continue
+    # expression diff already full; subset to m
+    num=np.sum(xdiff[m,j]*yd)
+    den=np.sqrt(xss[j]*ydss)
+    rhos[j]=num/den
+print('rho nan',np.isnan(rhos).sum(),'range',np.nanmin(rhos),np.nanmax(rhos), flush=True)
+# top 20 negative with count, symbols
+order=np.argsort(rhos)
+print('top negative:')
+for k in order[:20]:
+    print(k, common_genes[k], rhos[k], int(n_valid[k]))
+print('top positive:')
+for k in order[-5:][::-1]:
+    print(k, common_genes[k], rhos[k], int(n_valid[k]))
+print('total elapsed',time.time()-t0, flush=True)
+PY"

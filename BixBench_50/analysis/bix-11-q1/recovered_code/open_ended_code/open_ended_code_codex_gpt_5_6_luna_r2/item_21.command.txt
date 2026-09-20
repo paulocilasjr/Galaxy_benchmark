@@ -1,0 +1,79 @@
+/bin/bash -lc "python - <<'PY'
+import re, statistics, zipfile
+
+summary_re = re.compile(r'Sum of internal branch lengths:\\s*([0-9.]+)\\s*\\(([0-9.]+)% of tree length\\)')
+
+class Node:
+    def __init__(self, children=None, length=None):
+        self.children = children or []
+        self.length = length
+
+def parse_newick(s):
+    i = 0
+    def read_until(stops):
+        nonlocal i
+        j = i
+        while i < len(s) and s[i] not in stops:
+            i += 1
+        return s[j:i].strip()
+    def subtree():
+        nonlocal i
+        while i < len(s) and s[i].isspace(): i += 1
+        children = []
+        if s[i] == '(':
+            i += 1
+            children = [subtree()]
+            while True:
+                while i < len(s) and s[i].isspace(): i += 1
+                if s[i] == ',':
+                    i += 1; children.append(subtree())
+                elif s[i] == ')':
+                    i += 1; break
+                else:
+                    raise ValueError('invalid Newick')
+            while i < len(s) and s[i].isspace(): i += 1
+            if i < len(s) and s[i] not in ':,();': read_until(':,();')
+        else:
+            read_until(':,();')
+        while i < len(s) and s[i].isspace(): i += 1
+        length = None
+        if i < len(s) and s[i] == ':':
+            i += 1; length = float(read_until(',();'))
+        return Node(children, length)
+    return subtree()
+
+def exact_ratio(newick):
+    root = parse_newick(newick)
+    def walk(node, isroot=False):
+        total = internal = 0.0
+        if not isroot and node.length is not None:
+            total += node.length
+            if node.children: internal += node.length
+        for child in node.children:
+            t, b = walk(child)
+            total += t; internal += b
+        return total, internal
+    total, internal = walk(root, True)
+    return internal / total
+
+all_group = {}
+for group, path in [('animals', 'inputs/scogs_animals.zip'), ('fungi', 'inputs/scogs_fungi.zip')]:
+    shown, exact = [], []
+    with zipfile.ZipFile(path) as z:
+        tree_names = sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        iq_names = sorted(n for n in z.namelist() if n.endswith('.iqtree'))
+        assert len(tree_names) == len(iq_names)
+        for n in iq_names:
+            m = summary_re.search(z.read(n).decode('utf-8'))
+            assert m, n
+            shown.append(float(m.group(2)) / 100)
+        for n in tree_names:
+            exact.append(exact_ratio(z.read(n).decode('utf-8')))
+    assert all(abs(x * 100 - y * 100) < 0.000051 for x, y in zip(sorted(exact), sorted(shown)))
+    med_shown = statistics.median(shown)
+    med_exact = statistics.median(exact)
+    all_group[group] = med_shown
+    print(f'{group}: trees={len(shown)}, median_shown={med_shown:.10f}, median_exact={med_exact:.17g}, zeros={sum(x == 0 for x in shown)}')
+print(f'difference_shown={all_group[\"fungi\"] - all_group[\"animals\"]:.10f}')
+PY
+unzip -t inputs/scogs_animals.zip >/dev/null && unzip -t inputs/scogs_fungi.zip >/dev/null && echo archives_ok"

@@ -1,0 +1,39 @@
+/bin/bash -c "Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv')
+# scope mixture only
+dd <- d[d"'$StrainNumber=='"'287_98',]
+# p from ratio, assume first component 287
+spl <- strsplit(dd"'$Ratio, '"':', fixed=TRUE)
+dd"'$p <- sapply(spl, function(z) as.numeric(z[1])/sum(as.numeric(z)))
+cat('"'n',nrow(dd),'p range',range(dd"'$p),'"'\\n')
+fit_quad <- lm(Area ~ p + I(p"'^2), data=dd)
+fit_cubic <- lm(Area ~ p + I(p''^2) + I(p''^3), data=dd)
+fit_spline <- lm(Area ~ ns(p, df=4), data=dd)
+cat('"'AIC quad', AIC(fit_quad),'cubic',AIC(fit_cubic),'spline',AIC(fit_spline),'\\n')
+cat('adjR2 quad',summary(fit_quad)"'$adj.r.squared,'"'cubic',summary(fit_cubic)"'$adj.r.squared,'"'spline',summary(fit_spline)"'$adj.r.squared,'"'\\n')
+cat('BIC quad',BIC(fit_quad),'cubic',BIC(fit_cubic),'spline',BIC(fit_spline),'\\n')
+# optimize spline within observed p range
+pred <- function(p) predict(fit_spline, newdata=data.frame(p=p))
+o <- optimize(function(x) pred(x), interval=range(dd"'$p), maximum=TRUE)
+cat('"'spline optimum', o"'$maximum, '"'pred', o"'$objective, '"'\\n')
+# find for all
+for (f in list(quad=fit_quad, cubic=fit_cubic, spline=fit_spline)) {
+  pr <- function(p) predict(f, newdata=data.frame(p=p))
+  oo <- optimize(function(x) pr(x), interval=range(dd"'$p), maximum=TRUE)
+  cat(oo$maximum, oo$objective, '"'\\n')
+}
+# maybe optimize domain 0 to 1? spline extrapolation boundary weird but report
+for(domain in list(c(0.25,0.999001), c(0,1))) {
+ oo <- optimize(function(x) pred(x), interval=domain, maximum=TRUE)
+ cat('domain',domain[1],domain[2],'max',oo"'$maximum,oo$objective,'"'\\n')
+}
+# average replicates then fit same models
+agg <- aggregate(Area ~ p, data=dd, FUN=mean)
+cat('\\nagg n',nrow(agg),'\\n')
+fq <- lm(Area~p+I(p"'^2), data=agg); fc <- lm(Area~p+I(p''^2)+I(p''^3), data=agg); fs <- lm(Area~ns(p,df=4), data=agg)
+cat('"'agg AIC',AIC(fq),AIC(fc),AIC(fs),'\\n')
+prs <- function(x) predict(fs,newdata=data.frame(p=x))
+oo <- optimize(function(x) prs(x), interval=range(agg"'$p), maximum=TRUE)
+cat('"'agg spline max',oo"'$maximum,oo$objective,'"'\\n')
+RS"

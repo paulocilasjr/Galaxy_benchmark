@@ -1,0 +1,74 @@
+/bin/bash -c "cat > /workspace/tmp/ora.py <<'PY'
+import pandas as pd
+import numpy as np
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path'])
+link['gene']=link['gene'].str.split(':',expand=True)[1]
+link['path']=link['path'].str.split(':',expand=True)[1]
+pathdesc=pd.read_csv('/workspace/tmp/pau_pathways.tsv',sep='\\t',header=None,names=['path','desc'])
+pathdesc['path']=pathdesc['path'].str.replace('pau','pau') # already
+
+files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+
+def run(universe_mode='measured'):
+    allkg=set(link.gene)
+    sigs={}
+    resgenes={}
+    for strain,fn in files.items():
+        df=pd.read_csv('/workspace/tmp/'+fn)
+        resgenes[strain]=set(df.gene)
+        up=set(df.loc[df.log2FoldChange>1.5,'gene'])
+        down=set(df.loc[df.log2FoldChange< -1.5,'gene'])
+        sigs[strain]={'up':up,'down':down}
+    # For each strain/direction, universe depending mode
+    results={}
+    for strain in files:
+        for direction in ['up','down']:
+            if universe_mode=='measured':
+                universe=resgenes[strain] & allkg
+            elif universe_mode=='kegg':
+                universe=allkg
+            elif universe_mode=='all_measured':
+                universe=resgenes[strain]
+            U=len(universe)
+            sel=sigs[strain][direction] & universe
+            k=len(sel)
+            rows=[]
+            for p in link.path.unique():
+                genes=set(link.loc[link.path==p,'gene']) & universe
+                m=len(genes)
+                q=len(genes & sel)
+                # P(X>=q), R phyper(q-1, m, U-m, k, lower.tail=FALSE)
+                pval=hypergeom.sf(q-1, U, m, k) if q>0 else 1.0
+                rows.append((p,m,q,k,U,pval))
+            d=pd.DataFrame(rows,columns=['path','m','q','k','U','pval'])
+            d=d[d.q>0].copy() if len(d)>0 else d
+            if len(d)>0:
+                d['padj']=multipletests(d.pval, method='fdr_bh')[1]
+            else:
+                d['padj']=[]
+            d['direction']=direction
+            results[(strain,direction)]=d
+    return results,sigs,resgenes,allkg
+
+for mode in ['measured','kegg','all_measured']:
+    results,sigs,resgenes,allkg=run(mode)
+    print('\\nMODE',mode)
+    for strain in ['97','98','99']:
+        for direction in ['up','down']:
+            d=results[(strain,direction)]
+            print(strain,direction,'universe',d.U.iloc[0] if len(d) else 'NA','selected',d.k.iloc[0] if len(d) else sigs[strain][direction],'sig',int((d.padj<0.05).sum()) if len(d) else 0)
+    for direction in ['up','down']:
+        sets=[]
+        for strain in ['97','98','99']:
+            d=results[(strain,direction)]
+            sets.append(set(d.loc[d.padj<0.05,'path']))
+        common=set.intersection(*sets)
+        print('COMMON',direction,len(common),sorted(common)[:30])
+    up=set(results[('97','up')].loc[results[('97','up')].padj<0.05,'path']) & set(results[('98','up')].loc[results[('98','up')].padj<0.05,'path']) & set(results[('99','up')].loc[results[('99','up')].padj<0.05,'path'])
+    down=set(results[('97','down')].loc[results[('97','down')].padj<0.05,'path']) & set(results[('98','down')].loc[results[('98','down')].padj<0.05,'path']) & set(results[('99','down')].loc[results[('99','down')].padj<0.05,'path'])
+    print('TOTAL unique common',len(up|down))
+PY
+python3 /workspace/tmp/ora.py"

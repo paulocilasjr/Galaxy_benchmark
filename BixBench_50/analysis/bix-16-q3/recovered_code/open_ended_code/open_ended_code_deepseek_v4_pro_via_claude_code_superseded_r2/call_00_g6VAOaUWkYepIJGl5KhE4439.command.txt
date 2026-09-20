@@ -1,0 +1,68 @@
+source venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy.stats import spearmanr
+
+# Check a few random genes
+crispr_ids_all = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:, 0].tolist()
+omics_ids_all = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:, 0].tolist()
+
+common = sorted(set(crispr_ids_all) & set(omics_ids_all))
+print(f'Common cell lines: {len(common)}')
+
+# Read just a few columns for testing
+# First get column indices for a few genes
+crispr_header = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()
+omics_header = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()
+
+def parse_gene_name(col_name):
+    col_name = col_name.strip()
+    if '(' in col_name:
+        return col_name.split('(')[0].strip()
+    return col_name
+
+# Pick a few specific genes that we know might be relevant
+test_genes = ['TP53', 'KRAS', 'MYC', 'EGFR', 'BRCA1', 'BRAF', 'PTEN', 'MTOR', 'AKT1', 'GAPDH']
+
+for gene in test_genes:
+    crispr_col = None
+    omics_col = None
+    for i, col in enumerate(crispr_header):
+        if parse_gene_name(col) == gene:
+            crispr_col = i
+            break
+    for i, col in enumerate(omics_header):
+        if parse_gene_name(col) == gene:
+            omics_col = i
+            break
+    
+    if crispr_col is not None and omics_col is not None:
+        # Read just these columns
+        crispr_data = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0, crispr_col])
+        omics_data = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0, omics_col])
+        
+        # Filter to common cell lines
+        crispr_data = crispr_data[crispr_data.iloc[:, 0].isin(common)]
+        omics_data = omics_data[omics_data.iloc[:, 0].isin(common)]
+        
+        # Align
+        crispr_data = crispr_data.set_index(crispr_data.columns[0])
+        omics_data = omics_data.set_index(omics_data.columns[0])
+        
+        # Common index
+        common_idx = crispr_data.index.intersection(omics_data.index)
+        x = crispr_data.loc[common_idx].iloc[:, 0].astype(float).values
+        y = omics_data.loc[common_idx].iloc[:, 0].astype(float).values
+        
+        # Remove NaN
+        mask = ~(np.isnan(x) | np.isnan(y))
+        if mask.sum() > 10:
+            rho, p = spearmanr(x[mask], y[mask])
+            # Also try with negated CRISPR (essentiality interpretation)
+            rho_neg, p_neg = spearmanr(-x[mask], y[mask])
+            print(f'{gene}: n={mask.sum()}, rho(raw)={rho:.4f}, rho(essentiality=-raw)={rho_neg:.4f}')
+        else:
+            print(f'{gene}: not enough data (n={mask.sum()})')
+    else:
+        print(f'{gene}: not found in both datasets (crispr_col={crispr_col}, omics_col={omics_col})')
+" 2>&1

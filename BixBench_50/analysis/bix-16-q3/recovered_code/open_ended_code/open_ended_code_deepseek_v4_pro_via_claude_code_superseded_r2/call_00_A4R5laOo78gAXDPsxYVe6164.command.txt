@@ -1,0 +1,118 @@
+source venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy.stats import spearmanr
+import gc
+
+# Quick verification using the loaded data approach but checking top correlations
+crispr_ids_all = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:, 0].tolist()
+omics_ids_all = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:, 0].tolist()
+
+crispr_ids_set = set(crispr_ids_all)
+omics_ids_set = set(omics_ids_all)
+
+crispr_row_indices = [i for i, cid in enumerate(crispr_ids_all) if cid in omics_ids_set]
+omics_id_to_row = {cid: i for i, cid in enumerate(omics_ids_all) if cid in crispr_ids_set}
+
+crispr_header = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()
+omics_header = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()
+
+def parse_gene_name(col_name):
+    col_name = col_name.strip()
+    if '(' in col_name:
+        return col_name.split('(')[0].strip()
+    return col_name
+
+crispr_gene_to_col = {}
+for i, col in enumerate(crispr_header):
+    gene = parse_gene_name(col)
+    if i > 0 and gene not in crispr_gene_to_col:
+        crispr_gene_to_col[gene] = i
+
+omics_gene_to_col = {}
+for i, col in enumerate(omics_header):
+    gene = parse_gene_name(col)
+    if i > 0 and gene not in omics_gene_to_col:
+        omics_gene_to_col[gene] = i
+
+common_genes = sorted(set(crispr_gene_to_col.keys()) & set(omics_gene_to_col.keys()))
+print(f'Common genes: {len(common_genes)}')
+
+# Load full data as before
+crispr_cols = [0] + [crispr_gene_to_col[g] for g in common_genes]
+omics_cols = [0] + [omics_gene_to_col[g] for g in common_genes]
+
+print('Loading CRISPR...')
+crispr_df = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=crispr_cols)
+crispr_df = crispr_df.iloc[crispr_row_indices]
+crispr_df = crispr_df.set_index(crispr_df.columns[0])
+crispr_df.columns = common_genes
+crispr_df = crispr_df.astype(np.float32)
+
+print('Loading Omics...')
+omics_df = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=omics_cols)
+omics_row_indices = [omics_id_to_row[cid] for cid in crispr_df.index.tolist()]
+omics_df = omics_df.iloc[omics_row_indices]
+omics_df = omics_df.set_index(omics_df.columns[0])
+omics_df.columns = common_genes
+omics_df = omics_df.astype(np.float32)
+
+crispr_arr = crispr_df.to_numpy()
+omics_arr = omics_df.to_numpy()
+
+# Compute only top correlations using vectorized rank correlation
+# Actually scipy's spearmanr is slow for many genes. Let me use a faster approach.
+# Spearman correlation is Pearson correlation on ranks.
+from scipy.stats import rankdata
+
+# Rank each column
+print('Computing ranks...')
+n_cells, n_genes = crispr_arr.shape
+
+# Use argsort for ranking (faster than rankdata for many columns)
+# Spearman: rank each vector, then compute Pearson correlation
+max_abs_corr = np.zeros(n_genes)
+for j in range(n_genes):
+    x = crispr_arr[:, j]
+    y = omics_arr[:, j]
+    mask = ~(np.isnan(x) | np.isnan(y))
+    n_valid = mask.sum()
+    if n_valid < 10:
+        max_abs_corr[j] = 0
+        continue
+    x_clean = x[mask]
+    y_clean = y[mask]
+    if np.all(x_clean == x_clean[0]) or np.all(y_clean == y_clean[0]):
+        max_abs_corr[j] = 0
+        continue
+    try:
+        # Spearman = Pearson on ranks
+        x_ranked = rankdata(x_clean)
+        y_ranked = rankdata(y_clean)
+        rho = np.corrcoef(x_ranked, y_ranked)[0, 1]
+        max_abs_corr[j] = rho
+    except:
+        max_abs_corr[j] = 0
+    
+    if (j+1) % 2000 == 0:
+        print(f'  {j+1}/{n_genes}, max abs corr so far: {np.max(np.abs(max_abs_corr[:j+1])):.4f}', flush=True)
+
+print(f'\\nMax correlation: {max_abs_corr.max():.6f}')
+print(f'Min correlation: {max_abs_corr.min():.6f}')
+print(f'Mean correlation: {max_abs_corr.mean():.6f}')
+print(f'Std correlation: {max_abs_corr.std():.6f}')
+print(f'Count >= 0.6: {(max_abs_corr >= 0.6).sum()}')
+print(f'Count <= -0.6: {(max_abs_corr <= -0.6).sum()}')
+
+# Top 10 genes by absolute correlation
+top_idx = np.argsort(np.abs(max_abs_corr))[-20:]
+for idx in reversed(top_idx):
+    print(f'  {common_genes[idx]}: {max_abs_corr[idx]:.6f}')
+
+# Also compute distribution info
+valid = max_abs_corr[max_abs_corr != 0]
+print(f'\\nPercentiles of |correlation|:')
+for p in [50, 75, 90, 95, 99, 99.5, 99.9]:
+    print(f'  {p}th: {np.percentile(np.abs(valid), p):.6f}')
+print(f'  max: {np.max(np.abs(valid)):.6f}')
+" 2>&1

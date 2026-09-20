@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, glob, os, re, statistics
+from collections import Counter, defaultdict
+base='/workspace'
+trio=openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx', data_only=True)
+ts=trio.active
+status={}
+for r in ts.iter_rows(min_row=2, values_only=True):
+ sid=r[0]
+ if sid is None: continue
+ # normalize trailing spaces/tabs
+ key=str(sid).strip()
+ status[key]=(str(r[1]).strip(), str(r[3]).strip() if r[3] else None)
+files=sorted(glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+
+def sample_key(fname):
+ s=fname.replace('230209_Exome_GRCh38_CHIP_','').replace('.xlsx','')
+ # split at - or _? For numeric use leading digits before -
+ m=re.match(r'(\\d+)',s)
+ if m: return m.group(1)
+ # SRR ids
+ m=re.match(r'(SRR\\d+)',s)
+ if m: return m.group(1)
+ return s
+# test map
+for f in files[:3]: print(f, sample_key(os.path.basename(f)), status.get(sample_key(os.path.basename(f))))
+
+def compute(upstream_exclude):
+ counts={}
+ details={}
+ for f in files:
+  key=sample_key(os.path.basename(f))
+  w=openpyxl.load_workbook(f, data_only=False); s=w.active
+  n=0
+  for r in s.iter_rows(min_row=3, values_only=True):
+   zyg=r[4]; so=r[13]; vaf=r[9]
+   if zyg == 'Reference': continue
+   so_s=str(so) if so is not None else ''
+   if so_s in ('intron_variant','3_prime_UTR_variant','5_prime_UTR_variant','5_prime_UTR_premature_start_codon_gain_variant','intergenic_variant'):
+    continue
+   if upstream_exclude and so_s=='upstream_gene_variant': continue
+   if vaf is None: continue
+   try: v=float(vaf)
+   except: continue
+   if v < 0.3:
+    n+=1
+  counts[key]=n
+  details[key]=(status.get(key), n)
+ return counts,details
+for up in [False, True]:
+ counts,det=compute(up)
+ print('\\nupstream_exclude',up)
+ carriers=[v for k,v in counts.items() if status.get(k) and status[k][1]=='Carrier']
+ affected=[v for k,v in counts.items() if status.get(k) and status[k][1]=='Affected']
+ unaff=[v for k,v in counts.items() if status.get(k) and status[k][1]=='Unaffected']
+ print('carriers count',len(carriers),'vals',sorted(carriers),'median',statistics.median(carriers) if carriers else None)
+ print('affected',len(affected),sorted(affected),'median',statistics.median(affected) if affected else None)
+ print('unaff',len(unaff),'median',statistics.median(unaff) if unaff else None)
+ print('carrier details')
+ for k in sorted(carriers_by[up] if False else []): pass
+ # print sample counts for carrier status sorted by sample
+ for k in sorted(det):
+  st=det[k][0]
+  if st and st[1]=='Carrier': print(k, det[k])
+ print('missing files status',[(k,v) for k,v in det.items() if v[0] is None])
+PY"

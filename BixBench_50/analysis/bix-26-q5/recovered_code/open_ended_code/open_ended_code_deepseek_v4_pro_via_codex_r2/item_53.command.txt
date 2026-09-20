@@ -1,0 +1,39 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import hypergeom
+links=[]
+for line in open('tmp/pau_pathway_links.txt'):
+ a,b=line.strip().split('\\t'); links.append((b.split(':')[-1],a.split(':')[-1]))
+pl={l.split('\\t')[0] for l in open('tmp/pau_pathway_list.txt') if l.strip()}
+links=[(p,g) for p,g in links if p in pl]
+df=pd.DataFrame(links,columns=['path','gene'])
+p2g={p:set(r.gene) for p,r in df.groupby('path')}; g2p={g:set(r.path) for g,r in df.groupby('gene')}; allg=set(df.gene)
+def bh(p):
+ p=np.asarray(p,float); n=len(p)
+ if n==0:return p
+ o=np.argsort(p); r=np.empty(n); r[o]=np.arange(1,n+1); a=p*n/r
+ for i in range(n-2,-1,-1):
+  if a[o[i+1]]<a[o[i]]:a[o[i]]=a[o[i+1]]
+ return a
+def run(f,minS,maxS,universe_all=False):
+ d=pd.read_csv(f); genes=sorted(set(d.gene[(d.log2FoldChange.abs()>1.5)&(d.padj<0.05)]))
+ qmap={gene:g2p.get(gene,set()) for gene in genes if gene in g2p}; n=len(qmap)
+ q2={}
+ for gene,ts in qmap.items():
+  for t in ts:q2.setdefault(t,set()).add(gene)
+ full={t:set(p2g[t]) for t in q2}
+ keep={t for t,M in full.items() if minS<=len(M)<=maxS}
+ q2={t:s for t,s in q2.items() if t in keep}; full={t:s for t,s in full.items() if t in keep}
+ N=len(allg) if not universe_all else 5828
+ out=[]
+ for t in q2:
+  k=len(q2[t]); M=len(full[t]); p=hypergeom.sf(k-1,N,M,n); out.append((t,p))
+ dfo=pd.DataFrame(out,columns=['ID','p']); dfo['padj']=bh(dfo.p)
+ return set(dfo.ID[dfo.padj<0.05])
+for uni in [False,True]:
+ a=run('tmp/GluFevsGluFePlus.csv',10,500,uni); b=run('tmp/SuccvsGluFePlus.csv',10,500,uni)
+ print('uni',uni,'A',len(a),'B',len(b),'only',len(a-b),a-b,'inter',a&b)
+for minS,maxS in [(1,500),(10,1000),(1,10000),(10,500)]:
+ a=run('tmp/GluFevsGluFePlus.csv',minS,maxS,False); b=run('tmp/SuccvsGluFePlus.csv',minS,maxS,False)
+ print('sizes',minS,maxS,'only',len(a-b),'A',len(a),'B',len(b),a-b)
+PY"

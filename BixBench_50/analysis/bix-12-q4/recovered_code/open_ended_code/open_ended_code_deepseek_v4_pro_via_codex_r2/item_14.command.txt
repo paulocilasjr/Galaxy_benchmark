@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import os, glob, math, json, tempfile, subprocess, sys
+from collections import Counter
+
+def read_fasta(path):
+    seqs=[]; name=None; parts=[]
+    with open(path) as f:
+        for line in f:
+            if line.startswith('>'):
+                if name is not None: seqs.append(''.join(parts).replace('\\n',''))
+                name=line[1:].strip(); parts=[]
+            else: parts.append(line.strip())
+        if name is not None: seqs.append(''.join(parts))
+    return seqs
+
+def pis_pct(path):
+    seqs=read_fasta(path); n=len(seqs); L=len(seqs[0])
+    pi=0
+    for j in range(L):
+        cnt=Counter(s[j] for s in seqs if s[j] not in '-.Xx?*')
+        if sum(v>=2 for v in cnt.values())>=2: pi+=1
+    return pi, L
+
+arrs={}
+for label,root in [('animal','/workspace/tmp/scogs_animal'),('fungi','/workspace/tmp/scogs_fungi')]:
+    arr=[]
+    for f in glob.glob(root+'/*.mafft'):
+        pi,L=pis_pct(f); arr.append(100*pi/L)
+    arrs[label]=arr
+    print(label,len(arr),sum(arr)/len(arr),min(arr),max(arr))
+
+a=arrs['animal']; b=arrs['fungi']
+
+# rank with average ties
+vals=sorted(set(a+b))
+rank={v:i+1 for i,v in enumerate(vals)}
+from collections import defaultdict
+allv=a+b
+pos=defaultdict(list)
+for i,v in enumerate(sorted(allv)): pos[v].append(i+1)
+avg={v:sum(l)/len(l) for v,l in pos.items()}
+R1=sum(avg[v] for v in a)
+U1=R1 - len(a)*(len(a)+1)/2
+U2=len(a)*len(b)-U1
+print('avg rank',R1,'U1',U1,'U2',U2,'min',min(U1,U2))
+# concordant count: for each a > b U1; ties half? standard U with ties from concordance
+conc=0; tie=0
+for x in a:
+  for y in b:
+    if x>y: conc+=1
+    elif x==y: tie+=1
+Uconc=conc+tie/2
+print('concordant U1',Uconc,'U2',len(a)*len(b)-Uconc)
+PY"

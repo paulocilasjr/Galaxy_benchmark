@@ -1,0 +1,85 @@
+/bin/bash -lc "cat > /workspace/tmp/kegg_ora.R <<'RS'
+# Base R implementation matching clusterProfiler enrichKEGG defaults for organism pau
+options(stringsAsFactors = FALSE)
+read_res <- function(f) {
+  con <- gzfile(f, 'rb'); x <- unserialize(con); close(con)
+  a <- attributes(x)
+  data.frame(gene = a"'$rownames, lfc = a$listData$log2FoldChange, stringsAsFactors = FALSE)
+}
+res_files <- c('"'inputs/res_1vs97.rds','inputs/res_1vs98.rds','inputs/res_1vs99.rds')
+res_list <- lapply(res_files, read_res)
+names(res_list) <- c('s97','s98','s99')
+
+# download KEGG
+link_url <- 'https://rest.kegg.jp/link/pathway/pau'
+list_url <- 'https://rest.kegg.jp/list/pathway/pau'
+link <- try(read.delim(url(link_url), header=FALSE, sep='\\t', quote=''))
+listed <- try(read.delim(url(list_url), header=FALSE, sep='\\t', quote=''))
+link[,1] <- sub('"'^path:'"', '', link[,1])
+link[,2] <- sub('"'^pau:'"', '', link[,2])
+link <- link[link[,1] %in% listed[,1], , drop=FALSE]
+path2gene <- split(link[,2], link[,1])
+gene2path <- split(link[,1], link[,2])
+universe <- unique(link[,2])
+N <- length(universe)
+
+ora <- function(gene_ids, minGSSize=10, maxGSSize=500) {
+  gene_ids <- unique(gene_ids)
+  qmap <- gene2path[gene_ids]
+  lens <- lengths(qmap)
+  qmap <- qmap[lens > 0]
+  n <- length(qmap)
+  if (n == 0) return(data.frame())
+  # term -> query genes
+  qdf <- data.frame(gene=rep(names(qmap), lengths(qmap)), path=unlist(qmap, use.names=FALSE), stringsAsFactors=FALSE)
+  qterm2gene <- split(qdf"'$gene, qdf$path)
+  # annotate term full genes
+  qterm <- names(qterm2gene)
+  term2gene <- path2gene[qterm]
+  term2gene <- lapply(term2gene, intersect, universe)
+  sizes <- lengths(term2gene)
+  keep <- sizes >= minGSSize & sizes <= maxGSSize
+  term2gene <- term2gene[keep]
+  qterm2gene <- qterm2gene[keep]
+  if (length(term2gene)==0) return(data.frame())
+  qterm <- names(qterm2gene)
+  k <- lengths(qterm2gene)[qterm]
+  M <- lengths(term2gene)[qterm]
+  pvals <- phyper(k - 1, M, N - M, n, lower.tail = FALSE)
+  padj <- p.adjust(pvals, method='"'BH')
+  data.frame(ID=qterm, k=k, M=M, n=n, pvalue=pvals, p.adjust=padj, stringsAsFactors=FALSE, row.names=NULL)
+}
+
+res_all <- list()
+for (i in seq_along(res_list)) {
+  rr <- res_list[[i]]
+  up <- rr"'$gene[rr$lfc > 1.5]
+  down <- rr$gene[rr$lfc < -1.5]
+  for (dir in c('"'up','down')) {
+    genes <- if (dir=='up') up else down
+    ora_res <- ora(genes)
+    sig <- ora_res[ora_res"'$p.adjust < 0.05, '"'ID']
+    key <- paste0(names(res_list)[i], '_', dir)
+    res_all[[key]] <- sig
+    cat(key, 'query', length(genes), 'mapped', sum(genes %in% universe), 'ORA terms tested', nrow(ora_res), 'sig', length(sig), '\\n')
+    cat('  sig ids:', paste(sig, collapse=', '), '\\n')
+  }
+}
+common_up <- Reduce(intersect, res_all[c('s97_up','s98_up','s99_up')])
+common_down <- Reduce(intersect, res_all[c('s97_down','s98_down','s99_down')])
+cat('\\nPathway-intersection A: up', length(common_up), 'down', length(common_down), 'union', length(union(common_up, common_down)), '\\n')
+cat('down ids:', paste(common_down, collapse=', '), '\\n')
+
+# Common gene set ORA B
+all_genes <- res_list[[1]]"'$gene
+common_up_genes <- Reduce(intersect, lapply(res_list, function(rr) rr$gene[rr$lfc > 1.5]))
+common_down_genes <- Reduce(intersect, lapply(res_list, function(rr) rr$gene[rr$lfc < -1.5]))
+cat('"'\\nCommon genes: up', length(common_up_genes), 'down', length(common_down_genes), '\\n')
+for (dir in c('up','down')) {
+  genes <- if (dir=='up') common_up_genes else common_down_genes
+  ora_res <- ora(genes)
+  sig <- ora_res[ora_res"'$p.adjust < 0.05, '"'ID']
+  cat('B',dir,'sig',length(sig),paste(sig,collapse=', '),'\\n')
+}
+RS
+Rscript /workspace/tmp/kegg_ora.R"

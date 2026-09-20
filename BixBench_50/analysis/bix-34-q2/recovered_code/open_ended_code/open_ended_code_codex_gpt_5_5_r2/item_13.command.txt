@@ -1,0 +1,77 @@
+/bin/bash -lc "python - <<'PY'
+from itertools import combinations
+from statistics import median
+from zipfile import ZipFile
+
+with ZipFile('/workspace/inputs/scogs_fungi.zip') as z:
+    newick = z.read('981902at2759.faa.mafft.clipkit.treefile').decode().strip()
+print(newick)
+
+# Minimal Newick parser for labels + branch lengths.
+class Node:
+    def __init__(self, name=None, length=0.0):
+        self.name = name
+        self.length = length
+        self.children = []
+        self.parent = None
+
+def parse_subtree(s, i=0):
+    node = Node()
+    if s[i] == '(':
+        i += 1
+        while True:
+            child, i = parse_subtree(s, i)
+            child.parent = node
+            node.children.append(child)
+            if s[i] == ',':
+                i += 1
+                continue
+            if s[i] == ')':
+                i += 1
+                break
+    # optional label
+    start = i
+    while i < len(s) and s[i] not in ':,();':
+        i += 1
+    if i > start:
+        node.name = s[start:i]
+    if i < len(s) and s[i] == ':':
+        i += 1
+        start = i
+        while i < len(s) and s[i] not in ',();':
+            i += 1
+        node.length = float(s[start:i])
+    return node, i
+
+root, i = parse_subtree(newick[:-1])
+
+tips = {}
+def visit(n):
+    if not n.children:
+        tips[n.name] = n
+    for c in n.children:
+        visit(c)
+visit(root)
+
+def ancestors(n):
+    d = {}
+    dist = 0.0
+    while n is not None:
+        d[n] = dist
+        dist += n.length
+        n = n.parent
+    return d
+
+dists = []
+for a, b in combinations(sorted(tips), 2):
+    aa = ancestors(tips[a])
+    n = tips[b]
+    db = 0.0
+    while n not in aa:
+        db += n.length
+        n = n.parent
+    dist = aa[n] + db
+    dists.append(dist)
+    print(a, b, f'{dist:.10f}')
+print('median', f'{median(dists):.10f}')
+PY"

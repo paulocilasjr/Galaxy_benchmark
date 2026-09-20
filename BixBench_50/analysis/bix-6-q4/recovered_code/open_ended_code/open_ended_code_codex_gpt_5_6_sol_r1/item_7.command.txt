@@ -1,0 +1,54 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, xml.etree.ElementTree as ET, math, collections
+p='inputs/JuliaJong_CRISPRa_BCL2_B3GNT_cacerResTcellCytotoxicity_supplData1_mageck.xlsx'
+ns='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+with zipfile.ZipFile(p) as z:
+    root=ET.parse(z.open('xl/sharedStrings.xml')).getroot()
+    ss=[''.join(t.text or '' for t in si.iter(ns+'t')) for si in root]
+    rows=[]
+    with z.open('xl/worksheets/sheet3.xml') as f:
+        for ev,e in ET.iterparse(f,events=('end',)):
+            if e.tag "'!= ns+'"'row': continue
+            rn=int(e.attrib['r']); d={}
+            for c in e.findall(ns+'c'):
+                ref=c.attrib.get('r',''); col=''.join(ch for ch in ref if ch.isalpha())
+                v=c.find(ns+'v'); val=None if v is None else v.text
+                if c.attrib.get('t')=='s' and val is not None: val=ss[int(val)]
+                d[col]=val
+            if rn>1: rows.append((rn,d.get('A'),d.get('F'),d.get('G')))
+            e.clear()
+print('data rows',len(rows),'last row',rows[-1][0])
+invalid=[]; pairs=[]
+for rn,rid,a,b in rows:
+    try: x=float(a); y=float(b)
+    except (TypeError,ValueError): invalid.append((rn,rid,a,b)); continue
+    if not (math.isfinite(x) and math.isfinite(y)): invalid.append((rn,rid,a,b)); continue
+    pairs.append((rid,x,y))
+print('valid pairs',len(pairs),'invalid',len(invalid),invalid[:10])
+ids=[p[0] for p in pairs]
+dups={k:v for k,v in collections.Counter(ids).items() if v>1}
+print('duplicate IDs',len(dups),'duplicate excess',sum(v-1 for v in dups.values()),'examples',list(dups.items())[:10])
+xs=[p[1] for p in pairs]; ys=[p[2] for p in pairs]
+print('x range',min(xs),max(xs),'y range',min(ys),max(ys))
+print('unique x/y',len(set(xs)),len(set(ys)),'max tie multiplicities',max(collections.Counter(xs).values()),max(collections.Counter(ys).values()))
+
+def ranks(vals):
+    order=sorted(range(len(vals)),key=vals.__getitem__)
+    out=[0.0]*len(vals); i=0
+    while i<len(vals):
+        j=i+1
+        while j<len(vals) and vals[order[j]]==vals[order[i]]: j+=1
+        rank=(i+1+j)/2.0
+        for k in range(i,j): out[order[k]]=rank
+        i=j
+    return out
+rx=ranks(xs); ry=ranks(ys)
+mx=sum(rx)/len(rx); my=sum(ry)/len(ry)
+num=sum((a-mx)*(b-my) for a,b in zip(rx,ry))
+den=math.sqrt(sum((a-mx)**2 for a in rx)*sum((b-my)**2 for b in ry))
+rho=num/den
+print('spearman rho repr',repr(rho))
+print('rho 15g',format(rho,'.15g'))
+# no-tie shortcut only as diagnostic
+n=len(xs); d2=sum((a-b)**2 for a,b in zip(rx,ry)); print('shortcut',1-6*d2/(n*(n*n-1)))
+PY"

@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('/workspace/inputs/count.csv', index_col=0)
+print('raw shape', raw.shape)
+print(raw.index[:3], raw.columns.tolist())
+
+def analyze(samples):
+    cnt = raw[samples].T.copy()
+    cnt.columns.name = None
+    meta = pd.DataFrame({'condition': [s[:2] for s in samples]}, index=samples)
+    dds = DeseqDataSet(counts=cnt, metadata=meta, design=\"~C(condition, levels=['WL','KL'])\", quiet=True)
+    dds.deseq2()
+    print('dds done', samples, 'non_zero_idx', dds.non_zero_idx.sum(), 'var columns', dds.var.columns.tolist())
+    # inspect design and LFC names
+    print('design matrix:\\n', dds.obsm['design_matrix'].head())
+    print('LFC cols', dds.varm['LFC'].columns.tolist())
+    ds = DeseqStats(dds, contrast=['condition','KL','WL'], alpha=0.05, quiet=True)
+    ds.run_wald_test()
+    coeff = [c for c in ds.LFC.columns if c "'!= '"'Intercept'][0]
+    print('coeff', coeff)
+    ds.lfc_shrink(coeff=coeff)
+    r = ds.results_df.copy()
+    print(r.columns.tolist())
+    print(r.head())
+    print('padj min/max', r.padj.min(), r.padj.max(), 'NA', r.padj.isna().sum(), 'pvalue NA', r.pvalue.isna().sum())
+    for pcol in ['padj','pvalue']:
+        sig = (r[pcol] < 0.05) & (r['baseMean'] > 10) & (r['log2FoldChange'].abs() > 1)
+        print(pcol, 'count', sig.sum(), 'up', ((r.log2FoldChange>1)&sig).sum(), 'down', ((r.log2FoldChange<-1)&sig).sum())
+    return r
+
+r_all = analyze(['KL1','KL2','KL3','WL1','WL2','WL3'])
+print('\\n\\nSUBSET')
+r_sub = analyze(['KL1','KL2','WL1','WL2'])
+PY"

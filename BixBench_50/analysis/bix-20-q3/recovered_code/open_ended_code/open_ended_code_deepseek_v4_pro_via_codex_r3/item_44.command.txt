@@ -1,0 +1,31 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, glob, os, re, openpyxl
+print('pandas',pd.__version__)
+# use pandas header row index 1 (third row), parse all 19 carrier files; check selected count
+meta=pd.read_excel('/workspace/inputs/230215_Trio_Status.xlsx')
+meta['Sample ID']=meta['Sample ID'].astype(str).str.strip()
+carrier=set(meta.loc[meta['BLM Mutation Status']=='Carrier','Sample ID'])
+files=glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+frames=[]
+for f in files:
+    full=re.search(r'CHIP_(.+?)\\.xlsx"'$'"',os.path.basename(f)).group(1); mm=re.match(r'(\\d+)',full); sid=mm.group(1) if mm else full
+    if sid not in carrier: continue
+    df=pd.read_excel(f, header=1)
+    df['sample']=sid
+    frames.append(df)
+    print(sid, df.shape)
+allv=pd.concat(frames, ignore_index=True)
+print('all columns', list(allv.columns))
+print('total rows', len(allv))
+# check columns names
+zyg='Zygosity'; so='Sequence Ontology (Combined)'; vaf='Variant Allele Freq'; cls='Classification'; inchip='In_CHIP'
+print(allv[[zyg,so,vaf,cls,inchip]].head())
+# convert vaf
+allv['vafnum']=pd.to_numeric(allv[vaf], errors='coerce')
+# filter
+excluded=allv[so].astype(str).str.lower().str.contains('intron|intergenic|_utr|untranslated', regex=True, na=False)
+sel=allv[(allv[zyg]"'!='"'Reference') & (~excluded) & (allv['vafnum']<0.3) & (allv[cls].notna())]
+print('pandas pipeline N',len(sel),'B/LB',sel[cls].isin(['Benign','Likely Benign']).sum())
+print(sel[cls].value_counts(dropna=False))
+print(sel[so].value_counts(dropna=False))
+PY"

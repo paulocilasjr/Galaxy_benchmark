@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, numpy as np
+from scipy import stats
+p='/workspace/inputs/pone.0150501.s002.xls'
+wb=xlrd.open_workbook(p); ws=wb.sheet_by_index(0)
+names=[]; M=[]
+for r in range(2,ws.nrows):
+ row=ws.row_values(r)
+ name=row[0]; vals=[]
+ for c in range(1,21):
+  v=row[c]
+  vals.append(v if isinstance(v,(int,float)) and not (isinstance(v,float) and np.isnan(v)) else np.nan)
+ names.append(name); M.append(vals)
+M=np.array(M,float)
+# sample indices 0-9 patients, 10-19 controls; exclude P3 idx2, C18 idx17 (col17? headers: P_1 col1..P_10 col10, C_11 col11..C_20 col20; C18 = 18th control? actually C_18 is col18? Let's map)
+# P3 col3 (idx2); C18 col18? row header col 0? list: C_11 col11 idx10 ... C_18 col18 idx17, C_19 idx18, C_20 idx19. So exclude idx2 and idx17.
+keep=np.array([i for i in range(20) if i not in (2,17)])
+Pidx=keep[:9] # first 9 patients after exclude P3 = [0,1,3,4,5,6,7,8,9]
+Cidx=keep[9:] # [10..16,18,19]
+print(keep, Pidx, Cidx)
+
+def ttest_arr(data, equal_var):
+ ps=[]
+ for row in data:
+  a=row[Pidx]; b=row[Cidx]
+  a=a[np.isfinite(a)]; b=b[np.isfinite(b)]
+  if len(a)<2 or len(b)<2:
+   ps.append(np.nan); continue
+  try:
+   ps.append(stats.ttest_ind(a,b,equal_var=equal_var).pvalue)
+  except: ps.append(np.nan)
+ return np.array(ps)
+
+def sample_means(data, use_lt34):
+ means=[]
+ for j in keep:
+  vals=data[:,j]
+  if use_lt34:
+   vals=vals[(np.isfinite(vals)) & (vals<34)]
+  else:
+   vals=vals[np.isfinite(vals)]
+  means.append(np.mean(vals) if len(vals) else np.nan)
+ return np.array(means)
+
+variants=[]
+for rawtransform in ['ct','logct']:
+ for norm in ['none','global_ct_subtract','global_expr']:
+  for lt in [False,True]:
+   for eq in [True,False]:
+    # transformed values per miRNA for t-test:
+    if norm=='none':
+     data=M
+    elif norm=='global_ct_subtract':
+     means=sample_means(M, lt)
+     data=M - means[None,:]
+    elif norm=='global_expr':
+     means=sample_means(M, lt)
+     # 2"'^-(ct - mean) = 2''^(mean-ct); t-test on log2 expression = mean-ct same as subtract (up to sign) so same p; skip? include
+     data=means[None,:]-M
+    else: continue
+    if rawtransform=='"'logct' and norm"'!='"'none':
+     # log2 raw expression before subtract? not meaningful
+     pass
+    ps=ttest_arr(data, eq)
+    n= np.sum(ps<0.05)
+    variants.append((norm,lt,eq,n,np.nanmin(ps),names[np.nanargmin(ps)] if np.any(ps<.05) else None))
+
+for v in variants: print(v)
+PY"

@@ -1,0 +1,47 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, statistics
+from collections import Counter
+base='inputs/'
+with open(base+'Sample_annotated_Zenodo.csv',newline='') as f:
+    samples=list(csv.DictReader(f))
+with open(base+'GeneMetaInfo_Zenodo.csv',newline='') as f:
+    meta_rows=list(csv.DictReader(f))
+meta={r['']:r for r in meta_rows}
+print('sample rows',len(samples),'unique sample IDs',len({r['sample'] for r in samples}))
+print('cell types',dict(sorted(Counter(r['celltype'] for r in samples).items())))
+print('samtype',dict(Counter(r['samtype'] for r in samples)))
+print('batches',dict(Counter(r['batch'] for r in samples)))
+print('gene metadata rows',len(meta_rows),'unique row IDs',len(meta))
+print('gene IDs differ from row ID',sum(r['']"'!=r['"'Geneid'] for r in meta_rows))
+print('biotype counts top',Counter(r['gene_biotype'] for r in meta_rows).most_common(12))
+pc={k:int(v['Length']) for k,v in meta.items() if v['gene_biotype']=='protein_coding'}
+print('protein coding',len(pc),'length range',min(pc.values()),max(pc.values()))
+with open(base+'BatchCorrectedReadCounts_Zenodo.csv',newline='') as f:
+    reader=csv.reader(f); hdr=next(reader)
+    cols=hdr[1:]
+    smap={r['sample']:r for r in samples}
+    print('expression columns',len(cols),'unique',len(set(cols)))
+    print('expr absent annotation',sorted(set(cols)-set(smap)))
+    print('annotation absent expr',sorted(set(smap)-set(cols)))
+    groups={c:[i+1 for i,x in enumerate(cols) if smap[x]['celltype']==c] for c in ('CD4','CD8','CD14','CD19')}
+    print('target samples',{k:len(v) for k,v in groups.items()})
+    vals={k:[] for k in groups}; lengths=[]; found=set(); duplicates=0; rows=0; minv=math.inf; maxv=-math.inf
+    for row in reader:
+        rows+=1; gene=row[0]
+        if gene not in pc: continue
+        if gene in found: duplicates+=1
+        found.add(gene); lengths.append(pc[gene])
+        for cell,idxs in groups.items():
+            x=[float(row[i]) for i in idxs]
+            minv=min(minv,min(x)); maxv=max(maxv,max(x))
+            vals[cell].append(math.fsum(x)/len(x))
+print('expression rows',rows,'protein coding matched',len(lengths),'unique',len(found),'duplicates',duplicates,'pc absent expr',len(set(pc)-found))
+print('target value range',minv,maxv)
+def pearson(x,y):
+    mx=math.fsum(x)/len(x); my=math.fsum(y)/len(y)
+    dx=[v-mx for v in x]; dy=[v-my for v in y]
+    return math.fsum(a*b for a,b in zip(dx,dy))/math.sqrt(math.fsum(a*a for a in dx)*math.fsum(b*b for b in dy))
+for cell in groups:
+    r=pearson(lengths,vals[cell])
+    print(cell,'r=',repr(r),'abs=',repr(abs(r)),'mean_expr=',statistics.fmean(vals[cell]))
+PY"

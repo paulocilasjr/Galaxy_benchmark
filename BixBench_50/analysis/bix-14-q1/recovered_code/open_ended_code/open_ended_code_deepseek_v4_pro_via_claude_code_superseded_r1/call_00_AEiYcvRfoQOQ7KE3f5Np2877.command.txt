@@ -1,0 +1,110 @@
+python3 << 'PYEOF'
+import openpyxl
+import os
+
+# Define coding variant SO terms
+coding_so_terms = {
+    'synonymous_variant',
+    'missense_variant',
+    'stop_gained',
+    'stop_lost',
+    'start_lost',
+    'frameshift_variant',
+    'inframe_insertion',
+    'inframe_deletion',
+    'coding_sequence_variant',
+    'protein_altering_variant',
+}
+
+# Carrier files
+carrier_file_ids = ['184', '185', '285', '287', '353', '354', '381', '396', '397',
+                    '489', '490', '499', '500', '503', '504', '556', '557', '613', '614']
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+
+# Detailed breakdown
+details = []
+per_sample_counts = {}
+
+for sid in carrier_file_ids:
+    fname = f'230209_Exome_GRCh38_CHIP_{sid}-'
+    # Find the actual file
+    for f in os.listdir(chip_dir):
+        if f.startswith(f'230209_Exome_GRCh38_CHIP_{sid}-') and f.endswith('.xlsx'):
+            fpath = os.path.join(chip_dir, f)
+            break
+    else:
+        print(f"WARNING: No file found for sample {sid}")
+        continue
+    
+    wb = openpyxl.load_workbook(fpath)
+    ws = wb.active
+    
+    coding_count = 0
+    syn_count = 0
+    
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        so_term = str(row[13]).strip() if row[13] is not None else None
+        vaf = row[9]
+        gene = str(row[12]).strip() if row[12] is not None else None
+        chrpos = str(row[0]).strip() if row[0] is not None else None
+        zyg = str(row[4]).strip() if row[4] is not None else None
+        effect = str(row[14]).strip() if row[14] is not None else None
+        
+        if vaf is None:
+            continue
+        vaf_val = float(vaf)
+        if vaf_val >= 0.3:
+            continue
+        
+        if so_term and so_term in coding_so_terms:
+            coding_count += 1
+            if so_term == 'synonymous_variant':
+                syn_count += 1
+                details.append((sid, chrpos, gene, so_term, effect, zyg, vaf_val))
+    
+    if coding_count > 0:
+        per_sample_counts[sid] = (coding_count, syn_count)
+
+# Print per-sample breakdown
+print("=== Per-sample breakdown ===")
+for sid in sorted(per_sample_counts.keys()):
+    c, s = per_sample_counts[sid]
+    print(f"  Sample {sid}: {c} coding with VAF<0.3, {s} synonymous")
+
+print(f"\n=== Summary ===")
+total_c = sum(c for c, s in per_sample_counts.values())
+total_s = sum(s for c, s in per_sample_counts.values())
+print(f"Total coding with VAF<0.3: {total_c}")
+print(f"Total synonymous with VAF<0.3: {total_s}")
+print(f"Fraction: {total_s}/{total_c} = {total_s/total_c:.6f}")
+
+print(f"\n=== All synonymous variants with VAF<0.3 ===")
+for d in details:
+    print(f"  Sample={d[0]}, Pos={d[1]}, Gene={d[2]}, SO={d[3]}, Effect={d[4]}, Zyg={d[5]}, VAF={d[6]:.4f}")
+
+# Also check: how many non-coding variants with VAF<0.3?
+non_coding_count = 0
+for sid in carrier_file_ids:
+    fname = f'230209_Exome_GRCh38_CHIP_{sid}-'
+    for f in os.listdir(chip_dir):
+        if f.startswith(f'230209_Exome_GRCh38_CHIP_{sid}-') and f.endswith('.xlsx'):
+            fpath = os.path.join(chip_dir, f)
+            break
+    else:
+        continue
+    
+    wb = openpyxl.load_workbook(fpath)
+    ws = wb.active
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        so_term = str(row[13]).strip() if row[13] is not None else None
+        vaf = row[9]
+        if vaf is None:
+            continue
+        if float(vaf) >= 0.3:
+            continue
+        if so_term and so_term not in coding_so_terms:
+            non_coding_count += 1
+
+print(f"\nNon-coding variants with VAF<0.3: {non_coding_count}")
+PYEOF
+

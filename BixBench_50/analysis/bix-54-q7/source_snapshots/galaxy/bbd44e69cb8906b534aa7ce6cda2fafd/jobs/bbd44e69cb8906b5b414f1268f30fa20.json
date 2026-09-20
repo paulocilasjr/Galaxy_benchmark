@@ -1,0 +1,53 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5b414f1268f30fa20",
+  "history_id": "bbd44e69cb8906b534aa7ce6cda2fafd",
+  "tool_id": "codex_swarm_model_fit_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T04:38:58.889364",
+  "update_time": "2026-07-15T04:39:38.471761",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'RSCRIPT'\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 1) stop('Expected one input path')\ninput_path <- args[[1]]\n\nlibrary(splines)\n\ndat <- read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE)\nrequired <- c('DishNumber','StrainNumber','Ratio','Replicate','Area')\nmissing_cols <- setdiff(required, names(dat))\nif (length(missing_cols) > 0) stop(paste('Missing columns:', paste(missing_cols, collapse = ', ')))\n\ndat$StrainNumber <- as.character(dat$StrainNumber)\ndat$Ratio <- as.character(dat$Ratio)\ndat$Area <- as.numeric(dat$Area)\n\ncurve <- dat[dat$StrainNumber %in% c('98', '287', '287_98'), , drop = FALSE]\nif (nrow(curve) == 0) stop('No 287/98 curve rows found')\n\nparse_mix_p <- function(ratio) {\n  parts <- strsplit(ratio, ':', fixed = TRUE)[[1]]\n  if (length(parts) != 2) stop(paste('Bad ratio:', ratio))\n  a <- as.numeric(parts[[1]])\n  b <- as.numeric(parts[[2]])\n  if (!is.finite(a) || !is.finite(b) || a < 0 || b < 0 || (a + b) <= 0) stop(paste('Bad ratio:', ratio))\n  a / (a + b)\n}\n\ncurve$p <- NA_real_\ncurve$p[curve$StrainNumber == '98'] <- 0\ncurve$p[curve$StrainNumber == '287'] <- 1\nis_mix <- curve$StrainNumber == '287_98'\ncurve$p[is_mix] <- vapply(curve$Ratio[is_mix], parse_mix_p, numeric(1))\ncurve <- curve[is.finite(curve$p) & is.finite(curve$Area), , drop = FALSE]\n\nif (nrow(curve) < 6) stop('Too few complete rows for candidate models')\nif (min(curve$p) > 0 || max(curve$p) < 1) stop('Expected observed boundary rows p=0 and p=1')\n\nmodels <- list(\n  quadratic = lm(Area ~ p + I(p^2), data = curve),\n  cubic = lm(Area ~ p + I(p^2) + I(p^3), data = curve),\n  natural_spline_df4 = lm(Area ~ ns(p, df = 4), data = curve)\n)\naics <- vapply(models, AIC, numeric(1))\nbest_name <- names(aics)[which.min(aics)]\nbest_model <- models[[best_name]]\n\npredfun <- function(x) {\n  as.numeric(predict(best_model, newdata = data.frame(p = x)))\n}\n\nlower <- min(curve$p)\nupper <- max(curve$p)\nbreaks <- seq(lower, upper, length.out = 1001)\ncandidates <- c(lower, upper, unique(curve$p))\nfor (i in seq_len(length(breaks) - 1)) {\n  lo <- breaks[[i]]\n  hi <- breaks[[i + 1]]\n  opt <- try(optimize(function(z) -predfun(z), interval = c(lo, hi), tol = .Machine$double.eps^0.5), silent = TRUE)\n  if (!inherits(opt, 'try-error') && is.finite(opt$minimum)) candidates <- c(candidates, opt$minimum)\n}\nvals <- vapply(candidates, predfun, numeric(1))\nidx <- which.max(vals)\nopt_p <- candidates[[idx]]\nmax_pred <- vals[[idx]]\n\nwriteLines(formatC(max_pred, digits = 15, format = 'fg', flag = '#'), 'answer.txt')\n\naud <- data.frame(\n  field = c('n_rows','best_model','optimal_p','max_predicted_area', paste0('AIC_', names(aics))),\n  value = c(as.character(nrow(curve)), best_name, formatC(opt_p, digits = 15, format = 'fg', flag = '#'), formatC(max_pred, digits = 15, format = 'fg', flag = '#'), formatC(aics, digits = 15, format = 'fg', flag = '#')),\n  stringsAsFactors = FALSE\n)\nwrite.table(aud, file = 'audit.tsv', sep = '\\t', quote = FALSE, row.names = FALSE, col.names = TRUE)\nRSCRIPT\nRscript analysis.R \"/jetstream2/scratch/main/jobs/78533856/inputs/dataset_780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a472135a69d590220b79eb4",
+      "src": "hda",
+      "uuid": "780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f"
+    }
+  },
+  "outputs": {
+    "answer": {
+      "id": "f9cad7b01a472135395bb6911d9cf2d0",
+      "src": "hda",
+      "uuid": "35624923-31ba-4c2a-8489-c9b8bf2001a9"
+    },
+    "audit": {
+      "id": "f9cad7b01a472135da98a599fbe6c26d",
+      "src": "hda",
+      "uuid": "5b5fb532-b595-48e9-a3de-a982b5ae1c9d"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

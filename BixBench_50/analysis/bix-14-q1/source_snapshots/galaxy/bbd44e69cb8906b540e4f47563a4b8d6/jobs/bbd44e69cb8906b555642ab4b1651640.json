@@ -1,0 +1,61 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b555642ab4b1651640",
+  "history_id": "bbd44e69cb8906b540e4f47563a4b8d6",
+  "tool_id": "blm-carrier-synonymous-fraction-20260801-v2",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-01T15:28:23.745012",
+  "update_time": "2026-08-01T15:33:28.268607",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython -c 'import openpyxl,sys; sys.stderr.write(\"openpyxl=\"+openpyxl.__version__+\"\\n\")'\npython - \"/jetstream2/scratch/main/jobs/78853714/inputs/dataset_bc08b386-69ff-41a8-9171-cb23af41ef43.dat\" result.tsv audit.tsv <<'PY'\nimport csv\nimport io\nimport os\nimport re\nimport sys\nimport tarfile\nfrom collections import Counter\nfrom openpyxl import load_workbook\n\nbundle_path, result_path, audit_path = sys.argv[1:4]\nCODING_TERMS = {\n    \"synonymous_variant\", \"missense_variant\", \"stop_gained\", \"stop_lost\",\n    \"start_lost\", \"frameshift_variant\", \"inframe_insertion\", \"inframe_deletion\",\n    \"protein_altering_variant\", \"coding_sequence_variant\",\n    \"incomplete_terminal_codon_variant\", \"initiator_codon_variant\",\n    \"feature_elongation\", \"feature_truncation\",\n}\n\ndef cell_values(row):\n    return [c.value for c in row]\n\ndef normalized_sample(value):\n    if value is None:\n        return \"\"\n    if isinstance(value, float) and value.is_integer():\n        return str(int(value))\n    text = str(value).strip()\n    if text.endswith(\".0\") and text[:-2].isdigit():\n        return text[:-2]\n    return text\n\ndef workbook_from_tar(tf, member):\n    fh = tf.extractfile(member)\n    if fh is None:\n        raise RuntimeError(\"Cannot extract \" + member.name)\n    return load_workbook(io.BytesIO(fh.read()), read_only=False, data_only=True)\n\ndef sample_from_filename(name):\n    match = re.search(r\"CHIP_(.+)\\.xlsx$\", os.path.basename(name))\n    if not match:\n        return \"\"\n    token = match.group(1)\n    return token if token.startswith(\"SRR\") else token.split(\"-\", 1)[0]\n\ndef so_terms(value):\n    if value is None:\n        return set()\n    return {x.strip() for x in re.split(r\"[,;&|]+\", str(value)) if x.strip()}\n\nwith tarfile.open(bundle_path, \"r:*\") as tf:\n    members = [m for m in tf.getmembers() if m.isfile() and m.name.lower().endswith(\".xlsx\")]\n    cohort_members = [m for m in members if os.path.basename(m.name) == \"230215_Trio_Status.xlsx\"]\n    variant_members = [m for m in members if \"CHIP_DP10_GQ20_PASS/\" in m.name]\n    if len(members) != 88 or len(cohort_members) != 1 or len(variant_members) != 86:\n        raise RuntimeError(\"Input inventory mismatch: total=%d cohort=%d variants=%d\" % (len(members), len(cohort_members), len(variant_members)))\n\n    cohort_wb = workbook_from_tar(tf, cohort_members[0])\n    cohort_ws = cohort_wb[cohort_wb.sheetnames[0]]\n    cohort_rows = cohort_ws.iter_rows()\n    cohort_header = cell_values(next(cohort_rows))\n    sample_idx = cohort_header.index(\"Sample ID\")\n    blm_idx = cohort_header.index(\"BLM Mutation Status\")\n    status_idx = cohort_header.index(\"Status\")\n    cohort = {}\n    for row in cohort_rows:\n        vals = cell_values(row)\n        sample = normalized_sample(vals[sample_idx]) if sample_idx < len(vals) else \"\"\n        if not sample:\n            continue\n        blm = \"\" if blm_idx >= len(vals) or vals[blm_idx] is None else str(vals[blm_idx]).strip()\n        role = \"\" if status_idx >= len(vals) or vals[status_idx] is None else str(vals[status_idx]).strip()\n        cohort[sample] = (blm, role)\n\n    carriers = {sample for sample, pair in cohort.items() if pair[0].casefold() == \"carrier\"}\n    consequence_counts = Counter()\n    sample_rows = []\n    total_low_vaf = 0\n    total_coding = 0\n    total_synonymous = 0\n    processed_carrier_samples = set()\n\n    for member in sorted(variant_members, key=lambda m: m.name):\n        sample = sample_from_filename(member.name)\n        if sample not in carriers:\n            continue\n        processed_carrier_samples.add(sample)\n        wb = workbook_from_tar(tf, member)\n        ws = wb[wb.sheetnames[0]]\n        rows = ws.iter_rows()\n        cell_values(next(rows))\n        header = cell_values(next(rows))\n        try:\n            vaf_idx = header.index(\"Variant Allele Freq\")\n            so_idx = header.index(\"Sequence Ontology (Combined)\")\n        except ValueError as exc:\n            raise RuntimeError(\"Required column missing in %s: %s\" % (member.name, exc))\n        sample_low = sample_coding = sample_syn = 0\n        for row in rows:\n            vals = cell_values(row)\n            if max(vaf_idx, so_idx) >= len(vals):\n                continue\n            raw_vaf = vals[vaf_idx]\n            if raw_vaf is None or str(raw_vaf).strip() == \"\":\n                continue\n            try:\n                vaf = float(raw_vaf)\n            except (TypeError, ValueError):\n                continue\n            if not vaf < 0.3:\n                continue\n            sample_low += 1\n            total_low_vaf += 1\n            terms = so_terms(vals[so_idx])\n            if not terms:\n                consequence_counts[\"<blank>\"] += 1\n            else:\n                for term in sorted(terms):\n                    consequence_counts[term] += 1\n            if terms.intersection(CODING_TERMS):\n                sample_coding += 1\n                total_coding += 1\n                if \"synonymous_variant\" in terms:\n                    sample_syn += 1\n                    total_synonymous += 1\n        sample_rows.append((sample, cohort[sample][1], cohort[sample][0], sample_low, sample_coding, sample_syn))\n\nmissing_carrier_files = sorted(carriers - processed_carrier_samples)\nunmatched_variant_files = sorted(sample_from_filename(m.name) for m in variant_members if sample_from_filename(m.name) not in cohort)\nif missing_carrier_files:\n    raise RuntimeError(\"Carrier samples without variant workbooks: \" + \",\".join(missing_carrier_files))\nif unmatched_variant_files:\n    raise RuntimeError(\"Variant workbooks absent from cohort table: \" + \",\".join(unmatched_variant_files))\nif total_coding == 0:\n    raise RuntimeError(\"No coding variants with VAF < 0.3\")\nif total_synonymous > total_coding:\n    raise RuntimeError(\"Synonymous numerator exceeds coding denominator\")\nfraction = total_synonymous / float(total_coding)\n\nwith open(result_path, \"w\", newline=\"\") as out:\n    writer = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    writer.writerow([\"cohort\", \"vaf_rule\", \"analysis_unit\", \"carrier_samples\", \"coding_variants\", \"synonymous_variants\", \"fraction\"])\n    writer.writerow([\"BLM Mutation Status=Carrier\", \"VAF<0.3\", \"sample-variant rows\", len(processed_carrier_samples), total_coding, total_synonymous, format(fraction, \".12g\")])\n\nwith open(audit_path, \"w\", newline=\"\") as out:\n    writer = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    writer.writerow([\"section\", \"key\", \"value1\", \"value2\", \"value3\", \"value4\"])\n    writer.writerow([\"scope\", \"xlsx_inputs\", len(members), \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"variant_workbooks\", len(variant_members), \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"cohort_rows\", len(cohort), \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"carrier_labels\", len(carriers), \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"processed_carrier_samples\", len(processed_carrier_samples), \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"all_low_vaf_rows_in_carriers\", total_low_vaf, \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"coding_low_vaf_rows\", total_coding, \"\", \"\", \"\"])\n    writer.writerow([\"scope\", \"synonymous_coding_low_vaf_rows\", total_synonymous, \"\", \"\", \"\"])\n    for sample, role, blm, low, coding, syn in sample_rows:\n        writer.writerow([\"sample\", sample, role, blm, low, \"%d;%d\" % (coding, syn)])\n    for term, count in sorted(consequence_counts.items()):\n        writer.writerow([\"consequence\", term, count, \"coding\" if term in CODING_TERMS else \"noncoding\", \"\", \"\"])\n\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "bundle": {
+      "id": "f9cad7b01a4721355c72dff25cf32406",
+      "src": "hda",
+      "uuid": "bc08b386-69ff-41a8-9171-cb23af41ef43"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a472135f15e3b1fc4f69bf1",
+      "src": "hda",
+      "uuid": "070d5a0d-9b92-4d23-88ae-a48de5eba14b"
+    },
+    "audit": {
+      "id": "f9cad7b01a4721358c2d6a0b2f5bd6e1",
+      "src": "hda",
+      "uuid": "8d6bcf5f-f358-45ce-a82c-de7298215957"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "openpyxl=2.4.0-b1\nTraceback (most recent call last):\n  File \"<stdin>\", line 130, in <module>\nRuntimeError: Carrier samples without variant workbooks: 533\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "openpyxl=2.4.0-b1\nTraceback (most recent call last):\n  File \"<stdin>\", line 130, in <module>\nRuntimeError: Carrier samples without variant workbooks: 533\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

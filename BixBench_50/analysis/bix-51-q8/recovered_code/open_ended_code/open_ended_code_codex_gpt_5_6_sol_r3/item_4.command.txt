@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, xml.etree.ElementTree as ET, re, json
+p='inputs/data.xlsx'
+ns={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main','r':'http://schemas.openxmlformats.org/officeDocument/2006/relationships','pr':'http://schemas.openxmlformats.org/package/2006/relationships'}
+with zipfile.ZipFile(p) as z:
+    ss=[]
+    if 'xl/sharedStrings.xml' in z.namelist():
+      root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+      for si in root.findall('m:si',ns): ss.append(''.join(t.text or '' for t in si.iter('{%s}t'%ns['m'])))
+    wb=ET.fromstring(z.read('xl/workbook.xml'))
+    rel=ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))
+    targets={x.attrib['Id']:x.attrib['Target'] for x in rel}
+    sheets=[]
+    for sh in wb.find('m:sheets',ns):
+      name=sh.attrib['name']; rid=sh.attrib['{%s}id'%ns['r']]; target=targets[rid]
+      path=target.lstrip('/') if target.startswith('/xl/') else 'xl/'+target.lstrip('/')
+      root=ET.fromstring(z.read(path))
+      rows=[]
+      for row in root.findall('.//m:sheetData/m:row',ns):
+        vals={}
+        for c in row.findall('m:c',ns):
+          ref=c.attrib['r']; col=re.match(r'[A-Z]+',ref).group(); typ=c.attrib.get('t'); v=c.find('m:v',ns)
+          val=None if v is None else v.text
+          if typ=='s' and val is not None: val=ss[int(val)]
+          elif typ=='inlineStr': val=''.join(t.text or '' for t in c.iter('{%s}t'%ns['m']))
+          vals[col]=val
+        rows.append((int(row.attrib['r']),vals))
+      sheets.append((name,rows))
+    print('sheets:',[x[0] for x in sheets])
+    for name,rows in sheets:
+      print('\\nSHEET',name,'rows',len(rows))
+      for r,vals in rows[:20]: print(r, json.dumps(vals,ensure_ascii=False))
+PY"

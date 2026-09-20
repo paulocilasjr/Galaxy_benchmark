@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter, defaultdict
+import openpyxl, math, re
+
+carrier={'185','184','285','287','353','354','556','557','533','381','396','397','489','490','499','500','503','504','613','614'}
+region_exclude_exact={'intron_variant','intergenic_variant','3_prime_UTR_variant','5_prime_UTR_variant','5_prime_UTR_premature_start_codon_gain_variant'}
+
+def num(x):
+    if isinstance(x,(int,float)) and not isinstance(x,bool): return float(x)
+    try: return float(str(x).strip())
+    except: return None
+
+rows=[]
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    sid=p.stem.split('_CHIP_',1)[1].split('-',1)[0]
+    if sid not in carrier: continue
+    wb=openpyxl.load_workbook(p,data_only=True,read_only=False)
+    ws=wb.active
+    vals=list(ws.iter_rows(values_only=True)); headers=list(vals[1]); d={h:i for i,h in enumerate(headers) if h is not None}
+    for row in vals[2:]:
+        rec={k:row[i] for k,i in d.items()}
+        rec['sample']=sid; rec['file']=p.name; rec['vaf_num']=num(rec['Variant Allele Freq'])
+        rows.append(rec)
+    wb.close()
+
+print('carrier workbook rows',len(rows),'files',len(set(r['file'] for r in rows)))
+print('vaf by zygosity:',Counter((r['Zygosity'],r['vaf_num'] is not None) for r in rows))
+print('vaf range numeric:',min(r['vaf_num'] for r in rows if r['vaf_num'] is not None),max(r['vaf_num'] for r in rows if r['vaf_num'] is not None))
+print('numeric VAF bins:',Counter('lt0.3' if r['vaf_num'] is not None and r['vaf_num']<.3 else 'ge0.3' for r in rows if r['vaf_num'] is not None))
+
+# base/filters
+for region_pred_name,region_pred in [
+ ('exact',lambda o:o in region_exclude_exact),
+ ('contains_intronic_intergenic_utr',lambda o: any(x in str(o).lower() for x in ('intron','intergenic','utr'))),
+]:
+    base=[r for r in rows if r['vaf_num'] is not None and r['vaf_num']<.3 and str(r['Zygosity']).strip().lower()"'!='"'reference' and not region_pred(r['Sequence Ontology (Combined)'])]
+    with_clin=[r for r in base if r['Classification'] not in (None,'')]
+    numr=[r for r in with_clin if str(r['Classification']).strip().lower() in ('benign','likely benign')]
+    print('\\n',region_pred_name,'base somatic vaf<.3 region filtered',len(base),'with clinvar',len(with_clin),'num',len(numr),'prop',len(numr)/len(with_clin) if with_clin else None)
+    print('classification',Counter(r['Classification'] for r in with_clin))
+    print('ontology',Counter(r['Sequence Ontology (Combined)'] for r in base))
+    print('zygosity',Counter(r['Zygosity'] for r in base))
+    print('per sample')
+    for sid in sorted(set(r['sample'] for r in with_clin),key=lambda x:int(x)):
+        rr=[r for r in with_clin if r['sample']==sid]
+        nn=sum(str(r['Classification']).strip().lower() in ('benign','likely benign') for r in rr)
+        print(sid,nn,len(rr),f'{nn/len(rr):.6g}')
+
+# Show rows with vaf<.3 nonreference but region excluded and etc
+base0=[r for r in rows if r['vaf_num'] is not None and r['vaf_num']<.3 and str(r['Zygosity']).strip().lower()"'!='"'reference']
+print('\\nbase before region',len(base0),'ontologies',Counter(r['Sequence Ontology (Combined)'] for r in base0))
+# potentially numeric string weird and nonref missing classification
+print('base region filtered no classification',sum(r['Classification'] in (None,'') for r in base if True))
+PY"

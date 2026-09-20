@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+# Independent OOXML-level cross-check (does not rely on openpyxl worksheet dimensions)
+from pathlib import Path
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from collections import Counter
+import re
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+def colnum(ref):
+    letters=re.match(r'[A-Z]+',ref).group()
+    n=0
+    for ch in letters:n=n*26+ord(ch)-64
+    return n-1
+def read_xlsx(path):
+    with ZipFile(path) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall(NS+'si'):
+                ss.append(''.join(t.text or '' for t in si.iter(NS+'t')))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for row in root.find(NS+'sheetData').findall(NS+'row'):
+            vals={}
+            for c in row.findall(NS+'c'):
+                ref=c.attrib['r']; typ=c.attrib.get('t'); v=c.find(NS+'v')
+                if v is None: val=None
+                elif typ=='s': val=ss[int(v.text)]
+                elif typ=='b': val=(v.text=='1')
+                else:
+                    try: val=float(v.text)
+                    except: val=v.text
+                vals[colnum(ref)]=val
+            rows.append(vals)
+        return rows
+meta=read_xlsx('inputs/230215_Trio_Status.xlsx')
+# row 1 column D = 3
+carriers={str(int(r[0])) if isinstance(r.get(0),float) else str(r.get(0)).strip() for r in meta[1:] if r.get(3)=='Carrier'}
+files={re.search(r'CHIP_(["'^.]*)'"\\.xlsx"'$'"',p.name).group(1).split('-')[0]:p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+counts=Counter(); retained=[]
+for sid in sorted(carriers & files.keys(),key=int):
+    rows=read_xlsx(files[sid])
+    h={j:v for j,v in rows[1].items()}
+    inv={v:j for j,v in h.items()}
+    for rr,row in enumerate(rows[2:],3):
+        get=lambda name: row.get(inv[name])
+        z=get('Zygosity'); vaf=get('Variant Allele Freq'); so=str(get('Sequence Ontology (Combined)') or ''); cl=get('Classification')
+        if z in (None,'Reference'): continue
+        if vaf is None or not float(vaf)<0.3: continue
+        if any(term in so.lower() for term in ('intron','intergenic','utr')): continue
+        if cl is None or not str(cl).strip(): continue
+        counts[cl]+=1; retained.append((sid,rr,get('Chr:Pos'),cl))
+print('available_carriers',len(carriers & files.keys()))
+print('missing',sorted(carriers-files.keys()))
+print('classification_counts',dict(counts))
+num=counts['Benign']+counts['Likely Benign']; den=sum(counts.values())
+print('numerator',num,'denominator',den,'proportion',num/den)
+assert (counts['Benign'],counts['Likely Benign'],den,num/den)==(35,2,37,1.0)
+PY"

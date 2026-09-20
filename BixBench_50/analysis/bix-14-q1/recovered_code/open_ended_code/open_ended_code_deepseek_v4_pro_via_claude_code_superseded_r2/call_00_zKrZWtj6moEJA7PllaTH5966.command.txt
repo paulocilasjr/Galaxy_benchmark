@@ -1,0 +1,88 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import re
+
+var_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+trio = pd.read_excel('/workspace/inputs/230215_Trio_Status.xlsx')
+blm_carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+carrier_ids = set(blm_carriers['Sample ID'].astype(str).tolist())
+
+coding_so_terms = {
+    'synonymous_variant',
+    'missense_variant',
+    'inframe_insertion',
+    'inframe_deletion',
+    'frameshift_variant',
+    'stop_gained',
+    'stop_lost',
+    'start_lost',
+    'coding_sequence_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+# Let's check: how many "Reference" calls have non-NaN VAF < 0.3?
+ref_with_low_vaf = 0
+ref_low_vaf_coding = 0
+ref_low_vaf_syn = 0
+
+for fname in sorted(os.listdir(var_dir)):
+    m = re.search(r'CHIP_(\d+)-([^.]+)\.xlsx$', fname)
+    if not m:
+        continue
+    cid = m.group(1)
+    if cid not in carrier_ids:
+        continue
+    
+    fpath = os.path.join(var_dir, fname)
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:].copy()
+    data.columns = range(data.shape[1])
+    
+    data['VAF_num'] = pd.to_numeric(data[9], errors='coerce')
+    
+    # Reference calls with VAF < 0.3
+    ref_low = data[(data[4] == 'Reference') & (data['VAF_num'].notna()) & (data['VAF_num'] < 0.3)]
+    ref_with_low_vaf += len(ref_low)
+    
+    # Among those, how many are coding?
+    ref_coding = ref_low[ref_low[13].isin(coding_so_terms)]
+    ref_low_vaf_coding += len(ref_coding)
+    ref_low_vaf_syn += len(ref_coding[ref_coding[13] == 'synonymous_variant'])
+    
+    if len(ref_low) > 0:
+        print(f"Carrier {cid}: {len(ref_low)} Reference calls with VAF<0.3, {len(ref_coding)} coding ({len(ref_coding[ref_coding[13]=='synonymous_variant'])} syn)")
+
+print(f"\nTotal Reference calls with VAF<0.3: {ref_with_low_vaf}")
+print(f"  Coding: {ref_low_vaf_coding} ({ref_low_vaf_syn} synonymous)")
+
+# Now check non-Reference with VAF<0.3
+nonref_low_vaf = 0
+nonref_low_vaf_coding = 0
+nonref_low_vaf_syn = 0
+
+for fname in sorted(os.listdir(var_dir)):
+    m = re.search(r'CHIP_(\d+)-([^.]+)\.xlsx$', fname)
+    if not m:
+        continue
+    cid = m.group(1)
+    if cid not in carrier_ids:
+        continue
+    
+    fpath = os.path.join(var_dir, fname)
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:].copy()
+    data.columns = range(data.shape[1])
+    
+    data['VAF_num'] = pd.to_numeric(data[9], errors='coerce')
+    
+    nonref_low = data[(data[4] != 'Reference') & (data['VAF_num'].notna()) & (data['VAF_num'] < 0.3)]
+    nonref_low_vaf += len(nonref_low)
+    
+    nonref_coding = nonref_low[nonref_low[13].isin(coding_so_terms)]
+    nonref_low_vaf_coding += len(nonref_coding)
+    nonref_low_vaf_syn += len(nonref_coding[nonref_coding[13] == 'synonymous_variant'])
+
+print(f"\nTotal non-Reference calls with VAF<0.3: {nonref_low_vaf}")
+print(f"  Coding: {nonref_low_vaf_coding} ({nonref_low_vaf_syn} synonymous)")
+PYEOF

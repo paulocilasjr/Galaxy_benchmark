@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import csv, time, gc
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata
+
+crf='inputs/CRISPRGeneEffect.csv'; exf='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+def header(fn):
+    with open(fn,newline='',encoding='utf-8') as f: return next(csv.reader(f))
+ch=header(crf); eh=header(exf)
+ehs=set(eh[1:]); common=[x for x in ch[1:] if x in ehs]
+cr_cols=[0]+[i+1 for i,x in enumerate(ch[1:]) if x in ehs]
+ex_pos={x:i for i,x in enumerate(eh)}
+ex_cols=[0]+[ex_pos[x] for x in common]
+print('common exact',len(common),flush=True)
+t0=time.time()
+cr=pd.read_csv(crf,usecols=cr_cols,index_col=0,dtype=np.float32)
+print('read crispr',cr.shape,'sec',time.time()-t0,'nan',int(cr.isna().sum().sum()),flush=True)
+t1=time.time()
+ex=pd.read_csv(exf,usecols=ex_cols,index_col=0,dtype=np.float32)
+print('read expr',ex.shape,'sec',time.time()-t1,'nan',int(ex.isna().sum().sum()),flush=True)
+ids=cr.index.intersection(ex.index)
+cr=cr.loc[ids,common]
+ex=ex.loc[ids,common]
+print('aligned',cr.shape,ex.shape,'rows',len(ids),'nan cr/ex',int(cr.isna().sum().sum()),int(ex.isna().sum().sum()),flush=True)
+raw=np.full(len(common),np.nan,dtype=np.float64); nobs=np.zeros(len(common),dtype=np.int32)
+t0=time.time()
+for start in range(0,len(common),1000):
+    stop=min(start+1000,len(common))
+    a=ex.iloc[:,start:stop].to_numpy(dtype=np.float64,copy=True)
+    b=cr.iloc[:,start:stop].to_numpy(dtype=np.float64,copy=True)
+    for j in range(stop-start):
+        ok=np.isfinite(a[:,j]) & np.isfinite(b[:,j]); n=int(ok.sum()); nobs[start+j]=n
+        if n<2: continue
+        ra=rankdata(a[ok,j],method='average'); rb=rankdata(b[ok,j],method='average')
+        da=ra-ra.mean(); db=rb-rb.mean(); den=np.sqrt(np.dot(da,da)*np.dot(db,db))
+        if den: raw[start+j]=np.dot(da,db)/den
+    if start % 5000 == 0: print('processed',stop,'sec',time.time()-t0,flush=True)
+finite=np.isfinite(raw); order=np.argsort(raw[finite])[::-1]; ix=np.flatnonzero(finite)[order]
+print('finite',finite.sum(),'nobs range',nobs[finite].min(),nobs[finite].max(),flush=True)
+for k in range(20):
+    i=int(ix[k]); print(k+1,common[i],'raw_corr',repr(raw[i]),'strength_corr',repr(-raw[i]),'n',nobs[i],flush=True)
+PY"

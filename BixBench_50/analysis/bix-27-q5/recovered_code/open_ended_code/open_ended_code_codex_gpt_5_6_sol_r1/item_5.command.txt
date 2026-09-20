@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import csv, sys
+from collections import Counter
+import numpy as np
+import pandas as pd
+import sklearn
+from sklearn.decomposition import PCA
+path='inputs/ROSMAP_genexp_ad.csv'
+with open(path,newline='') as f:
+    raw_header=next(csv.reader(f))
+labels=np.array(raw_header[1:], dtype=object)
+counts=Counter(labels.tolist())
+keep=np.array([counts[x]==1 for x in labels])
+df=pd.read_csv(path,index_col=0)
+raw=df.to_numpy(dtype=np.float64, copy=True).T
+print('versions',sys.version.split()[0],np.__version__,pd.__version__,sklearn.__version__)
+print('raw_shape',raw.shape,'kept_shape',raw[keep].shape)
+print('finite',np.isfinite(raw).all(),'nan',np.isnan(raw).sum(),'min',raw.min(),'max',raw.max())
+for name,X0 in [('resolved_unique_only',raw[keep]),('all_records_diagnostic',raw)]:
+    X=np.log10(X0+1.0)
+    vars_=X.var(axis=0, ddof=1)
+    print('\\n',name,'shape',X.shape,'finite',np.isfinite(X).all(),'zero_variance_genes',np.sum(vars_==0),'total_sample_variance',vars_.sum())
+    # exact eigendecomposition of sample Gram matrix; nonzero spectra match covariance PCA
+    C=X-X.mean(axis=0)
+    gram=C@C.T
+    ev=np.linalg.eigvalsh(gram)
+    ratio=ev[-1]/ev.sum()
+    print('gram_exact_pc1_fraction',repr(float(ratio)),'percent',repr(float(ratio*100)))
+    pfull=PCA(n_components=100,svd_solver='full').fit(X)
+    print('sklearn_full_pc1_fraction',repr(float(pfull.explained_variance_ratio_[0])),'percent',repr(float(pfull.explained_variance_ratio_[0]*100)),'100sum',pfull.explained_variance_ratio_.sum())
+    print('exact_absdiff',abs(pfull.explained_variance_ratio_[0]-ratio))
+    for seed in (0,1,42):
+        pa=PCA(n_components=100,random_state=seed).fit(X)
+        print('auto_seed',seed,'solver',getattr(pa,'_fit_svd_solver',None),'pc1_percent',repr(float(pa.explained_variance_ratio_[0]*100)))
+PY"

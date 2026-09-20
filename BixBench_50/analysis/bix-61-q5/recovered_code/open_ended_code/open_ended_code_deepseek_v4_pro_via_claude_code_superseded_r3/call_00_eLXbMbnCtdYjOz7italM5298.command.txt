@@ -1,0 +1,111 @@
+python3 << 'PYEOF'
+# More detailed analysis
+import gzip
+
+vcf_path = "/workspace/inputs/SRR35233585_raw_variants.vcf"
+f = open(vcf_path, 'r')
+
+ts_sites = 0
+tv_sites = 0
+ts_alleles = 0
+tv_alleles = 0
+indel_count = 0
+mnp_count = 0
+other_count = 0
+het_count = 0
+hom_alt_count = 0
+hom_ref_count = 0
+
+transitions = {
+    ('A', 'G'), ('G', 'A'),
+    ('C', 'T'), ('T', 'C')
+}
+
+for line in f:
+    if line.startswith('#'):
+        continue
+    fields = line.strip().split('\t')
+    if len(fields) < 10:
+        continue
+    
+    ref = fields[3]
+    alt_field = fields[4]
+    
+    # Parse genotype
+    fmt = fields[8].split(':')
+    gt_idx = fmt.index('GT')
+    gt = fields[9].split(':')[gt_idx]
+    
+    if gt == '0/1' or gt == '1/0' or gt == '0|1' or gt == '1|0':
+        het_count += 1
+    elif gt == '1/1' or gt == '1|1':
+        hom_alt_count += 1
+    elif gt == '0/0' or gt == '0|0':
+        hom_ref_count += 1
+    
+    # Check if SNV
+    if len(ref) != 1:
+        if len(ref) > 1:
+            mnp_count += 1 if ',' not in alt_field else 0
+        else:
+            other_count += 1
+        continue
+    
+    alts = alt_field.split(',')
+    all_snv = all(len(a) == 1 for a in alts)
+    
+    if not all_snv:
+        # Contains indels or mixed
+        indel_count += len([a for a in alts if len(a) != 1])
+        # Still count SNV alleles
+        snv_alts = [a for a in alts if len(a) == 1]
+        for a in snv_alts:
+            ts_alleles += 1 if (ref, a) in transitions else 0
+            tv_alleles += 0 if (ref, a) in transitions else 1
+        continue
+    
+    # All alleles are SNVs
+    # Site-level: check if ANY allele is transition or transversion
+    # For site-level, if multiallelic we count the site once
+    site_is_ts = any((ref, a) in transitions for a in alts)
+    site_is_tv = any((ref, a) not in transitions for a in alts)
+    
+    if site_is_ts and not site_is_tv:
+        ts_sites += 1
+    elif site_is_tv and not site_is_ts:
+        tv_sites += 1
+    else:
+        # Mixed multiallelic site
+        ts_sites += 1  # count as both? Most tools would count as separate
+        tv_sites += 1
+    
+    # Allele-level counting
+    for a in alts:
+        if (ref, a) in transitions:
+            ts_alleles += 1
+        else:
+            tv_alleles += 1
+
+f.close()
+
+total_snv_sites = ts_sites + tv_sites
+total_snv_alleles = ts_alleles + tv_alleles
+
+print(f"--- Variant type counts ---")
+print(f"Homozygous alt (1/1): {hom_alt_count}")
+print(f"Heterozygous (0/1): {het_count}")
+print(f"Homozygous ref (0/0): {hom_ref_count}")
+print(f"Indels/MNPs/other: {indel_count + mnp_count + other_count}")
+print()
+print(f"--- Allele-level Ts/Tv ---")
+print(f"Ts alleles: {ts_alleles}")
+print(f"Tv alleles: {tv_alleles}")
+print(f"Total SNV alleles: {total_snv_alleles}")
+print(f"Ts/Tv (allele-level): {ts_alleles/tv_alleles:.4f} -> {ts_alleles/tv_alleles:.2f}")
+print()
+print(f"--- Site-level Ts/Tv ---")
+print(f"Ts sites: {ts_sites}")
+print(f"Tv sites: {tv_sites}")
+print(f"Total SNV sites: {total_snv_sites}")
+print(f"Ts/Tv (site-level): {ts_sites/tv_sites:.4f} -> {ts_sites/tv_sites:.2f}")
+PYEOF

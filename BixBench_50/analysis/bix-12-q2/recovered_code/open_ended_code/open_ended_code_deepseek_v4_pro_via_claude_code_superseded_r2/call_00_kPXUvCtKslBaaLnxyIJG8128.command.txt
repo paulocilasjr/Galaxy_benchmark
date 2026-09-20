@@ -1,0 +1,72 @@
+python3 -c "
+import os, glob
+from collections import Counter
+
+def read_fasta(filepath):
+    sequences = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_header is not None:
+                    sequences.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            sequences.append((current_header, ''.join(current_seq)))
+    return sequences
+
+def compute_pis_pct(filepath):
+    seqs = read_fasta(filepath)
+    if len(seqs) < 2:
+        return None
+    seq_lengths = [len(s[1]) for s in seqs]
+    if len(set(seq_lengths)) > 1:
+        return None
+    aln_len = seq_lengths[0]
+    if aln_len == 0:
+        return None
+    seq_strs = [s[1] for s in seqs]
+    pis = 0
+    for i in range(aln_len):
+        col = [s[i] for s in seq_strs]
+        counts = Counter(col)
+        states_ge2 = sum(1 for n in counts.values() if n >= 2)
+        if len(counts) >= 2 and states_ge2 >= 2:
+            pis += 1
+    return pis / aln_len * 100.0
+
+maffts = sorted(glob.glob('/workspace/work/scogs_fungi/*.faa.mafft'))
+results = []
+for f in maffts:
+    pct = compute_pis_pct(f)
+    if pct is not None:
+        results.append(pct)
+
+# Non-overlapping bins
+results_sorted = sorted(results)
+print('Non-overlapping distribution:')
+bins = [(0,1),(1,2),(2,3),(3,4),(4,5),(5,6),(6,7),(7,8),(8,10),(10,15),(15,20)]
+for lo, hi in bins:
+    count = sum(1 for r in results_sorted if lo <= r < hi)
+    if count > 0:
+        print(f'  [{lo}-{hi})%: {count} files')
+
+import statistics
+print(f'\\nMedian: {statistics.median(results):.4f}%')
+print(f'N = {len(results)}')
+
+# Verify 0% files are < 4 sequences
+print('\\nChecking 0% files:')
+zero_files = [f for f in maffts if compute_pis_pct(f) == 0]
+for f in zero_files[:5]:
+    seqs = read_fasta(f)
+    print(f'  {os.path.basename(f)}: {len(seqs)} sequences')
+" 2>&1
+

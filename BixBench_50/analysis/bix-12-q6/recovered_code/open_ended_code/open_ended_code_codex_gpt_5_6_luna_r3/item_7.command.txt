@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from pathlib import Path
+import statistics
+try:
+    from scipy.stats import mannwhitneyu
+    print('scipy', __import__('scipy').__version__)
+except Exception as e:
+    print('no scipy', repr(e))
+
+def read_fasta(data):
+    seqs=[]; h=None; chunks=[]
+    for line in data.decode().splitlines():
+        if line.startswith('>'):
+            if h is not None: seqs.append((h,''.join(chunks)))
+            h=line[1:].strip(); chunks=[]
+        else: chunks.append(line.strip())
+    if h is not None: seqs.append((h,''.join(chunks)))
+    return seqs
+
+def pis(seqs, gaps_missing=True):
+    if not seqs: return 0
+    L=len(seqs[0][1]); n=0
+    for j in range(L):
+        col=[s[j] for _,s in seqs]
+        if gaps_missing: col=[x for x in col if x not in '-?X']
+        c=Counter(col)
+        if sum(v>=2 for v in c.values()) >= 2: n+=1
+    return n
+
+for missing in [True,False]:
+    vals={}
+    print('\\nGAPS_MISSING',missing)
+    for group in ['animals','fungi']:
+        path=Path('inputs')/f'scogs_{group}.zip'
+        arr=[]
+        with ZipFile(path) as z:
+            for name in sorted(n for n in z.namelist() if n.endswith('.mafft')):
+                seqs=read_fasta(z.read(name))
+                v=pis(seqs,missing)
+                arr.append(v); vals[(group,name)]=v
+        print(group,'n',len(arr),'nonzero',sum(v>0 for v in arr),'min',min(arr),'median',statistics.median(arr),'mean',sum(arr)/len(arr),'max',max(arr),'sum',sum(arr),'top',sorted(arr,reverse=True)[:15])
+    a=[v for (g,n),v in vals.items() if g=='animals']; f=[v for (g,n),v in vals.items() if g=='fungi']
+    if 'scipy' in globals() or True:
+        try:
+            for alt in ['two-sided','less','greater']:
+                res=mannwhitneyu(a,f,alternative=alt,method='auto')
+                print('U',alt,res.statistic,'p',res.pvalue)
+        except Exception as e: print('mw fail',repr(e))
+PY"

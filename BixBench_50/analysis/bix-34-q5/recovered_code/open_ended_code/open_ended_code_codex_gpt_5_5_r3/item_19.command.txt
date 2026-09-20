@@ -1,0 +1,64 @@
+/bin/bash -lc "python - <<'PY'
+# Same parser, report medians for complete 4-tip trees only and all trees.
+import zipfile, statistics, itertools
+class Node:
+    __slots__=('name','length','children','parent')
+    def __init__(self,name=None,length=0.0): self.name=name; self.length=length; self.children=[]; self.parent=None
+
+def parse(s):
+    s=s.strip().rstrip(';'); n=len(s)
+    def name_len(i):
+        while i<n and s[i].isspace(): i+=1
+        start=i
+        while i<n and s[i] not in ':,()': i+=1
+        name=s[start:i].strip() or None
+        while i<n and s[i].isspace(): i+=1
+        L=0.0
+        if i<n and s[i]==':':
+            i+=1; start=i
+            while i<n and s[i] not in ',()': i+=1
+            L=float(s[start:i].strip())
+        return name,L,i
+    def sub(i):
+        while i<n and s[i].isspace(): i+=1
+        if s[i]=='(':
+            node=Node(); i+=1
+            while True:
+                child,i=sub(i); child.parent=node; node.children.append(child)
+                while i<n and s[i].isspace(): i+=1
+                if i<n and s[i]==',': i+=1; continue
+                if i<n and s[i]==')': i+=1; break
+                raise ValueError
+            node.name,node.length,i=name_len(i); return node,i
+        name,L,i=name_len(i); return Node(name,L),i
+    root,i=sub(0); root.length=0; return root
+
+def tips(r):
+    out=[]
+    def rec(x):
+        if x.children:
+            for c in x.children: rec(c)
+        else: out.append(x)
+    rec(r); return out
+
+def dist(a,b):
+    seen={}; acc=0; x=a
+    while x is not None:
+        seen[id(x)]=acc; acc+=x.length; x=x.parent
+    acc=0; x=b
+    while x is not None:
+        if id(x) in seen: return acc+seen[id(x)]
+        acc+=x.length; x=x.parent
+
+def mp(s):
+    ts=tips(parse(s)); return sum(dist(a,b) for a,b in itertools.combinations(ts,2))/(len(ts)*(len(ts)-1)/2), len(ts)
+for zname in ['inputs/scogs_animals.zip','inputs/scogs_fungi.zip']:
+    vals=[]; vals4=[]
+    with zipfile.ZipFile(zname) as z:
+        for name in z.namelist():
+            if name.endswith('.treefile'):
+                m,k=mp(z.read(name).decode())
+                vals.append(m)
+                if k==4: vals4.append(m)
+    print(zname, 'all n',len(vals),'median',statistics.median(vals),'4tip n',len(vals4),'median',statistics.median(vals4))
+PY"

@@ -1,0 +1,104 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+import pickle
+
+# Load data
+res_97 = pd.read_csv("/tmp/analysis/res_97.csv")
+res_98 = pd.read_csv("/tmp/analysis/res_98.csv")
+res_99 = pd.read_csv("/tmp/analysis/res_99.csv")
+
+# Load KEGG data
+with open("/tmp/analysis/kegg_data.pkl", "rb") as f:
+    kegg_data = pickle.load(f)
+pathway_genes_raw = {k: set(v) for k, v in kegg_data["pathway_genes"].items()}
+pathways = kegg_data["pathways"]
+
+# Build universe: all genes in dataset that are annotated in KEGG
+all_genes = set(res_97["gene"])
+all_kegg_genes = set()
+for gs in pathway_genes_raw.values():
+    all_kegg_genes.update(gs)
+universe = all_genes & all_kegg_genes
+N_universe = len(universe)
+
+print(f"Universe size: {N_universe}")
+
+# Define DE gene sets: |lfc| > 1.5
+datasets = {}
+for label, res_df in [('97', res_97), ('98', res_98), ('99', res_99)]:
+    de_up = set(res_df[res_df["log2FoldChange"] > 1.5]["gene"]) & universe
+    de_down = set(res_df[res_df["log2FoldChange"] < -1.5]["gene"]) & universe
+    datasets[label] = {'up': de_up, 'down': de_down, 'n_up': len(de_up), 'n_down': len(de_down)}
+    print(f"Strain {label}: DE up={len(de_up)}, DE down={len(de_down)}")
+
+# Run ORA for each strain and direction
+all_ora_results = {}
+
+for label, ds in datasets.items():
+    all_ora_results[label] = {}
+    for direction, de_set in [('up', ds['up']), ('down', ds['down'])]:
+        K = len(de_set)
+        if K == 0:
+            all_ora_results[label][direction] = {}
+            continue
+        
+        pathway_results = {}
+        for pid, pw_genes in pathway_genes_raw.items():
+            pw_in_u = pw_genes & universe
+            n = len(pw_in_u)
+            if n < 2:
+                continue
+            x = len(pw_in_u & de_set)
+            if x == 0:
+                continue
+            
+            # Hypergeometric test: P(X >= x)
+            pval = hypergeom.sf(x - 1, N_universe, K, n)
+            fold_enrichment = (x / n) / (K / N_universe)
+            
+            pathway_results[pid] = {
+                'pvalue': pval,
+                'fold_enrichment': fold_enrichment,
+                'overlap': x,
+                'pathway_size': n
+            }
+        
+        # Apply BH correction within each direction
+        if pathway_results:
+            pids = list(pathway_results.keys())
+            pvals = [pathway_results[pid]['pvalue'] for pid in pids]
+            _, padjs, _, _ = multipletests(pvals, method='fdr_bh')
+            for pid, padj in zip(pids, padjs):
+                pathway_results[pid]['padj'] = padj
+        
+        all_ora_results[label][direction] = pathway_results
+
+# Find pathways significantly enriched (padj < 0.05) in same direction across all three
+consistent_count = 0
+consistent_pathways = []
+
+for pid in pathway_genes_raw:
+    for direction in ['up', 'down']:
+        sig_all = True
+        for label in ['97', '98', '99']:
+            if pid not in all_ora_results[label].get(direction, {}):
+                sig_all = False
+                break
+            if all_ora_results[label][direction][pid]['padj'] >= 0.05:
+                sig_all = False
+                break
+        if sig_all:
+            consistent_count += 1
+            consistent_pathways.append((pid, direction))
+            res_97_padj = all_ora_results['97'][direction][pid]['padj']
+            res_98_padj = all_ora_results['98'][direction][pid]['padj']
+            res_99_padj = all_ora_results['99'][direction][pid]['padj']
+            print(f"CONSISTENT: {pid} ({direction}): {pathways.get(pid, 'N/A')}")
+            print(f"  padj: 97={res_97_padj:.4e}, 98={res_98_padj:.4e}, 99={res_99_padj:.4e}")
+
+print(f"\nFinal count: {consistent_count}")
+PYEOF

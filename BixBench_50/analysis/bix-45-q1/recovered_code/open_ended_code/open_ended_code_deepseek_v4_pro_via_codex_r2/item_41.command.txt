@@ -1,0 +1,35 @@
+/bin/bash -lc "cd /workspace && python3 - <<'PY'
+from pathlib import Path
+from collections import Counter
+from scipy import stats
+from statistics import median, mean
+
+def old_rcv(path):
+    # replicate phykit <=2.0: concat all record.seq including gaps; denom num_records*aln_len
+    from Bio import AlignIO
+    aln=AlignIO.read(str(path),'fasta')
+    aln_len=aln.get_alignment_length(); num=len(aln)
+    concat=''.join(str(r.seq) for r in aln)
+    total=Counter(concat)
+    avg={c:total[c]/num for c in total}
+    vals=[]
+    for r in aln:
+        rc=Counter(str(r.seq))
+        temp=sum(abs(rc[c]-avg[c]) for c in total)
+        vals.append(temp/(num*aln_len))
+    return sum(vals)
+
+def vals(d):
+    vv={}
+    for p in sorted(Path(d).glob('*.faa.mafft')):
+        vv[p.name[:-len('.faa.mafft')]]=round(old_rcv(p),4)
+    return vv
+A=vals('/workspace/work_animals');F=vals('/workspace/work_fungi')
+print('old n',len(A),len(F),'medA',median(A.values()),'medF',median(F.values()),'meanA',mean(A.values()),'meanF',mean(F.values()))
+print('p all',stats.mannwhitneyu(list(A.values()),list(F.values()),alternative='two-sided'))
+common=set(A)&set(F)
+print('p common',stats.mannwhitneyu(list(A.values()),[F[g] for g in common],alternative='two-sided'))
+# distributions above .25
+for name,V in [('A',A.values()),('F',F.values())]:
+ print(name,'>0.25',sum(v>.25 for v in V)/len(V), 'max',max(V), 'min',min(V))
+PY"

@@ -1,0 +1,124 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+from scipy.stats import fisher_exact, hypergeom
+from statsmodels.stats.multitest import multipletests
+import pickle
+
+# Load data
+res_97 = pd.read_csv("/tmp/analysis/res_97.csv")
+res_98 = pd.read_csv("/tmp/analysis/res_98.csv")
+res_99 = pd.read_csv("/tmp/analysis/res_99.csv")
+
+# Load KEGG data
+with open("/tmp/analysis/kegg_data.pkl", "rb") as f:
+    kegg_data = pickle.load(f)
+pathway_genes_raw = {k: set(v) for k, v in kegg_data["pathway_genes"].items()}
+pathways = kegg_data["pathways"]
+
+def run_ora_hypergeom(res_df, pathway_genes, lfc_threshold=1.5):
+    """Use hypergeometric test directly (scipy implementation)"""
+    all_genes = set(res_df["gene"])
+    all_pw_genes = set()
+    for genes in pathway_genes.values():
+        all_pw_genes.update(genes)
+    universe = all_genes & all_pw_genes
+    N = len(universe)  # total balls
+    
+    de_up = set(res_df[res_df["log2FoldChange"] > lfc_threshold]["gene"]) & universe
+    de_down = set(res_df[res_df["log2FoldChange"] < -lfc_threshold]["gene"]) & universe
+    
+    results = {}
+    for direction, de_genes in [('up', de_up), ('down', de_down)]:
+        K = len(de_genes)  # number of "success" balls
+        
+        for pid, pw_genes in pathway_genes.items():
+            pw_in_u = pw_genes & universe
+            n = len(pw_in_u)  # number of draws
+            if n < 2:
+                continue
+            
+            x = len(pw_in_u & de_genes)  # number of successes drawn
+            if x == 0:
+                continue
+            
+            # P(X >= x) = 1 - P(X <= x-1) = sf(x-1)
+            pval = hypergeom.sf(x - 1, N, K, n)
+            odds_ratio = (x / (K - x + 1e-10)) / ((n - x + 1e-10) / (N - K - n + x + 1e-10))
+            
+            results[(pid, direction)] = {
+                'pvalue': pval,
+                'odds_ratio': odds_ratio if odds_ratio > 0 else float('inf'),
+                'overlap': x,
+                'pathway_size': n,
+                'de_size': K
+            }
+    
+    return results, N, len(de_up), len(de_down)
+
+# Run for each strain
+for label, res_df in [('97', res_97), ('98', res_98), ('99', res_99)]:
+    results, N, n_up, n_down = run_ora_hypergeom(res_df, pathway_genes_raw)
+    
+    # Apply BH correction
+    if len(results) > 0:
+        pvals = [r['pvalue'] for r in results.values()]
+        keys = list(results.keys())
+        _, padjs, _, _ = multipletests(pvals, method='fdr_bh')
+        
+        sig_up = set()
+        sig_down = set()
+        for key, padj in zip(keys, padjs):
+            pid, direction = key
+            results[key]['padj'] = padj
+            if padj < 0.05:
+                if direction == 'up':
+                    sig_up.add(pid)
+                else:
+                    sig_down.add(pid)
+        
+        print(f"\n=== Strain {label} (universe={N}, DE up={n_up}, down={n_down}) ===")
+        print(f"  Sig UP ({len(sig_up)}): {sorted(sig_up)[:5]}...")
+        print(f"  Sig DOWN ({len(sig_down)}): {sorted(sig_down)[:5]}...")
+        
+        # Show the most significant pathways
+        top = sorted(results.items(), key=lambda x: x[1]['pvalue'])[:10]
+        for (pid, direction), res in top:
+            print(f"  {pid} ({direction}): p={res['pvalue']:.4f}, padj={res['padj']:.4f}, overlap={res['overlap']}, pw_size={res['pathway_size']}")
+
+# Run comprehensive analysis to find consistently enriched pathways
+print("\n\n=== CONSISTENT PATHWAYS (padj < 0.05, same direction, all 3 strains) ===")
+all_results = {}
+for label, res_df in [('97', res_97), ('98', res_98), ('99', res_99)]:
+    results, N, n_up, n_down = run_ora_hypergeom(res_df, pathway_genes_raw)
+    all_results[label] = results
+    
+    if len(results) > 0:
+        pvals = [r['pvalue'] for r in results.values()]
+        keys = list(results.keys())
+        _, padjs, _, _ = multipletests(pvals, method='fdr_bh')
+        for key, padj in zip(keys, padjs):
+            results[key]['padj'] = padj
+
+sig_paths = {}
+for label in ['97', '98', '99']:
+    sig_paths[label] = {'up': set(), 'down': set()}
+    for (pid, direction), res in all_results[label].items():
+        if res.get('padj', 1.0) < 0.05:
+            sig_paths[label][direction].add(pid)
+
+consist_up = sig_paths['97']['up'] & sig_paths['98']['up'] & sig_paths['99']['up']
+consist_down = sig_paths['97']['down'] & sig_paths['98']['down'] & sig_paths['99']['down']
+
+print(f"Consistent UP: {len(consist_up)}")
+for pid in sorted(consist_up):
+    print(f"  {pid}: {pathways.get(pid, 'N/A')}")
+
+print(f"Consistent DOWN: {len(consist_down)}")
+for pid in sorted(consist_down):
+    print(f"  {pid}: {pathways.get(pid, 'N/A')}")
+
+total = len(consist_up) + len(consist_down)
+print(f"\nTOTAL: {total}")
+PYEOF

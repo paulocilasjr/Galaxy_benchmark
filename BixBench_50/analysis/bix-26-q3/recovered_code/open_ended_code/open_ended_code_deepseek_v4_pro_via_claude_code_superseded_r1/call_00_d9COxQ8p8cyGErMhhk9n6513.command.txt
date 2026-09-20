@@ -1,0 +1,154 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import requests
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+import csv
+
+# Load gene data
+df = pd.read_csv("/workspace/res_GluFevsGluFePlus.csv")
+
+# Upregulated genes
+up_mask = (df['log2FoldChange'] > 1.5) & (df['padj'] < 0.05)
+up_genes = set(df.loc[up_mask, 'gene'].tolist())
+print(f"Upregulated genes (total): {len(up_genes)}")
+
+# All genes
+all_genes = set(df['gene'].tolist())
+
+# Get KEGG pathway-gene mapping
+url = "http://rest.kegg.jp/link/pau/pathway"
+response = requests.get(url, timeout=60)
+
+pathway_to_genes = {}
+for line in response.text.strip().split('\n'):
+    parts = line.split('\t')
+    if len(parts) == 2:
+        path_id = parts[0].strip().replace('path:', '')
+        gene_id = parts[1].strip().replace('pau:', '')
+        if path_id not in pathway_to_genes:
+            pathway_to_genes[path_id] = set()
+        pathway_to_genes[path_id].add(gene_id)
+
+# Background: genes with KEGG annotations that are in our dataset
+kegg_annotated = set()
+for genes in pathway_to_genes.values():
+    kegg_annotated |= genes
+kegg_annotated = kegg_annotated & all_genes  # Only genes in our dataset
+
+print(f"KEGG-annotated genes in our data: {len(kegg_annotated)}")
+
+# Upregulated genes that have KEGG annotations
+up_kegg = up_genes & kegg_annotated
+print(f"Upregulated with KEGG annotations: {len(up_kegg)}")
+
+# Get pathway names
+url2 = "http://rest.kegg.jp/list/pathway/pau"
+response2 = requests.get(url2, timeout=60)
+pathway_names = {}
+for line in response2.text.strip().split('\n'):
+    parts = line.split('\t')
+    if len(parts) == 2:
+        path_id = parts[0].strip().replace('path:', '')
+        path_name = parts[1].strip()
+        pathway_names[path_id] = path_name
+
+# Find ABC transporters
+abc_pathway_id = None
+for pid, pname in pathway_names.items():
+    if 'ABC transporters' in pname:
+        abc_pathway_id = pid
+        print(f"\nABC transporters pathway: {pid} - {pname}")
+        break
+
+# ABC transporters genes
+abc_genes = pathway_to_genes.get(abc_pathway_id, set())
+abc_genes_in_data = abc_genes & all_genes
+print(f"ABC transporters genes in our data: {len(abc_genes_in_data)}")
+
+# Upregulated genes that are in ABC transporters
+up_in_abc = up_genes & abc_genes_in_data
+print(f"Upregulated genes in ABC transporters: {len(up_in_abc)}")
+print(f"Genes: {sorted(up_in_abc)}")
+
+# Now do full KEGG enrichment analysis
+print("\n--- KEGG Enrichment Analysis ---")
+print(f"Background size: {len(kegg_annotated)}")
+print(f"Significant (upregulated): {len(up_kegg)}")
+
+N = len(kegg_annotated)  # Total background
+n = len(up_kegg)          # Total significant
+
+results = []
+for pid, pathway_genes in pathway_to_genes.items():
+    pw_in_data = pathway_genes & kegg_annotated
+    M = len(pw_in_data)  # Genes in pathway
+    
+    if M < 2:  # Skip pathways with too few genes
+        continue
+    
+    # Overlap
+    overlap = up_kegg & pw_in_data
+    k = len(overlap)  # Significant genes in pathway
+    
+    if k == 0:
+        continue
+    
+    # 2x2 contingency table
+    #                In pathway    Not in pathway
+    # Significant       k              n - k
+    # Not significant   M - k          N - M - (n - k)
+    
+    a = k
+    b = M - k
+    c = n - k
+    d = N - M - (n - k)
+    
+    odds_ratio, p_value = fisher_exact([[a, b], [c, d]], alternative='greater')
+    
+    results.append({
+        'pathway_id': pid,
+        'pathway_name': pathway_names.get(pid, 'Unknown'),
+        'pathway_size': M,
+        'overlap': k,
+        'p_value': p_value,
+        'odds_ratio': odds_ratio,
+        'genes': sorted(overlap)
+    })
+
+# Multiple testing correction
+results_df = pd.DataFrame(results)
+if len(results_df) > 0:
+    reject, pvals_corrected, _, _ = multipletests(results_df['p_value'].values, method='fdr_bh')
+    results_df['padj'] = pvals_corrected
+    results_df = results_df.sort_values('padj')
+    
+    # Show top results
+    print("\nTop 20 enriched pathways:")
+    for i, row in results_df.head(20).iterrows():
+        print(f"  {row['pathway_id']}: {row['pathway_name']} - {row['overlap']}/{row['pathway_size']} genes, p={row['p_value']:.2e}, padj={row['padj']:.2e}")
+    
+    # Show ABC transporters specifically
+    abc_row = results_df[results_df['pathway_id'] == abc_pathway_id]
+    if len(abc_row) > 0:
+        row = abc_row.iloc[0]
+        print(f"\n--- ABC transporters ---")
+        print(f"Pathway ID: {row['pathway_id']}")
+        print(f"Pathway name: {row['pathway_name']}")
+        print(f"Pathway size: {row['pathway_size']}")
+        print(f"Overlap (upregulated genes): {row['overlap']}")
+        print(f"p-value: {row['p_value']:.6e}")
+        print(f"Adjusted p-value: {row['padj']:.6e}")
+        print(f"Genes: {row['genes']}")
+    else:
+        print(f"\nABC transporters not found in enrichment results (no overlap)")
+        # Check if there are any upregulated genes in this pathway
+        abc_in_data = pathway_to_genes.get(abc_pathway_id, set()) & kegg_annotated
+        abc_up = up_kegg & abc_in_data
+        print(f"ABC pathway genes in data: {len(abc_in_data)}")
+        print(f"ABC pathway genes upregulated: {len(abc_up)}")
+        if len(abc_up) > 0:
+            print(f"Genes: {abc_up}")
+
+PYEOF

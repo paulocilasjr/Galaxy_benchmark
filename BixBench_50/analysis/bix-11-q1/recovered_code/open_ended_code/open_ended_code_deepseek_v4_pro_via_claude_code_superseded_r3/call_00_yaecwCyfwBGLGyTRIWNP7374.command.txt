@@ -1,0 +1,48 @@
+/workspace/venv/bin/python3 -c "
+import zipfile, tempfile, os, re, statistics
+
+def extract_treeness_from_iqtree(zip_path, label):
+    results = []
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        iqtree_files = sorted([f for f in zf.namelist() if f.endswith('.iqtree')])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for tf in iqtree_files:
+                ortholog_id = os.path.basename(tf).split('.')[0]
+                try:
+                    zf.extract(tf, tmpdir)
+                    path = os.path.join(tmpdir, tf)
+                    with open(path, 'r') as f:
+                        content = f.read()
+                    
+                    # Extract: \"Sum of internal branch lengths: X.XXXX (Y.YYYY% of tree length)\"
+                    # We want the percentage Y -> convert to proportion
+                    match = re.search(r'Sum of internal branch lengths: [\d.]+ \(([\d.]+)% of tree length\)', content)
+                    if match:
+                        pct = float(match.group(1))
+                        treeness = pct / 100.0
+                        results.append(treeness)
+                    else:
+                        # For trees that failed or didn't have this line
+                        # Check if it's an error case
+                        if 'Alignment must have at least 3 sequences' in content:
+                            continue  # skip failed trees
+                        # Check for other errors
+                        if 'ERROR' in content[:500]:
+                            continue
+                        
+                except Exception as e:
+                    pass
+    
+    med = statistics.median(results) if results else 0
+    print(f'{label}: N={len(results)}, median treeness={med:.8f}')
+    return med, results
+
+animal_med, animal_vals = extract_treeness_from_iqtree('/workspace/inputs/scogs_animals.zip', 'ANIMALS')
+fungi_med, fungi_vals = extract_treeness_from_iqtree('/workspace/inputs/scogs_fungi.zip', 'FUNGI')
+print(f'Diff (fungi-animals): {fungi_med - animal_med:.8f}')
+
+# Show distribution details
+print()
+print(f'Animal: min={min(animal_vals):.6f}, max={max(animal_vals):.6f}, zeros={sum(1 for v in animal_vals if v==0)}')
+print(f'Fungi:  min={min(fungi_vals):.6f}, max={max(fungi_vals):.6f}, zeros={sum(1 for v in fungi_vals if v==0)}')
+" 2>&1

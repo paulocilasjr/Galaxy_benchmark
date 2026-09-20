@@ -1,0 +1,32 @@
+/bin/bash -lc "PYTHONPATH=/workspace/tmp/pylib python -u - <<'PY'
+import pandas as pd, traceback, sys
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+try:
+ counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+ meta = pd.read_csv('inputs/sample_layout.csv')
+ meta['count_id'] = meta['SampleID'].str.replace('-', '_', regex=False)
+ meta2 = meta[meta['Group'].isin(['DMSO','CBD_IC50'])].set_index('count_id')
+ meta2 = meta2.loc[counts.columns.intersection(meta2.index)]
+ meta2['condition'] = pd.Categorical(meta2['Group'], categories=['DMSO','CBD_IC50'])
+ cts = counts.loc[:, meta2.index].astype('int64')
+ cts = cts.loc[cts.sum(axis=1)>0]
+ print('prepared', cts.shape, flush=True)
+ dds = DeseqDataSet(counts=cts.T, metadata=meta2[['condition']], design='~condition', refit_cooks=True, n_cpus=1, quiet=False)
+ print('dds made', flush=True)
+ dds.deseq2()
+ print('fit done', flush=True)
+ stat = DeseqStats(dds, contrast=['condition','CBD_IC50','DMSO'], alpha=0.05, cooks_filter=True, independent_filter=True, quiet=False, n_cpus=1)
+ print('stats made', flush=True)
+ stat.summary()
+ print('summary done', flush=True)
+ r = stat.results_df
+ print('result cols', r.columns.tolist(), flush=True)
+ print('n nonNA padj', r.padj.notna().sum(), 'sig', ((r.padj<0.05)&(r.log2FoldChange.abs()>0.5)).sum(), flush=True)
+ sig = r[(r.padj<0.05)&(r.log2FoldChange.abs()>0.5)]
+ print('up', (sig.log2FoldChange>0).sum(), 'down', (sig.log2FoldChange<0).sum(), flush=True)
+ print('top up\\n',sig[sig.log2FoldChange>0].sort_values('padj').head(20)[['log2FoldChange','pvalue','padj']].to_string(), flush=True)
+ print('top down\\n',sig[sig.log2FoldChange<0].sort_values('padj').head(20)[['log2FoldChange','pvalue','padj']].to_string(), flush=True)
+except Exception:
+ traceback.print_exc(); sys.exit(1)
+PY"

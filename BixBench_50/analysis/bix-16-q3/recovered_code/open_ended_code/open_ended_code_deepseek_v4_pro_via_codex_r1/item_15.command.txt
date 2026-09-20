@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, re
+from scipy.stats import rankdata
+
+t=time.time()
+eff = pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0)
+print('eff read', eff.shape, time.time()-t, 'anyna', eff.isna().any().any())
+t=time.time()
+expr = pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0)
+print('expr read', expr.shape, time.time()-t, 'anyna', expr.isna().any().any())
+# align samples
+common = eff.index.intersection(expr.index)
+print('common samples',len(common))
+eff = eff.loc[common]; expr = expr.loc[common]
+# match by exact header label
+genes = eff.columns.intersection(expr.columns)
+print('exact common genes',len(genes))
+E = eff[genes].to_numpy(dtype=np.float64)
+X = expr[genes].to_numpy(dtype=np.float64)
+print(E.shape, X.shape, 'nan count',np.isnan(E).sum(),np.isnan(X).sum())
+# essentiality transform
+S = -E
+# rank columns average ties
+R = np.empty_like(S)
+for j in range(S.shape[1]):
+    R[:,j] = rankdata(S[:,j])
+Q = np.empty_like(X)
+for j in range(X.shape[1]):
+    Q[:,j] = rankdata(X[:,j])
+# pearson on ranks
+Rc = R - R.mean(axis=0, keepdims=True)
+Qc = Q - Q.mean(axis=0, keepdims=True)
+rn = np.sqrt((Rc**2).sum(axis=0))
+qn = np.sqrt((Qc**2).sum(axis=0))
+rho = (Rc*Qc).sum(axis=0)/(rn*qn)
+print('rho range',rho.min(),rho.max(),'count >=.6',int((rho>=0.6).sum()),'count <=-.6',int((rho<=-0.6).sum()))
+# top/bottom
+idx=np.argsort(rho)
+for i in list(idx[:10])+list(idx[-10:]): print(genes[i], rho[i])
+print('time total', time.time()-t)
+PY"

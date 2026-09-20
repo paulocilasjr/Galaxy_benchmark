@@ -1,0 +1,90 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, statistics, math, re
+
+# Minimal recursive Newick parser. Each node is [children, branch_length_to_parent].
+def parse_newick(s):
+    i=0; L=len(s)
+    def skip_comment():
+        nonlocal i
+        while i<L and s[i].isspace(): i+=1
+        while i<L and s[i]=='[':
+            depth=1; i+=1
+            while i<L and depth:
+                if s[i]=='[': depth+=1
+                elif s[i]==']': depth-=1
+                i+=1
+            while i<L and s[i].isspace(): i+=1
+    def label():
+        nonlocal i
+        skip_comment()
+        if i<L and s[i] in \"'\\\"\":
+            q=s[i]; i+=1; start=i
+            while i<L and s[i]"'!=q: i+=1
+            out=s[start:i]; i+=1
+            return out
+        start=i
+        while i<L and s[i] not in '"':,();[]' and not s[i].isspace(): i+=1
+        return s[start:i]
+    def length():
+        nonlocal i
+        skip_comment()
+        if i<L and s[i]==':':
+            i+=1; skip_comment(); start=i
+            while i<L and s[i] not in ',();[]' and not s[i].isspace(): i+=1
+            return float(s[start:i])
+        return 0.0
+    def node():
+        nonlocal i
+        skip_comment()
+        children=[]
+        if i<L and s[i]=='(':
+            i+=1
+            while True:
+                children.append(node()); skip_comment()
+                if s[i]==',': i+=1; continue
+                if s[i]==')': i+=1; break
+                raise ValueError((i,s[max(0,i-20):i+20]))
+            label()  # optional internal node label/support
+        else:
+            if not label(): raise ValueError(('missing tip',i))
+        bl=length(); skip_comment()
+        return [children,bl]
+    root=node(); skip_comment()
+    if i<L and s[i]==';': i+=1
+    if s[i:].strip(): raise ValueError(('trailing',s[i:]))
+    return root
+
+def mean_patristic(root):
+    def count(n):
+        if not n[0]: return 1
+        return sum(count(c) for c in n[0])
+    N=count(root)
+    total=0.0
+    def walk(n):
+        nonlocal total
+        k=count(n)
+        if k<N: total += n[1]*k*(N-k)
+        for c in n[0]: walk(c)
+    walk(root)
+    return total/math.comb(N,2),N
+
+results={}
+for group in ('animals','fungi'):
+    vals=[]; tip_counts={}; bad=[]
+    with zipfile.ZipFile(f'inputs/scogs_{group}.zip') as z:
+        names=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        for name in names:
+            try:
+                x,n=mean_patristic(parse_newick(z.read(name).decode()))
+                if not math.isfinite(x): raise ValueError(x)
+                vals.append(x); tip_counts[n]=tip_counts.get(n,0)+1
+            except Exception as e: bad.append((name,repr(e)))
+    med=statistics.median(vals); results[group]=med
+    print(group,'selected=',len(names),'processed=',len(vals),'failed=',len(bad),'tip_counts=',tip_counts)
+    print('median=',format(med,'.17g'),'mean=',format(statistics.mean(vals),'.17g'),'range=',(min(vals),max(vals)))
+    sv=sorted(vals); m=len(sv)//2
+    print('central=',[format(v,'.17g') for v in sv[max(0,m-2):m+2]])
+    if bad: print('bad=',bad[:3])
+print('fungi/animals=',format(results['fungi']/results['animals'],'.17g'))
+print('animals/fungi=',format(results['animals']/results['fungi'],'.17g'))
+PY"

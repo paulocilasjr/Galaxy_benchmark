@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, warnings
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv')
+gene_col = raw.columns[0]
+counts = raw.set_index(gene_col).T
+counts.index.name = None
+# Explicitly define WL as reference and KL as target; absolute LFC means direction does not affect final foreground.
+metadata = pd.DataFrame({'condition': pd.Categorical(['KL']*3 + ['WL']*3, categories=['WL','KL'])}, index=counts.index)
+print(counts.shape, metadata)
+print('start')
+t=time.time()
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', quiet=True, n_cpus=1)
+dds.deseq2()
+print('dds done',time.time()-t)
+print('design', dds.design_matrix)
+print('nonzero genes', len(dds.non_zero_genes), 'filtered', dds.filtered_genes)
+stat = DeseqStats(dds, contrast=['condition','KL','WL'], alpha=0.05, quiet=True, n_cpus=1)
+stat.summary()
+print('stats done',time.time()-t)
+print(stat.results_df.head())
+print('columns',stat.results_df.columns.tolist())
+# inspect coeff names
+print('LFC columns',stat.LFC.columns.tolist())
+stat.lfc_shrink(coeff='condition_KL_vs_WL', adapt=True)
+res = stat.results_df.copy()
+print(res.head())
+print('ranges',res[['baseMean','log2FoldChange','pvalue','padj']].describe())
+sel = res['pvalue'].lt(0.05) & res['log2FoldChange'].abs().gt(1) & res['baseMean'].gt(10)
+print('selected',sel.sum())
+print('p only',res['pvalue'].lt(.05).sum(),'lfc',res['log2FoldChange'].abs().gt(1).sum(),'base',res['baseMean'].gt(10).sum())
+print('top selected')
+print(res.loc[sel].sort_values('pvalue').head(20).to_string())
+res.to_csv('/tmp/pydeseq2_res.csv')
+PY"

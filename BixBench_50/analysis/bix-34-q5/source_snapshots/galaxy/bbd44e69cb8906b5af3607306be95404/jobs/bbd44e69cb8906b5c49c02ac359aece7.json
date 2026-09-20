@@ -1,0 +1,71 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5c49c02ac359aece7",
+  "history_id": "bbd44e69cb8906b5af3607306be95404",
+  "tool_id": "patristic-median-ratio-biocontainers-v1",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-02T12:44:28.063993",
+  "update_time": "2026-08-02T12:50:55.182175",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython -c 'import Bio; assert Bio.__version__ == \"1.84\", Bio.__version__'\npython - \"/jetstream2/scratch/main/jobs/78867885/inputs/dataset_08ec74c0-a79d-4683-b47a-f894a91d31f7.dat\" \"/jetstream2/scratch/main/jobs/78867885/inputs/dataset_feeb634d-25aa-4b7f-b5e9-96db97e1de1f.dat\" <<'PY'\nimport csv\nimport io\nimport itertools\nimport math\nimport statistics\nimport sys\nimport zipfile\n\nfrom Bio import Phylo\n\nanimals_path, fungi_path = sys.argv[1], sys.argv[2]\n\ndef number(value):\n    return format(value, \".17g\")\n\ndef analyze_archive(path, group):\n    rows = []\n    with zipfile.ZipFile(path, \"r\") as archive:\n        members = sorted(\n            info for info in archive.infolist()\n            if not info.is_dir() and info.filename.lower().endswith(\".treefile\")\n        )\n        for info in members:\n            member = info.filename\n            try:\n                raw = archive.read(info)\n                text = raw.decode(\"utf-8\")\n                tree = Phylo.read(io.StringIO(text), \"newick\")\n                terminals = tree.get_terminals()\n                if len(terminals) < 2:\n                    raise ValueError(\"fewer than two terminal taxa\")\n                for clade in tree.find_clades(order=\"preorder\"):\n                    if clade is tree.root:\n                        continue\n                    branch = clade.branch_length\n                    if branch is None:\n                        raise ValueError(\"missing non-root branch length\")\n                    if not math.isfinite(branch) or branch < 0:\n                        raise ValueError(\"invalid non-root branch length\")\n                distances = [\n                    tree.distance(left, right)\n                    for left, right in itertools.combinations(terminals, 2)\n                ]\n                if not distances or any(\n                    not math.isfinite(distance) or distance < 0\n                    for distance in distances\n                ):\n                    raise ValueError(\"invalid patristic distance\")\n                mean_distance = statistics.fmean(distances)\n                rows.append({\n                    \"group\": group,\n                    \"member\": member,\n                    \"n_taxa\": len(terminals),\n                    \"n_pairs\": len(distances),\n                    \"mean\": mean_distance,\n                    \"status\": \"ok\",\n                    \"error\": \"\",\n                })\n            except Exception as exc:\n                rows.append({\n                    \"group\": group,\n                    \"member\": member,\n                    \"n_taxa\": \"\",\n                    \"n_pairs\": \"\",\n                    \"mean\": None,\n                    \"status\": \"failed\",\n                    \"error\": str(exc).replace(\"\\t\", \" \").replace(\"\\n\", \" \"),\n                })\n    return rows\n\nall_rows = analyze_archive(animals_path, \"Animals\") + analyze_archive(fungi_path, \"Fungi\")\n\nwith open(\"per_tree.tsv\", \"w\", newline=\"\", encoding=\"utf-8\") as handle:\n    writer = csv.writer(handle, delimiter=\"\\t\", lineterminator=\"\\n\")\n    writer.writerow([\"group\", \"member\", \"n_taxa\", \"n_pairs\", \"mean_patristic_distance\", \"status\", \"error\"])\n    for row in all_rows:\n        writer.writerow([\n            row[\"group\"],\n            row[\"member\"],\n            row[\"n_taxa\"],\n            row[\"n_pairs\"],\n            \"\" if row[\"mean\"] is None else number(row[\"mean\"]),\n            row[\"status\"],\n            row[\"error\"],\n        ])\n\nsummary = {}\nfor group in (\"Animals\", \"Fungi\"):\n    group_rows = [row for row in all_rows if row[\"group\"] == group]\n    valid = [row[\"mean\"] for row in group_rows if row[\"status\"] == \"ok\"]\n    failed = sum(row[\"status\"] != \"ok\" for row in group_rows)\n    if not valid:\n        raise RuntimeError(\"no valid tree metrics for \" + group)\n    summary[group] = {\n        \"selected\": len(group_rows),\n        \"valid\": len(valid),\n        \"failed\": failed,\n        \"median\": statistics.median(valid),\n    }\n\nratio = summary[\"Fungi\"][\"median\"] / summary[\"Animals\"][\"median\"]\n\nwith open(\"summary.tsv\", \"w\", newline=\"\", encoding=\"utf-8\") as handle:\n    writer = csv.writer(handle, delimiter=\"\\t\", lineterminator=\"\\n\")\n    writer.writerow([\"group\", \"selected_treefiles\", \"valid_treefiles\", \"failed_treefiles\", \"median_mean_patristic_distance\"])\n    for group in (\"Animals\", \"Fungi\"):\n        item = summary[group]\n        writer.writerow([group, item[\"selected\"], item[\"valid\"], item[\"failed\"], number(item[\"median\"])])\n    writer.writerow([\"Fungi_over_Animals\", \"\", \"\", \"\", number(ratio)])\n\nwith open(\"answer.txt\", \"w\", encoding=\"utf-8\") as handle:\n    handle.write(number(ratio) + \"\\n\")\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "animals_zip": {
+      "id": "f9cad7b01a47213570ce0d1410a0bc9e",
+      "src": "hda",
+      "uuid": "08ec74c0-a79d-4683-b47a-f894a91d31f7"
+    },
+    "fungi_zip": {
+      "id": "f9cad7b01a47213516ea93715954013d",
+      "src": "hda",
+      "uuid": "feeb634d-25aa-4b7f-b5e9-96db97e1de1f"
+    }
+  },
+  "outputs": {
+    "per_tree": {
+      "id": "f9cad7b01a47213512d773f2889c0f57",
+      "src": "hda",
+      "uuid": "bde5334e-9d4e-4f98-9914-eae13e6d3b3d"
+    },
+    "summary": {
+      "id": "f9cad7b01a4721350432c03e6d8134b4",
+      "src": "hda",
+      "uuid": "767af30b-4706-4504-9030-a3cb9012eb91"
+    },
+    "answer": {
+      "id": "f9cad7b01a472135dd0e97f04c74f10e",
+      "src": "hda",
+      "uuid": "d672a838-c951-46f2-a8ea-17b46d906ac1"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 71, in <module>\n  File \"<stdin>\", line 19, in analyze_archive\nTypeError: '<' not supported between instances of 'ZipInfo' and 'ZipInfo'\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 71, in <module>\n  File \"<stdin>\", line 19, in analyze_archive\nTypeError: '<' not supported between instances of 'ZipInfo' and 'ZipInfo'\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

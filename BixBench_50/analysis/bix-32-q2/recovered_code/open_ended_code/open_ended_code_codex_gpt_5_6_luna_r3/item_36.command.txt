@@ -1,0 +1,38 @@
+/bin/bash -lc "Rscript - <<'RS'
+paths <- c(\"/workspace/inputs/res_1vs97.rds\", \"/workspace/inputs/res_1vs98.rds\", \"/workspace/inputs/res_1vs99.rds\")
+res <- lapply(paths, function(p) {
+  x <- readRDS(p)
+  ld <- attr(x, \"listData\")
+  data.frame(gene=attr(x, \"rownames\"), lfc=ld"'$log2FoldChange, stringsAsFactors=FALSE)
+})
+stopifnot(length(unique(vapply(res, nrow, integer(1)))) == 1L)
+stopifnot(length(Reduce(intersect, lapply(res, `[[`, "gene"))) == nrow(res[[1]]))
+links <- read.delim("https://rest.kegg.jp/link/pathway/pau", header=FALSE, sep="'"\\t\", quote=\"\", stringsAsFactors=FALSE)
+colnames(links) <- c(\"gene\", \"pathway\")
+links"'$gene <- sub("''^pau:", "", links$gene)
+links$pathway <- sub("''^path:", "", links$pathway)
+pathgenes <- lapply(split(links$gene, links$pathway), unique)
+universe <- intersect(res[[1]]$gene, unique(links$gene))
+stopifnot(length(universe) == 2041L)
+ora <- function(fg) {
+  sets <- lapply(pathgenes, intersect, y=universe)
+  gs.size <- lengths(sets)
+  hits <- vapply(sets, function(s) length(intersect(s, fg)), integer(1))
+  tested <- gs.size >= 10L & gs.size <= 500L & hits > 0L
+  p <- rep(NA_real_, length(sets))
+  p[tested] <- phyper(hits[tested] - 1L, gs.size[tested], length(universe) - gs.size[tested], length(intersect(fg, universe)), lower.tail=FALSE)
+  padj <- rep(NA_real_, length(sets))
+  padj[tested] <- p.adjust(p[tested], method="BH")
+  names(sets)[!is.na(padj) & padj <= 0.05]
+}
+sig <- lapply(res, function(d) {
+  list(pos=ora(d$gene[d$lfc > 1.5]), neg=ora(d$gene[d$lfc < -1.5]))
+})
+for (sgn in c("pos", "neg")) {
+  z <- lapply(sig, `[[`, sgn)
+  cat(sgn, paste(lengths(z), collapse=","), "intersection", length(Reduce(intersect, z)), "'"\\n\")
+}
+answer <- length(unique(c(Reduce(intersect, lapply(sig, "'`[[`, "pos")), Reduce(intersect, lapply(sig, `[[`, "neg")))))
+stopifnot(answer == 0L)
+cat("ANSWER", answer, "'"\\n\")
+RS"

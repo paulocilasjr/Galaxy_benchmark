@@ -1,0 +1,54 @@
+/bin/bash -lc "python - <<'PY'
+from collections import Counter
+from openpyxl import load_workbook
+wb=load_workbook('/workspace/inputs/data.xlsx', data_only=True, read_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+# read only rows with both Efficacy and BMI populated, header positions known
+obs=[]
+for row in rows[1:]:
+    eff=row[2] if len(row)>2 else None
+    bmi=row[10] if len(row)>10 else None
+    if eff in ('PR','PD','SD') and isinstance(bmi,(int,float)):
+        obs.append((eff,float(bmi),row[0],row[1]))
+print('n',len(obs),'eff',Counter(o[0] for o in obs),'groups',Counter(o[3] for o in obs))
+print('cross',Counter((o[3],o[0]) for o in obs))
+print('BMI min max mean',min(o[1] for o in obs),max(o[1] for o in obs),sum(o[1] for o in obs)/len(obs))
+# Newton on x centered to improve conditioning; stable loglik.
+x=[o[1] for o in obs]; y=[1 if o[0]=='PR' else 0 for o in obs]
+xc=sum(x)/len(x)
+z=[v-xc for v in x]
+
+def sigmoid(t):
+    if t>=0:
+        e=__import__('math').exp(-t); return 1/(1+e)
+    e=__import__('math').exp(t); return e/(1+e)
+
+def log1pexp(t):
+    import math
+    if t>0: return t+math.log1p(math.exp(-t))
+    return math.log1p(math.exp(t))
+
+def ll(b0,b1):
+    return sum(yi*(b0+b1*zi)-log1pexp(b0+b1*zi) for yi,zi in zip(y,z))
+# Newton solve score=0; Hessian negative
+b0=0.; b1=0.
+import math
+for it in range(100):
+    ps=[sigmoid(b0+b1*zi) for zi in z]
+    s0=sum(yi-p for yi,p in zip(y,ps)); s1=sum((yi-p)*zi for yi,p,zi in zip(y,ps,z))
+    w=[p*(1-p) for p in ps]
+    a=sum(w); bb=sum(w*zi for w,zi in zip(w,z)); c=sum(w*zi*zi for w,zi in zip(w,z))
+    det=a*c-bb*bb
+    # inv Fisher * score (Newton b_new=b+ I"'^-1 score)
+    d0=(c*s0-bb*s1)/det; d1=(-bb*s0+a*s1)/det
+    b0 += d0; b1 += d1
+    print(it,b0,b1,s0,s1) if it<3 else None
+    if max(abs(d0),abs(d1))<1e-14: break
+print('"'iterations',it+1)
+print('center',xc,'b0',b0,'b1',b1,'uncentered intercept',b0-b1*xc)
+L=ll(b0,b1)
+print('logLik',format(L,'.17g'),'AIC',format(-2*L+2*2,'.17g'))
+# Direct numeric details
+print('nobs',len(y),'k',2,'pos',sum(y),'neg',len(y)-sum(y))
+PY"

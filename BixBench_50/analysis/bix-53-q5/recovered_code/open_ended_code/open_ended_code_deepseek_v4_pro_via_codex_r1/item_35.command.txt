@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, mygene, gseapy, json, warnings, os, time
+warnings.filterwarnings('ignore')
+res=pd.read_csv('/workspace/tmp/pydeseq2_results.csv',index_col=0)
+mask=(res.pvalue<0.05)&(res.baseMean>10)&(res.log2FoldChange.abs()>1)
+genes=res.index[mask].tolist()
+mg=mygene.MyGeneInfo()
+out=mg.querymany(genes, scopes='ensembl.gene', fields='symbol', species='mouse', verbose=False)
+sym=[]
+missing=[]
+for g in genes:
+ rs=[r for r in out if r.get('query')==g and 'symbol' in r]
+ if rs:
+  sym.append(rs[0]['symbol'])
+ else:
+  missing.append(g)
+# uppercase and dedupe preserving order
+uniq=[]
+seen=set()
+for s in sym:
+ u=s.upper()
+ if u not in seen:
+  seen.add(u); uniq.append(u)
+print('n input genes', len(genes), 'mapped', len(sym), 'missing', missing, 'unique symbols', len(uniq))
+# save gene list file
+with open('/workspace/tmp/deg_symbols.txt','w') as f:
+ f.write('\\n'.join(uniq))
+print('first symbols', uniq[:20])
+# run gseapy enrichr
+start=time.time()
+enr = gseapy.enrichr(gene_list=uniq, gene_sets='WikiPathways_2019_Mouse', organism='Mouse', outdir=None, no_plot=True, verbose=True)
+print('elapsed', time.time()-start)
+print(type(enr.results), enr.results.shape)
+print(enr.results.columns.tolist())
+print(enr.results.head(30).to_string())
+enr.results.to_csv('/workspace/tmp/enrichr_wikipathways.csv', index=False)
+print('saved')
+PY"

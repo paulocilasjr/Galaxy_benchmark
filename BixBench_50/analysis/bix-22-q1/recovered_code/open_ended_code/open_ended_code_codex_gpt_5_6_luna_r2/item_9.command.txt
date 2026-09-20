@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+base='inputs'
+celltypes=['CD4','CD8','CD14','CD19']
+with open(base+'/Sample_annotated_Zenodo.csv', newline='') as f:
+    ann=list(csv.DictReader(f))
+ann_by_sample={r['sample']:r for r in ann}
+length={}; coding=set()
+with open(base+'/GeneMetaInfo_Zenodo.csv', newline='') as f:
+    for r in csv.DictReader(f):
+        g=r['']; length[g]=float(r['Length'])
+        if r['gene_biotype']=='protein_coding': coding.add(g)
+sums={ct:[] for ct in celltypes}; lengths=[]; ngenes=0
+with open(base+'/BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    rd=csv.reader(f); header=next(rd)
+    # Match annotation by sample name and retain count-file order.
+    cols={ct:[i for i,s in enumerate(header[1:]) if ann_by_sample[s]['celltype']==ct] for ct in celltypes}
+    for row in rd:
+        g=row[0]
+        if g not in coding: continue
+        ngenes+=1; lengths.append(length[g]); vals=row[1:]
+        for ct,idxs in cols.items():
+            sums[ct].append(sum(float(vals[i]) for i in idxs))
+
+def pearson(x,y):
+    xm=math.fsum(x)/len(x); ym=math.fsum(y)/len(y)
+    xx=math.fsum((a-xm)*(a-xm) for a in x)
+    yy=math.fsum((b-ym)*(b-ym) for b in y)
+    xy=math.fsum((a-xm)*(b-ym) for a,b in zip(x,y))
+    return xy/math.sqrt(xx*yy)
+print('celltype sample counts=',{ct:len(v) for ct,v in cols.items()})
+print('coding rows in counts=',ngenes)
+results={}
+for ct in celltypes:
+    means=[s/len(cols[ct]) for s in sums[ct]]
+    r=pearson(lengths,means); results[ct]=r
+    print(ct, 'r=',repr(r),'abs=',repr(abs(r)), 'mean range=',(min(means),max(means)))
+print('weakest=',min(results,key=lambda k:abs(results[k])))
+PY"

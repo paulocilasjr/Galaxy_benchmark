@@ -1,0 +1,51 @@
+/bin/bash -lc "cat > /workspace/compare_methods.py <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+import gseapy
+base='/workspace/inputs'
+c=pd.read_csv(base+'/counts_raw_unfiltered.csv',index_col=0)
+lay=pd.read_csv(base+'/sample_layout.csv'); lay['col']=lay.SampleID.str.replace('-','_',regex=False)
+ctl=lay.loc[lay.Group=='DMSO','col']; trt=lay.loc[lay.Group=='Cisplatin_IC50_CBD_IC50','col']
+cc=c[list(ctl)+list(trt)]
+m=pd.read_csv(base+'/ensg_to_gene_name.tsv',sep='\\t'); gene=dict(zip(m.ENSG,m.gene_name))
+lib=gseapy.get_library(name='Reactome_2022', organism='Human'); path=set(lib[[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes')][0]])
+# DESeq2 ratios using outputs saved? rerun not. approximate methods.
+def result(name, lfc, p, basefilter=None):
+ p=np.asarray(p,float); lfc=np.asarray(lfc,float)
+ q=np.full(len(p),np.nan); ok=np.isfinite(p)
+ q[ok]=multipletests(p[ok],method='fdr_bh')[1]
+ # For DESeq2-like filtering just all tested with nonzero total
+ ok2=ok & (q<.05) & (np.abs(lfc)>=.5)
+ syms=[gene.get(x) for x in cc.index[ok2]]
+ ov=sorted(set(s for s in syms if s in path))
+ print(name,'DEGs',sum(ok2),'overlap',len(ov),'/',len(path),ov)
+ # print target status
+ for x in path:
+  ix=[i for i,g in enumerate(syms) if g==x]
+ # target p q
+ print(pd.DataFrame({'id':cc.index,'gene':[gene.get(x) for x in cc.index],'lfc':lfc,'p':p,'q':q}) .query('gene in @path').sort_values('gene').to_string(index=False))
+
+# cpm normalized
+libsize=cc.sum(axis=0).values
+norm=cc.values/libsize*1e6
+for transform in ['logcpm','lognorm','vst?']:
+ if transform=='logcpm': z=np.log2(norm+0.5)
+ elif transform=='lognorm': z=np.log2(norm+1)
+ else: continue
+ # Welch t
+ t,p=stats.ttest_ind(z[:,:3],z[:,3:],axis=1,equal_var=False,nan_policy='omit')
+ lfc=z[:,3:].mean(1)-z[:,:3].mean(1)
+ result(transform,lfc,p)
+ # student equal variance
+ t,p=stats.ttest_ind(z[:,:3],z[:,3:],axis=1,equal_var=True,nan_policy='omit')
+ result(transform+' equal',lfc,p)
+# raw counts unnormalized t test maybe
+for trans,z in [('raw',cc.values),('lograw',np.log2(cc.values+1))]:
+ t,p=stats.ttest_ind(z[:,:3],z[:,3:],axis=1,equal_var=False,nan_policy='omit')
+ lfc=z[:,3:].mean(1)-z[:,:3].mean(1)
+ # raw diff not log, calculate proper mean normalized log fold
+ if trans=='raw': lfc=np.log2((norm[:,3:].mean(1)+.5)/(norm[:,:3].mean(1)+.5))
+ result(trans,lfc,p)
+PY
+python /workspace/compare_methods.py"

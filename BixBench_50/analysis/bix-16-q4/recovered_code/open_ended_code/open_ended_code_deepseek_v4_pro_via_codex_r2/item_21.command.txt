@@ -1,0 +1,43 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.stats as stats, time
+T=time.time()
+ch=pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0); eh=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0)
+common=[c for c in ch.columns[1:] if c in eh.columns[1:]]; dt={c:np.float32 for c in common}
+cd=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=[ch.columns[0]]+common, index_col=0, dtype=dt)
+ed=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[eh.columns[0]]+common, index_col=0, dtype=dt)
+ids=sorted(set(cd.index)&set(ed.index)); cd=cd.loc[ids]; ed=ed.loc[ids]
+# vectorized
+re=cd.rank(axis=0, method='average', na_option='keep').to_numpy(dtype=np.float64)
+rx=ed.rank(axis=0, method='average', na_option='keep').to_numpy(dtype=np.float64)
+valid=~(np.isnan(re)|np.isnan(rx)); n=valid.sum(axis=0,dtype=np.float64)
+def mc(a): return np.where(valid,a,0.0)
+sx=mc(re).sum(axis=0); sy=mc(rx).sum(axis=0); sxx=mc(re*re).sum(axis=0); syy=mc(rx*rx).sum(axis=0); sxy=mc(re*rx).sum(axis=0)
+mx=sx/n; my=sy/n; cov=sxy-n*mx*my; varx=sxx-n*mx*mx; vary=syy-n*my*my
+den=np.sqrt(np.maximum(varx*vary,0)); rho=np.clip(cov/den,-1,1); df=n-2
+t=np.sqrt(np.maximum(df,0))*rho/np.sqrt(np.maximum(1-rho*rho,np.finfo(float).tiny)); pv=2*stats.t.sf(np.abs(t),df)
+# loop
+pl=np.empty(len(common)); rhl=np.empty(len(common));
+for i in range(len(common)):
+    r, pp=stats.spearmanr(cd.iloc[:,i].to_numpy(), ed.iloc[:,i].to_numpy(), nan_policy='omit')
+    rhl[i]=r; pl[i]=pp
+diff=np.abs(pv-pl); rel=diff/np.maximum(pl,1e-300)
+print('max abs p diff',diff.max(),'at',diff.argmax(),'pv,pl',pv[diff.argmax()],pl[diff.argmax()])
+print('max rel',rel.max(),'at',rel.argmax(),'pv,pl',pv[rel.argmax()],pl[rel.argmax()])
+print('rho max diff',np.abs(rho-rhl).max(),'at',np.abs(rho-rhl).argmax(),rho[np.abs(rho-rhl).argmax()],rhl[np.abs(rho-rhl).argmax()])
+# BH both
+def bh(p):
+    m=p.size; order=np.argsort(p,kind='mergesort'); rank=np.empty(m); rank[order]=np.arange(1,m+1); q=np.empty(m); q[order]=p[order]*m/rank[order]
+    for j in range(m-2,-1,-1):
+        if q[order[j]]>q[order[j+1]]: q[order[j]]=q[order[j+1]]
+    return np.minimum(q,1)
+qv=bh(pv); ql=bh(pl)
+sv=qv<.05; sl=ql<.05
+print('counts',sv.sum(),sl.sum(),'diff ids count',np.where(sv"'!=sl)[0].shape)
+ids_diff=np.where(sv!=sl)[0]
+for i in ids_diff[:20]:
+    print(i,common[i],'"'n',n[i],'rho',rho[i],rhl[i],'pv',pv[i],'pl',pl[i],'qv',qv[i],'ql',ql[i],'sv',sv[i],'sl',sl[i])
+# threshold p nearest
+for name,parr,qarr in [('v',pv,qv),('l',pl,ql)]:
+    sig=parr[qarr<.05]
+    print(name,'max sig p',sig.max(),'min nonsig q',qarr[qarr>=.05].min(),'min sig q',qarr[qarr<.05].min())
+PY"

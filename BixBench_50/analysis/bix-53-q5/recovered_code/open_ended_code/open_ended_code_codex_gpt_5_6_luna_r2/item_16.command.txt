@@ -1,0 +1,22 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, warnings
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+warnings.filterwarnings('ignore')
+counts=pd.read_csv('/workspace/inputs/count.csv').set_index('geneID')
+meta=pd.DataFrame({'condition':['KL']*3+['WL']*3},index=counts.columns)
+start=time.time()
+dds=DeseqDataSet(counts=counts.T,metadata=meta,design='~condition',ref_level=['condition','KL'],quiet=True,n_cpus=4)
+dds.deseq2()
+print('deseq2_seconds',round(time.time()-start,2),flush=True)
+stat=DeseqStats(dds,contrast=['condition','WL','KL'],quiet=True,n_cpus=4)
+stat.summary()
+print('contrast_lfc_columns',stat.LFC.columns.tolist(),flush=True)
+stat.lfc_shrink(coeff='condition[T.WL]',adapt=True)
+print('shrink_seconds',round(time.time()-start,2),flush=True)
+res=stat.results_df.copy()
+for pcol in ['pvalue','padj']:
+  sel=res[(res[pcol]<.05)&(res.log2FoldChange.abs()>1)&(res.baseMean>10)].copy()
+  print('\\n',pcol,'selected',len(sel),'up',int((sel.log2FoldChange>1).sum()),'down',int((sel.log2FoldChange < -1).sum()),flush=True)
+  print(sel.sort_values(pcol)[['baseMean','log2FoldChange','pvalue','padj']].head(15).to_string(),flush=True)
+PY"

@@ -1,0 +1,35 @@
+/bin/bash -lc "Rscript -e '
+parse_map <- function(lines) { z <- strsplit(lines, \"\\\\t\", fixed=FALSE); data.frame(gene=sub(\""'^pau:","",vapply(z,`[[`,"",1)), path=sub("''^path:","",vapply(z,`[[`,"",2)), stringsAsFactors=FALSE) }
+map <- parse_map(readLines("https://rest.kegg.jp/link/pathway/pau", warn=FALSE))
+path_lines <- strsplit(readLines("https://rest.kegg.jp/list/pathway/pau", warn=FALSE), "'"\\\\t\")
+pnames <- setNames(vapply(path_lines,"'`[[`,"",2), vapply(path_lines,`[[`,"",1))
+sets <- split(map$gene, map$path)
+sets <- lapply(sets, unique)
+ids_by <- list(); lfc_by <- list()
+for (f in list.files("inputs", pattern="'"\\\\.rds"'$", full.names=TRUE)) {x<-readRDS(f); a<-attributes(x); ids_by[[basename(f)]]<-a$rownames; lfc_by[[basename(f)]]<-a$listData$log2FoldChange}
+run_ora <- function(g, universe, minGS=10, maxGS=500, padj_cut=.05) {
+  g <- intersect(unique(g), unique(universe)); u <- intersect(unique(universe), map$gene)
+  term_ids <- names(sets)[vapply(sets, function(s) {K<-sum(s %in% u); K>=minGS && K<=maxGS}, logical(1))]
+  raw <- vapply(term_ids, function(t) {s<-sets[[t]]; K<-sum(s %in% u); k<-sum(s %in% g); phyper(k-1,K,length(u)-K,length(g),lower.tail=FALSE)}, numeric(1))
+  adj <- p.adjust(raw, method="BH")
+  data.frame(path=term_ids, k=vapply(term_ids,function(t)sum(sets[[t]] %in% g),integer(1)), K=vapply(term_ids,function(t)sum(sets[[t]] %in% u),integer(1)), p=raw, padj=adj, stringsAsFactors=FALSE)
+}
+for (univ_kind in c("tested","kegg")) {
+  cat("UNIVERSE",univ_kind,"'"\\n\")
+  up_list <- list(); down_list <- list()
+  for (nm in names(ids_by)) {
+    ids<-ids_by[[nm]]; l<-lfc_by[[nm]]; univ<-if(univ_kind==\"tested\") ids else map"'$gene
+    up<-ids[l>1.5]; dn<-ids[l< -1.5]
+    eu<-run_ora(up,univ); ed<-run_ora(dn,univ)
+    up_sig<-eu$path[eu$padj < .05]; dn_sig<-ed$path[ed$padj < .05]
+    up_list[[nm]]<-up_sig; down_list[[nm]]<-dn_sig
+    cat(nm,"up genes",length(intersect(up,map$gene)),"down genes",length(intersect(dn,map$gene)),"tested terms",nrow(eu),"up sig",length(up_sig),"down sig",length(dn_sig),"'"\\n\")
+    if (length(up_sig)) {cat(\" up:\",paste(up_sig,collapse=\",\"),\"\\n\")}
+    if (length(dn_sig)) {cat(\" down:\",paste(dn_sig,collapse=\",\"),\"\\n\")}
+  }
+  ucommon<-Reduce(intersect,up_list); dcommon<-Reduce(intersect,down_list)
+  cat(\"COMMON UP\",length(ucommon),paste(ucommon,collapse=\",\"),\"\\n\")
+  cat(\"COMMON DOWN\",length(dcommon),paste(dcommon,collapse=\",\"),\"\\n\")
+  cat(\"TOTAL\",length(union(ucommon,dcommon)),\"\\n\")
+}
+'"

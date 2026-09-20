@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request
+from collections import defaultdict
+from math import comb
+up=set(open('tmp/upgenes.txt').read().split())
+link=urllib.request.urlopen('https://rest.kegg.jp/link/pathway/pau',timeout=30).read().decode()
+pairs=[]
+for l in link.splitlines():
+    parts=l.split('\\t')
+    if len(parts)==2:
+        g=parts[0].split(':')[-1]; p=parts[1].split(':')[-1]
+        pairs.append((g,p))
+plist=urllib.request.urlopen('https://rest.kegg.jp/list/pathway/pau',timeout=30).read().decode()
+path_ids=set(l.split('\\t')[0] for l in plist.splitlines() if '\\t' in l)
+pairs=[(g,p) for g,p in pairs if p in path_ids]
+path2genes=defaultdict(set)
+for g,p in pairs: path2genes[p].add(g)
+extID={g for g,p in pairs}
+N=len(extID)
+mapped={g for g in up if g in extID}
+gene2terms=defaultdict(set)
+for g,p in pairs: gene2terms[g].add(p)
+qTermID=set()
+for g in mapped: qTermID |= gene2terms[g]
+print('N',N,'n mapped',len(mapped),'qTermID raw',len(qTermID))
+qTermID_filtered=set()
+for t in qTermID:
+    M=len(path2genes[t])
+    if 10<=M<=500:
+        qTermID_filtered.add(t)
+print('qTermID filtered',len(qTermID_filtered))
+rows=[]; n=len(mapped)
+for t in sorted(qTermID_filtered):
+    M=len(path2genes[t]); k=len(mapped & path2genes[t])
+    p=sum(comb(M,i)*comb(N-M,n-i) for i in range(k,min(M,n)+1))/comb(N,n)
+    rows.append((t,M,k,p))
+rows.sort(key=lambda x:x[3])
+m=len(rows)
+ps=[r[3] for r in rows]
+order=sorted(range(m), key=lambda i:ps[i])
+qs=[1.0]*m
+prev=1.0
+for rank in range(m,0,-1):
+    idx=order[rank-1]
+    val=ps[idx]*m/rank
+    if val<prev: prev=val
+    qs[idx]=prev
+for r,q in zip(rows,qs):
+    if r[0]=='pau02010': print('ABC',r,'p.adjust',q)
+print('sig p.adjust <=.05',sum(q<=0.05 for q in qs))
+print('total rows',m)
+for r,q in zip(rows,qs):
+    if q<=0.05: print('sig',r,q)
+PY"

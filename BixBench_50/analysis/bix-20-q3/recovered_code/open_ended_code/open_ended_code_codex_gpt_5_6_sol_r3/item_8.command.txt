@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter,defaultdict
+import openpyxl,re
+# metadata/files
+wb=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True)
+meta=list(wb.active.iter_rows(values_only=True)); carriers={str(r[0]).strip() for r in meta[1:] if r[3]=='Carrier'}
+files={re.search(r'CHIP_(["'^.]*)'"\\.xlsx"'$'"',p.name).group(1).split('-')[0]:p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+allcalls=[]
+for sid,p in files.items():
+    if sid not in carriers: continue
+    wb=openpyxl.load_workbook(p,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions(); it=ws.iter_rows(values_only=True); next(it); h=next(it)
+    for rr,row in enumerate(it,3):
+        d=dict(zip(h,row)); d['sid']=sid; d['row']=rr; allcalls.append(d)
+# boolean masks
+isvar=lambda d: d['Zygosity'] not in (None,'Reference')
+low=lambda d: d['Variant Allele Freq'] is not None and float(d['Variant Allele Freq'])<.3
+excluded_terms=('intron','intergenic','UTR')
+region_ok=lambda d: not any(x.lower() in str(d['Sequence Ontology (Combined)']).lower() for x in excluded_terms)
+classified=lambda d: d['Classification'] is not None and str(d['Classification']).strip()"'!='"''
+stages=[('all',lambda d:True),('nonreference',isvar),('VAF<0.3',lambda d:isvar(d) and low(d)),('region-filtered',lambda d:isvar(d) and low(d) and region_ok(d)),('ClinVar-classified',lambda d:isvar(d) and low(d) and region_ok(d) and classified(d))]
+for name,f in stages:
+    ds=[d for d in allcalls if f(d)]
+    print(name,len(ds),'class',dict(Counter(d['Classification'] for d in ds)),'zygo',dict(Counter(d['Zygosity'] for d in ds)),'so',dict(Counter(d['Sequence Ontology (Combined)'] for d in ds)))
+
+D=[d for d in allcalls if isvar(d) and low(d) and region_ok(d) and classified(d)]
+print('\\nFINAL ROWS')
+fields=['sid','row','Chr:Pos','Ref/Alt','Gene Names','Zygosity','Variant Allele Freq','Sequence Ontology (Combined)','Effect (Combined)','Classification','Variant ID','Read Depths (DP)','Genotype Qualities (GQ)']
+for d in sorted(D,key=lambda x:(int(x['sid']),x['row'])):
+    print('\\t'.join(str(d[k]) for k in fields))
+print('\\nCOUNTS PER SAMPLE')
+for sid in sorted(carriers & files.keys(),key=int):
+  ds=[d for d in D if d['sid']==sid]
+  print(sid,len(ds),dict(Counter(d['Classification'] for d in ds)))
+# all nonreference VAF<.3, including excluded/blank classifications
+print('\\nALL LOW VAF NONREF')
+L=[d for d in allcalls if isvar(d) and low(d)]
+for d in sorted(L,key=lambda x:(int(x['sid']),x['row'])):
+    print('\\t'.join(str(d[k]) for k in fields))
+PY"

@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, tempfile, os
+from pathlib import Path
+from Bio import AlignIO
+from scipy.stats import mannwhitneyu
+from phykit.services.alignment.rcv import RelativeCompositionVariability
+from types import SimpleNamespace
+
+# Read member bytes and score with current PhyKIT and exact 1.x formula.
+data={}
+with tempfile.TemporaryDirectory(dir='/workspace') as d:
+  for label,zpath in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+    with zipfile.ZipFile(zpath) as z:
+      for name in sorted(n for n in z.namelist() if n.endswith('.faa.mafft')):
+        b=z.read(name); p=Path(d)/(label+'_'+Path(name).name); p.write_bytes(b)
+        aln=AlignIO.read(str(p),'fasta')
+        seqs=[str(r.seq) for r in aln]; n=len(seqs); L=aln.get_alignment_length()
+        # old 1.x formula
+        concat=''.join(seqs)
+        avg={c:concat.count(c)/n for c in set(concat)} if n else {}
+        old=sum(sum(abs(s.count(c)-avg[c]) for c in set(concat))/(n*L) for s in seqs) if n and L else 0.0
+        new=RelativeCompositionVariability(SimpleNamespace(alignment=str(p),json=False)).calculate_rcv()
+        data.setdefault(label,{})[name]=(old,new,n,L)
+
+for label in data:
+  print(label,'n',len(data[label]),'old range',min(x[0] for x in data[label].values()),max(x[0] for x in data[label].values()),'new range',min(x[1] for x in data[label].values()),max(x[1] for x in data[label].values()))
+
+sets={
+ 'all':lambda name,x:True,
+ 'common':lambda name,x:name in set(data['animals'])&set(data['fungi']),
+ 'atleast2':lambda name,x:x[2]>=2,
+}
+for scope,keep in sets.items():
+  print('\\nSCOPE',scope)
+  for impl,idx in [('old',0),('new',1),('new_round4',1)]:
+    a=[x[idx] for k,x in data['animals'].items() if keep(k,x)]
+    f=[x[idx] for k,x in data['fungi'].items() if keep(k,x)]
+    if impl=='new_round4': a=list(map(lambda x:round(x,4),a)); f=list(map(lambda x:round(x,4),f))
+    r=mannwhitneyu(a,f,alternative='two-sided',method='auto')
+    print(impl,'n',len(a),len(f),'U',r.statistic,'p',repr(r.pvalue),'ties',len(a)+len(f)-len(set(a+f)))
+PY"

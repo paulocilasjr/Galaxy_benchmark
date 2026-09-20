@@ -1,0 +1,56 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.stats as stats, time
+T=time.time()
+# headers
+ch=pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0)
+eh=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0)
+common=[c for c in ch.columns[1:] if c in eh.columns[1:]]
+print('common genes',len(common))
+cd=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=[ch.columns[0]]+common, index_col=0, low_memory=False)
+ed=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[eh.columns[0]]+common, index_col=0, low_memory=False)
+ids=sorted(set(cd.index)&set(ed.index))
+cd=cd.loc[ids]; ed=ed.loc[ids]
+print('aligned',cd.shape,'dtypes',cd.dtypes.iloc[0],ed.dtypes.iloc[0],'load',time.time()-T, flush=True)
+# exact pairwise-complete Spearman for each common gene
+pvals=np.empty(len(common), dtype=float)
+rhos=np.empty(len(common), dtype=float)
+ns=np.empty(len(common), dtype=float)
+for i in range(len(common)):
+    x=cd.iloc[:,i].to_numpy(); y=ed.iloc[:,i].to_numpy()
+    v=~(np.isnan(x)|np.isnan(y))
+    n=int(v.sum()); ns[i]=n
+    if n < 3:
+        pvals[i]=np.nan; rhos[i]=np.nan; continue
+    # rank on valid paired observations only
+    rx=stats.rankdata(x[v]); ry=stats.rankdata(y[v])
+    # Pearson of ranks, then t-based two-sided p (same as spearmanr)
+    if np.all(rx==rx[0]) or np.all(ry==ry[0]):
+        pvals[i]=np.nan; rhos[i]=np.nan; continue
+    r=np.corrcoef(rx,ry)[0,1]
+    rhos[i]=r
+    if abs(r) >= 1.0:
+        pvals[i]=0.0
+    else:
+        t=r*np.sqrt((n-2)/(1-r*r))
+        pvals[i]=2*stats.t.sf(abs(t), n-2)
+print('computed finite p',int(np.isfinite(pvals).sum()),'of',len(common),'time',time.time()-T, flush=True)
+finite=np.isfinite(pvals)
+print('n min median max',ns[finite].min(),np.median(ns[finite]),ns[finite].max())
+print('rho min max',np.nanmin(rhos[finite]),np.nanmax(rhos[finite]))
+print('p min max',np.nanmin(pvals[finite]),np.nanmax(pvals[finite]))
+# BH correction over all finite tests
+p=pvals[finite]; m=p.size
+order=np.argsort(p, kind='mergesort')
+rank=np.empty(m, dtype=float); rank[order]=np.arange(1,m+1)
+q=np.empty(m, dtype=float); q[order]=p[order]*m/rank[order]
+for i in range(m-2,-1,-1):
+    if q[order[i]] > q[order[i+1]]:
+        q[order[i]] = q[order[i+1]]
+q=np.minimum(q,1.0)
+sig=q<0.05
+print('BH significant',int(sig.sum()),'percent',float(sig.sum())/m*100)
+print('unadj p<0.05',int((p<0.05).sum()),'percent',float((p<0.05).sum())/m*100)
+print('max significant p',p[sig].max() if sig.any() else None,'min non-significant q',q[~sig].min() if (~sig).any() else None)
+print('directional raw rho: pos/neg BH',int((rhos[finite]>0 & sig).sum()),int((rhos[finite]<0 & sig).sum()))
+print('total time',time.time()-T)
+PY"

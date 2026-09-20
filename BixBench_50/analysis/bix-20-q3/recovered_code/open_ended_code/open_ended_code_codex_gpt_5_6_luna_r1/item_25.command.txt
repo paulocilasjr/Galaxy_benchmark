@@ -1,0 +1,96 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+from openpyxl import load_workbook
+
+base = Path('inputs')
+status_path = base / '230215_Trio_Status.xlsx'
+genes_path = base / '230214_Schenz_et_al_2022_CHIP_Genes.xlsx'
+variant_dir = base / 'CHIP_DP10_GQ20_PASS'
+
+# CHIP gene scope from supplied gene list.
+wb = load_workbook(genes_path, read_only=True, data_only=True)
+ws = wb.active
+chip_genes = {str(row[0]).strip().upper() for row in ws.iter_rows(values_only=True) if row[0] is not None}
+
+# Carrier sample IDs from supplied status table.
+wb = load_workbook(status_path, read_only=True, data_only=True)
+ws = wb.active
+carrier_ids = {
+    str(row[0]).strip()
+    for row in ws.iter_rows(min_row=2, values_only=True)
+    if row[0] is not None and str(row[3]).strip() == 'Carrier'
+}
+
+def sample_id(path):
+    tail = path.stem.split('_CHIP_', 1)[1]
+    prefix = tail.split('-', 1)[0]
+    return prefix if prefix.isdigit() else tail
+
+def cell(row, index):
+    return row[index] if index < len(row) else None
+
+def overlaps_chip(gene_field):
+    if gene_field is None:
+        return False
+    return any(token.strip().upper() in chip_genes for token in str(gene_field).split(','))
+
+counts = Counter()
+classified_labels = Counter()
+carrier_files = 0
+for path in sorted(variant_dir.glob('*.xlsx')):
+    if sample_id(path) not in carrier_ids:
+        continue
+    carrier_files += 1
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb.active
+    # Supplied sheets have an incorrect A1 dimension; reset it to scan all XML rows.
+    ws.reset_dimensions()
+    rows = ws.iter_rows(values_only=True)
+    next(rows)  # grouped title row
+    header = next(rows)
+    idx = {str(value).strip(): i for i, value in enumerate(header) if value is not None}
+    required = {'Gene Names', 'Variant Allele Freq', 'Zygosity', 'Sequence Ontology (Combined)', 'Classification'}
+    missing = required - idx.keys()
+    if missing:
+        raise RuntimeError(f'{path.name}: missing {sorted(missing)}')
+    for row in rows:
+        if not overlaps_chip(cell(row, idx['Gene Names'])):
+            continue
+        counts['chip_rows'] += 1
+        try:
+            vaf = float(cell(row, idx['Variant Allele Freq']))
+        except (TypeError, ValueError):
+            continue
+        if not vaf < 0.3:
+            continue
+        counts['vaf_lt_0_3'] += 1
+        if str(cell(row, idx['Zygosity'])).strip() == 'Reference':
+            continue
+        counts['nonreference'] += 1
+        so = str(cell(row, idx['Sequence Ontology (Combined)']) or '').lower()
+        if any(term in so for term in ('intron', 'intergenic', 'utr')):
+            continue
+        counts['region_filtered'] += 1
+        classification = cell(row, idx['Classification'])
+        if classification is None or str(classification).strip() == '':
+            continue
+        counts['clinvar_classified'] += 1
+        classified_labels[str(classification).strip()] += 1
+        if str(classification).strip() in {'Benign', 'Likely Benign'}:
+            counts['benign_or_likely_benign'] += 1
+
+num = counts['benign_or_likely_benign']
+den = counts['clinvar_classified']
+if den == 0:
+    raise RuntimeError('No classified variants in denominator')
+proportion = num / den
+print('carrier IDs:', len(carrier_ids))
+print('carrier files:', carrier_files)
+print('missing files:', sorted(carrier_ids - {sample_id(p) for p in variant_dir.glob('*.xlsx')}))
+print('counts:', dict(counts))
+print('classified labels:', dict(classified_labels))
+print('proportion:', f'{proportion:.17g}')
+assert (num, den) == (37, 37)
+assert proportion == 1.0
+PY"

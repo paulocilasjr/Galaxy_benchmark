@@ -1,0 +1,54 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, time
+expr='inputs/BatchCorrectedReadCounts_Zenodo.csv'; meta='inputs/GeneMetaInfo_Zenodo.csv'; ann='inputs/Sample_annotated_Zenodo.csv'
+cts=['CD4','CD8','CD14','CD19']
+with open(ann,newline='') as f:
+    ar=list(csv.DictReader(f))
+ann_by={x['sample']:x for x in ar}
+with open(meta,newline='') as f:
+    mr=list(csv.DictReader(f))
+with open(expr,newline='') as f:
+    rd=csv.reader(f); hdr=next(rd); samples=hdr[1:]
+    groups={scope:{ct:[] for ct in cts} for scope in ['all','refsamp','nonrefsamp']}
+    for i,s in enumerate(samples):
+        a=ann_by[s]; ct=a['celltype']
+        if ct in cts:
+            groups['all'][ct].append(i)
+            groups[a['samtype']][ct].append(i)
+    data={scope:{ct:[] for ct in cts} for scope in groups}
+    lengths=[]; genes=[]; minv=float('inf'); neg=0; missing=0; aligned=True; pc_seen=0
+    for j,(row,m) in enumerate(zip(rd,mr)):
+        if row[0] "'!= m['"'Geneid']: aligned=False
+        if m['gene_biotype']"'!='"'protein_coding': continue
+        vals=[]
+        for x in row[1:]:
+            try: v=float(x)
+            except ValueError:
+                v=float('nan'); missing += 1
+            vals.append(v)
+            if math.isfinite(v):
+                minv=min(minv,v)
+                if v<0: neg+=1
+        lengths.append(float(m['Length'])); genes.append(m['Geneid']); pc_seen += 1
+        for scope in groups:
+            for ct,idxs in groups[scope].items():
+                vv=[vals[i] for i in idxs if math.isfinite(vals[i])]
+                data[scope][ct].append(sum(vv)/len(vv))
+
+def corr(x,y):
+    n=len(x); mx=sum(x)/n; my=sum(y)/n
+    sxx=sum((a-mx)**2 for a in x); syy=sum((b-my)**2 for b in y)
+    sxy=sum((a-mx)*(b-my) for a,b in zip(x,y))
+    return sxy/math.sqrt(sxx*syy)
+print('aligned',aligned,'protein_coding',pc_seen,'minimum count',minv,'negative values',neg,'missing values',missing)
+print('group sizes',groups)
+for scope in groups:
+    print('\\nSCOPE',scope)
+    for transform in ['raw_mean','log2_mean_plus1']:
+        out={}
+        for ct in cts:
+            y=data[scope][ct]
+            if transform=='log2_mean_plus1': y=[math.log2(v+1) for v in y]
+            out[ct]=corr(lengths,y)
+        print(transform,out,'weakest',min(out,key=lambda k:abs(out[k])))
+PY"

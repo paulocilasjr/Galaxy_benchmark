@@ -1,0 +1,25 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv'); layout['count_id']=layout.SampleID.str.replace('-','_',regex=False)
+meta=layout.loc[layout.Group.isin(['DMSO','Cisplatin_IC50_CBD_IC50']),['count_id','Group']].set_index('count_id'); meta.columns=['condition']
+counts=counts.loc[:,meta.index].T; counts=counts.loc[:,counts.sum()>0]
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~condition',refit_cooks=True,n_cpus=4,quiet=True); dds.deseq2()
+st=DeseqStats(dds,contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=.05,n_cpus=4,quiet=True); st.summary(); res=st.results_df
+ann=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t'); sym=pd.Series(ann.gene_name.values,index=ann.ENSG).to_dict()
+lib=gp.get_library('Reactome_2022',organism='human'); key=next(k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes ')); pathway=set(lib[key])
+for label,mask in {
+  'threshold':(res.padj<.05)&(res.log2FoldChange.abs()>=.5),
+  'padj_only':res.padj<.05,
+  'up_threshold':(res.padj<.05)&(res.log2FoldChange>=.5),
+  'down_threshold':(res.padj<.05)&(res.log2FoldChange<=-.5),
+}.items():
+    ens=res.index[mask]; genes=set(pd.Index(ens).map(sym).dropna())
+    overlap=sorted(genes & pathway)
+    print(label,len(ens),len(genes),f'{len(overlap)}/{len(pathway)}',overlap,flush=True)
+genes=pd.Index(res.index[(res.padj<.05)&(res.log2FoldChange.abs()>=.5)]).map(sym).dropna().unique().tolist()
+enr=gp.enrichr(gene_list=genes,gene_sets='Reactome_2022',organism='human',outdir=None,verbose=True)
+print(enr.results[enr.results.Term.str.contains('TP53 Regulates Transcription Of Cell Cycle Genes',case=False,na=False)].to_string(index=False),flush=True)
+PY"

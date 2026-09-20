@@ -1,0 +1,72 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+from sklearn.decomposition import PCA
+from collections import defaultdict
+
+# Read metadata
+meta_rows = []
+with open('/workspace/inputs/ROSMAP_meta_ad.csv') as f:
+    for row in csv.DictReader(f):
+        meta_rows.append(row)
+
+meta_by_id = defaultdict(list)
+for row in meta_rows:
+    meta_by_id[row['projid']].append(row)
+
+collision_ids = set()
+aggregate_ids = {}
+for pid, rows in meta_by_id.items():
+    if len(rows) <= 1:
+        continue
+    invariant_keys = ['msex', 'educ', 'apoe_genotype']
+    all_match = all(len(set(r[k] for r in rows)) == 1 for k in invariant_keys)
+    if all_match:
+        aggregate_ids[pid] = len(rows)
+    else:
+        collision_ids.add(pid)
+
+# Read expression matrix
+with open('/workspace/inputs/ROSMAP_genexp_ad.csv') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    sample_ids = header[1:]
+    data_rows = [[float(x) for x in row[1:]] for row in reader]
+
+X_raw = np.array(data_rows)
+
+sample_idx_map = defaultdict(list)
+for i, sid in enumerate(sample_ids):
+    sample_idx_map[sid].append(i)
+
+# Resolve duplicates
+cols_to_keep = []
+for sid in sorted(sample_idx_map.keys()):
+    indices = sample_idx_map[sid]
+    if sid in collision_ids:
+        continue
+    elif sid in aggregate_ids:
+        cols_to_keep.append((sid, indices))
+    else:
+        cols_to_keep.append((sid, indices[0]))
+
+resolved_data = np.zeros((X_raw.shape[0], len(cols_to_keep)))
+for j, (sid, col_info) in enumerate(cols_to_keep):
+    if isinstance(col_info, list):
+        resolved_data[:, j] = X_raw[:, col_info].mean(axis=1)
+    else:
+        resolved_data[:, j] = X_raw[:, col_info]
+
+# Transpose, transform, center, PCA
+X = np.log10(resolved_data.T + 1)
+X_c = X - X.mean(axis=0)
+
+pca = PCA(n_components=100, svd_solver='full')
+pca.fit(X_c)
+
+pc1_pct = pca.explained_variance_ratio_[0] * 100
+print(f"PC1: {pc1_pct:.10f}%")
+print(f"PC1 ratio: {pca.explained_variance_ratio_[0]:.15f}")
+print(f"Sum of all eigenvalues: {np.var(X_c, axis=0).sum():.10f}")
+print(f"N samples: {X_c.shape[0]}, N genes: {X_c.shape[1]}")
+PYEOF

@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from pathlib import Path
+from collections import Counter,defaultdict
+import re, openpyxl, fractions
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+def colnum(ref):
+ s=''.join(c for c in ref if c.isalpha()); n=0
+ for c in s:n=n*26+ord(c)-64
+ return n
+def rows(p):
+ with ZipFile(p) as z:
+  ss=[''.join(t.text or '' for t in si.iter(NS+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall(NS+'si')]
+  root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+  for row in root.find(NS+'sheetData').findall(NS+'row')[2:]:
+   d={}
+   for c in row.findall(NS+'c'):
+    v=c.find(NS+'v'); x=None if v is None else v.text
+    if c.attrib.get('t')=='s' and x is not None:x=ss[int(x)]
+    d[colnum(c.attrib['r'])]=x
+   yield d
+wb=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True)
+carriers=[str(r[0]).strip() for r in wb.active.iter_rows(min_row=2,values_only=True) if r[3]=='Carrier']
+by={}
+for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+ tok=re.search(r'CHIP_(.+)\\.xlsx"'$'"',p.name).group(1); m=re.match(r'\\d+',tok); sid=m.group(0) if m else tok; by[sid]=p
+coding={'synonymous_variant','missense_variant','inframe_insertion','inframe_deletion','frameshift_variant','stop_gained','stop_lost','start_lost','coding_sequence_variant','transcript_ablation','transcript_amplification'}
+allobs=[]
+for sid in carriers:
+ if sid not in by:continue
+ for r in rows(by[sid]):
+  try:v=float(r.get(10))
+  except:continue
+  if v<.3 and r.get(14) in coding:
+   allobs.append((sid,r.get(1),r.get(2),r.get(13),r.get(14),v))
+print('sample-level coding calls:',len(allobs),'synonymous:',sum(x[4]=='synonymous_variant' for x in allobs),'fraction',fractions.Fraction(sum(x[4]=='synonymous_variant' for x in allobs),len(allobs)))
+for keyfun,name in [(lambda x:(x[1],x[2]),'site/refalt'),(lambda x:(x[1],x[2],x[3],x[4]),'site/refalt/gene/SO'),(lambda x:(x[1],x[2],x[3]),'site/refalt/gene')]:
+ u={keyfun(x):x for x in allobs}
+ print('unique',name,len(u),'syn',sum(x[4]=='synonymous_variant' for x in u.values()),'fraction',fractions.Fraction(sum(x[4]=='synonymous_variant' for x in u.values()),len(u)))
+print('coding SO counts',Counter(x[4] for x in allobs))
+# Show per-sample coding counts and synonymous fraction.
+print('per-sample',Counter(x[0] for x in allobs))
+PY"

@@ -1,0 +1,55 @@
+/bin/bash -lc "cat > /workspace/tmp/compute_evo_rates.py <<'PY'
+from pathlib import Path
+from phykit.services.tree.evolutionary_rate import EvolutionaryRate
+import argparse, contextlib, io, json
+from scipy import stats
+
+def get_rate(path):
+    args = argparse.Namespace(tree=str(path), json=False)
+    er = EvolutionaryRate(args)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        er.run()
+    return float(buf.getvalue().strip())
+
+base=Path('/workspace/tmp')
+for group in ['animals','fungi']:
+    d=base/f'scogs_{group}'
+    trees=sorted(d.glob('*.treefile'))
+    rates={}
+    for t in trees:
+        g=t.name.split('.')[0]
+        rates[g]=get_rate(t)
+    Path(f'/workspace/tmp/rates_{group}.json').write_text(json.dumps(rates,indent=2,sort_keys=True))
+    print(group, 'n',len(rates), 'mean', sum(rates.values())/len(rates), 'median', sorted(rates.values())[len(rates)//2] if len(rates)%2 else (sorted(rates.values())[len(rates)//2-1]+sorted(rates.values())[len(rates)//2])/2)
+    print('first', list(rates.items())[:5])
+
+a=json.loads(Path('/workspace/tmp/rates_animals.json').read_text())
+f=json.loads(Path('/workspace/tmp/rates_fungi.json').read_text())
+# print distributions and U variants
+for label, x,y in [
+ ('all_animals_first', list(a.values()), list(f.values())),
+ ('all_fungi_first', list(f.values()), list(a.values())),
+]:
+    u,p=stats.mannwhitneyu(x,y, alternative='two-sided')
+    print(label, 'U',u,'p',p,'n',len(x),len(y),'product',len(x)*len(y))
+common=sorted(set(a)&set(f))
+print('common',len(common))
+for label,x,y in [('common_animals_first',[a[g] for g in common],[f[g] for g in common]),('common_fungi_first',[f[g] for g in common],[a[g] for g in common])]:
+    u,p=stats.mannwhitneyu(x,y,alternative='two-sided')
+    print(label,'U',u,'p',p,'n',len(x),len(y),'product',len(x)*len(y))
+# rounded 4
+for label,x,y in [
+ ('all_round_animals_first',[round(v,4) for v in a.values()],[round(v,4) for v in f.values()]),
+ ('all_round_fungi_first',[round(v,4) for v in f.values()],[round(v,4) for v in a.values()]),
+]:
+    u,p=stats.mannwhitneyu(x,y,alternative='two-sided')
+    print(label,'U',u,'p',p)
+for label,x,y in [
+ ('common_round_animals_first',[round(a[g],4) for g in common],[round(f[g],4) for g in common]),
+ ('common_round_fungi_first',[round(f[g],4) for g in common],[round(a[g],4) for g in common]),
+]:
+    u,p=stats.mannwhitneyu(x,y,alternative='two-sided')
+    print(label,'U',u,'p',p)
+PY
+python /workspace/tmp/compute_evo_rates.py"

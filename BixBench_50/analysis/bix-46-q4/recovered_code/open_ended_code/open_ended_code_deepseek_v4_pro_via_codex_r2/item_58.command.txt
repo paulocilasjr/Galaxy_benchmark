@@ -1,0 +1,47 @@
+/bin/bash -c "python3 - <<'PY'
+import subprocess, zipfile, xml.etree.ElementTree as ET, math, statistics
+# load res
+rscript=r'''
+for (f in c('/workspace/inputs/res_1vs97.rds','/workspace/inputs/res_1vs98.rds')) { con<-gzfile(f,'rb'); x<-unserialize(con); close(con); y<-unclass(x); ld<-attr(y,'listData'); rn<-attr(y,'rownames'); cat('###FILE',basename(f),'\\n'); for(i in seq_along(rn)) cat(rn[i],ld"'$log2FoldChange[i],ld$padj[i],'"'\\n',sep='\\t') }
+'''
+out=subprocess.run(['Rscript','-e',rscript],capture_output=True,text=True,check=True).stdout
+res={}; cur=None
+for line in out.splitlines():
+ if line.startswith('###FILE'):cur=line.split()[1];res[cur]={};continue
+ p=line.split('\\t')
+ if len(p)>=3:res[cur][p[0]]=(float(p[1]),float(p[2]))
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(fn):
+ with zipfile.ZipFile(fn) as z:root=ET.fromstring(z.read('word/document.xml'))
+ t=root.find('.//w:tbl',ns);d={}
+ for tr in t.findall('w:tr',ns)[2:]:
+  cells=[''.join(x.text or '' for x in c.findall('.//w:t',ns)) for c in tr.findall('w:tc',ns)]
+  if len(cells)>=4 and cells[0]:
+   def f(s):
+    s=s.strip();return None if s in ('','-') else float(s)
+   d[cells[0]]=f(cells[2]) # rhlI only
+ return d
+hcd=parse('/workspace/ppat.1006504.s012.docx'); bio=parse('/workspace/ppat.1006504.s013.docx')
+hcd_genes={g:v for g,v in hcd.items() if v is not None};bio_genes={g:v for g,v in bio.items() if v is not None}
+common=set(hcd_genes)&set(bio_genes); honly=set(hcd_genes)-set(bio_genes); bonly=set(bio_genes)-set(hcd_genes)
+print('counts HCD',len(hcd_genes),'bio',len(bio_genes),'common',len(common),'Honly',len(honly),'Bonly',len(bonly))
+for fname,d in res.items():
+ print('\\n',fname)
+ for label,genes in [('Honly',honly),('Bonly',bonly),('common',common)]:
+  vals=[]; signs=[]
+  for g in genes:
+   if g in d:
+    lfc=d[g][0]; vals.append(abs(lfc))
+    # expected sign = -table (if table WT/mutant)
+    # for Honly use HCD table, Bonly biofilm, common use HCD? use separate below
+    if g in hcd_genes: signs.append((lfc>0)==(-hcd_genes[g]>0))
+  if vals:
+   print(label,'n',len(vals),'meanabs',statistics.mean(vals),'medabs',statistics.median(vals))
+ # detailed sign per source
+ for label,genes,src in [('Honly',honly,hcd_genes),('Bonly',bonly,bio_genes),('common',common,hcd_genes)]:
+  ss=[]; aa=[]
+  for g in genes:
+   if g in d:
+    lfc=d[g][0]; ss.append((lfc>0)==(-src[g]>0)); aa.append(abs(lfc))
+  if ss: print('  ',label,'signag',sum(ss)/len(ss),'n',len(ss),'meanabs',statistics.mean(aa))
+PY"

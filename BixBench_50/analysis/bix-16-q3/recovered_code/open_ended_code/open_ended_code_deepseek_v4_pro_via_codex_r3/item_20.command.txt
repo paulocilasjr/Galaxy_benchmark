@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, warnings
+from scipy.stats import rankdata
+warnings.filterwarnings('ignore')
+ce=pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0)
+ex=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0)
+idx=ce.index.intersection(ex.index); cols=ce.columns.intersection(ex.columns)
+X=ex.loc[idx,cols].to_numpy(dtype=np.float64)
+Y=-ce.loc[idx,cols].to_numpy(dtype=np.float64)
+count=0; rows=[]
+for j,g in enumerate(cols):
+    x=X[:,j]; y=Y[:,j]
+    mask=np.isfinite(y)
+    xv=x[mask]; yv=y[mask]
+    if len(xv)<2: continue
+    rx=rankdata(xv); ry=rankdata(yv)
+    # Pearson on ranks
+    r=np.corrcoef(rx,ry)[0,1] if np.std(rx)>0 and np.std(ry)>0 else np.nan
+    if np.isfinite(r) and r>=0.6:
+        count+=1; rows.append((g,len(xv),float(r)))
+print('vectorized count',count)
+for g,n,r in sorted(rows,key=lambda z:-z[2])[:20]:
+    print(g,n,r)
+# raw coordinate count
+count_raw=0; rows_raw=[]
+for j,g in enumerate(cols):
+    x=X[:,j]; y=-ce.loc[idx,cols].iloc[:,j].to_numpy(dtype=np.float64) # this is transformed already
+# recompute raw explicitly
+Xraw=ex.loc[idx,cols].to_numpy(dtype=np.float64)
+Yraw=ce.loc[idx,cols].to_numpy(dtype=np.float64)
+count_raw=0
+for j,g in enumerate(cols):
+    x=Xraw[:,j]; y=Yraw[:,j]
+    mask=np.isfinite(y)
+    xv=x[mask]; yv=y[mask]
+    if len(xv)<2: continue
+    rx=rankdata(xv); ry=rankdata(yv)
+    r=np.corrcoef(rx,ry)[0,1] if np.std(rx)>0 and np.std(ry)>0 else np.nan
+    if np.isfinite(r) and r>=0.6: count_raw+=1
+print('raw count >=.6',count_raw)
+PY"

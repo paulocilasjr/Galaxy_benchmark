@@ -1,0 +1,57 @@
+/bin/bash -lc "rm -rf .codex_tmp/tree_lengths && mkdir -p .codex_tmp/tree_lengths && python - <<'PY'
+import json, os, shutil, subprocess, tempfile, zipfile, statistics
+from pathlib import Path
+
+phykit = '/opt/agent-venv/bin/phykit'
+groups = {
+    'animals': Path('inputs/scogs_animals.zip'),
+    'fungi': Path('inputs/scogs_fungi.zip'),
+}
+work = Path('.codex_tmp/tree_lengths')
+results = {}
+for group, archive in groups.items():
+    values = []
+    names = []
+    with zipfile.ZipFile(archive) as z:
+        members = sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        for i, name in enumerate(members):
+            tree_path = work / f'{group}_{i}.treefile'
+            tree_path.write_bytes(z.read(name))
+            cp = subprocess.run([phykit, 'tree_len', str(tree_path), '--json'], text=True, capture_output=True, check=True)
+            out = json.loads(cp.stdout)
+            # PhyKIT 2.3.0 emits a single-key JSON object for this command.
+            if isinstance(out, dict):
+                if 'tree_len' in out:
+                    val = out['tree_len']
+                elif 'total_tree_length' in out:
+                    val = out['total_tree_length']
+                else:
+                    val = next(v for v in out.values() if isinstance(v, (int, float, str)))
+            else:
+                val = out
+            values.append(float(val))
+            names.append(name)
+    results[group] = {'values': values, 'names': names, 'median': statistics.median(values)}
+
+animals = results['animals']['median']
+fungi = results['fungi']['median']
+print('animals_count', len(results['animals']['values']))
+print('fungi_count', len(results['fungi']['values']))
+print('animals_median', format(animals, '.12g'))
+print('fungi_median', format(fungi, '.12g'))
+print('fungi_over_animals', format(fungi / animals, '.12g'))
+print('animals_over_fungi', format(animals / fungi, '.12g'))
+# Also compute overlap by orthogroup prefix for sensitivity to paired/common SCOGs.
+a = {n.split('.')[0]: v for n, v in zip(results['animals']['names'], results['animals']['values'])}
+f = {n.split('.')[0]: v for n, v in zip(results['fungi']['names'], results['fungi']['values'])}
+common = sorted(set(a) & set(f))
+print('common_count', len(common))
+if common:
+    am = statistics.median(a[k] for k in common)
+    fm = statistics.median(f[k] for k in common)
+    print('common_animals_median', format(am, '.12g'))
+    print('common_fungi_median', format(fm, '.12g'))
+    print('common_fungi_over_animals', format(fm / am, '.12g'))
+
+shutil.rmtree(work)
+PY"

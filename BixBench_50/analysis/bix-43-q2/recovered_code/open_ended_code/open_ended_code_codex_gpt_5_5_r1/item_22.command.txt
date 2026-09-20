@@ -1,0 +1,32 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+# Reuse the previously established DE workflow, but load only enough to compare enrichment OR with and without explicit background.
+import pandas as pd
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+counts_f = counts.loc[(counts > 10).any(axis=1)]
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['SampleID_us'] = layout['SampleID'].str.replace('-', '_', regex=False)
+related = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+meta = layout.loc[layout['Group'].isin(related), ['SampleID_us','Group']].set_index('SampleID_us')
+meta['Group'] = pd.Categorical(meta['Group'], categories=related)
+cts = counts_f.loc[:, meta.index].T
+
+dds = DeseqDataSet(counts=cts, metadata=meta, design='~ Group', n_cpus=4, quiet=True)
+dds.deseq2()
+st = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05, n_cpus=4, quiet=True)
+st.summary()
+res = st.results_df
+mask = res['padj'].notna() & (res['padj'] <= 0.05) & (res['log2FoldChange'].abs() >= 0.5) & (res['baseMean'] >= 10)
+mapdf = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t').dropna(subset=['ENSG','gene_name'])
+ensg_to_symbol = dict(zip(mapdf['ENSG'], mapdf['gene_name']))
+fg = sorted(set(pd.Series(res.index[mask].map(ensg_to_symbol)).dropna().astype(str)))
+bg = sorted(set(pd.Series(counts_f.index.map(ensg_to_symbol)).dropna().astype(str)))
+term = 'TP53 Regulates Transcription Of Cell Cycle Genes R-HSA-6791312'
+for label, background in [('default', None), ('mapped_prefiltered', bg)]:
+    enr = gp.enrichr(gene_list=fg, gene_sets='Reactome_2022', organism='human', background=background, outdir=None, no_plot=True, cutoff=1.0, verbose=False)
+    row = enr.results.loc[enr.results['Term'].eq(term)].iloc[0]
+    print(label, 'OR', row['Odds Ratio'], 'P', row['P-value'], 'Adj', row['Adjusted P-value'], 'Genes', row['Genes'])
+PY"

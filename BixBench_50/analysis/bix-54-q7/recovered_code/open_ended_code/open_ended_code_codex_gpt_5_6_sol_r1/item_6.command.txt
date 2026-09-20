@@ -1,0 +1,29 @@
+/bin/bash -lc "Rscript - <<'RS'
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+z <- d[d"'$StrainNumber == '"'287_98', ]
+parts <- strsplit(z"'$Ratio, '"':', fixed=TRUE)
+z"'$p287 <- vapply(parts, function(v) { x <- as.numeric(v); x[1] / sum(x) }, numeric(1))
+stopifnot(nrow(z) == 36L, !anyNA(z[, c('"'Area','p287')]), all(table(z"'$p287) == 3L))
+fits <- list(
+  quadratic = lm(Area ~ p287 + I(p287''^2), data=z),
+  cubic = lm(Area ~ p287 + I(p287''^2) + I(p287''^3), data=z),
+  natural_spline_df4 = lm(Area ~ splines::ns(p287, df=4), data=z)
+)
+comparison <- data.frame(
+  model=names(fits),
+  n=vapply(fits,nobs,numeric(1)),
+  AIC=vapply(fits,AIC,numeric(1)),
+  adj_R2=vapply(fits,function(m) summary(m)$adj.r.squared,numeric(1))
+)
+print(comparison, row.names=FALSE, digits=12)
+best <- fits[[which.min(comparison$AIC)]]
+objective <- function(p) -as.numeric(predict(best, newdata=data.frame(p287=p)))
+opt <- optimize(objective, interval=range(z$p287), tol=.Machine$double.eps''^0.5)
+cat(sprintf('"'range=[%.15f, %.15f]\\n', min(z"'$p287), max(z$p287)))
+cat(sprintf('"'optimal_frequency=%.12f\\n', opt"'$minimum))
+cat(sprintf('"'maximum_predicted_area=%.12f\\n', -opt"'$objective))
+# Numerical local maximum check
+h <- 1e-6
+yp <- -objective(opt$minimum+h); y0 <- -objective(opt$minimum); ym <- -objective(opt$minimum-h)
+stopifnot(y0 > yp, y0 > ym)
+RS'

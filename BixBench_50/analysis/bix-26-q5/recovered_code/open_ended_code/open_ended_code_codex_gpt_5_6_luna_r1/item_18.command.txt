@@ -1,0 +1,44 @@
+/bin/bash -lc "Rscript - <<'RS'
+options(timeout=120)
+read_tab <- function(u) {
+  con <- url(u, open='rb'); on.exit(close(con), add=TRUE)
+  z <- readLines(con, warn=FALSE)
+  z <- z[nzchar(z)]
+  do.call(rbind, strsplit(z, '\\\\t', fixed=FALSE))
+}
+cat('downloading links...\\n')
+ln <- read_tab('https://rest.kegg.jp/link/pathway/pau')
+cat('link dims',paste(dim(ln),collapse='x'),'\\n')
+cat('downloading pathway list...\\n')
+pw <- read_tab('https://rest.kegg.jp/list/pathway/pau')
+cat('pathway dims',paste(dim(pw),collapse='x'),'\\n')
+print(head(pw,3))
+for (f in list.files('/workspace/inputs', pattern='\\\\.rds"'$'"', full.names=TRUE)) {
+  x <- readRDS(f); a <- attributes(x); d <- a"'$listData; ids <- a$rownames
+  sig <- ids[is.finite(d$log2FoldChange) & is.finite(d$padj) & abs(d$log2FoldChange)>1.5 & d$padj<0.05]
+  cat('"'\\n',basename(f),'tested',length(ids),'sig',length(sig),'mapped sig',sum(paste0('pau:',sig) %in% ln[,1]),'\\n')
+  cat('mapped tested',sum(paste0('pau:',ids) %in% ln[,1]),'unique path terms',length(unique(ln[,2])),'unique genes',length(unique(ln[,1])),'\\n')
+  # pathway gene sets, using all measured genes background
+  pathgenes <- split(sub('"'^pau:'"','',ln[,1]), sub('"'^path:'"','',ln[,2]))
+  measured <- intersect(ids, unique(sub('"'^pau:'"','',ln[,1])))
+  sigm <- intersect(sig, measured)
+  pathgenes_u <- lapply(pathgenes, intersect, measured)
+  pathgenes_u <- pathgenes_u[vapply(pathgenes_u,length,integer(1))>0]
+  calc <- function(Ngenes, qgenes, sets) {
+    N <- length(Ngenes); n <- length(qgenes)
+    k <- vapply(sets, function(s) sum(s %in% qgenes), integer(1)); M <- lengths(sets)
+    keep <- k>0
+    p <- phyper(k[keep]-1, M[keep], N-M[keep], n, lower.tail=FALSE)
+    padj <- p.adjust(p,'BH')
+    data.frame(id=names(sets)[keep],k=k[keep],M=M[keep],p=p,padj=padj)
+  }
+  # default all KEGG genes as universe (all mapped genes), and measured universe
+  for (label in c('allKEGG','measured')) {
+    if(label=='allKEGG') {u <- unique(sub('"'^pau:'"','',ln[,1])); q <- intersect(sig,u); sets <- pathgenes}
+    else {u <- measured; q <- sigm; sets <- pathgenes_u}
+    z <- calc(u,q,sets)
+    cat(label,'N',length(u),'n',length(q),'terms tested',nrow(z),'sig',sum(z"'$padj<0.05),'"'minpadj',ifelse(nrow(z),min(z"'$padj),NA),'"'\\n')
+    print(z[order(z"'$padj,z$p),][1:min(10,nrow(z)),])
+  }
+}
+RS'

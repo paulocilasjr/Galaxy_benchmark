@@ -1,0 +1,48 @@
+/bin/bash -c "python3 - <<'PY'
+import openpyxl, glob, os, re, statistics
+chip=set()
+ws=openpyxl.load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx', data_only=True).active
+for r in ws.iter_rows(values_only=True):
+ if r[0]: chip.add(str(r[0]).strip())
+
+trio_ws=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx', data_only=True).active
+recs=[]
+for r in trio_ws.iter_rows(min_row=2,values_only=True):
+ sid=str(r[0]).strip().replace('\\t','').strip(); status=str(r[1]).strip(); blm=str(r[3]).strip()
+ recs.append((sid,status,blm))
+files={os.path.basename(f).split('_')[-1].split('.')[0]:f for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+def match(sid):
+ if sid in files:return sid
+ if re.fullmatch(r'\\d+',sid):
+  cand=[t for t in files if re.fullmatch(re.escape(sid)+r'-[A-Z0-9]+',t)]
+  return cand[0] if len(cand)==1 else None
+ return None
+excl={'intron_variant','intergenic_variant','3_prime_UTR_variant','5_prime_UTR_variant','5_prime_UTR_premature_start_codon_gain_variant'}
+def count(f, restrict):
+ w=openpyxl.load_workbook(f,data_only=True).active; n=0
+ for r in w.iter_rows(min_row=3,values_only=True):
+  if restrict:
+   parts=str(r[12]).split(',')
+   if not any(p.strip() in chip for p in parts): continue
+  zyg=str(r[4]); ont=str(r[13])
+  if zyg=='Reference': continue
+  if ont in excl: continue
+  try: v=float(r[9])
+  except: continue
+  if v<0.3: n+=1
+ return n
+for label,pred in [
+ ('Carrier',lambda rec:rec[2]=='Carrier'),
+ ('Affected',lambda rec:rec[2]=='Affected'),
+ ('Carrier+Affected',lambda rec:rec[2] in ('Carrier','Affected')),
+ ('Unaffected',lambda rec:rec[2]=='Unaffected')]:
+ print('\\n',label)
+ for restrict in [False,True]:
+  counts=[]
+  for sid,status,blm in recs:
+   if not pred((sid,status,blm)): continue
+   tok=match(sid)
+   if not tok: continue
+   counts.append(count(files[tok],restrict))
+  print('restrict',restrict,'n',len(counts),'counts',counts,'median',statistics.median(counts))
+PY"

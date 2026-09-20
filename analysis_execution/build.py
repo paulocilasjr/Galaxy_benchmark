@@ -45,6 +45,8 @@ def _trace_events(path: Path, run_id: str, source_id: str, condition: str):
     if not path:
         return []
     raw = gzip.decompress(path.read_bytes()).decode(errors="replace") if path.suffix == ".gz" else path.read_text(errors="replace")
+    if path.name.startswith("claude_events"):
+        return _claude_trace_events(raw, path, run_id, source_id, condition)
     events = []
     for line_number, line in enumerate(raw.splitlines(), 1):
         try:
@@ -62,18 +64,70 @@ def _trace_events(path: Path, run_id: str, source_id: str, condition: str):
         tool = "shell" if kind == "command_execution" else item.get("tool") or kind
         event_type = _event_type(command or "", condition) if kind == "command_execution" else (
             "discovery" if kind == "web_search" or str(tool).startswith(("inspect_", "search_")) else "orchestration")
-        events.append({"event_id": f"evt_trace_{run_id}_{native}", "sequence": len(events) + 1,
+        events.append({"event_id": f"evt_trace_{run_id}_{native}_line_{line_number}", "sequence": len(events) + 1,
                        "source_line": line_number, "timestamp": None,
                        "timestamp_source": "JSONL order; no per-item timestamp",
                        "event_type": event_type,
                        "execution_location": "agent_runtime" if kind == "command_execution" else "external_service" if kind == "web_search" else "mixed" if str(tool).startswith("run_galaxy") else "agent_runtime",
                        "native_tool_call_id": native, "parent_event_ids": [], "input_artifact_ids": [], "output_artifact_ids": [],
                        "tool": tool, "command": command, "parameters": item.get("arguments"),
+                       "is_mcp_call": kind == "mcp_tool_call",
                        "status": item.get("status") or "completed", "exit_code": item.get("exit_code"),
                        "stdout_excerpt": (item.get("aggregated_output") or "")[:1000] if kind == "command_execution" else None,
                        "stderr_excerpt": str(item.get("error"))[:1000] if item.get("error") else None,
                        "evidence_refs": [f"{source_id}:{path.name}#L{line_number}"],
                        "visibility_limits": "Full retained trace is authoritative; shell output excerpt is truncated"})
+    return events
+
+
+def _claude_trace_events(raw: str, path: Path, run_id: str, source_id: str, condition: str):
+    records = []
+    for line_number, line in enumerate(raw.splitlines(), 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        records.append((line_number, record))
+    results = {}
+    for line_number, record in records:
+        if record.get("type") != "user":
+            continue
+        content = (record.get("message") or {}).get("content", [])
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id"):
+                text = block.get("content")
+                if isinstance(text, list):
+                    text = "\n".join(x.get("text", "") for x in text if isinstance(x, dict))
+                results[block["tool_use_id"]] = (line_number, str(text or ""), bool(block.get("is_error")))
+    events = []
+    for line_number, record in records:
+        if record.get("type") != "assistant":
+            continue
+        content = (record.get("message") or {}).get("content", [])
+        for block_index, block in enumerate(content if isinstance(content, list) else []):
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            native = str(block.get("id") or f"line_{line_number}")
+            native_tool = str(block.get("name") or "unknown")
+            params = block.get("input") or {}
+            is_shell = native_tool == "Bash"
+            command = params.get("command") if is_shell and isinstance(params, dict) else None
+            is_mcp = native_tool.startswith("mcp__")
+            tool = "shell" if is_shell else native_tool.rsplit("__", 1)[-1] if is_mcp else native_tool
+            result = results.get(native)
+            events.append({"event_id": f"evt_trace_{run_id}_{native}_line_{line_number}_block_{block_index}", "sequence": len(events) + 1,
+                           "source_line": line_number, "timestamp": None,
+                           "timestamp_source": "Claude JSONL order; no per-tool timestamp",
+                           "event_type": _event_type(command or "", condition) if is_shell else "discovery" if tool.startswith(("inspect_", "search_")) else "orchestration",
+                           "execution_location": "agent_runtime" if is_shell else "mixed" if is_mcp and tool.startswith("run_galaxy") else "agent_runtime",
+                           "native_tool_call_id": native, "native_tool_name": native_tool,
+                           "parent_event_ids": [], "input_artifact_ids": [], "output_artifact_ids": [],
+                           "tool": tool, "command": command, "parameters": params, "is_mcp_call": is_mcp,
+                           "status": "error" if result and result[2] else "completed" if result else "result_not_observed",
+                           "exit_code": None, "stdout_excerpt": result[1][:1000] if result else None,
+                           "stderr_excerpt": result[1][:1000] if result and result[2] else None,
+                           "evidence_refs": [f"{source_id}:{path.name}#L{line_number}"] + ([f"{source_id}:{path.name}#L{result[0]}"] if result else []),
+                           "visibility_limits": "Claude tool-use/result records; exit code not always structured; full retained trace is authoritative"})
     return events
 
 
@@ -226,6 +280,7 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
             sources.append({"source_id": trace_sid, "location": link.trace_url,
                             "retrieval_time_utc": trace_manifest.get("retrieved_at_utc"),
                             "access_status": trace_manifest.get("status", "not_collected"),
+                            "tls_certificate_verified": trace_manifest.get("tls_certificate_verified"),
                             "local_snapshot": str(trace_folder.relative_to(output)) if trace_folder.exists() else None,
                             "redactions": [x.get("redactions", []) for x in trace_manifest.get("files", []) if x.get("redactions")],
                             "evidence_completeness": "See file-level trace manifest"})
@@ -239,6 +294,7 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
                 sources.append({"source_id": galaxy_sid, "location": link.galaxy_url,
                                 "retrieval_time_utc": galaxy.get("retrieved_at_utc"),
                                 "access_status": galaxy.get("status", "not_collected"),
+                                "tls_certificate_verified": galaxy.get("tls_certificate_verified"),
                                 "local_snapshot": f"source_snapshots/galaxy/{hid}" if galaxy else None,
                                 "redactions": ["account fields in retained JSON"],
                                 "evidence_completeness": "Read-only current history snapshot, not original agent chronology"})
@@ -249,7 +305,8 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
         evaluation_path = locate(trace_folder, "evaluation.json")
         usage_path = locate(trace_folder, "usage.json")
         invocation_path = locate(trace_folder, "docker_invocation.json")
-        trace_path = locate(trace_folder, "codex_events.jsonl") or locate(trace_folder, "codex_events.jsonl.gz")
+        trace_path = (locate(trace_folder, "codex_events.jsonl") or locate(trace_folder, "codex_events.jsonl.gz")
+                      or locate(trace_folder, "claude_events.jsonl") or locate(trace_folder, "claude_events.jsonl.gz"))
         evaluation = read_json(evaluation_path) if evaluation_path else {}
         usage = read_json(usage_path) if usage_path else {}
         invocation = read_json(invocation_path) if invocation_path else {}
@@ -320,7 +377,7 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
                "condition": link.condition, "original_condition_label": link.condition_label,
                "model": {"supplied_label": link.model, "verified_runtime_id": invocation.get("model"),
                          "version": invocation.get("model"), "harness": invocation.get("image"),
-                         "reasoning_setting": invocation.get("reasoning_effort"),
+                         "reasoning_setting": invocation.get("reasoning_effort") or invocation.get("effort"),
                          "verification_status": "runtime_verified" if invocation.get("model") else "user_supplied_only"},
                "replicate_id": link.replicate, "seed": None,
                "status": "trace_observed" if trace_path else "history_observed" if galaxy.get("contents_path") else "source_incomplete",
@@ -357,7 +414,7 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
                          "missingness": None if usage_path else "not_collected"},
                "derived_metrics": {"completed_shell_calls": sum(e.get("tool") == "shell" for e in events),
                                    "nonzero_exit_shell_calls": sum(e.get("tool") == "shell" and e.get("exit_code") not in (None, 0) for e in events),
-                                   "completed_mcp_calls": sum(bool(e.get("native_tool_call_id")) and e.get("tool") not in {"shell", "web_search"} and e["execution_location"] != "galaxy_job" for e in events),
+                                   "completed_mcp_calls": sum(bool(e.get("is_mcp_call")) for e in events),
                                    "analytical_job_count": sum(e["event_type"] == "analysis" and e["execution_location"] == "galaxy_job" for e in events) if galaxy.get("contents_path") else None,
                                    "total_failed_jobs": sum(e["event_type"] == "analysis" and e["execution_location"] == "galaxy_job" and e.get("status") in {"error", "failed"} for e in events) if galaxy.get("contents_path") else None,
                                    "failed_jobs_before_first_supported_result": None,
@@ -412,6 +469,8 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
                                           "sha256": None, "validation_status": "pending"},
                                "reference_integrity": "pending", "hash_size_and_count_checks": "pending",
                                "unresolved_issues": []}}
+    if any(s.get("tls_certificate_verified") is False for s in sources):
+        evidence["audit"]["limitations"].append("Source TLS certificates were not verified because the host proxy presented an invalid certificate; local retained-byte hashes do not authenticate the remote server")
     evidence["comparisons"] = make_comparisons(runs)
     evidence["manuscript_findings"] = make_findings(runs, evidence["comparisons"])
     schema_path = output / "history_analysis_evidence.schema.json"

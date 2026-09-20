@@ -1,0 +1,69 @@
+/bin/bash -c "cat > /workspace/tmp/ora_clusterprofiler.py <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import hypergeom
+
+def bh_fdr(pvals):
+    pvals=np.asarray(pvals,dtype=float); order=np.argsort(pvals); n=len(pvals)
+    scaled=pvals[order]*n/np.arange(1,n+1)
+    adj_sorted=np.minimum.accumulate(scaled[::-1])[::-1]
+    adj=np.empty(n); adj[order]=adj_sorted
+    return np.minimum(1,adj)
+
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path'])
+link['gene']=link['gene'].str.split(':',expand=True)[1]
+link['path']=link['path'].str.split(':',expand=True)[1]
+pathdesc=pd.read_csv('/workspace/tmp/pau_pathways.tsv',sep='\\t',header=None,names=['path','desc'])
+pathdesc['path']=pathdesc['path'].str.replace('"'^pau'"','pau',regex=True)
+
+files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+allkg=set(link.gene)
+
+def run(minGSSize=10,maxGSSize=500,universe='kegg'):
+    out={}
+    for strain,fn in files.items():
+        df=pd.read_csv('/workspace/tmp/'+fn)
+        for direction,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+            gene=set(df.loc[expr,'gene'])
+            # mapped selected genes to any pathway
+            mapped_gene=[g for g in gene if g in allkg]
+            n=len(mapped_gene)
+            # term full sets
+            rows=[]
+            # only terms with at least one selected gene (and min/max full size)
+            for p,gdf in link.groupby('path'):
+                term_genes=set(gdf.gene)
+                m=len(term_genes)
+                if m<minGSSize or m>maxGSSize: continue
+                qgenes=term_genes & gene
+                q=len(qgenes)
+                if q==0: continue
+                pval=hypergeom.sf(q-1, len(allkg), m, n)
+                rows.append((p,m,q,n,pval))
+            d=pd.DataFrame(rows,columns=['path','m','q','n','pval'])
+            if len(d):
+                d['padj']=bh_fdr(d.pval.values)
+                d=d.sort_values('pval')
+            else:
+                d['padj']=pd.Series(dtype=float)
+            out[(strain,direction)]=d
+    return out
+
+for minG,maxG in [(10,500),(1,1e9)]:
+    out=run(minG,maxG,'kegg')
+    print('\\nSIZE',minG,maxG)
+    for strain in ['97','98','99']:
+        for direction in ['up','down']:
+            d=out[(strain,direction)]
+            print(strain,direction,'tested',len(d),'mapped selected',d.n.iloc[0] if len(d) else 0,'sig padj<=.05',int((d.padj<=0.05).sum()) if len(d) else 0)
+    for direction in ['up','down']:
+        sets=[]
+        for strain in ['97','98','99']:
+            d=out[(strain,direction)]
+            sets.append(set(d.loc[d.padj<=0.05,'path']))
+        common=set.intersection(*sets) if sets and all(len(x)>0 for x in sets) else set()
+        print('COMMON',direction,len(common),sorted(common))
+    up=set(out[('97','up')].loc[out[('97','up')].padj<=0.05,'path']) & set(out[('98','up')].loc[out[('98','up')].padj<=0.05,'path']) & set(out[('99','up')].loc[out[('99','up')].padj<=0.05,'path'])
+    down=set(out[('97','down')].loc[out[('97','down')].padj<=0.05,'path']) & set(out[('98','98') if False else ('98','down')].loc[out[('98','down')].padj<=0.05,'path']) & set(out[('99','down')].loc[out[('99','down')].padj<=0.05,'path'])
+    print('TOTAL',len(up|down))
+PY
+python3 /workspace/tmp/ora_clusterprofiler.py"

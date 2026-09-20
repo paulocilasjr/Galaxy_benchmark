@@ -1,0 +1,61 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv')
+parse_prop <- function(x) {
+  parts <- strsplit(as.character(x), ':')
+  sapply(parts, function(z) as.numeric(z[1]) / sum(as.numeric(z)))
+}
+mix <- subset(d, StrainNumber == '287_98')
+mix"'$freq <- parse_prop(mix$Ratio)
+# Fit dish-level replicate observations.
+mods <- list(
+  quadratic = lm(Area ~ poly(freq, 2, raw=TRUE), data=mix),
+  cubic = lm(Area ~ poly(freq, 3, raw=TRUE), data=mix),
+  ns4 = lm(Area ~ ns(freq, df=4), data=mix)
+)
+print(mix[,c('"'Ratio','Replicate','freq','Area')])
+print(sapply(mods, AIC))
+print(sapply(mods, BIC))
+print(sapply(mods, function(m) summary(m)"'$adj.r.squared))
+print(sapply(mods, function(m) deviance(m)))
+# optimize predictions over observed mixture domain [min(freq), max(freq)]
+lo <- min(mix$freq); hi <- max(mix$freq)
+cat('"'domain', lo, hi, '\\n')
+for (nm in names(mods)) {
+  f <- function(x) as.numeric(predict(mods[[nm]], newdata=data.frame(freq=x)))
+  opt <- optimize(function(x) -f(x), interval=c(lo, hi), maximum=FALSE)
+  # also check grid/endpoints for spline multimodality
+  grid <- seq(lo, hi, length.out=100001)
+  pr <- predict(mods[[nm]], newdata=data.frame(freq=grid))
+  im <- which.max(pr)
+  cat(nm, 'optimize_freq', opt"'$minimum, '"'optimize_pred', -opt"'$objective, '"'grid_freq', grid[im], 'grid_pred', pr[im], 'endpoint_preds', f(lo), f(hi), '\\n')
+}
+# Also show mean-by-ratio sensitivity and endpoint-control sensitivity, not as final yet.
+meanmix <- aggregate(Area ~ freq, mix, mean)
+mods_mean <- list(
+  quadratic = lm(Area ~ poly(freq, 2, raw=TRUE), data=meanmix),
+  cubic = lm(Area ~ poly(freq, 3, raw=TRUE), data=meanmix),
+  ns4 = lm(Area ~ ns(freq, df=4), data=meanmix)
+)
+cat('mean AIC\\n'); print(sapply(mods_mean, AIC)); print(sapply(mods_mean, function(m) summary(m)"'$adj.r.squared)); print(sapply(mods_mean, deviance))
+for (nm in names(mods_mean)) {
+  f <- function(x) as.numeric(predict(mods_mean[[nm]], newdata=data.frame(freq=x)))
+  opt <- optimize(function(x) -f(x), interval=c(min(meanmix$freq), max(meanmix$freq)))
+  cat('"'mean', nm, opt"'$minimum, -opt$objective, '"'\\n')
+}
+# endpoints inclusion: pure 98 p=0, pure 287 p=1 plus mixtures
+end <- subset(d, StrainNumber %in% c('98','287','287_98'))
+end"'$freq <- ifelse(end$StrainNumber=='"'98', 0, ifelse(end"'$StrainNumber=='"'287', 1, parse_prop(end"'$Ratio)))
+mods_end <- list(
+  quadratic = lm(Area ~ poly(freq, 2, raw=TRUE), data=end),
+  cubic = lm(Area ~ poly(freq, 3, raw=TRUE), data=end),
+  ns4 = lm(Area ~ ns(freq, df=4), data=end)
+)
+cat('"'end AIC\\n'); print(sapply(mods_end, AIC)); print(sapply(mods_end, function(m) summary(m)"'$adj.r.squared)); print(sapply(mods_end, deviance))
+for (nm in names(mods_end)) {
+  f <- function(x) as.numeric(predict(mods_end[[nm]], newdata=data.frame(freq=x)))
+  opt <- optimize(function(x) -f(x), interval=c(0, 1))
+  grid <- seq(0, 1, length.out=100001); pr <- predict(mods_end[[nm]], data.frame(freq=grid)); im <- which.max(pr)
+  cat('"'end', nm, opt"'$minimum, -opt$objective, '"'grid', grid[im], pr[im], '\\n')
+}
+RS"

@@ -1,0 +1,42 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.local_deps python3 - <<'PY'
+import csv
+from pathlib import Path
+import numpy as np
+import pandas as pd
+print('versions',np.__version__,pd.__version__,flush=True)
+crispr_path=Path('inputs/CRISPRGeneEffect.csv')
+expr_path=Path('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+model_path=Path('inputs/Model.csv')
+
+def header(path):
+    with path.open(newline='') as f:
+        return next(csv.reader(f))
+
+def first_col(path):
+    with path.open(newline='') as f:
+        rd=csv.reader(f); next(rd)
+        return [row[0] for row in rd]
+
+ch=header(crispr_path); eh=header(expr_path)
+expr_pos={x:i for i,x in enumerate(eh)}
+common=[x for x in ch[1:] if x in expr_pos]
+common_set=set(common)
+cp=[0]+[i for i,x in enumerate(ch) if x in common_set]
+ep=[0]+[expr_pos[x] for x in common]
+print('common',len(common),'selected columns',len(cp),len(ep),flush=True)
+c_ids=first_col(crispr_path); e_ids=first_col(expr_path); m_ids=first_col(model_path)
+c_set=set(c_ids); e_set=set(e_ids)
+shared=[x for x in m_ids if x in c_set and x in e_set]
+print('shared IDs',len(shared),flush=True)
+print('reading CRISPR',flush=True)
+c=pd.read_csv(crispr_path,usecols=cp,index_col=0,dtype=np.float32)
+print('reading expression',flush=True)
+e=pd.read_csv(expr_path,usecols=ep,index_col=0,dtype=np.float32)
+print('loaded',c.shape,e.shape,flush=True)
+c=c.loc[shared,common]
+e=e.loc[shared,common]
+print('aligned',c.shape,e.shape,'same indexes',c.index.equals(e.index),'same cols',c.columns.equals(e.columns),flush=True)
+print('missing CRISPR total/maxcol',int(c.isna().sum().sum()),int(c.isna().sum(axis=0).max()),'expr',int(e.isna().sum().sum()),int(e.isna().sum(axis=0).max()),flush=True)
+print('constant cols CRISPR/expression',int((c.nunique(dropna=True)<=1).sum()),int((e.nunique(dropna=True)<=1).sum()),flush=True)
+print('raw score range',float(np.nanmin(c.to_numpy())),float(np.nanmax(c.to_numpy())),'expr range',float(np.nanmin(e.to_numpy())),float(np.nanmax(e.to_numpy())),flush=True)
+PY"

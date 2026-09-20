@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, os, warnings
+warnings.filterwarnings('ignore')
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('/workspace/inputs/count.csv', index_col=0)
+counts = raw.T  # samples x genes
+meta = pd.DataFrame({'condition':['KL']*3 + ['WL']*3}, index=counts.index)
+print(counts.shape, counts.index.tolist())
+dds = DeseqDataSet(counts=counts.astype(int), metadata=meta, design='~condition', ref_level=['condition','KL'], quiet=True)
+print('obs', dds.obs)
+dds.deseq2()
+print('design cols', dds.obsm['design_matrix'].columns.tolist())
+stat = DeseqStats(dds, quiet=True)
+stat.summary()
+print('pre-shrink columns', stat.results_df.columns)
+print(stat.results_df.head(3))
+print('coeffs', stat.LFC.columns.tolist())
+stat.lfc_shrink(coeff='condition_WL_vs_KL')
+res = stat.results_df
+print('post-shrink columns', res.columns)
+print(res[['baseMean','log2FoldChange','pvalue','padj']].head())
+mask = (res.pvalue<0.05)&(res.baseMean>10)&(res.log2FoldChange.abs()>1)
+print('sig genes', mask.sum())
+print('NAs pvalue', res.pvalue.isna().sum(), 'NAs baseMean', res.baseMean.isna().sum(), 'NAs lfc', res.log2FoldChange.isna().sum())
+res.to_csv('/workspace/tmp/pydeseq2_results.csv')
+PY"

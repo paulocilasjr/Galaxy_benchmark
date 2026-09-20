@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from collections import Counter
+import glob, os, re, statistics
+
+def read_rows(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    try: ws.reset_dimensions()
+    except Exception: pass
+    return list(ws.iter_rows(values_only=True))
+
+def file_sample(path):
+    return os.path.basename(path).replace('.xlsx','').split('230209_Exome_GRCh38_CHIP_')[-1].split('-')[0].strip()
+chip_genes={str(r[0]).strip() for r in read_rows('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx') if r and r[0]}
+status_rows=read_rows('inputs/230215_Trio_Status.xlsx')
+ci={x:i for i,x in enumerate(status_rows[0]) if x is not None}
+carriers=[str(r[ci['Sample ID']]).strip() for r in status_rows[1:] if str(r[ci['BLM Mutation Status']]).strip()=='Carrier']
+files={file_sample(p):p for p in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+
+def ffloat(x):
+    try: return float(x)
+    except Exception: return None
+
+def excluded_so(x):
+    s=str(x or '').lower()
+    return 'intron' in s or 'intergenic' in s or 'utr' in s
+
+def count(p, explicit_match=False):
+    rows=read_rows(p); h=rows[1]
+    # duplicate Match columns: col 30 is Match under In_CHIP based on workbook section layout.
+    col={name:i for i,name in enumerate(h) if name is not None and name not in {}}
+    n=0; counted=[]
+    for r in rows[2:]:
+        if not any(x is not None for x in r): continue
+        if explicit_match:
+            in_chip=str(r[29] if len(r)>29 else '').strip().lower()=='true'
+            chip_match=str(r[30] if len(r)>30 else '').strip()
+            if not in_chip or chip_match not in chip_genes:
+                continue
+        if str(r[4] if len(r)>4 else '').strip().lower()=='reference': continue
+        if excluded_so(r[13] if len(r)>13 else None): continue
+        v=ffloat(r[9] if len(r)>9 else None)
+        if v is not None and v < 0.3:
+            n+=1
+            counted.append((r[0], r[12], r[13], r[4], v, r[29] if len(r)>29 else None, r[30] if len(r)>30 else None))
+    return n, counted
+for mode in [False, True]:
+    vals=[]
+    print('\\nmode explicit_match', mode)
+    for sid in carriers:
+        if sid in files:
+            n,_=count(files[sid], explicit_match=mode)
+            vals.append(n)
+            print(sid,n)
+        else:
+            print(sid,'MISSING')
+    print('sorted', sorted(vals), 'median', statistics.median(vals))
+
+# Check if any counted carrier variant has chip match not in chip list.
+bad=[]
+for sid in carriers:
+    if sid in files:
+        n, counted=count(files[sid], explicit_match=False)
+        for rec in counted:
+            if rec[6] not in chip_genes:
+                bad.append((sid, rec))
+print('\\nbad counted match not chip', bad[:20], 'n', len(bad))
+PY"

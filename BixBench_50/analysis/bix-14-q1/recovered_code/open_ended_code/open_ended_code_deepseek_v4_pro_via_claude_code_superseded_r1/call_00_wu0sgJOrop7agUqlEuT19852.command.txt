@@ -1,0 +1,105 @@
+python3 << 'PYEOF'
+import openpyxl
+import os
+
+# 1. Identify BLM mutation carriers
+wb = openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws = wb.active
+carrier_ids = set()
+for row in ws.iter_rows(min_row=2, values_only=True):
+    sample_id = row[0]
+    blm_status = row[3]
+    if blm_status == 'Carrier':
+        # Clean sample ID (some have trailing tabs)
+        sid = str(sample_id).strip()
+        carrier_ids.add(sid)
+
+print(f"BLM carriers (from Trio Status): {sorted(carrier_ids)}")
+print(f"Number of carriers: {len(carrier_ids)}")
+
+# 2. Map carrier IDs to their files
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+available_files = os.listdir(chip_dir)
+print(f"\nFiles in CHIP directory: {len(available_files)}")
+
+# Build a map from sample ID to file path
+# File naming: 230209_Exome_GRCh38_CHIP_{ID}-{Role}.xlsx
+# e.g., 184-PM means sample 184, role PM (Parent Mother)
+# 185-PF means sample 185, role PF (Parent Father)
+carrier_file_map = {}
+for fname in available_files:
+    if not fname.endswith('.xlsx'):
+        continue
+    # Extract the sample ID part
+    # Format: 230209_Exome_GRCh38_CHIP_{sample}-{suffix}.xlsx
+    parts = fname.replace('.xlsx', '').split('_')
+    sample_part = parts[-1]  # e.g., "184-PM" or "SRR5456220"
+    # Extract sample ID
+    sample_id = sample_part.split('-')[0]
+    if sample_id in carrier_ids:
+        carrier_file_map[sample_id] = os.path.join(chip_dir, fname)
+
+print(f"\nCarrier files found:")
+for sid, fpath in sorted(carrier_file_map.items()):
+    print(f"  {sid}: {os.path.basename(fpath)}")
+
+# 3. Define coding variant SO terms
+coding_so_terms = {
+    'synonymous_variant',
+    'missense_variant',
+    'stop_gained',
+    'stop_lost',
+    'start_lost',
+    'frameshift_variant',
+    'inframe_insertion',
+    'inframe_deletion',
+    'coding_sequence_variant',
+    'protein_altering_variant',
+}
+
+# 4. Process each carrier file
+total_coding_vaf_below_03 = 0
+total_synonymous_vaf_below_03 = 0
+
+# For debug: track all unique SO terms seen
+all_so_terms_seen = set()
+all_vaf_values = []
+
+for sid, fpath in sorted(carrier_file_map.items()):
+    wb = openpyxl.load_workbook(fpath)
+    ws = wb.active
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        so_term = str(row[13]).strip() if row[13] is not None else None
+        vaf = row[9]  # Variant Allele Freq
+        
+        if so_term:
+            all_so_terms_seen.add(so_term)
+        
+        # Skip variants without VAF or with VAF >= 0.3
+        if vaf is None:
+            continue
+        vaf_val = float(vaf)
+        if vaf_val >= 0.3:
+            continue
+        
+        all_vaf_values.append(vaf_val)
+        
+        # Check if coding
+        if so_term and so_term in coding_so_terms:
+            total_coding_vaf_below_03 += 1
+            if so_term == 'synonymous_variant':
+                total_synonymous_vaf_below_03 += 1
+
+print(f"\n=== Results ===")
+print(f"All SO terms seen across carrier files: {sorted(all_so_terms_seen)}")
+print(f"Coding SO terms used: {sorted(coding_so_terms)}")
+print(f"\nCoding variants with VAF < 0.3: {total_coding_vaf_below_03}")
+print(f"Synonymous variants with VAF < 0.3: {total_synonymous_vaf_below_03}")
+if total_coding_vaf_below_03 > 0:
+    fraction = total_synonymous_vaf_below_03 / total_coding_vaf_below_03
+    print(f"Fraction synonymous: {fraction:.6f}")
+else:
+    print("No coding variants with VAF < 0.3 found")
+
+PYEOF
+

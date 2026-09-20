@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5ec8139195057b42e",
+  "history_id": "bbd44e69cb8906b5360a7a75ad7e9759",
+  "tool_id": "codex-gene-length-expression-pearson-20260801",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-01T21:52:30.198532",
+  "update_time": "2026-08-01T21:53:18.555501",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analyze.py <<'PY'\nimport csv\nimport sys\n\nimport numpy as np\nfrom scipy.stats import pearsonr\n\ncount_path, gene_meta_path, sample_path = sys.argv[1:4]\ncell_types = [\"CD4\", \"CD8\", \"CD14\", \"CD19\"]\n\nwith open(sample_path, newline=\"\", encoding=\"utf-8\") as handle:\n    sample_rows = list(csv.DictReader(handle))\n\nsample_names = [row[\"sample\"] for row in sample_rows]\nwith open(count_path, newline=\"\", encoding=\"utf-8\") as handle:\n    count_reader = csv.reader(handle)\n    count_header = next(count_reader)\n\nif count_header[1:] != sample_names:\n    raise RuntimeError(\"count-matrix sample header does not exactly match annotation order\")\n\nheader_index = {name: index for index, name in enumerate(count_header)}\nsample_indices = {}\nfor cell_type in cell_types:\n    names = [row[\"sample\"] for row in sample_rows if row[\"celltype\"] == cell_type]\n    if not names:\n        raise RuntimeError(\"no samples found for \" + cell_type)\n    sample_indices[cell_type] = [header_index[name] for name in names]\n\ngene_meta = {}\nwith open(gene_meta_path, newline=\"\", encoding=\"utf-8\") as handle:\n    for row in csv.DictReader(handle):\n        gene_id = row[\"Geneid\"]\n        if gene_id in gene_meta:\n            raise RuntimeError(\"duplicate Geneid in gene metadata: \" + gene_id)\n        gene_meta[gene_id] = (float(row[\"Length\"]), row[\"gene_biotype\"])\n\nlengths = []\naverages = {cell_type: [] for cell_type in cell_types}\nseen_genes = set()\n\nwith open(count_path, newline=\"\", encoding=\"utf-8\") as handle:\n    count_reader = csv.reader(handle)\n    next(count_reader)\n    for row in count_reader:\n        gene_id = row[0]\n        if gene_id not in gene_meta:\n            continue\n        seen_genes.add(gene_id)\n        length, biotype = gene_meta[gene_id]\n        if biotype != \"protein_coding\":\n            continue\n        try:\n            values = {index: float(row[index]) for indices in sample_indices.values() for index in indices}\n        except (ValueError, IndexError) as exc:\n            raise RuntimeError(\"non-numeric or missing expression value for \" + gene_id) from exc\n        lengths.append(length)\n        for cell_type in cell_types:\n            cell_values = np.asarray(\n                [values[index] for index in sample_indices[cell_type]],\n                dtype=np.float64,\n            )\n            averages[cell_type].append(float(np.mean(cell_values)))\n\nprotein_coding_ids = {gene_id for gene_id, (_, biotype) in gene_meta.items() if biotype == \"protein_coding\"}\nmissing_ids = protein_coding_ids - seen_genes\nif missing_ids:\n    raise RuntimeError(\"protein-coding genes missing from count matrix: \" + str(len(missing_ids)))\n\nlength_array = np.asarray(lengths, dtype=np.float64)\nif length_array.size < 3:\n    raise RuntimeError(\"fewer than three protein-coding genes available\")\n\nwith open(\"correlations.tsv\", \"w\", encoding=\"utf-8\", newline=\"\") as output:\n    output.write(\"cell_type\\tn_samples\\tn_protein_coding_genes\\tpearson_r\\tabsolute_pearson_r\\n\")\n    for cell_type in cell_types:\n        expression_array = np.asarray(averages[cell_type], dtype=np.float64)\n        if expression_array.size != length_array.size:\n            raise RuntimeError(\"gene vector length mismatch for \" + cell_type)\n        correlation, _ = pearsonr(length_array, expression_array)\n        output.write(\n            cell_type\n            + \"\\t\"\n            + str(len(sample_indices[cell_type]))\n            + \"\\t\"\n            + str(int(length_array.size))\n            + \"\\t\"\n            + format(float(correlation), \".17g\")\n            + \"\\t\"\n            + format(abs(float(correlation)), \".17g\")\n            + \"\\n\"\n        )\nPY\npython analyze.py \"/jetstream2/scratch/main/jobs/78856534/inputs/dataset_1dd625a3-b9ea-4bc6-b420-7175061e40ac.dat\" \"/jetstream2/scratch/main/jobs/78856534/inputs/dataset_35b40e1a-a815-457e-af97-cd387a73f7f1.dat\" \"/jetstream2/scratch/main/jobs/78856534/inputs/dataset_19d6c629-740f-4bbf-8cce-96ec08fb40c9.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "count_matrix": {
+      "id": "f9cad7b01a47213520afd7d713fe2b01",
+      "src": "hda",
+      "uuid": "1dd625a3-b9ea-4bc6-b420-7175061e40ac"
+    },
+    "gene_metadata": {
+      "id": "f9cad7b01a472135754a7ae1457b6bd1",
+      "src": "hda",
+      "uuid": "35b40e1a-a815-457e-af97-cd387a73f7f1"
+    },
+    "sample_annotation": {
+      "id": "f9cad7b01a4721356899e0a443352d61",
+      "src": "hda",
+      "uuid": "19d6c629-740f-4bbf-8cce-96ec08fb40c9"
+    }
+  },
+  "outputs": {
+    "correlations": {
+      "id": "f9cad7b01a47213570cbb55e75cbd843",
+      "src": "hda",
+      "uuid": "db3a1dc2-d26a-4df1-8867-35a31ec53792"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

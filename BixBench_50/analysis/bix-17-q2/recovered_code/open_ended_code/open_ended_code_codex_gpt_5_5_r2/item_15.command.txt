@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+import glob, os, re, statistics
+from collections import Counter, defaultdict
+
+def iter_rows(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    ws.reset_dimensions()
+    yield from ws.iter_rows(values_only=True)
+
+# sample IDs in files
+file_ids=[]
+for f in sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')):
+    base=os.path.basename(f)
+    sid=base.replace('230209_Exome_GRCh38_CHIP_','').replace('.xlsx','')
+    sid=sid.split('-')[0]
+    file_ids.append(str(sid))
+print('n files', len(file_ids))
+
+# status mapping trimmed
+rows=list(iter_rows('inputs/230215_Trio_Status.xlsx'))
+header=rows[0]; idx={h:i for i,h in enumerate(header) if h}
+status={str(r[idx['Sample ID']]).strip(): {h:r[i] if i<len(r) else None for h,i in idx.items()} for r in rows[1:] if r and r[0] is not None}
+carriers=[sid for sid,r in status.items() if str(r['BLM Mutation Status']).strip()=='Carrier']
+print('carriers', carriers, 'n', len(carriers))
+print('carrier files present', [sid for sid in carriers if sid in file_ids], len([sid for sid in carriers if sid in file_ids]))
+print('carrier files missing', [sid for sid in carriers if sid not in file_ids])
+print('files no status', [sid for sid in file_ids if sid not in status])
+
+# gene list
+chip_genes=[str(r[0]).strip() for r in iter_rows('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx') if r and r[0]]
+print('chip genes n', len(chip_genes), chip_genes[:10], chip_genes[-5:])
+
+# inspect distributions representative and all
+counts=Counter(); vaf_types=Counter(); in_chip=Counter(); so=Counter(); zyg=Counter(); effects=Counter()
+for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'):
+    rows=iter_rows(f)
+    next(rows); h=next(rows); col={name:i for i,name in enumerate(h) if name is not None and name not in ['Match']}
+    # duplicate Match ignored; direct indexes
+    hlist=list(h)
+    for r in rows:
+        if not r or r[0] is None: continue
+        counts['rows']+=1
+        val=r[9] if len(r)>9 else None
+        vaf_types[type(val).__name__]+=1
+        in_chip[str(r[29] if len(r)>29 else None)]+=1
+        so[str(r[13] if len(r)>13 else None)]+=1
+        zyg[str(r[4] if len(r)>4 else None)]+=1
+        effects[str(r[14] if len(r)>14 else None)]+=1
+print('all variant rows', counts)
+print('vaf types', vaf_types)
+print('In_CHIP', in_chip)
+print('zygosity', zyg)
+print('top SO', so.most_common(20))
+print('effects', effects.most_common(20))
+PY"

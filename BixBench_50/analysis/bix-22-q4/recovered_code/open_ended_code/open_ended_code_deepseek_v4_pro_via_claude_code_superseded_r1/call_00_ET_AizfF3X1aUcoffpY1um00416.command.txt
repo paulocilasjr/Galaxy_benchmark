@@ -1,0 +1,68 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+# 1. Load sample annotations to get CD14 samples
+samples_df = pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv')
+cd14_samples = samples_df[samples_df['celltype'] == 'CD14']['sample'].tolist()
+print(f"Number of CD14 samples: {len(cd14_samples)}")
+
+# 2. Load gene metadata - file has leading comma (empty column 0)
+gene_meta = pd.read_csv('/workspace/inputs/GeneMetaInfo_Zenodo.csv')
+print(f"Gene metadata columns: {gene_meta.columns.tolist()}")
+print(f"Gene metadata shape: {gene_meta.shape}")
+
+# Filter for protein-coding
+pc_genes_meta = gene_meta[gene_meta['gene_biotype'] == 'protein_coding'].copy()
+print(f"Protein-coding genes: {len(pc_genes_meta)}")
+
+# 3. Load expression data
+expr = pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+print(f"Expression data shape: {expr.shape}")
+
+# Find CD14 columns that exist in expression data
+cd14_cols = [c for c in cd14_samples if c in expr.columns]
+print(f"CD14 columns found in expression data: {len(cd14_cols)}")
+
+# Subset to CD14 samples
+expr_cd14 = expr[cd14_cols]
+
+# 4. Merge: keep only protein-coding genes that are in the expression data
+pc_genes_meta = pc_genes_meta.set_index('Geneid')
+common_genes = expr_cd14.index.intersection(pc_genes_meta.index)
+print(f"Common protein-coding genes in expression data: {len(common_genes)}")
+
+expr_cd14_pc = expr_cd14.loc[common_genes]
+lengths = pc_genes_meta.loc[common_genes, 'Length']
+
+# 5. Filter for expressed genes: total counts across CD14 samples >= 10
+total_counts = expr_cd14_pc.sum(axis=1)
+expressed_mask = total_counts >= 10
+print(f"Expressed protein-coding genes (total counts >= 10): {expressed_mask.sum()}")
+
+expr_expressed = expr_cd14_pc[expressed_mask]
+lengths_expressed = lengths[expressed_mask]
+
+# 6. Compute mean expression across CD14 samples
+mean_expr = expr_expressed.mean(axis=1)
+
+# 7. Pearson correlation
+print(f"Mean expression stats: min={mean_expr.min():.4f}, max={mean_expr.max():.4f}, mean={mean_expr.mean():.4f}, var={mean_expr.var():.4f}")
+print(f"Length stats: min={lengths_expressed.min()}, max={lengths_expressed.max()}, mean={lengths_expressed.mean():.4f}, var={lengths_expressed.var():.4f}")
+
+pearson_r, pearson_p = stats.pearsonr(lengths_expressed, mean_expr)
+print(f"\nPearson r: {pearson_r}")
+print(f"Pearson p-value: {pearson_p}")
+
+# Also check - should the question interpret "mean expression" in a specific way?
+# Could also be mean of normalized counts or TPM-like values
+# But the file is "BatchCorrectedReadCounts" - these are already normalized read counts
+# Mean across samples is straightforward
+
+import os
+os.makedirs('/workspace/codex_output', exist_ok=True)
+with open('/workspace/codex_output/answer.txt', 'w') as f:
+    f.write(str(pearson_r))
+print(f"\nAnswer written: {pearson_r}")
+PYEOF

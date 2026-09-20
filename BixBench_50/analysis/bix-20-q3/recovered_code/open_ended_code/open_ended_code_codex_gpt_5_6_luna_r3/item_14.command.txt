@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+import pandas as pd
+
+status=pd.read_excel('inputs/230215_Trio_Status.xlsx',header=0)
+carrier={str(x).strip() for x in status.loc[status['BLM Mutation Status'].eq('Carrier'),'Sample ID']}
+print('Carrier IDs',len(carrier),sorted(carrier))
+
+den=[]; num=[]
+exclude=('intron','intergenic','utr')
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    sid=p.stem.split('_CHIP_',1)[1].split('-',1)[0]
+    if sid not in carrier: continue
+    df=pd.read_excel(p,header=1)
+    # pandas re-read: coerce VAF and preserve explicit non-reference call filter
+    vaf=pd.to_numeric(df['Variant Allele Freq'],errors='coerce')
+    zyg=df['Zygosity'].astype('string').str.strip().str.lower()
+    ontology=df['Sequence Ontology (Combined)'].astype('string').str.lower()
+    classification=df['Classification'].astype('string').str.strip()
+    ok=(vaf<0.3)&zyg.ne('reference')&~ontology.str.contains('|'.join(exclude),na=False)&classification.notna()&classification.ne('')
+    b=df.loc[ok,'Classification'].astype(str).str.strip().str.lower().isin(['benign','likely benign'])
+    den.extend(df.loc[ok,'Classification'].astype(str).tolist())
+    num.extend(df.loc[ok & b,'Classification'].astype(str).tolist())
+    print(sid, int(ok.sum()), int(b.sum()))
+print('independent denominator',len(den),'numerator',len(num),'fraction',len(num)/len(den))
+print('classes',Counter(den))
+assert len(den)==37 and len(num)==37
+PY"

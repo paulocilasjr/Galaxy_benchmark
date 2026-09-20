@@ -1,0 +1,44 @@
+/bin/bash -lc "PYTHONUNBUFFERED=1 /workspace/tmp/pydeseq2-venv/bin/python - <<'PY'
+import gc
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+base='/workspace/inputs'
+metadata=pd.read_csv(base+'/Sample_annotated_Zenodo.csv').set_index('sample')
+metadata['batch']=pd.Categorical(metadata['batch'].astype(str),categories=['1','2','3','4'],ordered=True)
+metadata['sex']=pd.Categorical(metadata['sex'],categories=['F','M'],ordered=True)
+print('loading counts',flush=True)
+gene_counts=pd.read_csv(base+'/BatchCorrectedReadCounts_Zenodo.csv',index_col=0)
+gene_counts=gene_counts.loc[gene_counts.sum(axis=1)>0]
+counts=gene_counts.T.loc[metadata.index]
+print('model shape',counts.shape,'FAM sum',counts['FAM138A'].sum(),flush=True)
+dds=DeseqDataSet(counts=counts,metadata=metadata,design='~ batch + sex',n_cpus=1,quiet=False,low_memory=True)
+dds.X=dds.X.astype(np.int32,copy=False)
+del gene_counts,counts
+_gc=gc.collect()
+print('raw frames released; running deseq2',flush=True)
+dds.deseq2()
+print('running wald',flush=True)
+ds=DeseqStats(dds,contrast=['sex','M','F'],n_cpus=1,quiet=False)
+ds.summary()
+row=ds.results_df.loc['FAM138A']
+print('pre-shrink',row.to_dict(),flush=True)
+coeff='sex[T.M]'; ci=ds.LFC.columns.get_loc(coeff)
+prior_var=ds._fit_prior_var(coeff_idx=ci)
+prior_scale=min(float(np.sqrt(prior_var)),1.0)
+target_pos=dds.var_names.get_loc('FAM138A')
+lfcs,inv_hess,conv=dds.inference.lfc_shrink_nbinom_glm(
+    design_matrix=ds.design_matrix.values,
+    counts=dds.X[:,[target_pos]],
+    size=1.0/dds.var.loc[['FAM138A'],'dispersions'].values,
+    offset=np.log(dds.obs['size_factors']).values,
+    prior_no_shrink_scale=15,
+    prior_scale=prior_scale,
+    optimizer='L-BFGS-B',
+    shrink_index=ci,
+)
+shrunk=float(lfcs[0,ci]/np.log(2))
+print('prior_var',prior_var,'prior_scale',prior_scale,'shrunk_lfc',shrunk,'converged',conv,flush=True)
+print('baseMean',float(row['baseMean']),'passes',abs(shrunk)>0.5,float(row['baseMean'])>10,flush=True)
+PY"

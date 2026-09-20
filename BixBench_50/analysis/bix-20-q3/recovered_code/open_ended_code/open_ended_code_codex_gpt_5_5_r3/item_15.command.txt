@@ -1,0 +1,92 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+import glob, re, collections, math
+
+def iter_sheet(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    try: ws.reset_dimensions()
+    except Exception: pass
+    yield from ws.iter_rows(values_only=True)
+
+def load_status():
+    rows=iter_sheet('inputs/230215_Trio_Status.xlsx')
+    hdr=next(rows)
+    out=[]
+    for r in rows:
+        if not r or r[0] is None: continue
+        d={h:v for h,v in zip(hdr,r) if h is not None}
+        d['Sample ID']=str(d['Sample ID']).strip()
+        out.append(d)
+    return out
+
+files=sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+file_map={re.match(r'(\\d+|SRR\\d+)', Path(f).stem.replace('230209_Exome_GRCh38_CHIP_','')).group(1): f for f in files}
+carriers=[r['Sample ID'] for r in load_status() if r['BLM Mutation Status']=='Carrier']
+print('carriers', len(carriers), carriers)
+print('used', len([c for c in carriers if c in file_map]), 'missing', [c for c in carriers if c not in file_map])
+
+exclude_terms=('intron','intergenic','utr')
+
+def is_excluded_region(so):
+    s=str(so or '').lower()
+    return any(t in s for t in exclude_terms)
+
+def to_float(x):
+    if x is None or x=='': return None
+    try: return float(x)
+    except Exception: return None
+
+counts=collections.Counter()
+by_class=collections.Counter()
+kept=[]
+all_after=[]
+per_sample=collections.defaultdict(collections.Counter)
+for sid in carriers:
+    f=file_map.get(sid)
+    if not f: continue
+    rows=iter_sheet(f)
+    group=next(rows); hdr=next(rows)
+    idx={h:i for i,h in enumerate(hdr) if h is not None}
+    for r in rows:
+        if not r or r[0] is None: continue
+        counts['raw']+=1
+        # In_CHIP all true, but apply if present
+        if 'In_CHIP' in idx and str(r[idx['In_CHIP']]).strip().lower()"'!='"'true':
+            counts['not_chip']+=1; continue
+        if str(r[idx['Zygosity']]).strip().lower()=='reference':
+            counts['reference']+=1; continue
+        vaf=to_float(r[idx['Variant Allele Freq']])
+        if vaf is None:
+            counts['no_vaf']+=1; continue
+        if not (vaf < 0.3):
+            counts['vaf_ge_0.3']+=1; continue
+        if is_excluded_region(r[idx['Sequence Ontology (Combined)']]):
+            counts['excluded_region']+=1; continue
+        counts['somatic_filtered']+=1
+        cls=r[idx['Classification']]
+        all_after.append((sid, r[idx['Chr:Pos']], r[idx['Ref/Alt']], r[idx['Gene Names']], r[idx['Sequence Ontology (Combined)']], vaf, cls))
+        if cls is None or str(cls).strip()=='' or str(cls).strip().lower()=='nan':
+            counts['no_clinvar_class']+=1; continue
+        cls=str(cls).strip()
+        counts['with_clinvar_class']+=1
+        by_class[cls]+=1
+        per_sample[sid][cls]+=1
+        kept.append((sid, r[idx['Chr:Pos']], r[idx['Ref/Alt']], r[idx['Gene Names']], r[idx['Sequence Ontology (Combined)']], vaf, cls))
+
+print('counts', counts)
+print('by_class', by_class)
+num=by_class['Benign']+by_class['Likely Benign']
+den=counts['with_clinvar_class']
+print('num den prop', num, den, num/den if den else None)
+print('\\nkept rows with class')
+for row in kept:
+    print(row)
+print('\\nall somatic filtered no/with class')
+for row in all_after:
+    print(row)
+print('\\nper sample')
+for sid in carriers:
+    if sid in file_map: print(sid, dict(per_sample[sid]))
+PY"

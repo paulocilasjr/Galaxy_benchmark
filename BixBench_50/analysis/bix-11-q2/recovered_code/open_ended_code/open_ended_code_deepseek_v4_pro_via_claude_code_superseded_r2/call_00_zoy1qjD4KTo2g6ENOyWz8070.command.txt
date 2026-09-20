@@ -1,0 +1,61 @@
+python3 << 'EOF'
+import re
+import glob
+import os
+
+def parse_newick(newick_str):
+    """Extract all branch lengths from a Newick string."""
+    pattern = r':(\d+\.?\d*(?:[eE][+-]?\d+)?)'
+    return [float(x) for x in re.findall(pattern, newick_str)]
+
+tree_files = sorted(glob.glob('/tmp/work/fungi_scogs/*.treefile'))
+print(f"Total tree files: {len(tree_files)}")
+
+# Check a few manually
+for tf in tree_files[:3]:
+    with open(tf) as fh:
+        tree = fh.read().strip()
+    lengths = parse_newick(tree)
+    total = sum(lengths)
+    
+    print(f"\n{os.path.basename(tf)}:")
+    print(f"  Tree: {tree[:120]}...")
+    print(f"  All lengths ({len(lengths)}): {lengths}")
+    print(f"  Sum (total): {total}")
+
+# Now compare for a few: our computed vs IQ-TREE reported
+print("\n--- Comparison for first 5 ---")
+for tf in tree_files[:5]:
+    base = tf.replace('.treefile', '')
+    iqtree_file = base + '.iqtree'
+    
+    with open(tf) as fh:
+        tree = fh.read().strip()
+    with open(iqtree_file) as fh:
+        iqtree_content = fh.read()
+    
+    lengths = parse_newick(tree)
+    total_tree_length = sum(lengths)
+    
+    # Find internal branch: In a 4-taxon tree ((A,B),(C,D)) or (A,(B,C),D) etc.
+    # Internal branch is the one shared by the two internal nodes
+    # For unrooted 4-taxon trees, there's exactly 1 internal branch out of 5 total
+    # The internal branch length is the one connecting two internal nodes
+    # In newick: (A:x,(B:y,C:z):w,D:v) or ((A:x,B:y):w,(C:z,D:v):u)
+    # The internal branch is the one that doesn't have a leaf name directly before it
+    
+    match = re.search(r'Sum of internal branch lengths: ([\d.]+) \(([\d.]+)% of tree length\)', iqtree_content)
+    if match:
+        reported_internal = float(match.group(1))
+        reported_pct = float(match.group(2))
+        reported_treeness = reported_pct / 100.0
+    
+    # The internal branch in most 4-taxon trees connects two clades
+    # E.g., (A:0.6,(B:0.8,C:1.0):0.2,D:0.6) - the 0.2 is the internal
+    # Actually, we'd need a proper parser. Let's try a simple approach:
+    # Sort lengths, the internal branch is typically much smaller
+    sorted_lengths = sorted(lengths)
+    internal_est = sorted_lengths[0]  # shortest is usually internal
+    
+    print(f"{os.path.basename(tf)}: total={total_tree_length:.4f}, internal_reported={reported_internal:.4f} (treeness={reported_treeness:.4f}), lengths={lengths}")
+EOF

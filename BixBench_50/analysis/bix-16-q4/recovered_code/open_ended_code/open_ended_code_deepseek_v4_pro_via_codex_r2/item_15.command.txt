@@ -1,0 +1,73 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.stats as stats, time
+T=time.time()
+# Load common-gene matrices, aligned by stable cell-line ID
+ch=pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0)
+eh=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0)
+first_c=ch.columns[0]; first_e=eh.columns[0]
+common=[c for c in ch.columns[1:] if c in eh.columns[1:]]
+dt={c:np.float32 for c in common}
+cd=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=[first_c]+common, index_col=0, dtype=dt, low_memory=False)
+ed=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[first_e]+common, index_col=0, dtype=dt, low_memory=False)
+common_ids=sorted(set(cd.index)&set(ed.index))
+cd=cd.loc[common_ids]; ed=ed.loc[common_ids]
+print('aligned',cd.shape,'genes',len(common),'load',time.time()-T, flush=True)
+# Spearman: rank each gene's observations across cell lines, average ties
+r_eff=cd.rank(axis=0, method='average', na_option='keep').to_numpy(dtype=np.float64)
+r_expr=ed.rank(axis=0, method='average', na_option='keep').to_numpy(dtype=np.float64)
+print('ranked',time.time()-T, flush=True)
+valid=~(np.isnan(r_eff) | np.isnan(r_expr))
+n=valid.sum(axis=0, dtype=np.float64)
+# pairwise-valid centered Pearson on ranks
+def masked_col(x): return np.where(valid, x, 0.0)
+sx=masked_col(r_eff).sum(axis=0, dtype=np.float64)
+sy=masked_col(r_expr).sum(axis=0, dtype=np.float64)
+sxx=masked_col(r_eff*r_eff).sum(axis=0, dtype=np.float64)
+syy=masked_col(r_expr*r_expr).sum(axis=0, dtype=np.float64)
+sxy=masked_col(r_eff*r_expr).sum(axis=0, dtype=np.float64)
+mx=sx/n; my=sy/n
+cov=sxy-n*mx*my
+varx=sxx-n*mx*mx
+vary=syy-n*my*my
+denom=np.sqrt(np.maximum(varx*vary, 0))
+with np.errstate(divide='ignore', invalid='ignore'):
+    rho=cov/denom
+rho=np.clip(rho,-1,1)
+df=n-2
+# scipy spearmanr t approximation
+with np.errstate(divide='ignore', invalid='ignore'):
+    t=np.sqrt(np.maximum(df,0))*rho/np.sqrt(np.maximum(1-rho*rho, np.finfo(float).tiny))
+p=2*stats.t.sf(np.abs(t), df)
+finite=np.isfinite(p) & np.isfinite(rho) & (n>=3) & (denom>0)
+print('computable genes',int(finite.sum()),'nonfinite p',int((~finite).sum()),'time',time.time()-T, flush=True)
+print('n min median max',n.min(),np.median(n),n.max())
+print('rho finite range',np.nanmin(rho[finite]),np.nanmax(rho[finite]))
+print('p range min max',p[finite].min(),p[finite].max())
+# BH on valid p only
+pvals=p[finite].copy()
+m=pvals.size
+order=np.argsort(pvals, kind='mergesort')
+rank=np.empty(m, dtype=float)
+rank[order]=np.arange(1,m+1)
+q=np.empty(m, dtype=float)
+q[order]=pvals[order]*m/rank[order]
+# enforce monotonic increasing from most significant
+for i in range(m-2,-1,-1):
+    if q[order[i]] > q[order[i+1]]:
+        q[order[i]] = q[order[i+1]]
+q=np.minimum(q,1.0)
+sig=q<0.05
+print('sig BH q<0.05',int(sig.sum()),'percent',float(sig.sum())/m*100)
+print('sig unadjusted p<0.05',int((pvals<0.05).sum()),'percent',float((pvals<0.05).sum())/m*100)
+# directional counts for sanity; raw effect coordinate signs are for raw gene effect (negative-going)
+pos=np.isfinite(rho) & (p<0.05) & (rho>0)
+neg=np.isfinite(rho) & (p<0.05) & (rho<0)
+print('unadj raw positive significant',int(pos.sum()),'negative',int(neg.sum()))
+# BH directional using q mapping
+qs_all=np.full(len(common), np.nan)
+qs_all[finite]=q
+bhsig=qs_all<0.05
+raw_rho=rho
+print('BH raw-positive',int(((raw_rho>0)&bhsig).sum()),'raw-negative',int(((raw_rho<0)&bhsig).sum()))
+print('total common genes',len(common),'time total',time.time()-T)
+PY"

@@ -1,0 +1,75 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, statistics, collections, math
+
+NUM = re.compile(r'[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[Ee][+-]?\\d+)?')
+
+def parse_newick(s):
+    s=s.strip()
+    i=0
+    def label():
+        nonlocal i
+        start=i
+        while i<len(s) and s[i] not in ':,();': i+=1
+        return s[start:i].strip()
+    def node():
+        nonlocal i
+        children=[]
+        if i < len(s) and s[i]=='(':
+            i+=1
+            children.append(node())
+            while i<len(s) and s[i]==',':
+                i+=1; children.append(node())
+            if i>=len(s) or s[i]"'!='"')': raise ValueError(('missing )',i,s))
+            i+=1
+            name=label()
+        else:
+            name=label()
+            if not name: raise ValueError(('missing tip',i,s))
+        length=None
+        if i<len(s) and s[i]==':':
+            i+=1
+            m=NUM.match(s,i)
+            if not m: raise ValueError(('bad branch length',i,s))
+            length=float(m.group()); i=m.end()
+        return {'children':children,'name':name,'length':length}
+    root=node()
+    if i<len(s) and s[i]==';': i+=1
+    if i "'!= len(s): raise ValueError(('"'trailing',i,s[i:]))
+    return root
+
+def mean_patristic(s):
+    root=parse_newick(s)
+    def count(n):
+        n['tips']=sum(count(c) for c in n['children']) if n['children'] else 1
+        return n['tips']
+    nt=count(root)
+    if nt < 2: raise ValueError('fewer than 2 tips')
+    edge_pair_sum=0.0
+    missing=[]
+    def walk(n):
+        nonlocal edge_pair_sum
+        for c in n['children']:
+            if c['length'] is None: missing.append(c['name'])
+            else: edge_pair_sum += c['length'] * c['tips'] * (nt-c['tips'])
+            walk(c)
+    walk(root)
+    if missing: raise ValueError(f'missing lengths {missing}')
+    return edge_pair_sum/(nt*(nt-1)/2), nt
+
+for group in ('animals','fungi'):
+    path=f'inputs/scogs_{group}.zip'
+    vals=[]; tips=collections.Counter(); names=[]
+    with zipfile.ZipFile(path) as z:
+        members=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        for name in members:
+            s=z.read(name).decode()
+            v,n=mean_patristic(s)
+            vals.append(v); tips[n]+=1; names.append(name)
+    print(group, 'selected',len(members),'processed',len(vals),'failed',0,'tips',dict(sorted(tips.items())))
+    print(' min',min(vals),'median',statistics.median(vals),'max',max(vals),'mean',statistics.mean(vals))
+    print(' middle',sorted(vals)[(len(vals)-1)//2:(len(vals)//2)+1])
+    globals()[group]=vals
+ma=statistics.median(animals); mf=statistics.median(fungi)
+print('fungi/animals',repr(mf/ma))
+print('animals/fungi',repr(ma/mf))
+PY"

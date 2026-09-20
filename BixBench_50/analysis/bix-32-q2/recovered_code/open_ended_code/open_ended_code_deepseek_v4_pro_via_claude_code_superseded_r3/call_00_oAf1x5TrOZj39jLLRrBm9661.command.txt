@@ -1,0 +1,100 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+import pickle
+
+# Load data
+res_97 = pd.read_csv("/tmp/analysis/res_97.csv")
+res_98 = pd.read_csv("/tmp/analysis/res_98.csv")
+res_99 = pd.read_csv("/tmp/analysis/res_99.csv")
+
+# Load KEGG data
+with open("/tmp/analysis/kegg_data.pkl", "rb") as f:
+    kegg_data = pickle.load(f)
+pathway_genes_raw = {k: set(v) for k, v in kegg_data["pathway_genes"].items()}
+pathways = kegg_data["pathways"]
+
+# Let me look at the intersection of DE genes across strains
+all_genes = set(res_97["gene"])
+
+de_up_97 = set(res_97[res_97["log2FoldChange"] > 1.5]["gene"])
+de_down_97 = set(res_97[res_97["log2FoldChange"] < -1.5]["gene"])
+de_up_98 = set(res_98[res_98["log2FoldChange"] > 1.5]["gene"])
+de_down_98 = set(res_98[res_98["log2FoldChange"] < -1.5]["gene"])
+de_up_99 = set(res_99[res_99["log2FoldChange"] > 1.5]["gene"])
+de_down_99 = set(res_99[res_99["log2FoldChange"] < -1.5]["gene"])
+
+print("DE up intersection (all 3):", len(de_up_97 & de_up_98 & de_up_99))
+print("DE down intersection (all 3):", len(de_down_97 & de_down_98 & de_down_99))
+
+# Which pathways have these genes?
+consist_up_genes = de_up_97 & de_up_98 & de_up_99
+consist_down_genes = de_down_97 & de_down_98 & de_down_99
+
+print(f"\nConsistent UP genes ({len(consist_up_genes)}): {consist_up_genes}")
+print(f"Consistent DOWN genes ({len(consist_down_genes)}):")
+
+# For each consistent down gene, show which pathways it belongs to
+for gene in sorted(consist_down_genes):
+    in_pathways = [pid for pid, genes in pathway_genes_raw.items() if gene in genes]
+    if in_pathways:
+        print(f"  {gene}: {in_pathways}")
+
+# Now let me try ORA with |lfc|>1.5 but WITHOUT padj filter (which is the same as with since all pass)
+# And let me look at nominal p-values, not adjusted
+print("\n=== Checking nominally significant (p<0.05) pathways per strain ===")
+
+def run_ora_nominal(res_df, pathway_genes, lfc_threshold=1.5):
+    all_genes = set(res_df["gene"])
+    all_pw_genes = set()
+    for genes in pathway_genes.values():
+        all_pw_genes.update(genes)
+    universe = all_genes & all_pw_genes
+    
+    de_up = set(res_df[res_df["log2FoldChange"] > lfc_threshold]["gene"]) & universe
+    de_down = set(res_df[res_df["log2FoldChange"] < -lfc_threshold]["gene"]) & universe
+    
+    results = {'up': {}, 'down': {}}
+    
+    for pid, pw_genes in pathway_genes.items():
+        pw_in_u = pw_genes & universe
+        if len(pw_in_u) < 2:
+            continue
+        
+        for direction, de_genes in [('up', de_up), ('down', de_down)]:
+            overlap = pw_in_u & de_genes
+            a = len(overlap)
+            if a == 0:
+                continue
+            b = len(de_genes) - a
+            c = len(pw_in_u) - a
+            d = len(universe) - len(de_genes) - c
+            
+            table = [[a, b], [c, d]]
+            _, pval = fisher_exact(table, alternative='greater')
+            results[direction][pid] = pval
+    
+    return results
+
+ora_97 = run_ora_nominal(res_97, pathway_genes_raw)
+ora_98 = run_ora_nominal(res_98, pathway_genes_raw)
+ora_99 = run_ora_nominal(res_99, pathway_genes_raw)
+
+# Find pathways with nominal p<0.05 in same direction across all three
+for direction in ['up', 'down']:
+    nom_sig_97 = {pid for pid, p in ora_97[direction].items() if p < 0.05}
+    nom_sig_98 = {pid for pid, p in ora_98[direction].items() if p < 0.05}
+    nom_sig_99 = {pid for pid, p in ora_99[direction].items() if p < 0.05}
+    
+    consist = nom_sig_97 & nom_sig_98 & nom_sig_99
+    
+    print(f"\n{direction.upper()}: nominally sig (p<0.05):")
+    print(f"  97: {len(nom_sig_97)}, 98: {len(nom_sig_98)}, 99: {len(nom_sig_99)}")
+    print(f"  Consistent: {len(consist)}")
+    for pid in sorted(consist):
+        print(f"    {pid}: {pathways.get(pid, 'N/A')[:100]}")
+        print(f"      p97={ora_97[direction][pid]:.4f}, p98={ora_98[direction][pid]:.4f}, p99={ora_99[direction][pid]:.4f}")
+PYEOF

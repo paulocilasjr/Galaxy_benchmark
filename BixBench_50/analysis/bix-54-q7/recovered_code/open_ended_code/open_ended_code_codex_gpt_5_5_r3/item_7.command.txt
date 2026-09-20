@@ -1,0 +1,53 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+parse_p <- function(strain, ratio) {
+  if (strain == '287') return(1)
+  if (strain == '98') return(0)
+  if (strain == '287_98') {
+    parts <- as.numeric(strsplit(ratio, ':', fixed=TRUE)[[1]])
+    return(parts[1] / sum(parts))
+  }
+  return(NA_real_)
+}
+d"'$p287 <- mapply(parse_p, d$StrainNumber, d$Ratio)
+curve <- d[!is.na(d$p287), ]
+cat('"'n curve:', nrow(curve), '\\n')
+print(curve[, c('DishNumber','StrainNumber','Ratio','Replicate','Area','p287')])
+mods <- list(
+  quadratic = lm(Area ~ poly(p287, 2, raw=TRUE), data=curve),
+  cubic = lm(Area ~ poly(p287, 3, raw=TRUE), data=curve),
+  natural_spline_df4 = lm(Area ~ ns(p287, df=4), data=curve)
+)
+print(sapply(mods, AIC))
+for (nm in names(mods)) {
+  fit <- mods[[nm]]
+  f <- function(x) as.numeric(predict(fit, newdata=data.frame(p287=x)))
+  opt <- optimize(function(x) -f(x), interval=c(0,1))
+  grid <- seq(0,1,length.out=10001)
+  pgrid <- predict(fit, newdata=data.frame(p287=grid))
+  imax <- which.max(pgrid)
+  cat(nm, 'opt_p=', format(opt"'$minimum, digits=17), '"'opt_pred=', format(-opt"'$objective, digits=17), '"'grid_p=', grid[imax], 'grid_pred=', max(pgrid), '\\n')
+}
+best <- mods[[which.min(sapply(mods, AIC))]]
+opt <- optimize(function(x) -as.numeric(predict(best, newdata=data.frame(p287=x))), interval=c(0,1))
+cat('BEST', names(mods)[which.min(sapply(mods, AIC))], '\\n')
+cat(format(-opt"'$objective, digits=17), '"'\\n')
+# Interior-only sensitivity
+mix <- d[d"'$StrainNumber == '"'287_98', ]
+parts <- strsplit(mix"'$Ratio, '"':', fixed=TRUE)
+mix"'$p287 <- vapply(parts, function(z) { z <- as.numeric(z); z[1]/sum(z)}, numeric(1))
+mods2 <- list(
+  quadratic = lm(Area ~ poly(p287, 2, raw=TRUE), data=mix),
+  cubic = lm(Area ~ poly(p287, 3, raw=TRUE), data=mix),
+  natural_spline_df4 = lm(Area ~ ns(p287, df=4), data=mix)
+)
+cat('"'interior-only n:', nrow(mix),'\\n')
+print(sapply(mods2, AIC))
+for (nm in names(mods2)) {
+  fit <- mods2[[nm]]
+  rng <- range(mix"'$p287)
+  opt2 <- optimize(function(x) -as.numeric(predict(fit, newdata=data.frame(p287=x))), interval=rng)
+  cat('"'interior', nm, 'range=', paste(rng,collapse=':'), 'opt_p=', format(opt2"'$minimum, digits=17), '"'opt_pred=', format(-opt2"'$objective, digits=17), '"'\\n')
+}
+RS"

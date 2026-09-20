@@ -1,0 +1,64 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from math import exp, log
+p='inputs/data.xlsx'; ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+with ZipFile(p) as z:
+    root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    ss=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    strings=[''.join(t.text or '' for t in si.iter('{%s}t'%ns)) for si in ss.findall('{%s}si'%ns)]
+    data=[]
+    for row in root.findall('.//{%s}sheetData/{%s}row'%(ns,ns)):
+        d={}
+        for c in row.findall('{%s}c'%ns):
+            ref=c.attrib['r']; col=''.join(q for q in ref if q.isalpha()); v=c.find('{%s}v'%ns)
+            if v is not None: d[col]=strings[int(v.text)] if c.attrib.get('t')=='s' else v.text
+        if d.get('A','').isdigit(): data.append((float(d['D']),1.0 if d['C']=='PR' else 0.0,d['C'],int(float(d['B']))))
+
+def fit(rows):
+    # Center age for conditioning; transform intercept back afterward.
+    mu=sum(a for a,y,_,_ in rows)/len(rows)
+    b0=log(sum(y for _,y,_,_ in rows)/(len(rows)-sum(y for _,y,_,_ in rows)))
+    b1=0.0
+    for it in range(100):
+        s0=s1=h00=h01=h11=ll=0.0
+        for age,y,_,_ in rows:
+            x=age-mu; eta=b0+b1*x
+            pr=1/(1+exp(-eta)); w=pr*(1-pr)
+            s0 += y-pr; s1 += x*(y-pr)
+            h00 += w; h01 += w*x; h11 += w*x*x
+            ll += y*log(pr)+(1-y)*log(1-pr)
+        det=h00*h11-h01*h01
+        d0=(h11*s0-h01*s1)/det
+        d1=(-h01*s0+h00*s1)/det
+        b0+=d0; b1+=d1
+        if max(abs(d0),abs(d1))<1e-14: break
+    intercept=b0-b1*mu
+    # final raw-scale scores
+    sc0=sc1=ll=0.0
+    for age,y,_,_ in rows:
+        eta=intercept+b1*age
+        pr=1/(1+exp(-eta))
+        sc0 += y-pr; sc1 += age*(y-pr)
+        ll += y*log(pr)+(1-y)*log(1-pr)
+    return intercept,b1,ll,sc0,sc1,it+1
+
+res=fit(data)
+print('n',len(data),'PR events',sum(y for _,y,_,_ in data),'non-events',sum(1-y for _,y,_,_ in data))
+print('mean age PR',sum(a*y for a,y,_,_ in data)/sum(y for _,y,_,_ in data))
+print('mean age non-PR',sum(a*(1-y) for a,y,_,_ in data)/sum(1-y for _,y,_,_ in data))
+print('intercept %.15g beta_age %.15g logLik %.15g iterations %d'%res[:4])
+print('score_intercept %.3g score_age %.3g'%(res[3],res[4]))
+rev=[(a,1-y,e,g) for a,y,e,g in data]
+print('reverse coding beta_age %.15g'%fit(rev)[1])
+print('mapping violations',sum(not ((g==1 and e=='PR') or (g==2 and e in ('SD','PD'))) for _,_,e,g in data))
+PY
+command -v Rscript || true
+python - <<'PY'
+mods=[]
+for m in ['numpy','scipy','statsmodels','sklearn','openpyxl']:
+ try:
+  x=__import__(m); mods.append((m,getattr(x,'__version__','present')))
+ except Exception as e: mods.append((m,type(e).__name__))
+print(mods)
+PY"

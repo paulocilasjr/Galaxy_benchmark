@@ -1,0 +1,50 @@
+/bin/bash -lc "unzip -tq inputs/scogs_animals.zip && python - <<'PY'
+from collections import Counter
+from zipfile import ZipFile
+
+archive='inputs/scogs_animals.zip'
+valid=set('ACDEFGHIKLMNPQRSTVWY')
+rows=[]
+with ZipFile(archive) as z:
+    members=[n for n in z.namelist() if n.endswith('.faa.mafft')]
+    assert len(members)==241, len(members)
+    for name in members:
+        records=[]
+        header=None
+        seq=[]
+        for line in z.read(name).decode('ascii').splitlines():
+            if line.startswith('>'):
+                if header is not None:
+                    records.append((header,''.join(seq)))
+                header=line[1:].strip(); seq=[]
+            elif line.strip():
+                seq.append(line.strip())
+        if header is not None:
+            records.append((header,''.join(seq)))
+        assert records and all(s for _,s in records), name
+        lengths={len(s) for _,s in records}
+        assert len(lengths)==1, (name,lengths)
+        assert all(set(s)<=valid|{'-'} for _,s in records), name
+        seqs=[s for _,s in records]
+        informative=0
+        for column in zip(*seqs):
+            observed=Counter(c for c in column if c"'!='"'-')
+            if sum(count>=2 for count in observed.values())>=2:
+                informative += 1
+        # Independent equivalent check on residue-pattern multiplicities.
+        informative2=sum(
+            1 for column in zip(*seqs)
+            if len([n for n in Counter(c for c in column if c"'!='"'-').values() if n>=2])>=2
+        )
+        assert informative==informative2
+        rows.append((informative,name,len(seqs),len(seqs[0])))
+
+best=max(v for v,*_ in rows)
+ties=sorted((name,n,L) for v,name,n,L in rows if v==best)
+assert best==29, best
+assert ties==[
+    ('1428854at2759.faa.mafft',4,1021),
+    ('570797at2759.faa.mafft',4,903),
+], ties
+print('PASS alignments=241; max_pis=%d; ties=%s' % (best, ties))
+PY"

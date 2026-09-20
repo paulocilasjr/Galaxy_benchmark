@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from pathlib import PurePosixPath
+import numpy as np
+from scipy.stats import mannwhitneyu, rankdata
+
+def fasta(data):
+    rec=[]; name=None; seq=[]
+    for line in data.decode().splitlines():
+        if line.startswith('>'):
+            if name is not None: rec.append((name,''.join(seq)))
+            name=line[1:].strip(); seq=[]
+        elif line.strip(): seq.append(line.strip())
+    if name is not None: rec.append((name,''.join(seq)))
+    return rec
+
+def metrics(rs):
+    seqs=[s.upper() for _,s in rs]; n=len(seqs); L=len(seqs[0])
+    pis_non_gap=pis_gap=0; valid_non_gap=0; complete=0; variable_ng=0; variable_gap=0
+    for col in zip(*seqs):
+        c=list(col); cs=[x for x in c if x not in '-?']
+        counts=Counter(cs); counts_gap=Counter(c)
+        if len(cs)>=1: valid_non_gap+=1
+        if len(cs)==n: complete+=1
+        if len(counts)>=2: variable_ng+=1
+        if len(counts_gap)>=2: variable_gap+=1
+        if len(counts)>=2 and min(counts.values())>=2: pis_non_gap+=1
+        if len(counts_gap)>=2 and min(counts_gap.values())>=2: pis_gap+=1
+    return dict(n=n,L=L,pis_ng=pis_non_gap,pis_gap=pis_gap,valid=valid_non_gap,complete=complete,var_ng=variable_ng,var_gap=variable_gap)
+
+data={}
+for group,fn in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+  arr=[]
+  with ZipFile(fn) as z:
+    for nm in z.namelist():
+      if nm.endswith('.mafft'):
+        arr.append((PurePosixPath(nm).name,metrics(fasta(z.read(nm)))))
+  data[group]=dict(arr)
+  print('\\n',group,'n',len(arr),'n counts',Counter(x['n'] for _,x in arr))
+  for k in ['pis_ng','pis_gap','L','valid','complete','var_ng','var_gap']:
+    vals=[x[k] for _,x in arr]
+    print(k,'sum',sum(vals),'min',min(vals),'max',max(vals),'median',np.median(vals))
+  print('nonzero PIS ng',sum(x['pis_ng']>0 for _,x in arr),'gap',sum(x['pis_gap']>0 for _,x in arr))
+  print('top metrics')
+  for nm,x in sorted(arr,key=lambda t:t[1]['pis_ng'],reverse=True)[:5]: print(nm,x)
+
+# variants: include all, n=4 only; numerator ng/gap; denominator L/valid/complete/variable maybe
+for taxscope in ['all','full4']:
+  for num in ['pis_ng','pis_gap']:
+    for den in ['L','valid','complete']:
+      vals={}
+      for g in ['animals','fungi']:
+        rows=[x for x in data[g].values() if taxscope=='all' or x['n']==4]
+        vals[g]=np.array([100*x[num]/x[den] if x[den] else np.nan for x in rows])
+      u=mannwhitneyu(vals['animals'],vals['fungi'],alternative='two-sided',method='asymptotic').statistic
+      print(taxscope,num,den,'n',len(vals['animals']),len(vals['fungi']),'U(a,f)',u,'p',mannwhitneyu(vals['animals'],vals['fungi'],alternative='two-sided',method='asymptotic').pvalue,'med',np.median(vals['animals']),np.median(vals['fungi']))
+# manual U rank / scipy potentially chooses first sample
+PY"

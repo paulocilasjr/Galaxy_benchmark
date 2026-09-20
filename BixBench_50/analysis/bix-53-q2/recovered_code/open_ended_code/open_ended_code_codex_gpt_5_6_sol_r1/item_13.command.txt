@@ -1,0 +1,30 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.pydeps python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv', index_col='geneID')
+
+def run(samples):
+    counts = raw[samples].T
+    counts = counts.loc[:, counts.sum(axis=0) > 0]
+    condition = ['KL' if s.startswith('KL') else 'WL' for s in samples]
+    meta = pd.DataFrame({'condition': pd.Categorical(condition, categories=['WL','KL'])}, index=samples)
+    dds = DeseqDataSet(counts=counts, metadata=meta, design='~condition', refit_cooks=True, n_cpus=2, quiet=True)
+    dds.deseq2()
+    print('variables', list(dds.varm.keys()))
+    print('design columns', list(dds.obsm['design_matrix'].columns))
+    ds = DeseqStats(dds, contrast=['condition','KL','WL'], alpha=0.05, cooks_filter=True, independent_filter=True, n_cpus=2, quiet=True)
+    ds.summary()
+    coef = [x for x in dds.obsm['design_matrix'].columns if x "'!= '"'Intercept'][0]
+    print('shrink coeff', coef)
+    ds.lfc_shrink(coeff=coef)
+    res = ds.results_df.copy()
+    sig = res[(res.pvalue < .05) & (res.log2FoldChange.abs() > 1) & (res.baseMean > 10)]
+    return res, sig
+
+for tag,samples in [('full',['KL1','KL2','KL3','WL1','WL2','WL3']), ('reduced',['KL1','KL2','WL1','WL2'])]:
+    res,sig=run(samples)
+    print(tag, 'tested',res.pvalue.notna().sum(),'significant',len(sig),'KL_up',sum(sig.log2FoldChange>1),'KL_down',sum(sig.log2FoldChange < -1),'medianLFC',sig.log2FoldChange.median())
+    print(sig[['baseMean','log2FoldChange','pvalue','padj']].sort_values('pvalue').head(5).to_string())
+PY"

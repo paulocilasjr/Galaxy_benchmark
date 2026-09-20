@@ -1,0 +1,75 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+import glob, os, re, statistics
+
+def read_rows(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    try: ws.reset_dimensions()
+    except Exception: pass
+    return list(ws.iter_rows(values_only=True))
+
+def file_sample(path):
+    return os.path.basename(path).replace('.xlsx','').split('230209_Exome_GRCh38_CHIP_')[-1].split('-')[0].strip()
+
+chip_genes={str(r[0]).strip() for r in read_rows('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx') if r and r[0]}
+print('chip genes n', len(chip_genes), sorted(list(chip_genes))[:10], sorted(list(chip_genes))[-10:])
+
+in_chip_counts=Counter(); genes_not_in_list=Counter(); all_so=Counter(); all_effect=Counter(); all_zyg=Counter()
+for p in sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')):
+    rows=read_rows(p); header=rows[1]; col={h:i for i,h in enumerate(header) if h is not None}
+    for r in rows[2:]:
+        if not any(x is not None for x in r): continue
+        in_chip_counts[r[col['In_CHIP']] if col['In_CHIP'] < len(r) else None]+=1
+        all_so[r[col['Sequence Ontology (Combined)']] if col['Sequence Ontology (Combined)'] < len(r) else None]+=1
+        all_effect[r[col['Effect (Combined)']] if col['Effect (Combined)'] < len(r) else None]+=1
+        all_zyg[r[col['Zygosity']] if col['Zygosity'] < len(r) else None]+=1
+        genes=str(r[col['Gene Names']] if col['Gene Names'] < len(r) else '')
+        for g in re.split(r'[,;]', genes):
+            g=g.strip()
+            if g and g not in chip_genes and g"'!='"'TET2-AS1':
+                genes_not_in_list[g]+=1
+print('In_CHIP counts', in_chip_counts)
+print('Top SO', all_so.most_common(20))
+print('Effect counts', all_effect)
+print('Zygosity counts', all_zyg)
+print('genes not in supplied list top', genes_not_in_list.most_common(20), 'nunique', len(genes_not_in_list))
+
+# Normalize status IDs and recompute final answer succinctly.
+status_rows=read_rows('inputs/230215_Trio_Status.xlsx')
+h=status_rows[0]; ci={x:i for i,x in enumerate(h) if x is not None}
+status_by={str(r[ci['Sample ID']]).strip(): str(r[ci['BLM Mutation Status']]).strip() for r in status_rows[1:]}
+files={file_sample(p):p for p in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+
+def ffloat(x):
+    try: return float(x)
+    except Exception: return None
+
+def excluded_so(x):
+    s=str(x or '').lower()
+    return 'intron' in s or 'intergenic' in s or 'utr' in s
+
+def count(p):
+    rows=read_rows(p); header=rows[1]; col={h:i for i,h in enumerate(header) if h is not None}
+    n=0
+    for r in rows[2:]:
+        if not any(x is not None for x in r): continue
+        z=str(r[col['Zygosity']] if col['Zygosity'] < len(r) else '').strip().lower()
+        if z=='reference': continue
+        so=r[col['Sequence Ontology (Combined)']] if col['Sequence Ontology (Combined)'] < len(r) else None
+        if excluded_so(so): continue
+        v=ffloat(r[col['Variant Allele Freq']] if col['Variant Allele Freq'] < len(r) else None)
+        if v is not None and v < 0.3:
+            n += 1
+    return n
+carrier_ids=[sid for sid,blm in status_by.items() if blm=='Carrier']
+counts=[]
+for sid in carrier_ids:
+    if sid in files:
+        counts.append(count(files[sid]))
+    else:
+        print('missing carrier file', sid)
+print('carrier counts sorted', sorted(counts))
+print('carrier n', len(counts), 'median', statistics.median(counts))
+PY"

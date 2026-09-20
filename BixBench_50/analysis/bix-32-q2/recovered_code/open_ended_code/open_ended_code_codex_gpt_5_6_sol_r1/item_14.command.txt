@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+import glob, warnings
+from collections import defaultdict
+import numpy as np
+import rdata
+from scipy.stats import hypergeom
+warnings.filterwarnings('ignore')
+# Read DE results.
+res={}
+for f in sorted(glob.glob('inputs/*.rds')):
+    strain=f.split('vs')[-1].split('.')[0]
+    x=rdata.conversion.convert(rdata.parser.parse_file(f))
+    res[strain]=(set(map(str,x.rownames)),dict(zip(map(str,x.rownames),np.asarray(x.listData['log2FoldChange'],float))))
+# Confirm common DE universe.
+common=set.intersection(*(v[0] for v in res.values()))
+union=set.union(*(v[0] for v in res.values()))
+print('DE universes common/union/per-file',len(common),len(union),[len(v[0]) for v in res.values()])
+# Parse KEGG PA14 mappings.
+p2g=defaultdict(set)
+for line in open('/tmp/kegg_pau_links.tsv'):
+    gene,path=line.rstrip().split('\\t')
+    p2g[path.removeprefix('path:')].add(gene.removeprefix('pau:'))
+mapped=set.union(*p2g.values())
+universe=common & mapped
+print('KEGG pathways/unique mapped genes/shared eligible universe',len(p2g),len(mapped),len(universe),'unmapped DE',len(common-mapped))
+# ClusterProfiler-like over-representation: universe-restricted sets, size 10..500,
+# and BH adjustment among terms having >=1 input hit.
+def bh(ps):
+    ps=np.asarray(ps,float); n=len(ps); order=np.argsort(ps); out=np.empty(n); prev=1.
+    for rank0 in range(n-1,-1,-1):
+        idx=order[rank0]; rank=rank0+1; prev=min(prev,ps[idx]*n/rank); out[idx]=prev
+    return out
+
+def ora(fg):
+    fg=set(fg)&universe
+    rows=[]
+    for p,genes0 in p2g.items():
+        genes=genes0&universe; K=len(genes)
+        if 10 <= K <= 500:
+            k=len(fg&genes)
+            if k:
+                pv=hypergeom.sf(k-1,len(universe),K,len(fg))
+                rows.append([p,k,K,pv,None])
+    q=bh([r[3] for r in rows])
+    for r,a in zip(rows,q):r[4]=a
+    return sorted(rows,key=lambda r:r[3]), {r[0] for r in rows if r[3] <= .05 and r[4] <= .05}
+all_sig={}
+for strain,(rn,lfc) in res.items():
+    for sign in ('up','down'):
+        fg={g for g,x in lfc.items() if x>1.5} if sign=='up' else {g for g,x in lfc.items() if x< -1.5}
+        rows,sig=ora(fg)
+        all_sig[strain,sign]=sig
+        print('\\n',strain,sign,'fg total/mapped',len(fg),len(fg&universe),'tested terms',len(rows),'sig',len(sig))
+        for r in rows[:12]: print(' ',r[0],'k/K',r[1],r[2],'p',format(r[3],'.4g'),'BH',format(r[4],'.4g'),'*' if r[0] in sig else '')
+up=set.intersection(*(all_sig[s,'up'] for s in res))
+down=set.intersection(*(all_sig[s,'down'] for s in res))
+print('\\nSAME UP',len(up),sorted(up))
+print('SAME DOWN',len(down),sorted(down))
+print('UNION COUNT',len(up|down),'overlap',sorted(up&down))
+PY"

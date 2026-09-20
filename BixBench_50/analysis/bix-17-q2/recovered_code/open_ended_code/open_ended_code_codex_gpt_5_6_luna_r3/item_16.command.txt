@@ -1,0 +1,27 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter
+
+status=load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+carriers={str(r[0]).strip() for r in status.iter_rows(min_row=2,values_only=True) if r[0] is not None and str(r[3]).strip()=='Carrier'}
+files={p.stem.split('_CHIP_',1)[1].split('-',1)[0]:p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('230209_Exome_GRCh38_CHIP_*.xlsx') if not p.stem.split('_CHIP_',1)[1].startswith('SRR')}
+
+ex={'intron_variant','intergenic_variant','3_prime_UTR_variant','5_prime_UTR_variant','5_prime_UTR_premature_start_codon_gain_variant'}
+summary=[]
+for sid in sorted(carriers & files, key=int):
+    ws=load_workbook(files[sid],data_only=True).active
+    kept=[]
+    for row in ws.iter_rows(min_row=3,values_only=True):
+        ont=row[13]
+        z=row[4]
+        v=row[9]
+        if ont in ex or z=='Reference' or not isinstance(v,(int,float)) or not v<0.3:
+            continue
+        kept.append((row[0],row[12],ont,z,v))
+    summary.append((sid,len(kept),Counter(x[3] for x in kept),kept))
+print('retained zygosity',Counter(z for _,_,c,k in summary for z in c))
+for sid,n,c,k in summary:
+    print(sid,n,c,[(x[0],x[1],x[2],x[4]) for x in k])
+print('carrier set size',len(carriers),'numeric supplied',len(summary),'missing',sorted(carriers-set(files)))
+PY"

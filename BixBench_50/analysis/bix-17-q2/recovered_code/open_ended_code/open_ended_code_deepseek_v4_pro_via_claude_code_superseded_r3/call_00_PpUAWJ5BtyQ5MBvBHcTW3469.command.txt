@@ -1,0 +1,79 @@
+python3 << 'PYEOF'
+from openpyxl import load_workbook
+import os
+import re
+import statistics
+
+# Full re-analysis with VAF string-to-float conversion
+
+wb_trio = load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws_trio = wb_trio['Sheet1']
+
+blm_carriers = {}
+for row in ws_trio.iter_rows(min_row=2, values_only=True):
+    sample_id = str(row[0])
+    blm_status = row[3]
+    if blm_status in ('Carrier', 'Affected'):
+        blm_carriers[sample_id] = {'blm_status': blm_status, 'status': row[1]}
+
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+files = sorted(os.listdir(chip_dir))
+chip_files = {}
+for f in files:
+    match = re.search(r'CHIP_(.+)\.xlsx', f)
+    if match:
+        sample_str = match.group(1)
+        sample_id = re.sub(r'-[A-Z0-9]+$', '', sample_str)
+        chip_files[sample_id] = f
+
+exclude_ontology = {
+    'intron_variant', 'intergenic_variant',
+    '3_prime_UTR_variant', '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+results = []
+
+for sample_id, info in sorted(blm_carriers.items()):
+    if sample_id not in chip_files:
+        continue
+    
+    filename = chip_files[sample_id]
+    wb = load_workbook(os.path.join(chip_dir, filename))
+    ws = wb.active
+    
+    chip_count = 0
+    
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        zygosity = row[4]
+        seq_onto = str(row[13]) if row[13] else ''
+        vaf_raw = row[9]
+        
+        # Exclude Reference zygosity
+        if zygosity == 'Reference':
+            continue
+        
+        # Exclude Intronic, Intergenic, UTR
+        if seq_onto in exclude_ontology:
+            continue
+        
+        # Convert VAF to float
+        if vaf_raw is None:
+            continue
+        try:
+            vaf = float(vaf_raw)
+        except (ValueError, TypeError):
+            continue
+        
+        # Count as CHIP variant if VAF < 0.3
+        if vaf < 0.3:
+            chip_count += 1
+    
+    results.append(chip_count)
+    print(f"  Sample {sample_id} ({info['blm_status']}, {info['status']}): {chip_count} CHIP variants (VAF < 0.3)")
+
+print(f"\nNumber of BLM carriers analyzed: {len(results)}")
+print(f"CHIP variant counts: {sorted(results)}")
+print(f"Median: {statistics.median(results)}")
+print(f"Mean: {statistics.mean(results):.4f}")
+PYEOF

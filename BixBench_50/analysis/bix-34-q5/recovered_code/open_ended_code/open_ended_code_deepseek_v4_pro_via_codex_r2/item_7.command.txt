@@ -1,0 +1,106 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, io, re, statistics
+from collections import defaultdict
+
+def parse_newick(s):
+    # return dict pair -> distance
+    s=s.strip()
+    if not s.endswith(';'): s+=';'
+    # simple recursive parser for Newick
+    pos=0
+    def skip():
+        nonlocal pos
+        while pos<len(s) and s[pos] in ' \\t\\n': pos+=1
+    def parse_node():
+        nonlocal pos
+        skip()
+        if s[pos]=='(':
+            pos+=1
+            children=[]
+            while True:
+                children.append(parse_node())
+                skip()
+                if pos<len(s) and s[pos]==',':
+                    pos+=1
+                    continue
+                elif pos<len(s) and s[pos]==')':
+                    pos+=1
+                    break
+                else:
+                    raise ValueError('bad newick')
+            # branch length for internal node
+            skip()
+            bl=None
+            if pos<len(s) and s[pos]==':':
+                pos+=1; bl=parse_number()
+            return ('internal',children,bl)
+        else:
+            # label
+            m=re.match(r\"["'^(),;:]+", s[pos:])
+            if not m: raise ValueError('"'bad label at '+s[pos:])
+            label=m.group(0); pos+=len(label)
+            skip()
+            bl=None
+            if pos<len(s) and s[pos]==':':
+                pos+=1; bl=parse_number()
+            return ('leaf',label,bl)
+    def parse_number():
+        nonlocal pos
+        m=re.match(r\"[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?\", s[pos:])
+        if not m: raise ValueError('bad number')
+        pos+=len(m.group(0)); return float(m.group(0))
+    tree=parse_node()
+    skip()
+    return tree
+
+def collect(tree):
+    # return list leaf labels and paths with cumulative branch lengths to each leaf from root of subtree (undefined root)
+    # Better: recursively get leaves with paths lengths; cross pairs LCA sum.
+    def rec(node):
+        typ=node[0]
+        if typ=='leaf':
+            return {node[1]: 0.0}
+        children=node[1]; bl=node[2] or 0.0
+        d={}
+        for ch in children:
+            sub=rec(ch)
+            # each leaf path length from this node includes branch to child? rec returned distance from child? Need adjust.
+            for lab,v in sub.items():
+                d[lab]=v # oops missing child branch
+        # Redesign
+    return rec
+
+def path_distances(s):
+    # full recursive returns map leaf->distance from node
+    def rec(node):
+        if node[0]=='leaf':
+            return {node[1]:0.0}
+        d={}
+        for ch in node[1]:
+            child_len=ch[2] if ch[2] is not None else 0.0
+            sub=rec(ch)
+            for lab,v in sub.items():
+                d[lab]=v+child_len
+        return d
+    d=rec(parse_newick(s))
+    labels=list(d)
+    pairs=[]
+    for i in range(len(labels)):
+        for j in range(i+1,len(labels)):
+            pairs.append(d[labels[i]]+d[labels[j]])
+    return pairs
+
+for f in ['inputs/scogs_animals.zip','inputs/scogs_fungi.zip']:
+    z=zipfile.ZipFile(f)
+    means=[]; pair_counts=[]; taxa_counts=[]
+    for name in z.namelist():
+        if name.endswith('.treefile'):
+            s=z.read(name).decode()
+            ds=path_distances(s)
+            means.append(sum(ds)/len(ds))
+            pair_counts.append(len(ds))
+            taxa_counts.append(len(ds) and int((1+(1+8*len(ds))**0.5)/2))
+    print(f, 'n trees',len(means),'median mean patristic',statistics.median(means),'mean',statistics.mean(means),'min',min(means),'max',max(means))
+    print('taxa counts', sorted(set(taxa_counts)), {x:taxa_counts.count(x) for x in set(taxa_counts)})
+    print('first means', means[:5])
+PY"

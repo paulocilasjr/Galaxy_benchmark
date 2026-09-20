@@ -1,0 +1,37 @@
+/bin/bash -lc "cd /workspace && python - <<'PY'
+import pandas as pd, glob, os, re
+carrier_ids={'185','184','285','287','353','354','556','557','381','396','397','489','490','499','500','503','504','613','614'}
+def sample_id(fn):
+ b=os.path.basename(fn); m=re.search(r'CHIP_(\\d+)-',b); return m.group(1) if m else None
+CODING={'synonymous_variant','missense_variant','splice_region_variant','stop_gained','stop_lost','start_lost','frameshift_variant','inframe_insertion','inframe_deletion'}
+frames=[]
+for f in sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')):
+ sid=sample_id(f)
+ if sid not in carrier_ids: continue
+ df=pd.read_excel(f, header=[0,1])
+ # identify columns
+ print('file',os.path.basename(f),'shape',df.shape,'col tuples',df.columns[:5])
+ vaf=None; so=None
+ for c in df.columns:
+  s=str(c).lower()
+  if ('variant allele freq' in s or 'vaf' in s) and vaf is None: vaf=c
+  if 'sequence ontology' in s and so is None: so=c
+ if vaf is None or so is None: print('MISSING',vaf,so); continue
+ df=df.copy(); df['__sid']=sid
+ frames.append(df[['__sid',vaf,so]].copy())
+ print(sid,'vaf',vaf,'so',so)
+allf=pd.concat(frames,ignore_index=True)
+print('combined shape',allf.shape)
+# unique samples
+print(allf.__sid.nunique())
+v=pd.to_numeric(allf[allf.columns[1]],errors='coerce')
+so=allf[allf.columns[2]].astype(str)
+print('vaf<0.3 rows',(v<0.3).sum())
+codingmask=so.isin(CODING)
+print('coding & vaf<.3',(codingmask & (v<0.3)).sum())
+print('syn & coding & vaf<.3',((so=='synonymous_variant') & codingmask & (v<0.3)).sum())
+# denom counts
+print(so[(v<0.3)&codingmask].value_counts())
+# compare openpyxl all row denominator if coding allowlist
+print('unique sample list', sorted(allf.__sid.unique()))
+PY"

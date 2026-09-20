@@ -1,0 +1,135 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, requests, math, time, os
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+
+def read_csv(path):
+    df=pd.read_csv(path)
+    df['padj']=pd.to_numeric(df['padj'], errors='coerce')
+    df['log2FoldChange']=pd.to_numeric(df['log2FoldChange'], errors='coerce')
+    return df
+
+def fetch_kegg(species='pau', cache_dir='/tmp'):
+    cache_link=os.path.join(cache_dir, f'kegg_link_pathway_{species}.txt')
+    cache_list=os.path.join(cache_dir, f'kegg_list_pathway_{species}.txt')
+    if not os.path.exists(cache_link):
+        r=requests.get(f'https://rest.kegg.jp/link/pathway/{species}', timeout=120)
+        r.raise_for_status()
+        open(cache_link,'w').write(r.text)
+    if not os.path.exists(cache_list):
+        r=requests.get(f'https://rest.kegg.jp/list/pathway/{species}', timeout=120)
+        r.raise_for_status()
+        open(cache_list,'w').write(r.text)
+    link=open(cache_link).read().splitlines()
+    names=open(cache_list).read().splitlines()
+    return link, names
+
+def parse_mapping(link, names):
+    # clusterProfiler strips everything before colon for both
+    rows=[]
+    for line in link:
+        if not line.strip(): continue
+        parts=line.split('\\t')
+        if len(parts)<2: continue
+        # KEGGREST keggLink returns gene in first? Our endpoint link/pathway/pau gives gene -> path
+        g=parts[0].split(':',1)[-1]
+        p=parts[1].split(':',1)[-1]
+        rows.append((p,g))
+    path2gene=pd.DataFrame(rows, columns=['path','gene']).dropna().drop_duplicates()
+    path2name={}
+    for line in names:
+        if not line.strip(): continue
+        parts=line.split('\\t')
+        if len(parts)<2: continue
+        pid=parts[0]
+        # clusterProfiler name strip; not needed
+        nm=parts[1]
+        path2name[pid]=nm
+    # filter to named terms
+    path2gene=path2gene[path2gene['path'].isin(path2name.keys())].copy()
+    return path2gene, path2name
+
+def r_bh(p):
+    p=np.asarray(p, dtype=float)
+    n=len(p)
+    if n==0: return np.array([])
+    i=np.arange(n,0,-1)
+    o=np.argsort(p, kind='stable')[::-1] # decreasing p? Wait R o <- order(p, decreasing=TRUE)
+    ro=np.argsort(o, kind='stable')
+    adj=pmin_one(np.minimum.accumulate((n/i)*p[o]))[ro]
+    return adj
+
+def pmin_one(x):
+    return np.minimum(1.0, x)
+
+def ora(genes, path2gene):
+    # genes iterable; unique, strings
+    genes=[str(g) for g in genes]
+    genes=list(dict.fromkeys(genes))
+    # gene -> path mapping from annotation (all)
+    g2p=path2gene.groupby('gene')['path'].apply(list).to_dict()
+    # qExtID2TermID only for input genes mapped
+    qmap={g:g2p[g] for g in genes if g in g2p}
+    if not qmap: return None, {}
+    # qExtID2TermID.df & split
+    rows=[]
+    for g,ps in qmap.items():
+        for p in ps:
+            rows.append((p,g))
+    df=pd.DataFrame(rows,columns=['path','gene']).drop_duplicates()
+    qterm2ext={p:list(grp['gene']) for p,grp in df.groupby('path')}
+    # extID universe = all unique genes in path2gene
+    extID=list(dict.fromkeys(path2gene['gene']))
+    # no universe -> as is
+    qterm2ext={p:[g for g in gs if g in extID] for p,gs in qterm2ext.items()}
+    qterms=list(qterm2ext.keys())
+    term2ext={p:[g for g in path2gene.loc[path2gene.path==p,'gene'] if g in extID] for p in qterms}
+    # filter size
+    idx={p for p in qterms if 10 <= len(term2ext[p]) <= 500}
+    qterms=[p for p in qterms if p in idx]
+    qterm2ext={p:qterm2ext[p] for p in qterms}
+    term2ext={p:term2ext[p] for p in qterms}
+    qterms=list(dict.fromkeys(qterm2ext.keys()))
+    if not qterms: return None, {}
+    k=np.array([len(qterm2ext[p]) for p in qterms], dtype=int)
+    M=np.array([len(term2ext[p]) for p in qterms], dtype=int)
+    N=len(extID)
+    n=len(qmap)
+    # p-values
+    pvals=[]
+    for kk,mm in zip(k,M):
+        # phyper(kk-1, mm, N-mm, n, lower.tail=FALSE)
+        p=hypergeom.sf(kk-1, N, mm, n)
+        pvals.append(p)
+    pvals=np.array(pvals)
+    adj=r_bh(pvals)
+    res=pd.DataFrame({
+        'ID':qterms,
+        'Count':k,
+        'Size':M,
+        'pvalue':pvals,
+        'p.adjust':adj,
+        'geneID':['/'.join(qterm2ext[p]) for p in qterms],
+    })
+    return res, path2name
+
+def enriched_pathways(res):
+    return set(res.loc[res['p.adjust']<0.05,'ID'])
+
+link,names=fetch_kegg('pau')
+p2g,p2n=parse_mapping(link,names)
+print('mapping rows', len(p2g), 'genes', p2g.gene.nunique(), 'terms', p2g.path.nunique())
+for label,file in [('GluFe','/workspace/res_GluFevsGluFePlus.csv'),('Succ','/workspace/res_SuccvsGluFePlus.csv')]:
+    df=read_csv(file)
+    sig=df[(df['log2FoldChange'].abs()>1.5)&(df['padj']<0.05)]
+    genes=sig['gene'].tolist()
+    print('\\n',label,'input genes',len(genes))
+    res,nm=ora(genes,p2g)
+    if res is None:
+        print('no result'); continue
+    print('tested terms',len(res),'sig p.adjust<0.05', (res.p.adjust<0.05).sum())
+    print('top:',res.sort_values('p.adjust').head(10).to_string(index=False))
+    print('sig terms:')
+    for row in res[res.p.adjust<0.05].sort_values('p.adjust').itertuples():
+        print(row.ID, row.Count, row.p.adjust, p2n.get(row.ID))
+PY"

@@ -1,0 +1,31 @@
+/bin/bash -c "Rscript - <<'RS'
+library(splines)
+d <- read.csv('/workspace/inputs/Swarm_2.csv')
+# Restrict to the actual 287:98 mixture system. Pure-strain rows are not mixtures
+# and would not define a meaningful proportion of strain 287 in a mixture.
+mix <- d[d"'$StrainNumber == '"'287_98', ]
+mix"'$p287 <- vapply(strsplit(mix$Ratio, '"':', fixed=TRUE),
+                   function(z) as.numeric(z[1]) / sum(as.numeric(z)),
+                   numeric(1))
+stopifnot(nrow(mix) == 36, "'!anyNA(mix$p287), min(mix$p287) > 0, max(mix$p287) < 1)
+
+fit_q <- lm(Area ~ p287 + I(p287''^2), data=mix)
+fit_c <- lm(Area ~ p287 + I(p287''^2) + I(p287''^3), data=mix)
+fit_s <- lm(Area ~ ns(p287, df=4), data=mix)
+
+cat(sprintf('"'n=%d; AIC quadratic=%.6f cubic=%.6f spline4=%.6f\\n',
+            nrow(mix), AIC(fit_q), AIC(fit_c), AIC(fit_s)))
+cat(sprintf('AdjR2 quadratic=%.6f cubic=%.6f spline4=%.6f\\n',
+            summary(fit_q)"'$adj.r.squared,
+            summary(fit_c)$adj.r.squared,
+            summary(fit_s)$adj.r.squared))
+
+pred_s <- function(p) as.numeric(predict(fit_s, newdata=data.frame(p287=p)))
+opt <- optimize(pred_s, interval=range(mix$p287), maximum=TRUE,
+                tol=.Machine$double.eps''^0.25)
+cat(sprintf('"'best=spline4; optimum_p287=%.20f; max_pred_area=%.20f\\n',
+            opt"'$maximum, opt$objective))
+cat(sprintf('"'R-default print max: %.10g\\n', opt"'$objective))
+cat(sprintf('"'round1=%.1f round2=%.2f round0=%d\\n',
+            opt"'$objective, opt$objective, round(opt$objective)))
+RS'

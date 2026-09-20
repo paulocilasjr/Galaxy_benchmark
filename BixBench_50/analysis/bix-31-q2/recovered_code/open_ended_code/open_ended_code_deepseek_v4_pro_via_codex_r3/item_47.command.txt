@@ -1,0 +1,91 @@
+/bin/bash -c "python -u - <<'PY'
+import pandas as pd, numpy as np, time, resource, gc
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+def rss_gb():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024/1024
+
+def fit_genewise_dispersions_lowmem(dds):
+    if \"size_factors\" not in dds.obs:
+        dds.fit_size_factors(fit_type=dds.size_factors_fit_type)
+    dds.var[\"non_zero\"] = ~(dds.X == 0).all(axis=0)
+    dds.non_zero_idx = np.arange(dds.n_vars)[dds.var[\"non_zero\"]]
+    dds.non_zero_genes = dds.var_names[dds.var[\"non_zero\"]]
+    dds._fit_MoM_dispersions()
+    if \"normed_counts\" in dds.layers:
+        del dds.layers[\"normed_counts\"]
+    gc.collect()
+    design_matrix = dds.obsm[\"design_matrix\"].values
+    size_factors = dds.obs[\"size_factors\"].values
+    if len(dds.obsm[\"design_matrix\"].value_counts()) == dds.obsm[\"design_matrix\"].shape[-1]:
+        mu_hat_ = dds.inference.lin_reg_mu(
+            counts=dds.X[:, dds.non_zero_idx], size_factors=size_factors,
+            design_matrix=design_matrix, min_mu=dds.min_mu)
+    else:
+        _, mu_hat_, _, _ = dds.inference.irls(
+            counts=dds.X[:, dds.non_zero_idx], size_factors=size_factors,
+            design_matrix=design_matrix,
+            disp=dds.var.loc[dds.var[\"non_zero\"], \"_MoM_dispersions\"].values,
+            min_mu=dds.min_mu, beta_tol=dds.beta_tol)
+    dds.layers[\"_mu_hat\"] = np.full((dds.n_obs, dds.n_vars), np.nan)
+    dds.layers[\"_mu_hat\"][:, dds.var[\"non_zero\"]] = mu_hat_
+    del mu_hat_; gc.collect()
+    dispersions_, l_bfgs_b_converged_ = dds.inference.alpha_mle(
+        counts=dds.X[:, dds.non_zero_idx], design_matrix=design_matrix,
+        mu=dds.layers[\"_mu_hat\"][:, dds.non_zero_idx],
+        alpha_hat=dds.var.loc[dds.var[\"non_zero\"], \"_MoM_dispersions\"].values,
+        min_disp=dds.min_disp, max_disp=dds.max_disp)
+    dds.var[\"genewise_dispersions\"] = np.full(dds.n_vars, np.nan)
+    dds.var.loc[dds.var[\"non_zero\"], \"genewise_dispersions\"] = np.clip(
+        dispersions_, dds.min_disp, dds.max_disp)
+    dds.var[\"_genewise_converged\"] = pd.array([pd.NA]*dds.n_vars, dtype=\"boolean\")
+    dds.var.loc[dds.var[\"non_zero\"], \"_genewise_converged\"] = l_bfgs_b_converged_
+
+print('loading', flush=True)
+t=time.time()
+meta=pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample')
+counts=pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv',index_col=0).astype(np.int32).T
+meta=meta.loc[counts.index]
+meta['batch']='b'+meta['batch'].astype(str)
+print('counts', counts.shape, 'rss', rss_gb(), flush=True)
+dds=DeseqDataSet(counts=counts, metadata=meta, design='~ batch + sex', n_cpus=4, quiet=True, low_memory=True, refit_cooks=False)
+print('DDS init rss', rss_gb(), flush=True)
+dds.fit_size_factors()
+print('size factors rss', rss_gb(), flush=True)
+fit_genewise_dispersions_lowmem(dds)
+print('genewise rss', rss_gb(), flush=True)
+dds.fit_dispersion_trend()
+print('trend rss', rss_gb(), flush=True)
+dds.fit_dispersion_prior()
+print('prior rss', rss_gb(), flush=True)
+dds.fit_MAP_dispersions()
+print('MAP rss', rss_gb(), flush=True)
+# Use single-process inference for the remaining larger matrix operations.
+dds.inference.n_cpus = 1
+dds.fit_LFC()
+print('LFC rss', rss_gb(), flush=True)
+for key in ['_mu_LFC','_hat_diagonals']:
+    if key in dds.obsm:
+        del dds.obsm[key]
+for key in list(dds.layers.keys()):
+    if key in ['normed_counts','_mu_hat']:
+        del dds.layers[key]
+gc.collect()
+print('after cleanup rss', rss_gb(), flush=True)
+stat=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=1, quiet=True, cooks_filter=False, independent_filter=False)
+stat.run_wald_test()
+print('wald rss', rss_gb(), flush=True)
+coeff='sex[T.M]'
+print('LFC cols', stat.LFC.columns.tolist(), flush=True)
+print('unshrunk FAM138A natural LFC', float(stat.LFC.loc['FAM138A', coeff]), 'SE', float(stat.SE.loc['FAM138A']), flush=True)
+stat.lfc_shrink(coeff=coeff)
+print('shrink rss', rss_gb(), flush=True)
+natural=float(stat.LFC.loc['FAM138A', coeff])
+lfc=natural/np.log(2)
+baseMean=float(stat.base_mean.loc['FAM138A'])
+print('FAM138A log2FoldChange', repr(lfc))
+print('FAM138A baseMean', repr(baseMean))
+print('FAM138A natural LFC', repr(natural))
+print('FAM138A shrunken SE', repr(float(stat.SE.loc['FAM138A'])))
+PY"

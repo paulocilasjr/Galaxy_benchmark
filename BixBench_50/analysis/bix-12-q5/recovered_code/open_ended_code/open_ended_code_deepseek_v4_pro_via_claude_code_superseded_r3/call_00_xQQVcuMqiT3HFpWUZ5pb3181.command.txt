@@ -1,0 +1,72 @@
+python3 << 'PYEOF'
+import os
+from collections import Counter
+
+def parse_fasta(filepath):
+    records = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if current_header is not None:
+                    records.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            records.append((current_header, ''.join(current_seq)))
+    return records
+
+def count_parsimony_informative_sites(records):
+    if len(records) < 4:  # need at least 4 sequences for parsimony informative
+        return 0
+    seqs = [seq for _, seq in records]
+    aln_len = len(seqs[0])
+    informative_count = 0
+    for col in range(aln_len):
+        chars = [s[col] for s in seqs]
+        counts = Counter(chars)
+        valid_states = [char for char, count in counts.items() if count >= 2]
+        if len(valid_states) >= 2:
+            informative_count += 1
+    return informative_count
+
+# Process ALL files in the animal directory that are multi-sequence alignments
+mafft_dir = '/workspace/tmp_animals'
+all_results = []
+
+for fname in sorted(os.listdir(mafft_dir)):
+    fpath = os.path.join(mafft_dir, fname)
+    records = parse_fasta(fpath)
+    
+    # Skip single-sequence files
+    if len(records) < 4:
+        continue
+    
+    # Skip non-aligned files (different lengths)
+    lengths = [len(r[1]) for r in records]
+    if len(set(lengths)) > 1:
+        continue
+    
+    pi_sites = count_parsimony_informative_sites(records)
+    all_results.append((pi_sites, fname, len(records), lengths[0]))
+
+# Sort by parsimony informative sites (descending)
+all_results.sort(key=lambda x: x[0], reverse=True)
+
+print(f"Total multi-sequence alignments: {len(all_results)}")
+print(f"\nTop 30 genes by parsimony informative sites:")
+for pi, fname, nseq, length in all_results[:30]:
+    print(f"  {fname}: {pi} PI sites, {nseq} sequences, {length} aa length")
+
+# Full distribution
+from collections import Counter
+dist = Counter(r[0] for r in all_results)
+print(f"\nDistribution of PI site counts:")
+for count in sorted(dist.keys()):
+    print(f"  {count}: {dist[count]} genes")
+
+PYEOF

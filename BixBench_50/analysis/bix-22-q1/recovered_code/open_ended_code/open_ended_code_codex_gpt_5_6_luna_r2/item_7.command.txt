@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from collections import defaultdict
+base='inputs'
+# Read sample annotations and preserve the count-file column order.
+with open(base+'/Sample_annotated_Zenodo.csv', newline='') as f:
+    ann=list(csv.DictReader(f))
+with open(base+'/BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    rd=csv.reader(f); header=next(rd)
+cols={ct:[i for i,s in enumerate(header[1:]) if ann[i]['celltype']==ct] for ct in ['CD4','CD8','CD14','CD19']}
+# Because all sample names match exactly, the annotation row order must be aligned by name, not assumed.
+ann_by_sample={r['sample']:r for r in ann}
+cols={ct:[i for i,s in enumerate(header[1:]) if ann_by_sample[s]['celltype']==ct] for ct in cols}
+# Metadata indexed by the count row's gene identifier.
+length={}; coding=set()
+with open(base+'/GeneMetaInfo_Zenodo.csv', newline='') as f:
+    for r in csv.DictReader(f):
+        g=r['']
+        length[g]=float(r['Length'])
+        if r['gene_biotype']=='protein_coding': coding.add(g)
+# Sum expression across samples in each cell type for every coding gene.
+sums={ct:[] for ct in cols}
+lengths=[]
+ngenes=0; bad=[]; noninteger=[]
+for row in rd:
+    g=row[0]
+    if g not in coding: continue
+    ngenes+=1; lengths.append(length[g])
+    vals=row[1:]
+    for ct,idxs in cols.items():
+        try:
+            sums[ct].append(sum(float(vals[i]) for i in idxs))
+        except ValueError:
+            bad.append(g)
+# Pearson correlation between gene length and mean expression. Dividing sums by a constant per group
+# does not change r, but use means explicitly for the requested quantity.
+def pearson(x,y):
+    xm=math.fsum(x)/len(x); ym=math.fsum(y)/len(y)
+    dx=[a-xm for a in x]; dy=[b-ym for b in y]
+    num=math.fsum(a*b for a,b in zip(dx,dy))
+    den=math.sqrt(math.fsum(a*a for a in dx)*math.fsum(b*b for b in dy))
+    return num/den
+print('celltype sample counts=',{ct:len(v) for ct,v in cols.items()})
+print('coding rows in counts=',ngenes,'bad=',len(bad),'noninteger=',len(noninteger))
+for ct in ['CD4','CD8','CD14','CD19']:
+    means=[s/len(cols[ct]) for s in sums[ct]]
+    r=pearson(lengths,means)
+    print(ct, 'r=',repr(r),'abs=',repr(abs(r)), 'mean range=',min(means),max(means))
+PY"

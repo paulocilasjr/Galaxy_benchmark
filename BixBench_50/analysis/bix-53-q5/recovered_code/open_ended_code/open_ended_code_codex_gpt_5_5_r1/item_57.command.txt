@@ -1,0 +1,81 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import math
+import pandas as pd
+import mygene
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+# Read benchmark input count matrix.
+counts_raw = pd.read_csv('inputs/count.csv')
+counts = counts_raw.set_index('geneID').T.astype(int)
+metadata = pd.DataFrame(
+    {'condition': ['KL' if sample.startswith('KL') else 'WL' for sample in counts.index]},
+    index=counts.index,
+)
+
+# Fit DESeq2-like negative-binomial model and shrink the WL vs KL LFC.
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~condition',
+    quiet=False,
+    n_cpus=8,
+)
+dds.deseq2()
+stats = DeseqStats(dds, contrast=['condition', 'WL', 'KL'], alpha=0.05, quiet=False, n_cpus=8)
+stats.summary()
+stats.lfc_shrink(coeff='condition[T.WL]')
+res = stats.results_df.copy()
+
+sig = res[(res['pvalue'] < 0.05) & (res['baseMean'] > 10) & (res['log2FoldChange'].abs() > 1)].copy()
+print('significant genes after shrink/filter:', len(sig))
+
+# WikiPathways_2019_Mouse in Enrichr/gseapy is symbol-based; map significant Ensembl IDs to symbols.
+mg = mygene.MyGeneInfo()
+queries = sig.index.tolist()
+map_rows = mg.querymany(queries, scopes='ensembl.gene', fields='symbol', species='mouse', verbose=False)
+symbols = []
+seen = set()
+for row in map_rows:
+    if row.get('notfound'):
+        continue
+    sym = row.get('symbol')
+    if not sym:
+        continue
+    # If mygene returns multiple hits, querymany yields multiple rows; use unique symbols for ORA.
+    if sym not in seen:
+        seen.add(sym)
+        symbols.append(sym)
+print('mapped unique symbols:', len(symbols))
+
+if not symbols:
+    raise RuntimeError('No mapped gene symbols for enrichment')
+
+enr = gp.enrichr(
+    gene_list=symbols,
+    gene_sets='WikiPathways_2019_Mouse',
+    organism='mouse',
+    outdir=None,
+    no_plot=True,
+    cutoff=1.0,
+)
+enrich = enr.results.copy()
+if enrich.empty:
+    raise RuntimeError('No enrichment results returned')
+
+# Use the gseapy/Enrichr returned ranking for top enriched pathways.
+top20 = enrich.head(20).copy()
+oxidative_count = top20['Term'].str.contains('oxidative', case=False, na=False).sum()
+fraction = oxidative_count / 20
+answer = f'{fraction:.1f}'
+print('top20 terms:')
+print(top20[['Term','P-value','Adjusted P-value','Combined Score']].to_string(index=False))
+print('oxidative_count:', oxidative_count)
+print('answer:', answer)
+
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', encoding='ascii') as f:
+    f.write(answer + '\\n')
+PY"

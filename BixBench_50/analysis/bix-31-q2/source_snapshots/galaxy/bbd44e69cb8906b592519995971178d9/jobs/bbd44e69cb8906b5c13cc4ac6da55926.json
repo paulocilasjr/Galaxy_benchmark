@@ -1,0 +1,61 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5c13cc4ac6da55926",
+  "history_id": "bbd44e69cb8906b592519995971178d9",
+  "tool_id": "pydeseq2-sex-batch-shrunk-20260803-v2",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-03T06:54:28.524859",
+  "update_time": "2026-08-03T06:57:27.513245",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78878195/inputs/dataset_d4c351a9-51fe-41e0-be48-3700d1431fc8.dat\" \"/jetstream2/scratch/main/jobs/78878195/inputs/dataset_b803dfc2-4778-436b-9292-5b9bddebb609.dat\" <<'PY'\nimport os\nimport sys\nimport numpy as np\nimport pandas as pd\nfrom pydeseq2.dds import DeseqDataSet\nfrom pydeseq2.ds import DeseqStats\n\ndef read_provided_table(path):\n    with open(path, 'r', encoding='utf-8', newline='') as handle:\n        first_line = handle.readline()\n    delimiter = '\\t' if '\\t' in first_line else ','\n    return pd.read_csv(path, sep=delimiter, index_col=0)\n\ncounts_path, metadata_path = sys.argv[1], sys.argv[2]\ncounts = read_provided_table(counts_path)\nmetadata = read_provided_table(metadata_path)\ncounts.index = counts.index.astype(str)\ncounts.columns = counts.columns.astype(str)\nmetadata.index = metadata.index.astype(str)\nif counts.index.duplicated().any():\n    raise ValueError('duplicate gene identifiers in count matrix')\nif counts.columns.duplicated().any():\n    raise ValueError('duplicate sample identifiers in count matrix')\nif metadata.index.duplicated().any():\n    raise ValueError('duplicate sample identifiers in metadata')\nmissing_metadata = sorted(set(counts.columns) - set(metadata.index))\nextra_metadata = sorted(set(metadata.index) - set(counts.columns))\nif missing_metadata or extra_metadata:\n    raise ValueError('count/metadata sample mismatch: missing=' + str(missing_metadata[:5]) + ' extra=' + str(extra_metadata[:5]))\nmetadata = metadata.loc[counts.columns].copy()\nmetadata['batch'] = metadata['batch'].astype(str)\nmetadata['sex'] = metadata['sex'].astype(str)\nif set(metadata['sex']) != {'F', 'M'}:\n    raise ValueError('sex must contain exactly F and M')\nmetadata['batch'] = pd.Categorical(metadata['batch'], categories=sorted(metadata['batch'].unique()))\nmetadata['sex'] = pd.Categorical(metadata['sex'], categories=['F', 'M'])\ncounts = counts.apply(pd.to_numeric, errors='coerce')\nvalues = counts.to_numpy(dtype=float)\nif not np.isfinite(values).all():\n    raise ValueError('count matrix contains non-numeric or non-finite values')\nif (values < 0).any():\n    raise ValueError('count matrix contains negative values')\nif not np.equal(values, np.floor(values)).all():\n    raise ValueError('count matrix contains non-integer values; no rounding was applied')\ncounts = pd.DataFrame(np.asarray(values, dtype=np.int64), index=counts.index, columns=counts.columns)\nn_cpus = max(1, int(os.environ.get('GALAXY_SLOTS', '1')))\n\ndds = DeseqDataSet(\n    counts=counts,\n    metadata=metadata[['batch', 'sex']],\n    design='~batch + sex',\n    ref_level=['sex', 'F'],\n    n_cpus=n_cpus,\n    quiet=True,\n)\ndds.deseq2()\nlfc_matrix = dds.varm['LFC']\nif hasattr(lfc_matrix, 'columns'):\n    coefficient_names = [str(x) for x in lfc_matrix.columns]\nelse:\n    coefficient_names = [str(x) for x in lfc_matrix.dtype.names]\nsex_coefficients = [x for x in coefficient_names if 'sex' in x.lower()]\nif len(sex_coefficients) != 1:\n    raise ValueError('expected one sex coefficient, found ' + str(coefficient_names))\nsex_coefficient = sex_coefficients[0]\n\nstat_res = DeseqStats(\n    dds,\n    contrast=['sex', 'M', 'F'],\n    n_cpus=n_cpus,\n    quiet=True,\n)\nstat_res.summary()\nstat_res.lfc_shrink(coeff=sex_coefficient)\nresults = stat_res.results_df.copy()\nif 'FAM138A' not in results.index:\n    raise ValueError('FAM138A was not present in the fitted result table')\nif 'baseMean' not in results.columns or 'log2FoldChange' not in results.columns:\n    raise ValueError('result table lacks baseMean or log2FoldChange')\nresults.index.name = 'gene_id'\nresults.reset_index().to_csv('pydeseq2_sex_M_vs_F_shrunk.tsv', sep='\\t', index=False, na_rep='NA')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a472135d26114a4a9f0af15",
+      "src": "hda",
+      "uuid": "d4c351a9-51fe-41e0-be48-3700d1431fc8"
+    },
+    "metadata": {
+      "id": "f9cad7b01a472135c15d87a17749d1c9",
+      "src": "hda",
+      "uuid": "b803dfc2-4778-436b-9292-5b9bddebb609"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a47213508acb1f9b2d14d33",
+      "src": "hda",
+      "uuid": "345c2e47-86e5-4de0-8d16-8b590b076f2e"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 48, in <module>\n  File \"/usr/local/lib/python3.13/site-packages/pydeseq2/dds.py\", line 248, in __init__\n    super().__init__(X=counts.astype(int), obs=metadata)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/anndata/_core/anndata.py\", line 229, in __init__\n    self._init_as_actual(\n    ~~~~~~~~~~~~~~~~~~~~^\n        X=X,\n        ^^^^\n    ...<12 lines>...\n        filemode=filemode,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/site-packages/anndata/_core/anndata.py\", line 408, in _init_as_actual\n    self._obs = _gen_dataframe(\n                ~~~~~~~~~~~~~~^\n        obs, [\"obs_names\", \"row_names\"], source=source, attr=\"obs\", length=n_obs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/functools.py\", line 934, in wrapper\n    return dispatch(args[0].__class__)(*args, **kw)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/anndata/_core/aligned_df.py\", line 65, in _gen_dataframe_df\n    raise _mk_df_error(source, attr, length, len(anno))\nValueError: Observations annot. `obs` must have as many rows as `X` has rows (59453), but has 723 rows.\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 48, in <module>\n  File \"/usr/local/lib/python3.13/site-packages/pydeseq2/dds.py\", line 248, in __init__\n    super().__init__(X=counts.astype(int), obs=metadata)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/anndata/_core/anndata.py\", line 229, in __init__\n    self._init_as_actual(\n    ~~~~~~~~~~~~~~~~~~~~^\n        X=X,\n        ^^^^\n    ...<12 lines>...\n        filemode=filemode,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/site-packages/anndata/_core/anndata.py\", line 408, in _init_as_actual\n    self._obs = _gen_dataframe(\n                ~~~~~~~~~~~~~~^\n        obs, [\"obs_names\", \"row_names\"], source=source, attr=\"obs\", length=n_obs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/functools.py\", line 934, in wrapper\n    return dispatch(args[0].__class__)(*args, **kw)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/anndata/_core/aligned_df.py\", line 65, in _gen_dataframe_df\n    raise _mk_df_error(source, attr, length, len(anno))\nValueError: Observations annot. `obs` must have as many rows as `X` has rows (59453), but has 723 rows.\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

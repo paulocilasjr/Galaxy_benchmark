@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import subprocess, sys
+from scipy.stats import mannwhitneyu
+
+def rcv(path):
+    p = subprocess.run([sys.executable, '-m', 'phykit', 'rcv', str(path)], text=True, capture_output=True, check=True)
+    return float(p.stdout.strip())
+
+groups = {
+    'animals': sorted(Path('analysis_work/animals').glob('*.faa.mafft')),
+    'fungi': sorted(Path('analysis_work/fungi').glob('*.faa.mafft')),
+}
+values = {}
+for group, paths in groups.items():
+    vals = [None] * len(paths)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        jobs = {pool.submit(rcv, p): i for i,p in enumerate(paths)}
+        for n, job in enumerate(as_completed(jobs), 1):
+            vals[jobs[job]] = job.result()
+            if n % 50 == 0 or n == len(paths):
+                print(group, n, 'of', len(paths), flush=True)
+    values[group] = vals
+
+a, f = values['animals'], values['fungi']
+print('animals_n_min_max', len(a), min(a), max(a))
+print('fungi_n_min_max', len(f), min(f), max(f))
+for method in ('auto','asymptotic','exact'):
+    try:
+        print(method, mannwhitneyu(a, f, alternative='two-sided', method=method))
+    except Exception as e:
+        print(method, type(e).__name__, e)
+print('asymptotic_no_continuity', mannwhitneyu(a, f, alternative='two-sided', method='asymptotic', use_continuity=False))
+PY"

@@ -1,0 +1,111 @@
+/bin/bash -lc "python3 - <<'PY'
+import math, csv, re
+from collections import defaultdict
+
+# parse KEGG exactly as clusterProfiler
+path2gene=defaultdict(set)
+gene2path=defaultdict(set)
+for line in open('/workspace/tmp/pau_link.tsv'):
+    line=line.strip()
+    if not line: continue
+    gene,path=line.split('\\t')
+    gene=re.sub(r'["'^:]+:'"', '', gene)
+    path=re.sub(r'["'^:]+:'"', '', path)
+    path2gene[path].add(gene)
+    gene2path[gene].add(path)
+
+names={}
+for line in open('/workspace/tmp/pau_pathways.tsv'):
+    line=line.strip()
+    if not line: continue
+    path,name=line.split('\\t',1)
+    # clusterProfiler removes \" - organism (code)\" suffix
+    name=re.sub(r'\\s-\\s[a-zA-Z ]+\\(\\w+\\)"'$'"', '', name)
+    names[path]=name
+
+# keep only paths in names (as CP does)
+path2gene={p:g for p,g in path2gene.items() if p in names}
+gene2path={g:{p for p in ps if p in names} for g,ps in gene2path.items()}
+universe=sorted({g for gs in path2gene.values() for g in gs})
+N=len(universe)
+print('N universe',N,'pathways',len(path2gene))
+
+# read gene results
+strains={}
+for st in ['97','98','99']:
+    genes=[]
+    with open(f'/workspace/tmp/res_{st}.csv') as f:
+        r=csv.DictReader(f)
+        for row in r:
+            genes.append((row['gene'], float(row['lfc']), float(row['padj'])))
+    strains[st]=genes
+    up=[g for g,l,p in genes if l>1.5]
+    down=[g for g,l,p in genes if l< -1.5]
+    print(st,'total',len(genes),'up',len(up),'down',len(down),'up mapped',len(set(up)&set(gene2path)),'down mapped',len(set(down)&set(gene2path)))
+
+def bh(ps):
+    n=len(ps)
+    if n==0:return []
+    idx=sorted(range(n), key=lambda i:ps[i])
+    q=[0.0]*n
+    prev=1.0
+    for rank,i in enumerate(idx): # rank 0-based => rank+1
+        val=ps[i]*n/(rank+1)
+        q[i]=min(val, prev)
+        prev=q[i]
+    # R cummin reversed actually ensures nondecreasing; above sets q in sorted order to min(new, previous cumulative min), yes.
+    return [min(v,1.0) for v in q]
+
+# helper ORA, returns significant by criteria
+def ora(gene_set, pvalue_cutoff=0.05, qvalue_cutoff=None):
+    gene_set=set(gene_set) & set(gene2path)
+    # qExtID2TermID: map each gene to its path
+    mapped={g:set(gene2path[g]) for g in gene_set}
+    qterms=set().union(*mapped.values()) if mapped else set()
+    if not qterms: return []
+    # filter gene set sizes 10..500
+    qterms={t for t in qterms if 10 <= len(path2gene[t]) <= 500}
+    # k, M, N, n
+    n=len(mapped)
+    rows=[]
+    for t in sorted(qterms):
+        k=len(path2gene[t] & set(mapped))
+        M=len(path2gene[t])
+        # phyper(k-1, M, N-M, n, lower.tail=FALSE)
+        p=0.0
+        # sum C(M,i)C(N-M,n-i)/C(N,n) for i=k..min(n,M)
+        denom=math.comb(N,n)
+        for i in range(k, min(n,M)+1):
+            p += math.comb(M,i)*math.comb(N-M,n-i)/denom
+        rows.append((t,k,M,n,p))
+    # p.adjust BH
+    ps=[r[4] for r in rows]
+    padj=bh(ps)
+    out=[]
+    for r,pa in zip(rows,padj):
+        t,k,M,n,p=r
+        # qvalue ignored? for p.adjust significance
+        if p<=pvalue_cutoff and pa<=pvalue_cutoff:
+            out.append((t,k,M,n,p,pa))
+    return out
+
+for st in ['97','98','99']:
+    genes=strains[st]
+    up=[g for g,l,p in genes if l>1.5]
+    down=[g for g,l,p in genes if l< -1.5]
+    up_res=ora(up)
+    down_res=ora(down)
+    print('\\nSTRAIN',st)
+    print('up significant padj<=0.05 count',len(up_res),'IDs',[r[0] for r in up_res][:30])
+    print('down significant padj<=0.05 count',len(down_res),'IDs',[r[0] for r in down_res][:30])
+    # also pvalue only?
+    # store
+    globals()[f'up_{st}']=set(r[0] for r in up_res)
+    globals()[f'down_{st}']=set(r[0] for r in down_res)
+
+up_common=up_97&up_98&up_99
+down_common=down_97&down_98&down_99
+print('\\nUP COMMON',len(up_common),sorted(up_common))
+print('DOWN COMMON',len(down_common),sorted(down_common))
+print('UNION',len(up_common|down_common),sorted(up_common|down_common))
+PY"

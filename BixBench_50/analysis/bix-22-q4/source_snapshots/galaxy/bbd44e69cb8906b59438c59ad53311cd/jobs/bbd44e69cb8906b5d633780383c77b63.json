@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5d633780383c77b63",
+  "history_id": "bbd44e69cb8906b59438c59ad53311cd",
+  "tool_id": "cd14-correlation-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-17T18:37:50.777813",
+  "update_time": "2026-07-17T18:38:26.253687",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython3 << 'PYEOF'\nimport csv\nimport math\nimport sys\n\ncd14_samples = set()\nwith open('/jetstream2/scratch/main/jobs/78578987/inputs/dataset_19d6c629-740f-4bbf-8cce-96ec08fb40c9.dat', 'r') as f:\n    reader = csv.DictReader(f)\n    for row in reader:\n        if row.get('celltype', '').strip() == 'CD14':\n            sample_name = row.get('sample', '').strip()\n            if sample_name:\n                cd14_samples.add(sample_name)\n\nif not cd14_samples:\n    print('ERROR: No CD14 samples found', file=sys.stderr)\n    sys.exit(1)\n\nprint(f'Found {len(cd14_samples)} CD14 samples', file=sys.stderr)\n\ngene_info = {}\nwith open('/jetstream2/scratch/main/jobs/78578987/inputs/dataset_35b40e1a-a815-457e-af97-cd387a73f7f1.dat', 'r') as f:\n    reader = csv.DictReader(f)\n    for row in reader:\n        gene_id = row.get('Geneid', '').strip()\n        length_str = row.get('Length', '0').strip()\n        biotype = row.get('gene_biotype', '').strip()\n        if gene_id:\n            try:\n                length = float(length_str)\n            except ValueError:\n                length = 0.0\n            gene_info[gene_id] = (length, biotype)\n\nprint(f'Loaded metadata for {len(gene_info)} genes', file=sys.stderr)\n\ncd14_col_indices = []\ngene_stats = []\n\nwith open('/jetstream2/scratch/main/jobs/78578987/inputs/dataset_1dd625a3-b9ea-4bc6-b420-7175061e40ac.dat', 'r') as f:\n    reader = csv.reader(f)\n    header = next(reader)\n\n    for i, col_name in enumerate(header):\n        if col_name.strip() in cd14_samples:\n            cd14_col_indices.append(i)\n\n    print(f'Found {len(cd14_col_indices)} CD14 columns in expression matrix', file=sys.stderr)\n\n    n_cd14 = len(cd14_col_indices)\n    if n_cd14 == 0:\n        print('ERROR: No CD14 columns found', file=sys.stderr)\n        sys.exit(1)\n\n    for row in reader:\n        if not row or len(row) < 2:\n            continue\n        gene_name = row[0].strip()\n        if not gene_name:\n            continue\n\n        total = 0.0\n        valid_count = 0\n        for ci in cd14_col_indices:\n            if ci < len(row):\n                val_str = row[ci].strip()\n                if val_str:\n                    try:\n                        total += float(val_str)\n                        valid_count += 1\n                    except ValueError:\n                        pass\n\n        if valid_count > 0:\n            mean_expr = total / valid_count\n        else:\n            mean_expr = 0.0\n\n        gene_stats.append((gene_name, total, mean_expr, valid_count))\n\nprint(f'Computed stats for {len(gene_stats)} genes', file=sys.stderr)\n\nfiltered = []\nfor gene_name, total, mean_expr, n_samples in gene_stats:\n    if total < 10:\n        continue\n    info = gene_info.get(gene_name)\n    if info is None:\n        continue\n    length, biotype = info\n    if biotype != 'protein_coding':\n        continue\n    if length <= 0:\n        continue\n    filtered.append((gene_name, mean_expr, total, length, biotype))\n\nprint(f'After filtering (sum>=10, protein_coding): {len(filtered)} genes', file=sys.stderr)\n\nif len(filtered) < 3:\n    print('ERROR: Too few genes for correlation', file=sys.stderr)\n    sys.exit(1)\n\nlengths = [f[3] for f in filtered]\nmeans = [f[1] for f in filtered]\n\nn = len(lengths)\nmean_len = sum(lengths) / n\nmean_expr_all = sum(means) / n\n\ncov = sum((lengths[i] - mean_len) * (means[i] - mean_expr_all) for i in range(n))\nstd_len = math.sqrt(sum((l - mean_len)**2 for l in lengths))\nstd_expr = math.sqrt(sum((m - mean_expr_all)**2 for m in means))\n\nif std_len == 0 or std_expr == 0:\n    pearson_r = 0.0\nelse:\n    pearson_r = cov / (std_len * std_expr)\n\nprint(f'Pearson r = {pearson_r:.10f}', file=sys.stderr)\n\nwith open('correlation_result.txt', 'w') as f:\n    f.write(f'{pearson_r:.10f}\\n')\n\nwith open('gene_data.tsv', 'w') as f:\n    f.write('gene\\tmean_expression\\ttotal_counts\\tlength\\tbiotype\\n')\n    for gene_name, mean_expr, total, length, biotype in filtered:\n        f.write(f'{gene_name}\\t{mean_expr:.6f}\\t{total:.6f}\\t{length:.0f}\\t{biotype}\\n')\n\nprint('Done.', file=sys.stderr)\nPYEOF",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expr_matrix": {
+      "id": "f9cad7b01a4721355f83053fab67189e",
+      "src": "hda",
+      "uuid": "1dd625a3-b9ea-4bc6-b420-7175061e40ac"
+    },
+    "sample_annot": {
+      "id": "f9cad7b01a472135b10c4887b4dbb6a4",
+      "src": "hda",
+      "uuid": "19d6c629-740f-4bbf-8cce-96ec08fb40c9"
+    },
+    "gene_meta": {
+      "id": "f9cad7b01a4721353e36eff929b6de48",
+      "src": "hda",
+      "uuid": "35b40e1a-a815-457e-af97-cd387a73f7f1"
+    }
+  },
+  "outputs": {
+    "correlation_result": {
+      "id": "f9cad7b01a472135e58620700e5410d1",
+      "src": "hda",
+      "uuid": "c10d8236-dc6f-4270-8652-2744c16eb5ab"
+    },
+    "gene_data": {
+      "id": "f9cad7b01a4721351f4ce8692ff19ec0",
+      "src": "hda",
+      "uuid": "a86d81ad-b952-41b4-9829-5ce50e077862"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Found 132 CD14 samples\nLoaded metadata for 59453 genes\nFound 132 CD14 columns in expression matrix\nComputed stats for 59453 genes\nAfter filtering (sum>=10, protein_coding): 16096 genes\nPearson r = 0.0158158302\nDone.\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Found 132 CD14 samples\nLoaded metadata for 59453 genes\nFound 132 CD14 columns in expression matrix\nComputed stats for 59453 genes\nAfter filtering (sum>=10, protein_coding): 16096 genes\nPearson r = 0.0158158302\nDone.\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

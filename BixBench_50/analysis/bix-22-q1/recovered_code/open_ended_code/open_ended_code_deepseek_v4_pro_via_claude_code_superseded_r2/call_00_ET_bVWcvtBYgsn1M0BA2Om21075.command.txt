@@ -1,0 +1,59 @@
+/tmp/myenv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+
+# 1. Load sample annotations
+print("Loading sample annotations...")
+samples = pd.read_csv("inputs/Sample_annotated_Zenodo.csv", index_col=0)
+print(f"Sample annotations: {samples.shape}")
+print(f"Cell types: {samples['celltype'].value_counts().to_dict()}")
+
+# 2. Load gene metadata - filter for protein_coding
+print("\nLoading gene metadata...")
+gene_meta = pd.read_csv("inputs/GeneMetaInfo_Zenodo.csv", index_col=0)
+print(f"Gene metadata: {gene_meta.shape}")
+protein_coding = gene_meta[gene_meta['gene_biotype'] == 'protein_coding'].copy()
+print(f"Protein-coding genes: {protein_coding.shape}")
+
+# 3. Load expression matrix
+print("\nLoading expression matrix...")
+expr = pd.read_csv("inputs/BatchCorrectedReadCounts_Zenodo.csv", index_col=0)
+print(f"Expression matrix: {expr.shape}")
+
+# 4. For each cell type, compute correlation
+cell_types = ['CD4', 'CD8', 'CD14', 'CD19']
+results = {}
+
+for ct in cell_types:
+    print(f"\n--- {ct} ---")
+    # Get sample columns for this cell type
+    ct_samples = samples[samples['celltype'] == ct].index.tolist()
+    # Only keep samples that exist in expression matrix
+    ct_samples = [s for s in ct_samples if s in expr.columns]
+    print(f"  Samples: {len(ct_samples)}")
+    
+    # Compute mean expression for these samples
+    ct_expr = expr[ct_samples].mean(axis=1)
+    
+    # Merge with gene length for protein-coding genes
+    merged = pd.DataFrame({
+        'mean_expression': ct_expr,
+    }).join(protein_coding[['Length']], how='inner')
+    
+    print(f"  Matched genes: {len(merged)}")
+    
+    # Compute Pearson correlation
+    corr, pval = pearsonr(merged['Length'], merged['mean_expression'])
+    results[ct] = (corr, pval)
+    print(f"  Pearson r = {corr:.6f}, p = {pval:.6e}")
+
+print("\n\n=== SUMMARY ===")
+for ct in cell_types:
+    r, p = results[ct]
+    print(f"{ct}: r = {r:.6f}, |r| = {abs(r):.6f}, p = {p:.6e}")
+
+# Find weakest
+weakest = min(results.items(), key=lambda x: abs(x[1][0]))
+print(f"\nWeakest correlation: {weakest[0]} with |r| = {abs(weakest[1][0]):.6f}")
+PYEOF

@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import time
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+start=time.time()
+counts_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+meta_path='inputs/Sample_annotated_Zenodo.csv'
+print('loading counts', flush=True)
+counts = pd.read_csv(counts_path, index_col=0)
+counts = counts.T
+counts.index.name='sample'
+print('counts shape', counts.shape, 'dtype', counts.dtypes.iloc[0], 'minutes', (time.time()-start)/60, flush=True)
+metadata = pd.read_csv(meta_path, index_col='sample')
+metadata = metadata.loc[counts.index, ['batch','sex']].copy()
+metadata['batch'] = pd.Categorical(metadata['batch'].astype(str), categories=['1','2','3','4'])
+metadata['sex'] = pd.Categorical(metadata['sex'].astype(str), categories=['F','M'])
+print('metadata', metadata.shape, metadata['sex'].value_counts().to_dict(), metadata['batch'].value_counts().to_dict(), flush=True)
+print('constructing dds', flush=True)
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~ batch + sex',
+    n_cpus=8,
+    quiet=True,
+)
+print('running deseq2', flush=True)
+dds.deseq2()
+print('deseq2 done minutes', (time.time()-start)/60, flush=True)
+stat_res = DeseqStats(dds, contrast=['sex','M','F'], n_cpus=8, quiet=True)
+stat_res.summary()
+print('stats done minutes', (time.time()-start)/60, flush=True)
+print('design columns', list(stat_res.LFC.columns))
+print('pre-shrink FAM138A', stat_res.results_df.loc['FAM138A'].to_dict())
+coeff_candidates=[c for c in stat_res.LFC.columns if 'sex' in c]
+assert len(coeff_candidates)==1, coeff_candidates
+coeff=coeff_candidates[0]
+print('shrink coeff',coeff, flush=True)
+stat_res.lfc_shrink(coeff=coeff)
+print('shrink done minutes', (time.time()-start)/60, flush=True)
+row=stat_res.results_df.loc['FAM138A']
+print('post-shrink FAM138A', row.to_dict())
+print('baseMean > 10', float(row['baseMean'])>10, 'abs lfc > .5', abs(float(row['log2FoldChange']))>.5)
+PY"

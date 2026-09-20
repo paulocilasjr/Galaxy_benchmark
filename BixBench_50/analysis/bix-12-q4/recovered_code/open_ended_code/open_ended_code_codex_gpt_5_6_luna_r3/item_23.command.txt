@@ -1,0 +1,79 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from fractions import Fraction
+
+def read(z, fn):
+    rec=[]; name=None; seq=[]
+    for line in z.read(fn).decode().splitlines():
+        if line.startswith('>'):
+            if name is not None: rec.append(''.join(seq))
+            name=line[1:].strip(); seq=[]
+        else: seq.append(line.strip())
+    if name is not None: rec.append(''.join(seq))
+    return rec
+
+def calc(rec):
+    cols=list(zip(*rec)); L=len(cols)
+    pi_gapstate=pi_ignore=pi_complete=0
+    var_gapstate=var_ignore=var_complete=0
+    nongap_cols=complete_cols=0
+    for col in cols:
+        c=Counter(col)
+        if len(c)>=2: var_gapstate+=1
+        if sum(v>=2 for v in c.values())>=2: pi_gapstate+=1
+        ng=[x for x in col if x not in '-?']
+        if len(ng)>0:
+            nongap_cols+=1
+            cc=Counter(ng)
+            if len(cc)>=2: var_ignore+=1
+            if sum(v>=2 for v in cc.values())>=2: pi_ignore+=1
+        if len(ng)==len(col):
+            complete_cols+=1
+            if len(cc)>=2: var_complete+=1
+            if sum(v>=2 for v in cc.values())>=2: pi_complete+=1
+    return locals()
+
+def read_group(g):
+    vals=[]
+    with ZipFile('inputs/scogs_'+g+'.zip') as z:
+        for fn in z.namelist():
+            if fn.endswith('.faa.mafft'):
+                rec=read(z,fn); vals.append(calc(rec))
+    return vals
+
+A=read_group('animals'); F=read_group('fungi')
+
+def u(x,y):
+    ans=Fraction(0)
+    for a in x:
+        for b in y:
+            ans += 1 if a>b else Fraction(1,2) if a==b else 0
+    return ans
+
+def pct(m, num, den):
+    d=m[den]
+    return Fraction(m[num]*100,d) if d else None
+
+variants={
+ 'gapstate/L':('pi_gapstate','L'),
+ 'ignore/L':('pi_ignore','L'),
+ 'complete/L':('pi_complete','L'),
+ 'ignore/nongap':('pi_ignore','nongap_cols'),
+ 'complete/complete':('pi_complete','complete_cols'),
+ 'gapstate/var':('pi_gapstate','var_gapstate'),
+ 'ignore/var':('pi_ignore','var_ignore'),
+ 'complete/var':('pi_complete','var_complete'),
+}
+for name,(num,den) in variants.items():
+    x=[pct(m,num,den) for m in A]; y=[pct(m,num,den) for m in F]
+    x=[a for a in x if a is not None]; y=[b for b in y if b is not None]
+    st=u(x,y); other=len(x)*len(y)-st
+    print(name,'n',len(x),len(y),'U_first=',st,'Umin=',min(st,other),'other=',other,'zeros',sum(a==0 for a in x),sum(b==0 for b in y),'ranges', (float(min(x)),float(max(x))), (float(min(y)),float(max(y))))
+
+for name,(num,den) in variants.items():
+    x=[pct(m,num,den) for m in A if m['n']==4]; y=[pct(m,num,den) for m in F if m['n']==4]
+    x=[a for a in x if a is not None]; y=[b for b in y if b is not None]
+    st=u(x,y); other=len(x)*len(y)-st
+    print('4only',name,'n',len(x),len(y),'U_first=',st,'Umin=',min(st,other),'zeros',sum(a==0 for a in x),sum(b==0 for b in y))
+PY"

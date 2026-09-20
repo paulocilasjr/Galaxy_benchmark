@@ -1,0 +1,79 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+base='/workspace/inputs'
+ann=[]
+with open(base+'/Sample_annotated_Zenodo.csv', newline='') as fh:
+    r=csv.DictReader(fh)
+    for row in r: ann.append(row)
+cd14_ids=[row['sample'] for row in ann if row['celltype']=='CD14']
+cd14_set=set(cd14_ids)
+print('n cd14', len(cd14_ids), len(cd14_set))
+
+meta_len={}; biotypes={}; dup={}
+with open(base+'/GeneMetaInfo_Zenodo.csv', newline='') as fh:
+    r=csv.reader(fh)
+    header=next(r)
+    # find Geneid and Length and gene_biotype columns
+    print('meta header',header)
+    gi=header.index('Geneid')
+    li=header.index('Length')
+    bi=header.index('gene_biotype')
+    for row in r:
+        if len(row)<=max(gi,li,bi): continue
+        gid=row[gi]
+        if gid in meta_len:
+            dup[gid]=dup.get(gid,0)+1
+        meta_len[gid]=row[li]
+        biotypes[gid]=row[bi]
+print('meta genes',len(meta_len),'dup ids',len(dup))
+print('biotype counts')
+from collections import Counter
+print(Counter(biotypes.values()).most_common(20))
+pc=set(g for g,b in biotypes.items() if b=='protein_coding')
+print('protein_coding',len(pc))
+
+# read counts
+lengths=[]; sums=[]; n=0; matched_dup=0
+with open(base+'/BatchCorrectedReadCounts_Zenodo.csv', newline='') as fh:
+    r=csv.reader(fh)
+    header=next(r)
+    # strip trailing spaces/newline
+    header=[h.strip() for h in header]
+    print('header0',repr(header[0]), 'sample names n',len(header)-1)
+    idx=[]
+    for j,h in enumerate(header):
+        if h in cd14_set:
+            idx.append(j)
+    print('matched cd14 cols',len(idx))
+    assert len(idx)==len(cd14_set), (len(idx),len(cd14_set))
+    for row in r:
+        if not row: continue
+        gid=row[0].strip()
+        if gid not in pc: continue
+        # total sum across CD14 columns
+        s=0.0
+        for j in idx:
+            val=row[j].strip()
+            try: s += float(val)
+            except: pass
+        lengths.append(float(meta_len[gid]))
+        sums.append(s)
+        n+=1
+print('matched expressed rows',n, 'first', lengths[:5], sums[:5])
+pairs=[]
+for l,s in zip(lengths,sums):
+    if s>=10:
+        pairs.append((l,s/len(cd14_ids)))
+print('filtered total>=10',len(pairs))
+print('length sample', pairs[:5])
+# pearson
+x=[p[0] for p in pairs]; y=[p[1] for p in pairs]
+mx=sum(x)/len(x); my=sum(y)/len(y)
+cov=sum((a-mx)*(b-my) for a,b in zip(x,y))
+vx=sum((a-mx)**2 for a in x); vy=sum((b-my)**2 for b in y)
+r=cov/math.sqrt(vx*vy)
+print('r',r)
+print('r using total vs length', end=' ')
+# check mean vs total same
+print('means range',min(y),max(y), 'length range',min(x),max(x))
+PY"

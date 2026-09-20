@@ -1,0 +1,47 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+metadata = pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample')
+# Match count columns to metadata rows exactly, then transpose for PyDESeq2.
+metadata = metadata.loc[counts.columns, ['batch', 'sex']].copy()
+metadata['batch'] = metadata['batch'].astype(str)
+metadata['sex'] = pd.Categorical(metadata['sex'].astype(str), categories=['F', 'M'])
+counts = counts.T.astype(np.int64)
+
+print('counts', counts.shape, 'metadata', metadata.shape, flush=True)
+print('FAM138A total', int(counts['FAM138A'].sum()), 'mean', float(counts['FAM138A'].mean()), flush=True)
+
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~ batch + sex',
+    quiet=False,
+    n_cpus=4,
+    low_memory=True,
+)
+dds.deseq2()
+print('variables', dds.varm.keys(), flush=True)
+try:
+    print('design columns', list(dds.obsm['design_matrix'].columns), flush=True)
+except Exception as e:
+    print('design columns unavailable', repr(e), flush=True)
+
+stat_res = DeseqStats(dds, contrast=['sex', 'M', 'F'], quiet=False, n_cpus=4)
+stat_res.summary()
+print('pre-shrink result FAM138A')
+print(stat_res.results_df.loc[['FAM138A']].to_string(), flush=True)
+print('coef names', list(dds.varm['LFC'].columns), flush=True)
+# With design categories F,M, the M-vs-F sex coefficient is the sex term.
+coeff_candidates = [c for c in dds.varm['LFC'].columns if 'sex' in str(c) and ('M' in str(c) or 'T.M' in str(c))]
+print('coeff candidates', coeff_candidates, flush=True)
+coeff = coeff_candidates[0] if len(coeff_candidates) == 1 else 'sex[T.M]'
+print('shrinking coeff', coeff, flush=True)
+stat_res.lfc_shrink(coeff=coeff)
+print('post-shrink result FAM138A')
+print(stat_res.results_df.loc[['FAM138A']].to_string(), flush=True)
+print('ANSWER', stat_res.results_df.loc['FAM138A', 'log2FoldChange'], flush=True)
+PY"

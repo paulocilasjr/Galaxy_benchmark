@@ -1,0 +1,243 @@
+/bin/bash -lc "g++ -O3 -std=c++17 -x c++ -o /tmp/crispr_corr - <<'CPP'
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <numeric>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+using namespace std;
+
+static vector<string> split_csv(const string& line) {
+    vector<string> out;
+    size_t start = 0;
+    while (true) {
+        size_t pos = line.find(',', start);
+        if (pos == string::npos) { out.emplace_back(line.substr(start)); break; }
+        out.emplace_back(line.substr(start, pos - start));
+        start = pos + 1;
+    }
+    return out;
+}
+
+static string first_field(const string& line) {
+    size_t p = line.find(',');
+    return p == string::npos ? line : line.substr(0, p);
+}
+
+static string feature_id(const string& x) {
+    size_t p = x.rfind('(');
+    if (p == string::npos || x.empty() || x.back() "'!= '"')') return x;
+    return x.substr(p + 1, x.size() - p - 2);
+}
+
+static double parse_num(const char* b, const char* e) {
+    if (b == e) return numeric_limits<double>::quiet_NaN();
+    string s(b, e);
+    if (s == \"NA\" || s == \"NaN\" || s == \"nan\") return numeric_limits<double>::quiet_NaN();
+    char* endp = nullptr;
+    double v = strtod(s.c_str(), &endp);
+    if (endp == s.c_str()) return numeric_limits<double>::quiet_NaN();
+    return v;
+}
+
+static vector<string> read_header(const string& path) {
+    ifstream f(path);
+    string line;
+    if ("'!getline(f, line)) throw runtime_error("cannot read header: " + path);
+    if (!line.empty() && line.back() == '"'\\r') line.pop_back();
+    return split_csv(line);
+}
+
+static vector<string> read_ids(const string& path) {
+    ifstream f(path);
+    string line;
+    if ("'!getline(f, line)) throw runtime_error("cannot read file: " + path);
+    vector<string> ids;
+    while (getline(f, line)) {
+        if (!line.empty() && line.back() == '"'\\r') line.pop_back();
+        if ("'!line.empty()) ids.push_back(first_field(line));
+    }
+    return ids;
+}
+
+static void load_selected(const string& path,
+                          const unordered_map<string,int>& row_idx,
+                          const vector<int>& col_to_pair,
+                          int nrows, int npairs,
+                          vector<vector<double>>& mat,
+                          long long& missing_count,
+                          long long& parsed_selected) {
+    ifstream f(path);
+    string line;
+    if (!getline(f, line)) throw runtime_error("cannot read data: " + path);
+    int row_seen = 0;
+    while (getline(f, line)) {
+        if (!line.empty() && line.back() == '"'\\r') line.pop_back();
+        if (line.empty()) continue;
+        string id = first_field(line);
+        auto rit = row_idx.find(id);
+        int target = rit == row_idx.end() ? -1 : rit->second;
+        size_t start = 0;
+        int col = 0;
+        while (start <= line.size()) {
+            size_t pos = line.find(',', start);
+            size_t end = (pos == string::npos) ? line.size() : pos;
+            if (col > 0 && col < (int)col_to_pair.size()) {
+                int p = col_to_pair[col];
+                if (p >= 0 && target >= 0) {
+                    double v = parse_num(line.data() + start, line.data() + end);
+                    mat[target][p] = v;
+                    ++parsed_selected;
+                    if ("'!isfinite(v)) ++missing_count;
+                }
+            }
+            ++col;
+            if (pos == string::npos) break;
+            start = pos + 1;
+        }
+        ++row_seen;
+    }
+    if (row_seen != (int)read_ids(path).size()) {
+        throw runtime_error("row count changed unexpectedly: " + path);
+    }
+}
+
+static double spearman_col(const vector<vector<double>>& a,
+                           const vector<vector<double>>& b, int col,
+                           int& nvalid) {
+    vector<pair<double,int>> va, vb;
+    int n = (int)a.size();
+    va.reserve(n); vb.reserve(n);
+    for (int i=0; i<n; ++i) {
+        double x=a[i][col], y=b[i][col];
+        if (isfinite(x) && isfinite(y)) {
+            va.emplace_back(x,i);
+            vb.emplace_back(y,i);
+        }
+    }
+    nvalid = (int)va.size();
+    if (nvalid < 2) return numeric_limits<double>::quiet_NaN();
+    sort(va.begin(), va.end(), [](const auto& x, const auto& y) {
+        if (x.first != y.first) return x.first < y.first;
+        return x.second < y.second;
+    });
+    sort(vb.begin(), vb.end(), [](const auto& x, const auto& y) {
+        if (x.first != y.first) return x.first < y.first;
+        return x.second < y.second;
+    });
+    vector<double> ra(nvalid), rb(nvalid);
+    for (int i=0; i<nvalid; ) {
+        int j=i+1;
+        while (j<nvalid && va[j].first == va[i].first) ++j;
+        double rank = (i + 1 + j) / 2.0;
+        for (int k=i; k<j; ++k) ra[va[k].second == va[k].second ? 0 : 0] = rank;
+        i=j;
+    }
+    // The temporary rank arrays above are indexed by observation, not sorted position.
+    // Rebuild them explicitly to keep the code clear and handle arbitrary row order.
+    vector<double> rao(nvalid), rbo(nvalid);
+    for (int i=0; i<nvalid; ) {
+        int j=i+1;
+        while (j<nvalid && va[j].first == va[i].first) ++j;
+        double rank = (i + 1 + j) / 2.0;
+        for (int k=i; k<j; ++k) rao[va[k].second] = rank;
+        i=j;
+    }
+    for (int i=0; i<nvalid; ) {
+        int j=i+1;
+        while (j<nvalid && vb[j].first == vb[i].first) ++j;
+        double rank = (i + 1 + j) / 2.0;
+        for (int k=i; k<j; ++k) rbo[vb[k].second] = rank;
+        i=j;
+    }
+    double mean=(nvalid+1)/2.0;
+    long double num=0, dx=0, dy=0;
+    for (int i=0; i<nvalid; ++i) {
+        long double x=rao[i]-mean, y=rbo[i]-mean;
+        num += x*y; dx += x*x; dy += y*y;
+    }
+    if (dx == 0 || dy == 0) return numeric_limits<double>::quiet_NaN();
+    return (double)(num / sqrt(dx*dy));
+}
+
+int main() {
+    const string cp="inputs/CRISPRGeneEffect.csv";
+    const string ep="inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv";
+    vector<string> ch=read_header(cp), eh=read_header(ep);
+    vector<string> cids=read_ids(cp), eids=read_ids(ep);
+    unordered_map<string,int> e_row_all;
+    for (int i=0;i<(int)eids.size();++i) e_row_all[eids[i]]=i;
+    unordered_map<string,int> shared_row;
+    vector<string> shared_ids;
+    for (const string& id: cids) {
+        if (e_row_all.count(id)) {
+            int ix=shared_ids.size(); shared_row[id]=ix; shared_ids.push_back(id);
+        }
+    }
+    int n=shared_ids.size();
+    unordered_map<string,int> c_id_col;
+    unordered_map<string,int> e_id_col_first;
+    unordered_map<string,int> e_label_col;
+    for (int j=1;j<(int)ch.size();++j) c_id_col[feature_id(ch[j])]=j;
+    for (int j=1;j<(int)eh.size();++j) {
+        string id=feature_id(eh[j]);
+        if (!e_id_col_first.count(id)) e_id_col_first[id]=j;
+        e_label_col[eh[j]]=j;
+    }
+    struct Pair { int cc, ee; string id; string clabel; string elabel; bool exact; };
+    vector<Pair> pairs;
+    vector<int> c_to_pair(ch.size(),-1), e_to_pair(eh.size(),-1);
+    for (int cj=1;cj<(int)ch.size();++cj) {
+        string id=feature_id(ch[cj]);
+        auto it=e_id_col_first.find(id);
+        if (it==e_id_col_first.end()) continue;
+        int ej=it->second;
+        auto ex=e_label_col.find(ch[cj]);
+        bool exact=(ex!=e_label_col.end());
+        if (exact) ej=ex->second;
+        int p=pairs.size();
+        pairs.push_back({cj,ej,id,ch[cj],eh[ej],exact});
+        c_to_pair[cj]=p;
+        if (e_to_pair[ej] != -1) throw runtime_error("expression column paired twice");
+        e_to_pair[ej]=p;
+    }
+    int pcount=pairs.size(), exact_count=0;
+    for (auto &p:pairs) if (p.exact) ++exact_count;
+    cerr << "CRISPR_ROWS "<<cids.size()<<" EXPRESSION_ROWS "<<eids.size()<<" SHARED_ROWS "<<n<<"'"\\n\";
+    cerr << \"CRISPR_FEATURES \"<<ch.size()-1<<\" EXPRESSION_FEATURES \"<<eh.size()-1<<\" ID_PAIRED_FEATURES \"<<pcount<<\" EXACT_LABEL_PAIRED \"<<exact_count<<\"\\n\";
+    vector<vector<double>> cm(n, vector<double>(pcount, numeric_limits<double>::quiet_NaN()));
+    vector<vector<double>> em(n, vector<double>(pcount, numeric_limits<double>::quiet_NaN()));
+    long long cmiss=0, emish=0, cparsed=0, eparsed=0;
+    load_selected(cp, shared_row, c_to_pair, n, pcount, cm, cmiss, cparsed);
+    load_selected(ep, shared_row, e_to_pair, n, pcount, em, emish, eparsed);
+    cerr << \"PARSED_SELECTED \"<<cparsed<<\" \"<<eparsed<<\" MISSING \"<<cmiss<<\" \"<<emish<<\"\\n\";
+    long long count_id=0, count_exact=0, finite_id=0, finite_exact=0;
+    int minvalid=1000000,maxvalid=0;
+    vector<pair<double,string>> strongest;
+    strongest.reserve(pcount);
+    for (int j=0;j<pcount;++j) {
+        int nv=0;
+        double rawr=spearman_col(cm,em,j,nv);
+        if (isfinite(rawr)) {
+            ++finite_id; minvalid=min(minvalid,nv); maxvalid=max(maxvalid,nv);
+            double bio=-rawr;
+            if (bio >= 0.6) ++count_id;
+            if (pairs[j].exact && bio >= 0.6) ++count_exact;
+            strongest.emplace_back(bio,pairs[j].clabel);
+        }
+    }
+    sort(strongest.rbegin(),strongest.rend());
+    cout << setprecision(17);
+    cout << \"COUNT_ID_MATCH \"<<count_id<<\" COUNT_EXACT_LABEL \"<<count_exact<<\" FINITE \"<<finite_id<<\" VALID_RANGE \"<<minvalid<<\" \"<<maxvalid<<\"\\n\";
+    cout << \"TOP\\n\";
+    for (int i=0;i<min(20,(int)strongest.size());++i) cout<<strongest[i].second<<\"\\t\"<<strongest[i].first<<\"\\n\";
+}
+CPP
+/tmp/crispr_corr"

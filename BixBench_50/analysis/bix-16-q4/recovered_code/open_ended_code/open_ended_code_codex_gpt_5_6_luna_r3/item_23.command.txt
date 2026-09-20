@@ -1,0 +1,98 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import csv, gc, os, time
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata, t, spearmanr
+
+start_time=time.time()
+
+def get_header(fn):
+    with open(fn, newline='') as f:
+        return next(csv.reader(f))
+
+def get_ids(fn):
+    with open(fn, newline='') as f:
+        rd=csv.reader(f); next(rd)
+        return [row[0] for row in rd]
+
+cf='inputs/CRISPRGeneEffect.csv'
+ef='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+hc=get_header(cf); he=get_header(ef)
+expr_pos={g:i for i,g in enumerate(he) if i>0 and g}
+genes=[g for i,g in enumerate(hc) if i>0 and g in expr_pos]
+cpos=[i for i,g in enumerate(hc) if i>0 and g in expr_pos]
+epos=[expr_pos[g] for g in genes]
+print('shared genes',len(genes),flush=True)
+
+# Read only shared genes from each table, retaining the original sample IDs.
+cdtype={hc[i]:np.float64 for i in cpos}
+edtype={he[i]:np.float64 for i in epos}
+ct0=time.time()
+cdf=pd.read_csv(cf, index_col=0, usecols=[0]+cpos, dtype=cdtype)
+print('CRISPR loaded',cdf.shape,'sec',round(time.time()-ct0,2),flush=True)
+et0=time.time()
+edf=pd.read_csv(ef, index_col=0, usecols=[0]+epos, dtype=edtype)
+print('expression loaded',edf.shape,'sec',round(time.time()-et0,2),flush=True)
+ids=[x for x in cdf.index if x in edf.index]
+print('shared models',len(ids),'unique',len(set(ids)),flush=True)
+# Explicitly align both matrices by ModelID and by identical shared-gene order.
+C=cdf.loc[ids, genes].to_numpy(dtype=np.float64, copy=True)
+E=edf.loc[ids, genes].to_numpy(dtype=np.float64, copy=True)
+del cdf, edf; gc.collect()
+print('arrays',C.shape,E.shape,'finite C/E',np.isfinite(C).all(),np.isfinite(E).all(),flush=True)
+
+n,m=C.shape
+rho=np.full(m,np.nan,dtype=np.float64)
+counts=np.zeros(m,dtype=np.int32)
+ps=np.full(m,np.nan,dtype=np.float64)
+
+# With complete data, rank each gene column and compute Pearson correlation of ranks.
+finite=np.isfinite(C)&np.isfinite(E)
+counts[:]=finite.sum(axis=0)
+if finite.all():
+    block=1024
+    for a in range(0,m,block):
+        b=min(a+block,m)
+        cr=rankdata(C[:,a:b],axis=0,method='average')
+        er=rankdata(E[:,a:b],axis=0,method='average')
+        cr-=cr.mean(axis=0); er-=er.mean(axis=0)
+        denom=np.sqrt(np.sum(cr*cr,axis=0)*np.sum(er*er,axis=0))
+        rho[a:b]=np.divide(np.sum(cr*er,axis=0),denom,out=np.full(b-a,np.nan),where=denom"'!=0)
+    valid=np.isfinite(rho)
+    dof=n-2
+    rr=np.clip(rho[valid],-1,1)
+    with np.errstate(divide='"'ignore',invalid='ignore'):
+        ts=rr*np.sqrt(dof/((1-rr)*(1+rr)))
+    ps[valid]=2*t.sf(np.abs(ts),dof)
+else:
+    # Pairwise-complete fallback for any gene with missing values.
+    print('using pairwise-complete fallback',flush=True)
+    for j in range(m):
+        ok=finite[:,j]
+        counts[j]=ok.sum()
+        if counts[j]>=3:
+            out=spearmanr(E[ok,j],C[ok,j],alternative='two-sided')
+            rho[j]=out.statistic; ps[j]=out.pvalue
+
+# Benjamini-Hochberg across all genes with defined tests.
+valid=np.isfinite(ps)
+pv=ps[valid]
+order=np.argsort(pv,kind='mergesort')
+rank=np.arange(1,len(pv)+1,dtype=np.float64)
+qsorted=pv[order]*len(pv)/rank
+qsorted=np.minimum.accumulate(qsorted[::-1])[::-1]
+q=np.full(m,np.nan,dtype=np.float64)
+valid_idx=np.flatnonzero(valid)
+q[valid_idx[order]]=np.minimum(qsorted,1.0)
+sig=np.isfinite(q)&(q<0.05)
+print('valid tests',int(valid.sum()),'n',n,'significant q<0.05',int(sig.sum()),flush=True)
+print('rho min/max',float(np.nanmin(rho)),float(np.nanmax(rho)),'p min',float(np.nanmin(ps)),'q min',float(np.nanmin(q)),flush=True)
+print('percentage denominator valid',repr(100*sig.sum()/valid.sum()),flush=True)
+print('percentage denominator shared',repr(100*sig.sum()/m),flush=True)
+print('two-sided sign counts significant',int(np.sum(sig & (rho<0))),int(np.sum(sig & (rho>0))),flush=True)
+# Validate vectorized p/rho against scipy's public function for representative columns.
+for j in [0,1,m//2,m-1]:
+    out=spearmanr(E[:,j],C[:,j],alternative='two-sided')
+    print('check',genes[j], 'rho',repr(rho[j]),repr(out.statistic),'p',repr(ps[j]),repr(out.pvalue),'q',repr(q[j]))
+print('elapsed',round(time.time()-start_time,2),flush=True)
+PY"

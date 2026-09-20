@@ -1,0 +1,39 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+from pathlib import Path
+from phykit.services.alignment.base import Alignment
+from scipy.stats import mannwhitneyu
+
+def scores(dirpath, ids=None, rounded=True):
+    vals=[]
+    rows=[]
+    paths=sorted(Path(dirpath).glob('*.faa.mafft'))
+    for p in paths:
+        oid=p.name.removesuffix('.faa.mafft')
+        if ids is not None and oid not in ids:
+            continue
+        v=Alignment(alignment_file_path=str(p)).calculate_rcv()
+        if rounded:
+            v=round(v,4)
+        vals.append(v)
+        rows.append((oid,v))
+    return vals, rows
+
+animal_ids={p.name.removesuffix('.faa.mafft') for p in Path('work/scogs_animals').glob('*.faa.mafft')}
+fungi_ids={p.name.removesuffix('.faa.mafft') for p in Path('work/scogs_fungi').glob('*.faa.mafft')}
+shared=animal_ids & fungi_ids
+for rounded in [True, False]:
+    for scope, ids in [('all', None), ('shared', shared)]:
+        a,_=scores('work/scogs_animals', ids, rounded)
+        f,_=scores('work/scogs_fungi', ids, rounded)
+        print('rounded', rounded, 'scope', scope, 'n', len(a), len(f))
+        print('means', sum(a)/len(a), sum(f)/len(f), 'medians', sorted(a)[len(a)//2], sorted(f)[len(f)//2])
+        for method in ['auto','asymptotic','exact']:
+            try:
+                res=mannwhitneyu(a, f, alternative='two-sided', method=method, use_continuity=True)
+                print(method, 'U', res.statistic, 'p', format(res.pvalue, '.17g'))
+            except Exception as e:
+                print(method, 'ERR', type(e).__name__, e)
+        print('greater p', format(mannwhitneyu(a,f,alternative='greater',method='asymptotic',use_continuity=True).pvalue,'.17g'))
+        print('less p', format(mannwhitneyu(a,f,alternative='less',method='asymptotic',use_continuity=True).pvalue,'.17g'))
+        print()
+PY"

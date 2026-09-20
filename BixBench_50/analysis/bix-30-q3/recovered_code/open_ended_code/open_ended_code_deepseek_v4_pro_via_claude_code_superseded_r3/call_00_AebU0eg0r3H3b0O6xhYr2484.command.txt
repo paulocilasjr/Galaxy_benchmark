@@ -1,0 +1,55 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import xlrd
+import numpy as np
+from scipy import stats
+import math
+from statsmodels.stats.multitest import multipletests
+
+wb = xlrd.open_workbook('inputs/pone.0150501.s002.xls')
+sh = wb.sheet_by_name('RAW DATA')
+
+p_values = []
+miRNA_names = []
+
+for r in range(2, sh.nrows):
+    name = sh.cell_value(r, 0)
+    miRNA_names.append(name)
+    
+    patient_vals = []
+    for c in range(1, 11):
+        val = sh.cell_value(r, c)
+        if val != 'NAN' and not (isinstance(val, float) and math.isnan(val)):
+            patient_vals.append(float(val))
+    
+    control_vals = []
+    for c in range(11, 21):
+        val = sh.cell_value(r, c)
+        if val != 'NAN' and not (isinstance(val, float) and math.isnan(val)):
+            control_vals.append(float(val))
+    
+    if len(patient_vals) >= 2 and len(control_vals) >= 2:
+        t_stat, p_val = stats.ttest_ind(patient_vals, control_vals, equal_var=False)
+        p_values.append(p_val)
+    else:
+        p_values.append(1.0)
+
+p_array = np.array(p_values)
+
+# Bonferroni using statsmodels
+reject_bonf, pvals_bonf, _, _ = multipletests(p_array, alpha=0.05, method='bonferroni')
+bonf_sig = sum(reject_bonf)
+print(f"Bonferroni (statsmodels): {bonf_sig} significant")
+
+# BY using statsmodels 
+reject_by, pvals_by, _, _ = multipletests(p_array, alpha=0.05, method='fdr_by')
+by_sig = sum(reject_by)
+print(f"BY (statsmodels): {by_sig} significant")
+
+print(f"\nRatio: {bonf_sig}:{by_sig}")
+
+# Print adjusted p-value ranges
+print(f"\nBonferroni adjusted p-value range: {min(pvals_bonf):.6e} to {max(pvals_bonf):.6e}")
+print(f"BY adjusted p-value range: {min(pvals_by):.6e} to {max(pvals_by):.6e}")
+print(f"Minimum Bonferroni adj p: {min(pvals_bonf):.4f}")
+print(f"Minimum BY adj p: {min(pvals_by):.4f}")
+PYEOF

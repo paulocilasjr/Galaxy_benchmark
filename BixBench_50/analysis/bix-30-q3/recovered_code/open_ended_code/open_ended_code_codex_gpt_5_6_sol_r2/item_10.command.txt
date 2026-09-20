@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, numpy as np
+from scipy.stats import ttest_ind
+s=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+names=[s.cell_value(i,0) for i in range(2,s.nrows)]
+X=np.array([[float(s.cell_value(i,j)) if isinstance(s.cell_value(i,j),(int,float)) else np.nan for j in range(1,21)] for i in range(2,s.nrows)])
+# detection-normalization: log2 expr = sample mean Ct detected <34 - Ct
+means_lt34=np.array([np.nanmean(np.where(X[:,j]<34,X[:,j],np.nan)) for j in range(20)])
+means_all=np.nanmean(X,axis=0)
+
+def adj(p, method):
+ p=np.asarray(p); m=len(p)
+ if method=='bonf': return np.minimum(p*m,1)
+ if method=='by':
+  order=np.argsort(p); ps=p[order]; cm=np.sum(1/np.arange(1,m+1)); q=ps*m*cm/np.arange(1,m+1); q=np.minimum.accumulate(q[::-1])[::-1]; out=np.empty(m); out[order]=np.minimum(q,1); return out
+for norm,XX in [('raw',X),('mean_lt34',means_lt34[None,:]-X),('mean_all',means_all[None,:]-X)]:
+ for drop in [False,True]:
+  pi=[j for j in range(10) if not(drop and j==2)]
+  ci=[j for j in range(10,20) if not(drop and j==17)]
+  for equal in [True,False]:
+   p=[]
+   for row in XX:
+    p.append(ttest_ind(row[pi],row[ci],nan_policy='omit',equal_var=equal).pvalue)
+   p=np.array(p)
+   b=adj(p,'bonf'); by=adj(p,'by')
+   sig=np.sum(p<=.05); bs=np.sum(b<=.05); bys=np.sum(by<=.05)
+   best=np.argsort(p)[:5]
+   print(norm,'drop',drop,'equal',equal,'raw',sig,'bonf',bs,'by',bys,'best',[(names[i],p[i],b[i],by[i]) for i in best])
+PY"

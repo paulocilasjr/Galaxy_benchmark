@@ -1,0 +1,82 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import xlrd
+import numpy as np
+from scipy import stats
+import math
+
+wb = xlrd.open_workbook('inputs/pone.0150501.s002.xls')
+sh = wb.sheet_by_name('RAW DATA')
+
+# Column layout: col 0 = miRNA name, cols 1-10 = patients, cols 11-20 = controls
+# Rows: 0=title, 1=headers, 2-176=data (175 miRNAs)
+
+p_values = []
+miRNA_names = []
+
+for r in range(2, sh.nrows):
+    name = sh.cell_value(r, 0)
+    miRNA_names.append(name)
+    
+    # Extract patient and control values
+    patient_vals = []
+    for c in range(1, 11):  # P_1 to P_10
+        val = sh.cell_value(r, c)
+        if val == 'NAN' or (isinstance(val, float) and math.isnan(val)):
+            continue
+        patient_vals.append(float(val))
+    
+    control_vals = []
+    for c in range(11, 21):  # C_11 to C_20
+        val = sh.cell_value(r, c)
+        if val == 'NAN' or (isinstance(val, float) and math.isnan(val)):
+            continue
+        control_vals.append(float(val))
+    
+    # Perform Welch's t-test (two-sided)
+    if len(patient_vals) >= 2 and len(control_vals) >= 2:
+        t_stat, p_val = stats.ttest_ind(patient_vals, control_vals, equal_var=False)
+        p_values.append(p_val)
+    else:
+        p_values.append(1.0)  # Not enough data, assign p=1
+
+m = len(p_values)
+print(f"Number of miRNAs tested: {m}")
+print(f"Number of p-values: {len(p_values)}")
+print(f"p-value range: {min(p_values):.6f} to {max(p_values):.6f}")
+
+# Bonferroni correction
+bonf_adj = [min(p * m, 1.0) for p in p_values]
+bonf_sig = sum(1 for p in bonf_adj if p <= 0.05)
+print(f"\nBonferroni significant (p_adj <= 0.05): {bonf_sig}")
+
+# Benjamini-Yekutieli correction
+# c(m) = sum_{i=1}^{m} 1/i
+c_m = sum(1.0 / i for i in range(1, m + 1))
+print(f"\nc(m) = {c_m:.6f}")
+
+# Sort p-values with original indices
+p_sorted = sorted([(p, i) for i, p in enumerate(p_values)], key=lambda x: x[0])
+
+# BY-adjusted p-values: q(i) = min_{j >= i} (m * c(m) / j) * p(j)
+# where p(j) is the j-th smallest p-value (1-indexed j)
+by_adj = [1.0] * m
+min_q = 1.0
+for i in range(m - 1, -1, -1):
+    j = i + 1  # 1-indexed rank
+    q = (m * c_m / j) * p_sorted[i][0]
+    if q < min_q:
+        min_q = q
+    by_adj[p_sorted[i][1]] = min(min_q, 1.0)
+
+by_sig = sum(1 for p in by_adj if p <= 0.05)
+print(f"BY significant (p_adj <= 0.05): {by_sig}")
+
+print(f"\nRatio: {bonf_sig}:{by_sig}")
+print(f"\nSimplified ratio: {bonf_sig // math.gcd(bonf_sig, by_sig) if by_sig > 0 else 'inf'}:{by_sig // math.gcd(bonf_sig, by_sig) if by_sig > 0 else 0}")
+
+# Also print some details
+print(f"\nTop 10 smallest p-values:")
+for i in range(min(10, m)):
+    idx = p_sorted[i][1]
+    print(f"  {miRNA_names[idx]}: p={p_sorted[i][0]:.6e}, Bonf adj={bonf_adj[idx]:.6e}, BY adj={by_adj[idx]:.6e}")
+PYEOF

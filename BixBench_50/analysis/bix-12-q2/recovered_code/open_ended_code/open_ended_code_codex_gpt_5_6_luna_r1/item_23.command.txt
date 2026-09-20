@@ -1,0 +1,71 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, statistics, math, collections
+p='inputs/scogs_fungi.zip'
+
+def read_records(txt):
+    rec=[]
+    cur=None; seq=[]
+    for line in txt.splitlines():
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if cur is not None: rec.append((cur,''.join(seq)))
+            cur=line[1:].split()[0]; seq=[]
+        else: seq.append(line)
+    if cur is not None: rec.append((cur,''.join(seq)))
+    return rec
+
+def stats(seqs, gap_mode='missing'):
+    L=len(seqs[0])
+    pis=0; var=0; const=0; allgap=0; comparable=0
+    symbols=collections.Counter()
+    for i in range(L):
+        col=[s[i] for s in seqs]
+        symbols.update(col)
+        if gap_mode=='missing':
+            col=[c for c in col if c not in '-?.']
+        # else treat all chars as states; missing symbols do not occur
+        if not col:
+            allgap+=1; continue
+        comparable+=1
+        cnt=collections.Counter(col)
+        if len(cnt)==1: const+=1
+        else: var+=1
+        if sum(n>=2 for n in cnt.values())>=2:
+            pis+=1
+    return L,pis,var,const,allgap,comparable,symbols
+
+with zipfile.ZipFile(p) as z:
+    names=[n for n in z.namelist() if n.endswith('.faa.mafft')]
+    rows=[]
+    for n in names:
+        rec=read_records(z.read(n).decode())
+        seqs=[s for h,s in rec]
+        a=stats(seqs,'missing'); b=stats(seqs,'state')
+        rows.append((n,len(rec),a,b))
+
+print('n alignments',len(rows))
+print('n taxa distribution',collections.Counter(r[1] for r in rows))
+print('length range',min(r[2][0] for r in rows),max(r[2][0] for r in rows),'total',sum(r[2][0] for r in rows))
+print('symbols total',collections.Counter({c:sum(r[2][6][c] for r in rows) for c in sorted(set().union(*(r[2][6].keys() for r in rows)))}))
+for label,idx,denidx in [('missing_L',2,0),('missing_comparable',2,5),('state_L',3,0),('state_comparable',3,5)]:
+    vals=[]
+    for r in rows:
+        st=r[idx]; den=st[denidx]
+        vals.append(100*st[1]/den if den else float('nan'))
+    vals=[v for v in vals if not math.isnan(v)]
+    print(label,'median',statistics.median(vals),'mean',statistics.mean(vals),'min',min(vals),'max',max(vals),'n',len(vals))
+    print('sorted around median',sorted(vals)[len(vals)//2-3:len(vals)//2+4])
+# actual numerators/denominators at middle sorted based variant
+for label,idx,denidx in [('missing_L',2,0),('missing_comparable',2,5),('state_L',3,0),('state_comparable',3,5)]:
+    pairs=[]
+    for r in rows:
+        st=r[idx]; den=st[denidx]
+        pairs.append((100*st[1]/den if den else float('nan'),r[0],st[1],den,r[1],st[2],st[3],st[4],st[5]))
+    pairs.sort()
+    print('\\n',label)
+    for x in pairs[len(pairs)//2-3:len(pairs)//2+4]: print(x)
+# alignment count and PIS zero etc
+print('\\nfirst detailed')
+for r in rows[:8]: print(r[0],r[1],r[2][:6],r[3][:6])
+PY"

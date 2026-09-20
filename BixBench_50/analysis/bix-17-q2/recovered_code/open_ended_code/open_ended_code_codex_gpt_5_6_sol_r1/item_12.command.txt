@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from statistics import median
+from openpyxl import load_workbook
+
+# Read carrier IDs.
+wb=load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True)
+it=wb.active.iter_rows(values_only=True); hdr=next(it); ix={x:i for i,x in enumerate(hdr) if x is not None}
+carrier_ids=[str(r[ix['Sample ID']]).strip() for r in it if r[ix['BLM Mutation Status']]=='Carrier']
+
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+def sample_id(p): return p.stem.split('_CHIP_')[-1].split('-')[0]
+by_id={sample_id(p):p for p in files}
+excluded_so={'intron_variant','intergenic_variant','3_prime_UTR_variant','5_prime_UTR_variant','5_prime_UTR_premature_start_codon_gain_variant'}
+counts={}; details={}
+for sid in carrier_ids:
+    p=by_id.get(sid)
+    if p is None: continue
+    wb=load_workbook(p,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions()
+    rows=ws.iter_rows(values_only=True); next(rows); hdr=next(rows); ci={x:i for i,x in enumerate(hdr) if x is not None}
+    kept=[]
+    for r in rows:
+        if not r or r[0] is None: continue
+        z=r[ci['Zygosity']]
+        so=r[ci['Sequence Ontology (Combined)']]
+        v=r[ci['Variant Allele Freq']]
+        if z=='Reference' or so in excluded_so: continue
+        try: vf=float(v)
+        except (TypeError,ValueError): continue
+        if vf < 0.3:
+            kept.append((r[ci['Chr:Pos']],r[ci['Ref/Alt']],so,v,z,r[ci['Gene Names']]))
+    counts[sid]=len(kept); details[sid]=kept
+print('included N',len(counts),'missing',[s for s in carrier_ids if s not in counts])
+print('counts sorted by metadata order')
+for s,c in counts.items(): print(s,c,details[s])
+print('sorted counts',sorted(counts.values()))
+print('median',median(counts.values()))
+PY"

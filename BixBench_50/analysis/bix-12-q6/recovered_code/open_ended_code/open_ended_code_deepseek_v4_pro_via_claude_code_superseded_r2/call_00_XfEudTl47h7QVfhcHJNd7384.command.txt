@@ -1,0 +1,50 @@
+python3 -c "
+import zipfile
+
+# Find animal orthologs with 4 sequences and print alignment stats
+with zipfile.ZipFile('/workspace/inputs/scogs_animals.zip', 'r') as zf:
+    for name in sorted(zf.namelist()):
+        if name.endswith('.faa.mafft'):
+            content = zf.read(name).decode('utf-8')
+            n_seqs = content.count('>')
+            if n_seqs == 4:
+                ortho = name.replace('.faa.mafft','').split('/')[-1]
+                # Parse alignment
+                seqs = []
+                cur_hdr = None
+                cur_seq = []
+                for line in content.strip().split('\n'):
+                    if line.startswith('>'):
+                        if cur_hdr:
+                            seqs.append((cur_hdr, ''.join(cur_seq)))
+                        cur_hdr = line[1:].strip()
+                        cur_seq = []
+                    elif line.strip():
+                        cur_seq.append(line.strip())
+                if cur_hdr:
+                    seqs.append((cur_hdr, ''.join(cur_seq)))
+                
+                seq_lens = [len(s) for _, s in seqs]
+                # Count PIS
+                pis = 0
+                for col in range(len(seqs[0][1])):
+                    chars = {}
+                    for _, s in seqs:
+                        c = s[col]
+                        chars[c] = chars.get(c, 0) + 1
+                    states_ge2 = sum(1 for v in chars.values() if v >= 2)
+                    if states_ge2 >= 2:
+                        pis += 1
+                print(f'animal {ortho}: {n_seqs} seqs, len={seq_lens[0]}, PIS={pis}')
+                if pis > 0:
+                    # Show first few columns
+                    for col in range(min(20, len(seqs[0][1]))):
+                        col_chars = ''.join(s[col] for _, s in seqs)
+                        chars = {}
+                        for _, s in seqs:
+                            c = s[col]
+                            chars[c] = chars.get(c, 0) + 1
+                        states_ge2 = sum(1 for v in chars.values() if v >= 2)
+                        marker = ' <-- PIS' if states_ge2 >= 2 else ''
+                        print(f'    col {col}: [{col_chars}] counts={chars} {marker}')
+" 2>&1 | head -80

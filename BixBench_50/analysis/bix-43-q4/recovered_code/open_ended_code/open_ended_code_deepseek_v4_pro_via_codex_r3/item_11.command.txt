@@ -1,0 +1,35 @@
+/bin/bash -lc "cd /workspace && python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+counts.columns=[c.replace('_','-') if c.startswith(('1','2','3','4','5','6','7','8','9','10')) else c for c in counts.columns]
+print(counts.shape, counts.columns.tolist())
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout=layout[['SampleID','Group']].rename(columns={'SampleID':'sample'})
+print(layout)
+meta=layout[layout.Group.isin(['DMSO','Cisplatin_IC50_CBD_IC50'])].copy()
+print(meta)
+meta['condition']=meta.Group
+counts_sub=counts[meta.sample.values]
+print('counts_sub',counts_sub.shape, counts_sub.columns.tolist(), counts_sub.sum().sum())
+# ensure sample IDs
+meta.index=meta.sample.values
+print(meta)
+dds=DeseqDataSet(counts=counts_sub, metadata=meta, design='~condition', ref_level=['condition','DMSO'], quiet=False)
+dds.deseq2()
+res=DeseqStats(dds, contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05)
+res.summary()
+r=res.results_df
+print(r.shape)
+print(r.head())
+print('na padj',r.padj.isna().sum(), 'na pvalue',r.pvalue.isna().sum())
+r.to_csv('/workspace/tmp/pydeseq2_full.csv')
+# stats
+sig=r[(r.padj<0.05)&(r.log2FoldChange.abs()>=0.5)]
+print('DEG count',len(sig), 'up', (sig.log2FoldChange>0).sum(),'down',(sig.log2FoldChange<0).sum())
+print(sig.head())
+print(sig[['log2FoldChange','padj']].describe())
+PY"

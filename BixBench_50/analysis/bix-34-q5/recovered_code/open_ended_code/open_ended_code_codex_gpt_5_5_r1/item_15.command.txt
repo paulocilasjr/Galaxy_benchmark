@@ -1,0 +1,145 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, statistics, itertools, math, collections, os
+
+class Parser:
+    def __init__(self, s):
+        self.s=s.strip()
+        self.i=0
+        self.nodes=[]
+    def skip_ws(self):
+        while self.i < len(self.s) and self.s[self.i].isspace():
+            self.i += 1
+    def new_node(self, name=None):
+        idx=len(self.nodes)
+        self.nodes.append({'name': name, 'children': [], 'length': None})
+        return idx
+    def parse_label(self):
+        self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] in \"'\\\"\":
+            q=self.s[self.i]; self.i += 1; out=[]
+            while self.i < len(self.s):
+                c=self.s[self.i]; self.i += 1
+                if c == q:
+                    # doubled quote in Newick quoted label
+                    if self.i < len(self.s) and self.s[self.i] == q:
+                        out.append(q); self.i += 1; continue
+                    break
+                out.append(c)
+            return ''.join(out)
+        start=self.i
+        while self.i < len(self.s) and self.s[self.i] not in ':,();':
+            self.i += 1
+        return self.s[start:self.i].strip() or None
+    def parse_length(self):
+        self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] == ':':
+            self.i += 1
+            self.skip_ws()
+            start=self.i
+            while self.i < len(self.s) and self.s[self.i] not in ',();':
+                self.i += 1
+            tok=self.s[start:self.i].strip()
+            return float(tok)
+        return None
+    def parse_subtree(self):
+        self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] == '(':
+            self.i += 1
+            idx=self.new_node()
+            while True:
+                child=self.parse_subtree()
+                self.nodes[idx]['children'].append(child)
+                self.skip_ws()
+                if self.i < len(self.s) and self.s[self.i] == ',':
+                    self.i += 1
+                    continue
+                if self.i < len(self.s) and self.s[self.i] == ')':
+                    self.i += 1
+                    break
+                raise ValueError(f'Expected comma or close paren at {self.i}: {self.s[self.i:self.i+20]"'!r}'"')
+            # Optional internal label/support before optional length.
+            if self.i < len(self.s) and self.s[self.i] not in ':,();':
+                self.nodes[idx]['name']=self.parse_label()
+            self.nodes[idx]['length']=self.parse_length()
+            return idx
+        else:
+            name=self.parse_label()
+            if not name:
+                raise ValueError(f'Missing leaf label at {self.i}')
+            idx=self.new_node(name)
+            self.nodes[idx]['length']=self.parse_length()
+            return idx
+    def parse(self):
+        root=self.parse_subtree()
+        self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] == ';':
+            self.i += 1
+        self.skip_ws()
+        if self.i "'!= len(self.s):
+            raise ValueError(f'"'Trailing text at {self.i}: {self.s[self.i:self.i+50]"'!r}'"')
+        return root, self.nodes
+
+def mean_patristic(newick):
+    root,nodes=Parser(newick).parse()
+    adj=[[] for _ in nodes]
+    for parent,node in enumerate(nodes):
+        for child in node['children']:
+            length=nodes[child]['length']
+            if length is None:
+                length=0.0
+            adj[parent].append((child,length))
+            adj[child].append((parent,length))
+    leaves=[i for i,n in enumerate(nodes) if not n['children']]
+    if len(leaves) < 2:
+        raise ValueError('Tree has fewer than two leaves')
+    # Check all non-root edges had a branch length; IQ-TREE treefiles should.
+    missing=[i for i,n in enumerate(nodes) if i "'!= root and n['"'length'] is None]
+    if missing:
+        raise ValueError(f'Missing branch lengths for {len(missing)} nodes')
+    total=0.0; count=0
+    for a,b in itertools.combinations(leaves,2):
+        stack=[(a,-1,0.0)]
+        seen=set()
+        while stack:
+            u,p,d=stack.pop()
+            if u == b:
+                total += d; count += 1; break
+            seen.add(u)
+            for v,w in adj[u]:
+                if v "'!= p and v not in seen:
+                    stack.append((v,u,d+w))
+        else:
+            raise ValueError('"'Disconnected tree')
+    return total/count, [nodes[i]['name'] for i in leaves]
+
+def summarize(zpath):
+    vals=[]; leaves_count=collections.Counter(); failures=[]
+    with zipfile.ZipFile(zpath) as z:
+        names=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        for name in names:
+            try:
+                s=z.read(name).decode().strip()
+                val, leaves=mean_patristic(s)
+                vals.append((name,val,len(leaves),tuple(sorted(leaves))))
+                leaves_count[len(leaves)] += 1
+            except Exception as e:
+                failures.append((name,str(e)))
+    med=statistics.median(v for _,v,_,_ in vals)
+    return vals, med, leaves_count, failures
+
+for group,zp in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+    vals, med, lc, failures=summarize(zp)
+    print(group, 'trees', len(vals), 'failures', len(failures), 'leaf_counts', dict(sorted(lc.items())), 'median_mean_patristic', repr(med))
+    print('  min/median/max means', min(v for _,v,_,_ in vals), med, max(v for _,v,_,_ in vals))
+    print('  first sorted values around median:')
+    sorted_vals=sorted(vals,key=lambda x:x[1])
+    mid=len(sorted_vals)//2
+    for rec in sorted_vals[max(0,mid-2):mid+3]:
+        print(' ', rec[0], rec[1], rec[2])
+    if failures[:3]: print(' failures sample', failures[:3])
+
+animal_vals, animal_med, _, _ = summarize('inputs/scogs_animals.zip')
+fungi_vals, fungi_med, _, _ = summarize('inputs/scogs_fungi.zip')
+print('fungi/animals', repr(fungi_med/animal_med))
+print('animals/fungi', repr(animal_med/fungi_med))
+PY"

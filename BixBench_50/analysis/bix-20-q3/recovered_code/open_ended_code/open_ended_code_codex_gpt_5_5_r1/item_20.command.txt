@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+# reuse parser quickly
+import zipfile,re,xml.etree.ElementTree as ET,glob,os
+from openpyxl import load_workbook
+NS={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def col_to_idx(col):
+ n=0
+ for ch in col:n=n*26+ord(ch)-64
+ return n-1
+def read(path):
+ with zipfile.ZipFile(path) as z:
+  ssroot=ET.fromstring(z.read('xl/sharedStrings.xml'))
+  ss=[''.join(t.text or '' for t in si.findall('.//m:t',NS)) for si in ssroot.findall('m:si',NS)]
+  root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+  rows={};maxcol=0
+  for row in root.findall('.//m:sheetData/m:row',NS):
+   r=int(row.attrib['r']);cells={}
+   for c in row.findall('m:c',NS):
+    idx=col_to_idx(re.match(r'([A-Z]+)',c.attrib['r']).group(1)); maxcol=max(maxcol,idx+1)
+    v=c.find('m:v',NS)
+    if v is None: val=None
+    elif c.attrib.get('t')=='s': val=ss[int(v.text)]
+    else:
+     text=v.text
+     try: val=float(text) if any(ch in text for ch in '.Ee') else int(text)
+     except: val=text
+    cells[idx]=val
+   rows[r]=cells
+  headers=[rows[2].get(i) for i in range(maxcol)]
+  return headers,[{headers[i]:rows[r].get(i) for i in range(maxcol) if headers[i] is not None} for r in sorted(k for k in rows if k>=3)]
+for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*185-PF.xlsx'):
+ h,recs=read(f)
+ print(h)
+ n=0
+ for rec in recs:
+  if rec.get('Zygosity')"'!='"'Reference' and rec.get('Zygosity') is not None:
+   print({k:rec.get(k) for k in ['Chr:Pos','Ref/Alt','Zygosity','Read Depths (DP)','Genotype Qualities (GQ)','Variant Allele Freq','Sequence Ontology (Combined)','Classification','In_CHIP']})
+   n+=1
+   if n>=20: break
+PY"

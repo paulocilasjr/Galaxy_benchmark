@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import csv
+from collections import Counter
+import numpy as np
+from sklearn.decomposition import PCA
+
+expr_path='inputs/ROSMAP_genexp_ad.csv'
+meta_path='inputs/ROSMAP_meta_ad.csv'
+with open(expr_path, newline='') as f:
+    reader=csv.reader(f)
+    header=next(reader)
+    genes=[]
+    vals=[]
+    for row in reader:
+        genes.append(row[0])
+        vals.append([float(x) for x in row[1:]])
+X_gene_sample=np.asarray(vals, dtype=np.float64)
+sample_ids=header[1:]
+print('raw shape genes x samples:',X_gene_sample.shape)
+print('gene labels unique:',len(set(genes)),'of',len(genes),'duplicate genes:',sum(v>1 for v in Counter(genes).values()))
+print('raw finite:',np.isfinite(X_gene_sample).all(),'min:',X_gene_sample.min(),'max:',X_gene_sample.max(),'zeros:',np.count_nonzero(X_gene_sample==0))
+with open(meta_path, newline='') as f:
+    meta_ids=[r['projid'] for r in csv.DictReader(f)]
+counts=Counter(sample_ids)
+collided={k for k,v in counts.items() if v>1}
+keep=np.array([sid not in collided for sid in sample_ids],dtype=bool)
+X=np.log10(X_gene_sample[:,keep].T + 1.0)
+print('fit shape samples x genes:',X.shape)
+print('fit finite:',np.isfinite(X).all(),'zero-var genes:',np.count_nonzero(np.var(X,axis=0)==0))
+# ordinary centered PCA, no feature scaling, all genes retained (none zero variance)
+pca=PCA(n_components=100, svd_solver='full')
+pca.fit(X)
+ratio=100.0*float(pca.explained_variance_ratio_[0])
+print('filtered PC1 ratio fraction:',repr(float(pca.explained_variance_ratio_[0])))
+print('filtered PC1 percent:',repr(ratio))
+print('filtered first 5 percent:',pca.explained_variance_ratio_[:5]*100)
+print('filtered total retained percent:',pca.explained_variance_ratio_.sum()*100)
+# independent covariance/eigen check: sample covariance denominator cancels in ratio
+Xc=X-X.mean(axis=0)
+sv=np.linalg.svd(Xc, full_matrices=False, compute_uv=False)
+ind=float(sv[0]**2/np.sum(sv**2)*100)
+print('independent SVD percent:',repr(ind),'abs diff:',abs(ind-ratio))
+# report all-row sensitivity for diagnostic only
+Xa=np.log10(X_gene_sample.T+1.0)
+pa=PCA(n_components=100,svd_solver='full').fit(Xa)
+print('all 222 rows diagnostic percent:',repr(float(pa.explained_variance_ratio_[0]*100)))
+# all unique IDs keep first occurrence diagnostic
+first=np.array([i==next(j for j,s in enumerate(sample_ids) if s==sid) for i,sid in enumerate(sample_ids)])
+pf=PCA(n_components=100,svd_solver='full').fit(np.log10(X_gene_sample[:,first].T+1.0))
+print('one occurrence per ID diagnostic percent:',repr(float(pf.explained_variance_ratio_[0]*100)))
+PY"

@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout['count_col']=layout.SampleID.str.replace('-','_',regex=False)
+sel=layout[layout.Group.isin(['DMSO','Cisplatin_IC50_CBD_IC50'])].copy()
+sel['condition']=sel.Group.map({'DMSO':'DMSO','Cisplatin_IC50_CBD_IC50':'CBD_cisplatin'})
+cts=counts[sel.count_col.tolist()].T
+cts.columns=counts.index.astype(str)
+cts=cts.loc[:,cts.sum(axis=0)>0]
+meta=sel.set_index('count_col')[['condition']]
+meta['condition']=pd.Categorical(meta.condition,categories=['DMSO','CBD_cisplatin'])
+print('starting',cts.shape,flush=True)
+dds=DeseqDataSet(counts=cts,metadata=meta,design_factors='condition',refit_cooks=True,n_cpus=1)
+dds.deseq2()
+print('dds done',flush=True)
+stat=DeseqStats(dds,contrast=['condition','CBD_cisplatin','DMSO'],alpha=0.05,n_cpus=1)
+stat.summary()
+res=stat.results_df
+print('results',res.shape,res.columns.tolist(),flush=True)
+deg=res[(res.padj<0.05)&(res.log2FoldChange.abs()>=0.5)]
+print('DEG',len(deg),flush=True)
+print(deg.sort_values('padj').head(10).to_string(),flush=True)
+PY"

@@ -1,0 +1,68 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) {
+  x <- readRDS(f)
+  d <- as.data.frame(attr(x, 'listData'))
+  rownames(d) <- attr(x, 'rownames')
+  d
+}
+fs <- c("'`97`='"'inputs/res_1vs97.rds', "'`98`='"'inputs/res_1vs98.rds', "'`99`='"'inputs/res_1vs99.rds')
+res <- lapply(fs, read_res)
+stopifnot(all(vapply(res[-1], function(z) setequal(rownames(z), rownames(res[[1]])), logical(1))))
+universe_input <- Reduce(intersect, lapply(res, rownames))
+link <- read.delim('https://rest.kegg.jp/link/pathway/pau', header=FALSE, stringsAsFactors=FALSE)
+names(link) <- c('gene','path')
+link"'$gene <- sub('"'"'^pau:'"', '', link"'$gene)
+link$path <- sub('"'"'^path:'"', '', link"'$path)
+pnames <- read.delim('"'https://rest.kegg.jp/list/pathway/pau', header=FALSE, stringsAsFactors=FALSE)
+names(pnames) <- c('path','name')
+ora <- function(fg, universe=universe_input, minsize=10, maxsize=500) {
+  u <- intersect(unique(universe), unique(link"'$gene))
+  g <- intersect(unique(fg), u)
+  gs <- split(link$gene, link$path)
+  gs <- lapply(gs, function(z) intersect(unique(z), u))
+  sizes <- lengths(gs)
+  gs <- gs[sizes >= minsize & sizes <= maxsize]
+  M <- lengths(gs); k <- vapply(gs, function(z) sum(z %in% g), integer(1))
+  keep <- k > 0
+  M <- M[keep]; k <- k[keep]
+  pv <- phyper(k-1, M, length(u)-M, length(g), lower.tail=FALSE)
+  pa <- p.adjust(pv, method='"'BH')
+  data.frame(path=names(M), k=k, M=M, n=length(g), N=length(u), pvalue=pv, padj=pa,
+             row.names=NULL)
+}
+sets <- list()
+for (s in names(res)) {
+  d <- res[[s]]
+  for (direction in c('up','down')) {
+    fg <- if(direction=='up') rownames(d)[d"'$log2FoldChange > 1.5] else rownames(d)[d$log2FoldChange < -1.5]
+    tab <- ora(fg)
+    sig <- tab$path[tab$padj < .05]
+    sets[[paste(s,direction,sep='"'_')]] <- sig
+    cat(s, direction, 'foreground=',length(fg),'mapped=',unique(tab"'$n),'"'tested=',nrow(tab),'sig=',length(sig),'\\n')
+    if(length(sig)) {
+      z <- merge(tab[tab"'$path %in% sig,], pnames, by='"'path', all.x=TRUE)
+      z <- z[order(z"'$padj),]
+      print(z[,c('"'path','name','k','M','pvalue','padj')], row.names=FALSE)
+    }
+  }
+}
+up_common <- Reduce(intersect, sets[c('97_up','98_up','99_up')])
+down_common <- Reduce(intersect, sets[c('97_down','98_down','99_down')])
+cat('\\nCOMMON UP',length(up_common),paste(up_common,collapse=', '),'\\n')
+cat('COMMON DOWN',length(down_common),paste(down_common,collapse=', '),'\\n')
+cat('TOTAL',length(union(up_common,down_common)),'\\n')
+print(pnames[pnames"'$path %in% union(up_common,down_common),],row.names=FALSE)
+cat('"'mapping: input universe=',length(universe_input),'mapped universe=',length(intersect(universe_input,unique(link"'$gene))),'"'KEGG genes=',length(unique(link"'$gene)),'"'pathways=',length(unique(link"'$path)),'"'\\n')
+
+# Sensitivity: default KEGG universe, varying max size and raw-vs-adjusted significance.
+for (ubg in c('input','kegg')) for(mx in c(500,Inf)) for(metric in c('padj','pvalue')) {
+  us <- if(ubg=='input') universe_input else unique(link"'$gene)
+  ss <- list()
+  for(s in names(res)) for(direction in c('"'up','down')) {
+    d<-res[[s]]; fg<-if(direction=='up') rownames(d)[d"'$log2FoldChange>1.5] else rownames(d)[d$log2FoldChange < -1.5]
+    tt<-ora(fg,us,maxsize=mx); ss[[paste(s,direction,sep='"'_')]]<-tt"'$path[tt[[metric]]<.05]
+  }
+  cu<-Reduce(intersect,ss[c('"'97_up','98_up','99_up')]); cd<-Reduce(intersect,ss[c('97_down','98_down','99_down')])
+  cat('SENS',ubg,'max',mx,metric,'common_up',length(cu),'common_down',length(cd),'total',length(union(cu,cd)),paste(union(cu,cd),collapse=','),'\\n')
+}
+RS"

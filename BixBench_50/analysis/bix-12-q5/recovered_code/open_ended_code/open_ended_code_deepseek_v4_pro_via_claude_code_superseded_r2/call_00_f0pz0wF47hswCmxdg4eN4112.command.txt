@@ -1,0 +1,67 @@
+python3 << 'PYEOF'
+import zipfile
+from collections import Counter
+
+def parse_fasta(text):
+    entries = []
+    current_header = None
+    current_seq = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            if current_header is not None:
+                entries.append((current_header, ''.join(current_seq)))
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_header is not None:
+        entries.append((current_header, ''.join(current_seq)))
+    return entries
+
+def count_parsimony_informative_sites(sequences):
+    if not sequences:
+        return 0
+    seqlen = len(sequences[0])
+    for s in sequences:
+        if len(s) != seqlen:
+            raise ValueError('Sequences have different lengths')
+    
+    count = 0
+    for i in range(seqlen):
+        col = [s[i] for s in sequences]
+        counter = Counter(col)
+        for gap_char in ['-', '.', '?', 'X']:
+            counter.pop(gap_char, None)
+        if len(counter) >= 2 and all(v >= 2 for v in counter.values()):
+            count += 1
+    return count
+
+with zipfile.ZipFile('inputs/scogs_animals.zip') as z:
+    # Verify both top genes
+    for gene in ['1428854at2759', '570797at2759']:
+        with z.open(f'{gene}.faa.mafft') as f:
+            content = f.read().decode('utf-8')
+        entries = parse_fasta(content)
+        seqs = [s for _, s in entries]
+        pis = count_parsimony_informative_sites(seqs)
+        
+        # Also count total variable sites for context
+        seqlen = len(seqs[0])
+        variable = 0
+        for i in range(seqlen):
+            col = set(s[i] for s in seqs)
+            col.discard('-')
+            col.discard('.')
+            col.discard('?')
+            col.discard('X')
+            if len(col) >= 2:
+                variable += 1
+        
+        print(f'{gene}: {pis} PIS, {variable} variable sites, {seqlen} total cols, {len(seqs)} seqs')
+        for h, s in entries:
+            print(f'  {h}')
+
+PYEOF

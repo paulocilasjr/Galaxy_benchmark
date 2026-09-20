@@ -1,0 +1,122 @@
+cd /workspace
+python3 << 'EOF'
+import sys, os, re, subprocess, statistics
+from collections import defaultdict
+sys.path.insert(0, '/workspace')
+from combined_tree_analysis import parse_newick, get_leaves, compute_patristic_distances
+
+animals_zip = '/workspace/inputs/scogs_animals.zip'
+fungi_zip = '/workspace/inputs/scogs_fungi.zip'
+mafft_bin = '/tmp/mafft-linux64/mafftdir/bin/mafft'
+mafft_env = '/tmp/mafft-linux64/mafftdir/libexec'
+iqtree_bin = '/tmp/iqtree-2.4.0-Linux-intel/bin/iqtree2'
+
+# Get shared OGs
+result = subprocess.run(['unzip', '-l', animals_zip], capture_output=True, text=True)
+animal_ogs = set()
+for line in result.stdout.split('\n'):
+    if '.treefile' in line:
+        m = re.search(r'(\d+at\d+)\.faa\.mafft\.clipkit\.treefile', line)
+        if m:
+            animal_ogs.add(m.group(1))
+result = subprocess.run(['unzip', '-l', fungi_zip], capture_output=True, text=True)
+fungi_ogs = set()
+for line in result.stdout.split('\n'):
+    if '.treefile' in line:
+        m = re.search(r'(\d+at\d+)\.faa\.mafft\.clipkit\.treefile', line)
+        if m:
+            fungi_ogs.add(m.group(1))
+
+shared_ogs = sorted(animal_ogs & fungi_ogs)
+print(f"Shared: {len(shared_ogs)}")
+
+# Read already-built trees from the previous run
+workdir = '/tmp/test_combined3'
+# Actually, let me find the workdir from the previous run
+import glob
+workdirs = glob.glob('/tmp/combined_trees_*')
+print(f"Found {len(workdirs)} workdirs")
+if workdirs:
+    workdir = workdirs[0]
+    print(f"Using {workdir}")
+    
+    # Process each tree
+    all_species_means = []  # mean to ALL other species
+    within_kingdom_means = []  # mean to same-kingdom only
+    cross_kingdom_means = []  # mean to other-kingdom only
+    
+    successful = 0
+    for og in shared_ogs:
+        gene_dir = os.path.join(workdir, og)
+        treefile = os.path.join(gene_dir, 'aligned.faa.treefile')
+        if not os.path.exists(treefile):
+            continue
+        
+        with open(treefile) as f:
+            newick = f.read().strip()
+        if not newick:
+            continue
+        
+        try:
+            tree = parse_newick(newick)
+            leaves = get_leaves(tree)
+            dists = compute_patristic_distances(tree)
+            
+            for sp in leaves:
+                is_animal = sp.startswith('Animals')
+                same_kingdom = [l for l in leaves if (l.startswith('Animals') == is_animal) and l != sp]
+                other_kingdom = [l for l in leaves if (l.startswith('Animals') != is_animal)]
+                all_others = [l for l in leaves if l != sp]
+                
+                if all_others:
+                    mean_all = sum(dists[(sp, other)] for other in all_others) / len(all_others)
+                    all_species_means.append((sp, mean_all))
+                if same_kingdom:
+                    mean_within = sum(dists[(sp, other)] for other in same_kingdom) / len(same_kingdom)
+                    within_kingdom_means.append((sp, mean_within))
+                if other_kingdom:
+                    mean_cross = sum(dists[(sp, other)] for other in other_kingdom) / len(other_kingdom)
+                    cross_kingdom_means.append((sp, mean_cross))
+            
+            successful += 1
+        except Exception as e:
+            print(f"Error {og}: {e}")
+    
+    print(f"\nProcessed {successful} trees")
+    
+    # Analysis 1: All-species means (current)
+    animal_vals = [v for sp, v in all_species_means if sp.startswith('Animals')]
+    fungi_vals = [v for sp, v in all_species_means if sp.startswith('Fungi')]
+    am = statistics.median(animal_vals)
+    fm = statistics.median(fungi_vals)
+    print(f"\n=== All-species means ===")
+    print(f"Animal median: {am:.6f} (n={len(animal_vals)})")
+    print(f"Fungi median: {fm:.6f} (n={len(fungi_vals)})")
+    print(f"Ratio (fungi/animal): {fm/am:.6f}")
+    print(f"Ratio (animal/fungi): {am/fm:.6f}")
+    
+    # Analysis 2: Within-kingdom means
+    animal_vals = [v for sp, v in within_kingdom_means if sp.startswith('Animals')]
+    fungi_vals = [v for sp, v in within_kingdom_means if sp.startswith('Fungi')]
+    am = statistics.median(animal_vals)
+    fm = statistics.median(fungi_vals)
+    print(f"\n=== Within-kingdom means ===")
+    print(f"Animal median: {am:.6f} (n={len(animal_vals)})")
+    print(f"Fungi median: {fm:.6f} (n={len(fungi_vals)})")
+    print(f"Ratio (fungi/animal): {fm/am:.6f}")
+    print(f"Ratio (animal/fungi): {am/fm:.6f}")
+    
+    # Analysis 3: Cross-kingdom means
+    animal_vals = [v for sp, v in cross_kingdom_means if sp.startswith('Animals')]
+    fungi_vals = [v for sp, v in cross_kingdom_means if sp.startswith('Fungi')]
+    am = statistics.median(animal_vals)
+    fm = statistics.median(fungi_vals)
+    print(f"\n=== Cross-kingdom means ===")
+    print(f"Animal median: {am:.6f} (n={len(animal_vals)})")
+    print(f"Fungi median: {fm:.6f} (n={len(fungi_vals)})")
+    print(f"Ratio (fungi/animal): {fm/am:.6f}")
+    print(f"Ratio (animal/fungi): {am/fm:.6f}")
+    
+else:
+    print("No workdir found!")
+EOF

@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from io import StringIO
+import re, statistics
+try:
+ from Bio import Phylo
+ print('Biopython available')
+except Exception as e: print('No biopython',e); raise
+zp='inputs/scogs_fungi.zip'
+rows=[]
+with ZipFile(zp) as z:
+ for n in z.namelist():
+  if not n.endswith('.treefile'): continue
+  s=z.read(n).decode().strip()
+  t=Phylo.read(StringIO(s),'newick')
+  terms=t.get_terminals(); nonterms=t.get_nonterminals()
+  total=sum(c.branch_length or 0 for c in t.find_clades())
+  internal=sum(c.branch_length or 0 for c in nonterms)
+  ratio=internal/total if total else float('nan')
+  iq=z.read(n[:-8]+'iqtree').decode()
+  m=re.search(r'Sum of internal branch lengths: ([0-9.eE+-]+) \\(([0-9.eE+-]+)% of tree length\\)',iq)
+  rows.append((n.split('.')[0],len(terms),total,internal,ratio,float(m.group(2))/100 if m else None,s))
+print('trees',len(rows),'tips counts', {k:sum(x[1]==k for x in rows) for k in sorted(set(x[1] for x in rows))})
+print('above .06 precise',sum(x[4]>.06 for x in rows),'den',len(rows),'pct',100*sum(x[4]>.06 for x in rows)/len(rows))
+print('above .06 printed IQtree',sum(x[5]>.06 for x in rows))
+print('ratio ranges by tips')
+for k in sorted(set(x[1] for x in rows)):
+ a=[x[4] for x in rows if x[1]==k]
+ print(k,len(a),min(a),statistics.median(a),max(a),'above',sum(v>.06 for v in a))
+print('nearest threshold:')
+for x in sorted(rows,key=lambda x:abs(x[4]-.06))[:15]: print(x[:6])
+print('non-tree logs')
+ treebases={n.split('.')[0] for n in z.namelist() if n.endswith('.treefile')}
+ for n in z.namelist():
+  if n.endswith('.log') and n.split('.')[0] not in treebases:
+   txt=z.read(n).decode(errors='replace')
+   print('\\n',n, '\\n', '\\n'.join(txt.splitlines()[-20:]))
+PY"

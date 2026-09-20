@@ -1,0 +1,37 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, os, tempfile, subprocess, statistics, json, glob, shutil
+os.makedirs('/workspace/tmp', exist_ok=True)
+for zname, prefix in [('inputs/scogs_animals.zip','animals'),('inputs/scogs_fungi.zip','fungi')]:
+    outdir=f'/workspace/tmp/{prefix}_trees'
+    shutil.rmtree(outdir, ignore_errors=True)
+    os.makedirs(outdir)
+    z=zipfile.ZipFile(zname)
+    names=[n for n in z.namelist() if n.endswith('.treefile')]
+    for n in names:
+        data=z.read(n)
+        out=os.path.join(outdir, os.path.basename(n))
+        open(out,'wb').write(data)
+    print(prefix, len(names))
+
+# run phykit treeness for each
+vals={}
+for prefix in ['animals','fungi']:
+    outdir=f'/workspace/tmp/{prefix}_trees'
+    vs=[]
+    for f in sorted(glob.glob(outdir+'/*.treefile')):
+        p=subprocess.run(['phykit','treeness',f],capture_output=True,text=True)
+        try:
+            v=float(p.stdout.strip())
+        except Exception as e:
+            print('ERR',f,p.stdout,p.stderr)
+            continue
+        vs.append((os.path.basename(f),v))
+    vals[prefix]=vs
+    raw=[v for _,v in vs]
+    rounded=[round(v,4) for v in raw]
+    print(prefix,'n',len(vs),'median raw',statistics.median(raw),'median rounded4',statistics.median(rounded))
+    print('sum',sum(raw),'zero count',sum(v==0 for v in raw),'minmax',min(raw),max(raw))
+    print('first',vs[:5])
+print('diff median raw',statistics.median([v for _,v in vals['fungi']])-statistics.median([v for _,v in vals['animals']]))
+print('diff median rounded4',statistics.median([round(v,4) for _,v in vals['fungi']])-statistics.median([round(v,4) for _,v in vals['animals']]))
+PY"

@@ -1,0 +1,53 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+
+def values(path):
+    ans=[]
+    with ZipFile(path) as z:
+        aligned=[n for n in z.namelist() if n.endswith('.mafft')]
+        raw={n.removesuffix('.faa') for n in z.namelist() if n.endswith('.faa')}
+        alnbase={n.removesuffix('.faa.mafft') for n in aligned}
+        assert raw==alnbase
+        for name in aligned:
+            seq=[]
+            for line in z.read(name).decode().splitlines():
+                if line.startswith('>'): seq.append('')
+                elif line.strip(): seq[-1]+=line.strip().upper()
+            assert len({len(x) for x in seq})==1
+            ans.append(sum(sum(n>=2 for n in Counter(c for c in col if c not in '-?X*').values())>=2 for col in zip(*seq)))
+    return ans
+
+a=values('inputs/scogs_animals.zip'); f=values('inputs/scogs_fungi.zip')
+u=sum(x>y for x in a for y in f)+0.5*sum(x==y for x in a for y in f)
+print('direct pairwise U_animals',u,'reverse',len(a)*len(f)-u,'pairs',len(a)*len(f))
+assert u==6748
+PY
+Rscript - <<'RS'
+read_fasta <- function(con) {
+  x <- readLines(con, warn=FALSE)
+  h <- grep('"'^>'"', x)
+  stopifnot(length(h)>0)
+  ends <- c(h[-1]-1, length(x))
+  vapply(seq_along(h), function(i) paste0(x[(h[i]+1):ends[i]], collapse=''), character(1))
+}
+pi_values <- function(path) {
+  members <- unzip(path, list=TRUE)"'$Name
+  aln <- members[grepl('"'\\\\.mafft"'$'"', members)]
+  raw <- sub('\\\\.faa"'$'"', '', members[grepl('\\\\.faa"'$'"', members)])
+  stopifnot(setequal(raw, sub('\\\\.faa\\\\.mafft"'$'"', '', aln)))
+  vapply(aln, function(member) {
+    s <- read_fasta(unz(path, member))
+    stopifnot(length(unique(nchar(s)))==1)
+    m <- do.call(rbind, strsplit(s, '', fixed=TRUE))
+    sum(apply(m, 2, function(col) {
+      tab <- table(col["'!col %in% c('"'-', '?', 'X', '*')])
+      sum(tab >= 2) >= 2
+    }))
+  }, numeric(1))
+}
+a <- pi_values('inputs/scogs_animals.zip')
+f <- pi_values('inputs/scogs_fungi.zip')
+cat('R n',length(a),length(f),'zeros',sum(a==0),sum(f==0),'W/U',unname(wilcox.test(a,f,exact=FALSE,correct=FALSE)"'$statistic),'"'\\n')
+stopifnot(unname(wilcox.test(a,f,exact=FALSE,correct=FALSE)"'$statistic)==6748)
+RS'

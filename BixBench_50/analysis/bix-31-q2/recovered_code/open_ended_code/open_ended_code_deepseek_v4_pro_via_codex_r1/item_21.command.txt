@@ -1,0 +1,51 @@
+/bin/bash -c "python - <<'PY'
+import time, os, gc
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+t0=time.time()
+print('loading', flush=True)
+counts=pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0).T
+counts.index.name='sample'
+print('counts', counts.shape, 'mem MB approx', counts.memory_usage(deep=True).sum()/1e6, flush=True)
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+meta=meta.loc[counts.index]
+meta['batch']=pd.Categorical(meta['batch'], categories=sorted(meta['batch'].astype(int).unique()))
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+print('meta', meta.shape, flush=True)
+assert meta.index.equals(counts.index)
+assert 'FAM138A' in counts.columns
+
+dds=DeseqDataSet(counts=counts, metadata=meta, design='~batch+sex', n_cpus=1, quiet=False, low_memory=True)
+del counts
+gc.collect()
+print('dds made, design columns', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+dds.deseq2()
+print('deseq2 done', time.time()-t0, flush=True)
+print('LFC columns available', dds.varm['LFC'].columns.tolist(), flush=True)
+
+stat=DeseqStats(dds, contrast=['sex','M','F'], alpha=0.05, n_cpus=1, quiet=False)
+stat.summary()
+print('summary done', time.time()-t0, flush=True)
+print('LFC columns in stats', stat.LFC.columns.tolist(), flush=True)
+print('results cols', stat.results_df.columns.tolist(), flush=True)
+stat.lfc_shrink(coeff='sex[T.M]')
+print('shrink done', time.time()-t0, flush=True)
+
+res=stat.results_df.copy()
+print('results shape', res.shape, flush=True)
+print('FAM row', flush=True)
+print(res.loc['FAM138A'], flush=True)
+print('shrunk LFC FAM:', res.loc['FAM138A','log2FoldChange'], flush=True)
+print('baseMean FAM:', res.loc['FAM138A','baseMean'], flush=True)
+crit=(res['log2FoldChange'].abs()>0.5)&(res['baseMean']>10)
+print('passing criteria', int(crit.sum()), 'of', len(res), flush=True)
+print('FAM passes', bool(crit.loc['FAM138A']), flush=True)
+os.makedirs('/workspace/codex_output', exist_ok=True)
+val=float(res.loc['FAM138A','log2FoldChange'])
+with open('/workspace/codex_output/answer.txt','w') as f:
+    f.write(f'{val:.15g}\\n')
+print('wrote', val, 'elapsed', time.time()-t0, flush=True)
+PY"

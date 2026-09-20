@@ -1,0 +1,76 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5b8147d37e12a6ed2",
+  "history_id": "bbd44e69cb8906b5bb10a304142fdd9d",
+  "tool_id": "codex-pa14-kegg-ora-comparison-20260803",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-03T13:57:45.251442",
+  "update_time": "2026-08-03T14:02:18.730655",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > ora.py <<'PY'\nimport csv\nimport math\nimport re\nimport sys\nimport urllib.error\nimport urllib.request\n\nimport scipy\nfrom scipy.stats import hypergeom\n\nif tuple(int(x) for x in scipy.__version__.split(\".\")[:2]) < (1, 0):\n    raise RuntimeError(\"SciPy version is too old\")\n\ndef fetch(path):\n    errors = []\n    for scheme in (\"https\", \"http\"):\n        url = scheme + \"://rest.kegg.jp/\" + path\n        try:\n            request = urllib.request.Request(\n                url, headers={\"User-Agent\": \"GalaxyUserTool-pa14-kegg-ora/0.1\"}\n            )\n            with urllib.request.urlopen(request, timeout=90) as response:\n                body = response.read().decode(\"utf-8\")\n            if body.strip():\n                return body\n            errors.append(url + \": empty response\")\n        except Exception as exc:\n            errors.append(url + \": \" + str(exc))\n    raise RuntimeError(\"KEGG REST request failed: \" + \" | \".join(errors))\n\ndef read_gene_ids(path):\n    genes = set()\n    header_tokens = {\n        \"rowname\", \"gene\", \"gene_id\", \"geneid\", \"id\", \"locus_tag\",\n        \"geneid/term\", \"query\"\n    }\n    with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n        for line in handle:\n            token = line.rstrip(\"\\r\\n\").split(\"\\t\", 1)[0].strip()\n            if not token:\n                continue\n            if token.lower() in header_tokens:\n                continue\n            genes.add(token)\n    return genes\n\ndef bare_id(token):\n    token = token.strip()\n    if \":\" in token:\n        return token.rsplit(\":\", 1)[1]\n    return token\n\ndef pathway_number(token):\n    token = bare_id(token)\n    match = re.search(r\"(\\d{5})$\", token)\n    if match is None:\n        return None\n    return match.group(1)\n\ndef organism_candidates():\n    records = []\n    try:\n        body = fetch(\"list/organism\")\n        for line in body.splitlines():\n            fields = line.split(\"\\t\")\n            if len(fields) >= 3:\n                code = fields[1].strip()\n                full = line.lower()\n                if \"pseudomonas aeruginosa\" in full:\n                    is_pa14 = (\"pa14\" in full) or (\"ucbpp-pa14\" in full)\n                    records.append((is_pa14, code))\n    except Exception:\n        records = []\n    ordered = []\n    for is_pa14, code in sorted(records, key=lambda item: (not item[0], item[1])):\n        if code not in ordered:\n            ordered.append(code)\n    for code in (\"paz\", \"pae\"):\n        if code not in ordered:\n            ordered.append(code)\n    return ordered\n\ndef load_mapping(code):\n    body = fetch(\"link/pathway/\" + code)\n    pathways = {}\n    for line in body.splitlines():\n        fields = line.split(\"\\t\")\n        if len(fields) < 2:\n            continue\n        gene = bare_id(fields[0])\n        number = pathway_number(fields[1])\n        if gene and number:\n            pathways.setdefault(number, set()).add(gene)\n    return pathways\n\ndef load_names(code):\n    names = {}\n    for endpoint in (\"list/pathway/\" + code, \"list/pathway\"):\n        try:\n            body = fetch(endpoint)\n        except Exception:\n            continue\n        for line in body.splitlines():\n            fields = line.split(\"\\t\", 1)\n            if len(fields) < 2:\n                continue\n            number = pathway_number(fields[0])\n            if number and number not in names:\n                names[number] = fields[1].strip()\n        if names:\n            break\n    return names\n\ndef benjamini_hochberg(pvalues):\n    count = len(pvalues)\n    adjusted = [1.0] * count\n    order = sorted(range(count), key=lambda index: pvalues[index])\n    running = 1.0\n    for rank in range(count, 0, -1):\n        index = order[rank - 1]\n        value = pvalues[index] * count / float(rank)\n        running = min(running, value)\n        adjusted[index] = min(1.0, running)\n    return adjusted\n\ndef ora(foreground, background, pathways):\n    universe = set()\n    for genes in pathways.values():\n        universe.update(genes.intersection(background))\n    foreground_mapped = foreground.intersection(universe)\n    tested = []\n    pvalues = []\n    counts = {}\n    for number in sorted(pathways):\n        pathway_genes = pathways[number]\n        k = len(foreground_mapped.intersection(pathway_genes))\n        if k == 0:\n            continue\n        K = len(universe.intersection(pathway_genes))\n        if K == 0:\n            continue\n        counts[number] = k\n        pvalue = float(hypergeom.sf(k - 1, len(universe), K, len(foreground_mapped)))\n        tested.append(number)\n        pvalues.append(pvalue)\n    adjusted = benjamini_hochberg(pvalues)\n    return {\n        \"universe_size\": len(universe),\n        \"foreground_size\": len(foreground_mapped),\n        \"padj\": dict(zip(tested, adjusted)),\n        \"hits\": counts,\n    }\n\ndef main():\n    if len(sys.argv) != 5:\n        raise RuntimeError(\"Expected four Galaxy input paths\")\n    iron_foreground = read_gene_ids(sys.argv[1])\n    iron_background = read_gene_ids(sys.argv[2])\n    innate_foreground = read_gene_ids(sys.argv[3])\n    innate_background = read_gene_ids(sys.argv[4])\n    background_union = iron_background.union(innate_background)\n    if not background_union:\n        raise RuntimeError(\"Both supplied backgrounds are empty\")\n\n    selected_code = None\n    selected_mapping = None\n    selected_score = -1\n    selected_pa14 = False\n    candidates = organism_candidates()\n    for code in candidates:\n        try:\n            mapping = load_mapping(code)\n        except Exception:\n            continue\n        mapped_background = set()\n        for genes in mapping.values():\n            mapped_background.update(genes.intersection(background_union))\n        score = len(mapped_background)\n        is_pa14 = code in candidates[:1] and code not in (\"paz\", \"pae\")\n        if score > 0 and (\n            selected_mapping is None\n            or (is_pa14 and not selected_pa14)\n            or (is_pa14 == selected_pa14 and score > selected_score)\n        ):\n            selected_code = code\n            selected_mapping = mapping\n            selected_score = score\n            selected_pa14 = is_pa14\n\n    if selected_mapping is None or selected_score == 0:\n        raise RuntimeError(\n            \"No Pseudomonas aeruginosa KEGG mapping overlapped the supplied universe\"\n        )\n\n    names = load_names(selected_code)\n    iron = ora(iron_foreground, iron_background, selected_mapping)\n    innate = ora(innate_foreground, innate_background, selected_mapping)\n    all_numbers = sorted(set(iron[\"padj\"]).union(innate[\"padj\"]))\n    answer_count = 0\n\n    with open(\"result.tsv\", \"w\", encoding=\"utf-8\", newline=\"\") as output:\n        writer = csv.writer(output, delimiter=\"\\t\", lineterminator=\"\\n\")\n        writer.writerow([\n            \"pathway_id\", \"pathway_name\", \"iron_depleted_padj\",\n            \"innate_media_padj\", \"iron_depleted_significant\",\n            \"innate_media_significant\", \"iron_depleted_hits\",\n            \"innate_media_hits\", \"kegg_organism_code\"\n        ])\n        for number in all_numbers:\n            iron_padj = iron[\"padj\"].get(number, 1.0)\n            innate_padj = innate[\"padj\"].get(number, 1.0)\n            iron_sig = iron_padj < 0.05\n            innate_sig = innate_padj < 0.05\n            if iron_sig and not innate_sig:\n                answer_count += 1\n            writer.writerow([\n                \"map\" + number,\n                names.get(number, \"KEGG pathway \" + number).replace(\"\\t\", \" \"),\n                \"%.17g\" % iron_padj,\n                \"%.17g\" % innate_padj,\n                \"1\" if iron_sig else \"0\",\n                \"1\" if innate_sig else \"0\",\n                str(iron[\"hits\"].get(number, 0)),\n                str(innate[\"hits\"].get(number, 0)),\n                selected_code\n            ])\n\n    with open(\"answer.txt\", \"w\", encoding=\"utf-8\") as answer:\n        answer.write(str(answer_count) + \"\\n\")\n\nmain()\nPY\npython ora.py \\\n  \"/jetstream2/scratch/main/jobs/78886923/inputs/dataset_7e63c2fd-d844-4869-b95a-60f9e253b484.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78886923/inputs/dataset_e1f5b60a-f527-4022-a2bb-9f76aa4ec9a0.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78886923/inputs/dataset_89ad3b63-cf41-4ec4-b5b4-932ecb88a751.dat\" \\\n  \"/jetstream2/scratch/main/jobs/78886923/inputs/dataset_d18cb2a9-2eae-4fe1-809c-14ebf5de84ac.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "iron_foreground": {
+      "id": "f9cad7b01a47213573e0f7c264bbead6",
+      "src": "hda",
+      "uuid": "7e63c2fd-d844-4869-b95a-60f9e253b484"
+    },
+    "iron_background": {
+      "id": "f9cad7b01a472135cf346e3e3f495d3c",
+      "src": "hda",
+      "uuid": "e1f5b60a-f527-4022-a2bb-9f76aa4ec9a0"
+    },
+    "innate_foreground": {
+      "id": "f9cad7b01a47213529df001fc25c8762",
+      "src": "hda",
+      "uuid": "89ad3b63-cf41-4ec4-b5b4-932ecb88a751"
+    },
+    "innate_background": {
+      "id": "f9cad7b01a472135dddd4960b607718f",
+      "src": "hda",
+      "uuid": "d18cb2a9-2eae-4fe1-809c-14ebf5de84ac"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a4721358cc31ba48b92dcad",
+      "src": "hda",
+      "uuid": "d368e9a0-e98b-46fe-ab0d-56b7d1691470"
+    },
+    "answer": {
+      "id": "f9cad7b01a4721356b98c00d20959551",
+      "src": "hda",
+      "uuid": "a230d524-3ca5-4678-99b3-a1be56d0fa6b"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"ora.py\", line 231, in <module>\n    main()\n  File \"ora.py\", line 192, in main\n    \"No Pseudomonas aeruginosa KEGG mapping overlapped the supplied universe\"\nRuntimeError: No Pseudomonas aeruginosa KEGG mapping overlapped the supplied universe\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"ora.py\", line 231, in <module>\n    main()\n  File \"ora.py\", line 192, in main\n    \"No Pseudomonas aeruginosa KEGG mapping overlapped the supplied universe\"\nRuntimeError: No Pseudomonas aeruginosa KEGG mapping overlapped the supplied universe\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

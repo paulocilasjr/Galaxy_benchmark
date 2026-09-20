@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+import xml.etree.ElementTree as ET
+from collections import Counter,defaultdict
+NS={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main','r':'http://schemas.openxmlformats.org/officeDocument/2006/relationships'}
+RELNS={'rel':'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+def colnum(cellref):
+    s=''.join(ch for ch in cellref if ch.isalpha())
+    n=0
+    for ch in s:
+        n=n*26+ord(ch.upper())-64
+    return n-1
+
+def read_xlsx(path):
+    with ZipFile(path) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', NS):
+                ss.append(''.join(t.text or '' for t in si.findall('.//a:t', NS)))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for r in root.findall('a:sheetData/a:row', NS):
+            vals=[]
+            for c in r.findall('a:c', NS):
+                idx=colnum(c.attrib.get('r','A1'))
+                while len(vals)<idx: vals.append('')
+                typ=c.attrib.get('t')
+                if typ=='inlineStr':
+                    val=''.join(t.text or '' for t in c.findall('.//a:t', NS))
+                else:
+                    v=c.find('a:v', NS)
+                    val='' if v is None else v.text or ''
+                    if typ=='s' and val"'!='"'': val=ss[int(val)]
+                vals.append(val)
+            rows.append(vals)
+        return rows
+rows=read_xlsx('inputs/230215_Trio_Status.xlsx')
+header=rows[0]
+print(header)
+idx={h:i for i,h in enumerate(header)}
+for r in rows[1:]:
+    print(r)
+print('status counts', Counter(r[idx['BLM Mutation Status']] for r in rows[1:]))
+print('sample file ids')
+files=sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+ids=[]
+for p in files:
+    stem=p.stem.replace('230209_Exome_GRCh38_CHIP_','')
+    sid=stem.split('-')[0]
+    ids.append(sid)
+print(len(files), ids)
+print('metadata ids missing files', sorted(set(r[idx['Sample ID']] for r in rows[1:]) - set(ids)))
+print('files missing metadata', sorted(set(ids) - set(r[idx['Sample ID']] for r in rows[1:])))
+PY"

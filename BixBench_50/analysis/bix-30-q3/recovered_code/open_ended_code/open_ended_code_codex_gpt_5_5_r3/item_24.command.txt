@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess, sys
+book=xlrd.open_workbook('inputs/pone.0150501.s002.xls')
+s=book.sheet_by_index(0)
+headers=s.row_values(1)[1:]
+mir=[]; mat=[]
+for r in range(2,s.nrows):
+    row=[]
+    for c in range(1,s.ncols):
+        v=s.cell_value(r,c)
+        if isinstance(v,str) and v.strip().upper()=='NAN': row.append(None)
+        else: row.append(float(v))
+    mir.append(s.cell_value(r,0)); mat.append(row)
+
+def run(label, exclude=(), mean_rule='detected', value_rule='keep', var_equal=True):
+    keep=[i for i,h in enumerate(headers) if h not in exclude]
+    means=[]
+    for j in range(len(headers)):
+        if mean_rule=='detected': xs=[row[j] for row in mat if row[j] is not None and row[j] < 34]
+        elif mean_rule=='all_numeric': xs=[row[j] for row in mat if row[j] is not None]
+        elif mean_rule=='detected_or_cap34': xs=[min(row[j],34) for row in mat if row[j] is not None]
+        means.append(sum(xs)/len(xs))
+    lines=[]
+    for name,row in zip(mir,mat):
+        vals=[]
+        for j in keep:
+            v=row[j]
+            if v is None: vals.append(None)
+            elif value_rule=='na_ge34' and v>=34: vals.append(None)
+            elif value_rule=='cap34' and v>=34: vals.append(-(34-means[j]))
+            else: vals.append(-(v-means[j]))
+        p=[vals[k] for k,j in enumerate(keep) if headers[j].startswith('P_')]
+        c=[vals[k] for k,j in enumerate(keep) if headers[j].startswith('C_')]
+        fmt=lambda xs:';'.join('NA' if x is None else repr(x) for x in xs)
+        lines.append(name+'\\t'+fmt(p)+'\\t'+fmt(c))
+    r_code = \"\"\"
+d <- read.delim('stdin', header=FALSE, sep='\\\\t', stringsAsFactors=FALSE)
+parsev <- function(x) as.numeric(strsplit(x, ';', fixed=TRUE)[[1]])
+pv <- numeric(nrow(d)); names <- d[,1]
+for (i in seq_len(nrow(d))) { p <- parsev(d[i,2]); c <- parsev(d[i,3]); pv[i] <- t.test(p, c, var.equal=VAR_EQUAL)"'$p.value }
+cat('"'LABEL raw_lt', sum(pv < 0.05), 'bonf', sum(p.adjust(pv,'bonferroni')<=0.05), 'BY', sum(p.adjust(pv,'BY')<=0.05), 'BH', sum(p.adjust(pv,'BH')<=0.05), 'min', min(pv), names[which.min(pv)], '\\\\n')
+\"\"\".replace('LABEL', label).replace('VAR_EQUAL', 'TRUE' if var_equal else 'FALSE')
+    out=subprocess.run(['Rscript','-e',r_code], input='\\n'.join(lines)+'\\n', text=True, capture_output=True)
+    print(out.stdout.strip())
+
+for exclude in [(), ('P_3','C_18')]:
+  for mean_rule in ['detected','all_numeric','detected_or_cap34']:
+    for value_rule in ['keep','na_ge34','cap34']:
+      for var_equal in [True, False]:
+        run(f\"excl={','.join(exclude) or 'none'} mean={mean_rule} val={value_rule} {'student' if var_equal else 'welch'}\", exclude, mean_rule, value_rule, var_equal)
+PY"

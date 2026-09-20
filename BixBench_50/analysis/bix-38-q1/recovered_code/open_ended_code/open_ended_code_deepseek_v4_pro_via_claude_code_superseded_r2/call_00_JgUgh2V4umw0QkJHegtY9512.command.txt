@@ -1,0 +1,61 @@
+cat << 'PYEOF' > /workspace/compute_fold_change.py
+import subprocess
+import glob
+import statistics
+import os
+
+phykit = "/tmp/phykit_env/bin/phykit"
+
+def get_tree_length(treefile):
+    result = subprocess.run([phykit, "total_tree_length", treefile], 
+                          capture_output=True, text=True, timeout=30)
+    for line in result.stdout.strip().split('\n'):
+        try:
+            return float(line.strip())
+        except ValueError:
+            continue
+    return None
+
+# Get all tree lengths
+animals_files = sorted(glob.glob("/workspace/animals_trees/*.treefile"))
+fungi_files = sorted(glob.glob("/workspace/fungi_trees/*.treefile"))
+
+animals_dict = {}
+for f in animals_files:
+    basename = os.path.basename(f).replace('.treefile', '')
+    tl = get_tree_length(f)
+    if tl is not None:
+        animals_dict[basename] = tl
+
+fungi_dict = {}
+for f in fungi_files:
+    basename = os.path.basename(f).replace('.treefile', '')
+    tl = get_tree_length(f)
+    if tl is not None:
+        fungi_dict[basename] = tl
+
+# Full set median
+animals_median_full = statistics.median(animals_dict.values())
+fungi_median_full = statistics.median(fungi_dict.values())
+fc_full = fungi_median_full / animals_median_full
+
+print(f"=== Full set ===")
+print(f"Animals: {len(animals_dict)} trees, median = {animals_median_full:.8f}")
+print(f"Fungi: {len(fungi_dict)} trees, median = {fungi_median_full:.8f}")
+print(f"Fold change (fungi/animals): {fc_full:.8f}")
+
+# Shared orthologs only
+shared = set(animals_dict.keys()) & set(fungi_dict.keys())
+animals_shared = [animals_dict[k] for k in shared]
+fungi_shared = [fungi_dict[k] for k in shared]
+animals_median_shared = statistics.median(animals_shared)
+fungi_median_shared = statistics.median(fungi_shared)
+fc_shared = fungi_median_shared / animals_median_shared
+
+print(f"\n=== Shared orthologs ({len(shared)}) ===")
+print(f"Animals median: {animals_median_shared:.8f}")
+print(f"Fungi median: {fungi_median_shared:.8f}")
+print(f"Fold change (fungi/animals): {fc_shared:.8f}")
+
+PYEOF
+/tmp/phykit_env/bin/python /workspace/compute_fold_change.py

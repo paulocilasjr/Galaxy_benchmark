@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+from collections import Counter, defaultdict
+from pathlib import Path
+from openpyxl import load_workbook
+
+status_ws=load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True).active
+it=status_ws.iter_rows(values_only=True)
+headers=next(it)
+records=[dict(zip(headers,row)) for row in it]
+carriers=[r for r in records if r['BLM Mutation Status']=='Carrier' and r['Sex']=='M' and isinstance(r['Age'],(int,float))]
+target=max(carriers,key=lambda r:r['Age'])
+print('target',target)
+path=next(Path('inputs/CHIP_DP10_GQ20_PASS').glob(f\"*CHIP_{target['Sample ID']}-*.xlsx\"))
+print('file',path.name)
+chip={row[0] for row in load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx',read_only=True,data_only=True).active.iter_rows(values_only=True) if row[0]}
+ws=load_workbook(path,read_only=False,data_only=True).active
+rows=list(ws.iter_rows(min_row=3,max_row=ws.max_row,min_col=1,max_col=33,values_only=True))
+nonref=[r for r in rows if r[4] in {'Heterozygous','Homozygous Variant'}]
+print('row counts',len(rows),'nonref',len(nonref),'chip_flag_values',Counter(r[29] for r in rows))
+raw=Counter(r[12] for r in nonref)
+print('exact_cell_top',raw.most_common(10))
+exploded=Counter()
+for r in nonref:
+    for g in str(r[12]).split(','):
+        if g in chip: exploded[g]+=1
+print('exploded_chip_top',exploded.most_common(10))
+all_exploded=Counter()
+for r in nonref:
+    for g in str(r[12]).split(','):
+        all_exploded[g]+=1
+print('exploded_all_top',all_exploded.most_common(10))
+weighted=Counter()
+for r in nonref:
+    for g in str(r[12]).split(','):
+        if g in chip: weighted[g] += 2 if r[4]=='Homozygous Variant' else 1
+print('weighted_chip_top',weighted.most_common(10))
+unique=defaultdict(set)
+for r in nonref:
+    for g in str(r[12]).split(','):
+        if g in chip: unique[g].add((r[0],r[1]))
+print('unique_chip_top',sorted(((g,len(v)) for g,v in unique.items()),key=lambda x:(-x[1],x[0]))[:10])
+print('NOTCH1 records')
+for r in nonref:
+    if r[12]=='NOTCH1': print(r[0],r[1],r[4],r[13],r[14])
+PY"

@@ -1,0 +1,81 @@
+python3 << 'PYEOF'
+import os
+from collections import Counter
+
+def parse_fasta(filepath):
+    """Parse a FASTA file, return list of (header, sequence) tuples."""
+    records = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if current_header is not None:
+                    records.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]  # remove '>'
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            records.append((current_header, ''.join(current_seq)))
+    return records
+
+def count_parsimony_informative_sites(records):
+    """Count parsimony informative sites in a multiple sequence alignment.
+    
+    A site is parsimony informative if:
+    - At least 2 different character states exist
+    - Each state occurs in at least 2 sequences
+    """
+    if len(records) < 2:
+        return 0
+    
+    seqs = [seq for _, seq in records]
+    # Verify all sequences are same length (alignment check)
+    lengths = set(len(s) for s in seqs)
+    if len(lengths) > 1:
+        print(f"WARNING: Sequences have different lengths: {lengths}")
+        return 0
+    
+    if not seqs:
+        return 0
+    
+    aln_len = len(seqs[0])
+    n_seqs = len(seqs)
+    informative_count = 0
+    
+    for col in range(aln_len):
+        chars = [s[col] for s in seqs]
+        counts = Counter(chars)
+        # Remove characters that appear only once
+        # Need at least 2 character states, each appearing at least twice
+        valid_states = [char for char, count in counts.items() if count >= 2]
+        if len(valid_states) >= 2:
+            informative_count += 1
+            
+    return informative_count
+
+# Process all .mafft files in the animal directory
+mafft_dir = '/workspace/tmp_animals'
+results = []
+
+for fname in sorted(os.listdir(mafft_dir)):
+    if not fname.endswith('.mafft'):
+        continue
+    fpath = os.path.join(mafft_dir, fname)
+    records = parse_fasta(fpath)
+    pi_sites = count_parsimony_informative_sites(records)
+    results.append((pi_sites, fname, len(records)))
+
+# Sort by parsimony informative sites (descending)
+results.sort(key=lambda x: x[0], reverse=True)
+
+print("Top 20 genes by parsimony informative sites:")
+for pi, fname, nseq in results[:20]:
+    print(f"  {fname}: {pi} informative sites, {nseq} sequences")
+
+print(f"\nTotal genes analyzed: {len(results)}")
+print(f"Maximum: {results[0][0]} informative sites in {results[0][1]}")
+
+PYEOF

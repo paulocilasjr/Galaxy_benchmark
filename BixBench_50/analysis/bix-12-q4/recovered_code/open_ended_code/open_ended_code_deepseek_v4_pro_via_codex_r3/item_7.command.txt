@@ -1,0 +1,50 @@
+/bin/bash -c "cd /workspace && python3 - <<'PY'
+from pathlib import Path
+from collections import Counter
+import scipy.stats as st
+
+def read_fasta(p):
+    seqs=[]
+    name=None; cur=[]
+    for line in p.read_text().splitlines():
+        if line.startswith('>'):
+            if name is not None: seqs.append((name,''.join(cur)))
+            name=line[1:].strip(); cur=[]
+        else: cur.append(line.strip())
+    if name is not None: seqs.append((name,''.join(cur)))
+    return seqs
+
+def calc(p, gap_as_state=False, require_non_gap=False):
+    seqs=read_fasta(p)
+    names=[n for n,s in seqs]
+    arr=[list(s) for n,s in seqs]
+    n=len(arr); L=len(arr[0])
+    pis=0
+    for j in range(L):
+        col=[arr[i][j] for i in range(n)]
+        # choose symbols
+        if gap_as_state:
+            syms=col
+        else:
+            syms=[c for c in col if c not in ('-','.')]
+        counts=Counter(syms)
+        # distinct states observed, each at least 2
+        states=[c for c,v in counts.items() if v>=2]
+        if len(set(states))>=2:
+            pis+=1
+    return pis/L*100
+
+for gap_as_state in [False, True]:
+  print('gap_as_state',gap_as_state)
+  for d in ['tmp/scogs_a','tmp/scogs_f']:
+      vals=[]
+      for p in Path(d).glob('*.mafft'):
+          vals.append(calc(p, gap_as_state=gap_as_state))
+      vals.sort()
+      print(d,'n',len(vals),'min',min(vals),'median',vals[len(vals)//2],'max',max(vals),'mean',sum(vals)/len(vals))
+  A=sorted(calc(p, gap_as_state=gap_as_state) for p in Path('tmp/scogs_a').glob('*.mafft'))
+  F=sorted(calc(p, gap_as_state=gap_as_state) for p in Path('tmp/scogs_f').glob('*.mafft'))
+  for alt in ['two-sided','less','greater']:
+      res=st.mannwhitneyu(A,F,alternative=alt,method='auto')
+      print(alt,res.statistic,res.pvalue)
+PY"

@@ -1,0 +1,32 @@
+/bin/bash -lc "cat > /workspace/tmp/run_deseq2_correct.R <<'RS'
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(readxl)
+})
+counts <- read.table(\"/workspace/inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt\",
+                     header=TRUE, sep=\"\", check.names=FALSE, row.names=1, stringsAsFactors=FALSE)
+coldata_raw <- as.data.frame(read_excel(\"/workspace/inputs/Issy_ASXL1_blood_coldata_gender.xlsx\"))
+coldata_raw"'$sample <- as.character(coldata_raw$sample)
+rownames(coldata_raw) <- coldata_raw$sample
+common <- intersect(coldata_raw$sample, colnames(counts))
+counts <- counts[, common, drop=FALSE]
+coldata <- coldata_raw[common, , drop=FALSE]
+coldata$condition <- factor(coldata$condition, levels=c("Control", "ASXL1"))
+coldata$sex <- factor(coldata$sex, levels=c("F", "M"))
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = coldata, design = ~ sex + condition)
+dds <- DESeq(dds, quiet=TRUE)
+print(resultsNames(dds))
+res <- results(dds, alpha=0.05, contrast=c("condition","ASXL1","Control"))
+shrink <- lfcShrink(dds, res=res, coef="condition_ASXL1_vs_Control", type="apeglm")
+print(all.equal(res$padj, shrink$padj))
+print(summary(shrink))
+cat("columns:'"\\n\"); print(colnames(shrink))
+cat(\"not NA padj:\", sum("'!is.na(shrink$padj)), "'"\\n\")
+cat(\"significant shrink padj<0.05:\", sum(shrink"'$padj < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"significant res padj<0.05:\", sum(res"'$padj < 0.05, na.rm=TRUE), "'"\\n\")
+cat(\"pvalue<0.05:\", sum(shrink"'$pvalue < 0.05, na.rm=TRUE), "'"\\n\")
+saveRDS(list(dds=dds, res=res, shrink=shrink), \"/workspace/tmp/deseq2_results_correct.rds\")
+writeLines(as.character(sum(shrink"'$padj < 0.05, na.rm=TRUE)), "/workspace/tmp/significant_count_correct.txt")
+RS
+/workspace/tmp/r-env/bin/Rscript /workspace/tmp/run_deseq2_correct.R'

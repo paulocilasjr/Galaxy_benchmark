@@ -1,0 +1,94 @@
+python3 -c "
+import os
+
+def parse_fasta(filepath):
+    seqs = []
+    cur_h, cur_s = None, []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if cur_h:
+                    seqs.append((cur_h, ''.join(cur_s)))
+                cur_h = line[1:]
+                cur_s = []
+            else:
+                cur_s.append(line.upper())
+        if cur_h:
+            seqs.append((cur_h, ''.join(cur_s)))
+    return seqs
+
+def pis_details(filepath):
+    seqs = parse_fasta(filepath)
+    n_spp = len(seqs)
+    if n_spp < 2 or not seqs:
+        return n_spp, 0, 0, 0.0
+    
+    chars_seqs = [s for _, s in seqs if len(s) > 0]
+    if not chars_seqs:
+        return n_spp, 0, 0, 0.0
+    
+    n = len(chars_seqs[0])
+    pis = 0
+    total_non_gap_cols = 0
+    for col in range(n):
+        chars = [s[col] for s in chars_seqs if col < len(s)]
+        non_gap = [c for c in chars if c != '-']
+        if len(non_gap) >= 2:
+            total_non_gap_cols += 1
+        freq = {}
+        for c in chars:
+            if c == '-':
+                continue
+            freq[c] = freq.get(c, 0) + 1
+        inf = sum(1 for v in freq.values() if v >= 2)
+        if inf >= 2:
+            pis += 1
+    
+    pct = (pis / n * 100.0) if n > 0 else 0.0
+    return n_spp, n, pis, pct
+
+# Check all shared OGs
+animals_dir = '/workspace/tmp/animals'
+fungi_dir = '/workspace/tmp/fungi'
+
+animals_mafft = set(f for f in os.listdir(animals_dir) if f.endswith('.mafft'))
+fungi_mafft = set(f for f in os.listdir(fungi_dir) if f.endswith('.mafft'))
+shared = sorted(animals_mafft & fungi_mafft)
+
+zero_both = 0
+zero_animal_only = 0
+zero_fungi_only = 0
+nonzero_both = 0
+
+for mf in shared:
+    af = os.path.join(animals_dir, mf)
+    ff = os.path.join(fungi_dir, mf)
+    nsp_a, alen_a, pis_a, pct_a = pis_details(af)
+    nsp_f, alen_f, pis_f, pct_f = pis_details(ff)
+    
+    if pct_a == 0 and pct_f == 0:
+        zero_both += 1
+    elif pct_a == 0:
+        zero_animal_only += 1
+    elif pct_f == 0:
+        zero_fungi_only += 1
+    else:
+        nonzero_both += 1
+
+print(f'Both zero: {zero_both}')
+print(f'Animal only zero: {zero_animal_only}')
+print(f'Fungi only zero: {zero_fungi_only}')
+print(f'Both nonzero: {nonzero_both}')
+print(f'Total: {len(shared)}')
+
+# Show some sample values
+print('\\nSample PIS values:')
+for mf in shared[:10]:
+    af = os.path.join(animals_dir, mf)
+    ff = os.path.join(fungi_dir, mf)
+    nsp_a, alen_a, pis_a, pct_a = pis_details(af)
+    nsp_f, alen_f, pis_f, pct_f = pis_details(ff)
+    print(f'  {mf}: animal({nsp_a}sp, alen={alen_a}, pis={pis_a}, {pct_a:.2f}%), fungi({nsp_f}sp, alen={alen_f}, pis={pis_f}, {pct_f:.2f}%)')
+"
+

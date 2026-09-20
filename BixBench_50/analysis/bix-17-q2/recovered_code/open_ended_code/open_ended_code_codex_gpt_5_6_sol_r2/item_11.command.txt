@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+import re, statistics
+ws=load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+carriers={str(r[0]).strip() for r in ws.iter_rows(min_row=2,values_only=True) if str(r[3]).strip()=='Carrier'}
+files={}
+for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+ raw=re.search(r'CHIP_(.+)\\.xlsx"'$'"',p.name).group(1)
+ sid=(raw.split('-')[0] if raw[0].isdigit() else raw).strip(); files[sid]=p
+counts={}; details={}
+for sid in sorted(carriers & files.keys()):
+ s=load_workbook(files[sid],data_only=True,read_only=False).active
+ h=[c.value for c in s[2]]; ix={x:i for i,x in enumerate(h) if x}
+ q=[]
+ for row in s.iter_rows(min_row=3,values_only=True):
+  if row[ix['Zygosity']]=='Reference': continue
+  so=str(row[ix['Sequence Ontology (Combined)']] or '').lower()
+  if 'intron' in so or 'intergenic' in so or 'utr' in so: continue
+  try: v=float(row[ix['Variant Allele Freq']])
+  except (TypeError,ValueError): continue
+  if v < 0.3: q.append((row[ix['Chr:Pos']],row[ix['Gene Names']],so,v))
+ counts[sid]=len(q); details[sid]=q
+print('Sample\\tCount\\tQualifying')
+for sid in sorted(counts,key=lambda x:(counts[x],x)):
+ print(sid,counts[sid],details[sid],sep='\\t')
+vals=sorted(counts.values())
+print('n=',len(vals),'sorted=',vals,'median=',statistics.median(vals))
+print('missing carrier workbook=',sorted(carriers-files.keys()))
+PY"

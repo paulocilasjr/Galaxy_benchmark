@@ -1,0 +1,82 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+import xml.etree.ElementTree as ET
+from collections import Counter, defaultdict
+NS={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+def colnum(cellref):
+    s=''.join(ch for ch in cellref if ch.isalpha())
+    n=0
+    for ch in s: n=n*26+ord(ch.upper())-64
+    return n-1
+
+def read_xlsx(path):
+    with ZipFile(path) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', NS): ss.append(''.join(t.text or '' for t in si.findall('.//a:t', NS)))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for r in root.findall('a:sheetData/a:row', NS):
+            vals=[]
+            for c in r.findall('a:c', NS):
+                idx=colnum(c.attrib.get('r','A1'))
+                while len(vals)<idx: vals.append('')
+                typ=c.attrib.get('t')
+                if typ=='inlineStr': val=''.join(t.text or '' for t in c.findall('.//a:t', NS))
+                else:
+                    v=c.find('a:v', NS); val='' if v is None else v.text or ''
+                    if typ=='s' and val"'!='"'': val=ss[int(val)]
+                vals.append(val)
+            rows.append(vals)
+        return rows
+
+def table(path):
+    rows=read_xlsx(path)
+    # first row group headers; second row columns
+    hdr=rows[1]
+    return hdr, rows[2:]
+# carrier ids
+meta=read_xlsx('inputs/230215_Trio_Status.xlsx')
+mi={h:i for i,h in enumerate(meta[0])}
+carriers={r[mi['Sample ID']].strip() for r in meta[1:] if r[mi['BLM Mutation Status']].strip()=='Carrier'}
+print('carriers', len(carriers), sorted(carriers))
+files=[]
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    sid=p.stem.replace('230209_Exome_GRCh38_CHIP_','').split('-')[0].strip()
+    if sid in carriers: files.append((sid,p))
+print('files',len(files),[sid for sid,p in files])
+for sid,p in files[:1]:
+    hdr,rows=table(p)
+    print('header indexes')
+    for i,h in enumerate(hdr): print(i,h)
+
+eff=Counter(); so=Counter(); pairs=Counter(); zyg=Counter(); in_chip=Counter(); vaf_lt=0
+examples=defaultdict(list)
+for sid,p in files:
+    hdr,rows=table(p); idx={h:i for i,h in enumerate(hdr)}
+    for r in rows:
+        def get(c): return r[idx[c]] if idx[c] < len(r) else ''
+        v=get('Variant Allele Freq')
+        if v=='': continue
+        try: vf=float(v)
+        except: continue
+        if vf < 0.3:
+            vaf_lt += 1
+            e=get('Effect (Combined)'); s=get('Sequence Ontology (Combined)')
+            eff[e]+=1; so[s]+=1; pairs[(e,s)]+=1; zyg[get('Zygosity')]+=1; in_chip[get('In_CHIP')]+=1
+            if len(examples[e])<3: examples[e].append((sid,get('Chr:Pos'),vf,s,get('HGVS p. (Clinically Relevant)')))
+print('VAF<0.3 observed rows', vaf_lt)
+print('zygosity', zyg)
+print('in_chip', in_chip)
+print('\\nEffect counts')
+for k,v in eff.most_common(): print(repr(k), v)
+print('\\nSO counts')
+for k,v in so.most_common(): print(repr(k), v)
+print('\\nPairs')
+for (e,s),v in pairs.most_common(): print(repr(e), repr(s), v)
+print('\\nExamples')
+for e,exs in examples.items(): print(e, exs)
+PY"

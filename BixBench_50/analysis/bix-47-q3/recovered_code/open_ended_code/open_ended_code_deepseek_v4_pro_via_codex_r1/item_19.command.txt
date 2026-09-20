@@ -1,0 +1,55 @@
+/bin/bash -c "python3 - <<'PY'
+# parse 556, count non-ref by col30 normalized upper; also Gene Names split and exact chip match
+import zipfile, xml.etree.ElementTree as ET, openpyxl
+from collections import Counter
+chip=[r[0].upper() for r in openpyxl.load_workbook('/workspace/inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx', data_only=True).active.iter_rows(values_only=True) if r and r[0]]
+chips=set(chip)
+def parse(path):
+ z=zipfile.ZipFile(path); M='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'; ns={'m':M[1:-1]}
+ items=[''.join(t.text or '' for t in si.iter(M+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall('m:si',ns)]
+ def ci(ref):
+  s=''
+  for ch in ref:
+   if ch.isalpha(): s+=ch
+   else: break
+  n=0
+  for ch in s:n=n*26+ord(ch)-64
+  return n-1
+ rows=[]
+ for row in ET.fromstring(z.read('xl/worksheets/sheet1.xml')).iter(M+'row'):
+  r=int(row.get('r')); vals={}
+  for c in row.findall(M+'c'):
+   idx=ci(c.get('r')); typ=c.get('t'); v=c.find(M+'v')
+   if v is None:
+    is_=c.find(M+'is'); val=''.join(t.text or '' for t in is_.iter(M+'t')) if is_ is not None else ''
+   else:
+    val=v.text or ''
+    if typ=='s': val=items[int(val)]
+   vals[idx]=val
+  rows.append((r,vals))
+ return rows
+rows=parse('/workspace/inputs/CHIP_DP10_GQ20_PASS/230209_Exome_GRCh38_CHIP_556-PF.xlsx')[2:]
+nr=[v for r,v in rows if v.get(4)"'!='"'Reference']
+print('nr',len(nr))
+# col30 normalized
+c30=Counter(v.get(30).upper() for v in nr if v.get(30))
+print('top col30 case-insens')
+for g,n in c30.most_common(25): print(g,n)
+# gene names exact chips: only count each gene in gene names that in chip set
+cgn=Counter()
+for v in nr:
+ seen=set()
+ for x in str(v.get(12) or '').split(','):
+  g=x.strip().upper()
+  if g in chips and g not in seen:
+   cgn[g]+=1; seen.add(g)
+print('top Gene Names restricted exact chips')
+for g,n in cgn.most_common(25): print(g,n)
+# gene names split all
+call=Counter()
+for v in nr:
+ for x in str(v.get(12) or '').split(','):
+  if x.strip(): call[x.strip()]+=1
+print('top Gene Names all split')
+for g,n in call.most_common(15): print(g,n)
+PY"

@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile, collections, statistics, math
+
+def read_fasta_bytes(b):
+    seqs=[]; name=None; chunks=[]
+    for raw in b.decode().splitlines():
+        line=raw.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None: seqs.append(''.join(chunks))
+            name=line[1:]; chunks=[]
+        else:
+            chunks.append(line)
+    if name is not None: seqs.append(''.join(chunks))
+    return seqs
+
+def pi_pct(seqs, gaps=False, denom='all'):
+    L=len(seqs[0])
+    pi=0
+    for col in zip(*seqs):
+        states=col if gaps else [c for c in col if c not in '-?.']
+        counts=collections.Counter(states)
+        if sum(v>=2 for v in counts.values()) >= 2:
+            pi += 1
+    if denom == 'all':
+        d=L
+    elif denom == 'ungapped_any':
+        d=sum(1 for col in zip(*seqs) if '-' not in col)
+    return 100*pi/d if d else math.nan
+
+def values(fn, **kw):
+    vals=[]
+    with zipfile.ZipFile(fn) as z:
+        for name in sorted(i.filename for i in z.infolist() if i.filename.endswith('.faa.mafft')):
+            vals.append(pi_pct(read_fasta_bytes(z.read(name)), **kw))
+    return vals
+
+def mann_u(x,y):
+    # U for first sample, ties count 0.5
+    return sum((1 if a>b else 0.5 if a==b else 0) for a in x for b in y)
+for kw in [dict(gaps=False,denom='all'), dict(gaps=True,denom='all'), dict(gaps=False,denom='ungapped_any')]:
+    xa=values('inputs/scogs_animals.zip', **kw); yf=values('inputs/scogs_fungi.zip', **kw)
+    U=mann_u(xa,yf)
+    print(kw, 'n', len(xa),len(yf),'U_animals',U,'U_fungi',len(xa)*len(yf)-U,'minU',min(U,len(xa)*len(yf)-U))
+    print('means', statistics.mean(xa), statistics.mean(yf), 'medians', statistics.median(xa), statistics.median(yf))
+PY"

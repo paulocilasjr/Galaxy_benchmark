@@ -1,0 +1,132 @@
+cat > /tmp/compute_mwu.py << 'PYEOF'
+import zipfile
+import sys
+import os
+from collections import Counter
+
+def parse_fasta(text):
+    """Parse FASTA/MAFFT format text into a dict of {header: sequence}"""
+    seqs = {}
+    current_header = None
+    current_seq = []
+    for line in text.strip().split('\n'):
+        if line.startswith('>'):
+            if current_header is not None:
+                seqs[current_header] = ''.join(current_seq)
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line.strip())
+    if current_header is not None:
+        seqs[current_header] = ''.join(current_seq)
+    return seqs
+
+def parsimony_informative_sites(seqs):
+    """
+    Count parsimony informative sites in an alignment.
+    A site is parsimony informative if at least two different amino acids
+    each appear in at least two sequences.
+    """
+    if not seqs:
+        return 0, 0
+    
+    seq_list = list(seqs.values())
+    if not seq_list:
+        return 0, 0
+    
+    alignment_length = len(seq_list[0])
+    informative = 0
+    
+    for pos in range(alignment_length):
+        column = [s[pos] for s in seq_list]
+        # Count non-gap characters
+        counts = Counter(c for c in column if c != '-')
+        
+        # Check: at least two different characters each appearing at least twice
+        chars_with_min2 = [c for c, cnt in counts.items() if cnt >= 2]
+        if len(chars_with_min2) >= 2:
+            informative += 1
+    
+    return informative, alignment_length
+
+def mann_whitney_u(x, y):
+    """
+    Compute the Mann-Whitney U statistic.
+    Returns U for group x, U for group y, and the minimum U.
+    
+    U1 = n1*n2 + n1*(n1+1)/2 - R1
+    where R1 is the sum of ranks of group 1
+    """
+    n1, n2 = len(x), len(y)
+    
+    # Combine and rank
+    combined = [(v, 0) for v in x] + [(v, 1) for v in y]
+    combined.sort(key=lambda t: t[0])
+    
+    # Assign ranks (average ranks for ties)
+    ranks = []
+    i = 0
+    while i < len(combined):
+        j = i
+        while j < len(combined) and combined[j][0] == combined[i][0]:
+            j += 1
+        avg_rank = (i + j + 1) / 2.0  # +1 for 1-indexed
+        for k in range(i, j):
+            ranks.append((avg_rank, combined[k][1]))
+        i = j
+    
+    # Sum ranks for group 0 (x)
+    R1 = sum(r for r, g in ranks if g == 0)
+    
+    U1 = n1 * n2 + n1 * (n1 + 1) / 2.0 - R1
+    U2 = n1 * n2 - U1  # since U1 + U2 = n1*n2
+    
+    return U1, U2
+
+# Parse both archives
+animal_zip = zipfile.ZipFile('/workspace/inputs/scogs_animals.zip')
+fungi_zip = zipfile.ZipFile('/workspace/inputs/scogs_fungi.zip')
+
+animal_mafft = {f for f in animal_zip.namelist() if f.endswith('.mafft')}
+fungi_mafft = {f for f in fungi_zip.namelist() if f.endswith('.mafft')}
+common = sorted(animal_mafft & fungi_mafft)
+
+print(f"Common SCOGs with alignments: {len(common)}", file=sys.stderr)
+
+animal_pct = []
+fungi_pct = []
+
+for fname in common:
+    animal_text = animal_zip.read(fname).decode('utf-8')
+    fungi_text = fungi_zip.read(fname).decode('utf-8')
+    
+    animal_seqs = parse_fasta(animal_text)
+    fungi_seqs = parse_fasta(fungi_text)
+    
+    a_info, a_len = parsimony_informative_sites(animal_seqs)
+    f_info, f_len = parsimony_informative_sites(fungi_seqs)
+    
+    if a_len > 0:
+        animal_pct.append(a_info / a_len * 100)
+    if f_len > 0:
+        fungi_pct.append(f_info / f_len * 100)
+
+print(f"Animal SCOGs: {len(animal_pct)}, Fungi SCOGs: {len(fungi_pct)}", file=sys.stderr)
+print(f"Animal mean PI%: {sum(animal_pct)/len(animal_pct):.4f}", file=sys.stderr)
+print(f"Fungi mean PI%: {sum(fungi_pct)/len(fungi_pct):.4f}", file=sys.stderr)
+
+# Compute Mann-Whitney U
+U1, U2 = mann_whitney_u(animal_pct, fungi_pct)
+U = min(U1, U2)
+
+print(f"U1 (animals): {U1:.4f}", file=sys.stderr)
+print(f"U2 (fungi): {U2:.4f}", file=sys.stderr)
+print(f"U = min(U1, U2) = {U:.4f}", file=sys.stderr)
+
+# Also print for answer
+print(f"{U}")
+
+animal_zip.close()
+fungi_zip.close()
+PYEOF
+python3 /tmp/compute_mwu.py

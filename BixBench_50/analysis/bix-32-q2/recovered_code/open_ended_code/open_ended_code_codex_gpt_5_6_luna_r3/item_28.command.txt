@@ -1,0 +1,44 @@
+/bin/bash -lc "Rscript - <<'RS'
+paths <- c(\"/workspace/inputs/res_1vs97.rds\", \"/workspace/inputs/res_1vs98.rds\", \"/workspace/inputs/res_1vs99.rds\")
+res <- lapply(paths, function(p) {
+  x <- readRDS(p); ld <- attr(x, \"listData\")
+  data.frame(gene=attr(x, \"rownames\"), lfc=ld"'$log2FoldChange, padj=ld$padj, stringsAsFactors=FALSE)
+})
+names(res) <- sub("res_", "", sub("'"\\\\.rds"'$", "", basename(paths)))
+links <- read.delim("https://rest.kegg.jp/link/pathway/pau", header=FALSE, sep="'"\\t\", quote=\"\", stringsAsFactors=FALSE)
+colnames(links) <- c(\"gene\", \"pathway\")
+links"'$gene <- sub("''^pau:", "", links$gene); links$pathway <- sub("''^path:", "", links$pathway)
+pathgenes <- lapply(split(links$gene, links$pathway), unique)
+allres <- unique(unlist(lapply(res, `[[`, "gene")))
+uni <- intersect(allres, unique(links$gene))
+
+o <- function(fg, universe=uni, minGS=1, maxGS=Inf, family="hits") {
+  gs <- lapply(pathgenes, intersect, y=universe)
+  sz <- lengths(gs); keep <- sz >= minGS & sz <= maxGS
+  k <- vapply(gs, function(g) length(intersect(g, fg)), integer(1))
+  tested <- keep & k > 0
+  N <- length(universe); n <- length(intersect(fg, universe)); M <- sz
+  p <- rep(NA_real_, length(gs)); p[tested] <- phyper(k[tested]-1, M[tested], N-M[tested], n, lower.tail=FALSE)
+  padj <- rep(NA_real_, length(gs));
+  if (family == "hits") padj[tested] <- p.adjust(p[tested], "BH") else if (family == "all") padj[keep] <- p.adjust(p[keep], "BH")
+  data.frame(pathway=names(gs), size=sz, hit=k, p=p, padj=padj, tested=tested, stringsAsFactors=FALSE)
+}
+for (minGS in c(1, 5, 10)) for (maxGS in c(Inf,500)) {
+  cat("'"\\n=== min\", minGS, \"max\", maxGS, \"===\\n\")
+  sets <- list()
+  for (sgn in c(\"pos\", \"neg\")) {
+    sig <- list()
+    for (nm in names(res)) {
+      d <- res[[nm]]
+      fg <- if (sgn==\"pos\") d"'$gene[d$lfc > 1.5] else d$gene[d$lfc < -1.5]
+      z <- o(fg, minGS=minGS, maxGS=maxGS, family="hits")
+      sig[[nm]] <- z$pathway[!is.na(z$padj) & z$padj < .05]
+      cat(sgn, nm, "fg", length(intersect(fg,uni)), "tested", sum(z$tested), "sig", length(sig[[nm]]), "rawsig", sum(z$p < .05,na.rm=TRUE), "'"\\n\")
+      if (length(sig[[nm]])>0) cat(\"  \", paste(sig[[nm]], collapse=\",\"), \"\\n\")
+    }
+    inter <- Reduce(intersect, sig); sets[[sgn]] <- inter
+    cat(\"INTER\", sgn, length(inter), paste(inter, collapse=\",\"), \"\\n\")
+  }
+  cat(\"TOTAL\", length(unique(unlist(sets))), \"SUM\", sum(lengths(sets)), \"\\n\")
+}
+RS"

@@ -1,0 +1,64 @@
+/bin/bash -c "python - <<'PY'
+import openpyxl, glob, os, re, collections
+meta = {}
+wb=openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+for r in rows[1:]:
+    sid=str(r[0]).strip()
+    meta[sid]=(r[2],r[3])
+carrier=set(k for k,v in meta.items() if v[1]=='Carrier')
+print('carrier metadata', len(carrier), sorted(carrier))
+files=sorted(glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+carr_files=[]
+for f in files:
+    base=os.path.basename(f)
+    m=re.search(r'CHIP_(.+?)\\.xlsx"'$'"', base)
+    full=m.group(1)
+    sid=re.match(r'(\\d+)', full).group(1)
+    if sid in carrier:
+        carr_files.append((sid,full,f))
+print('carrier files',len(carr_files),[s for s,full,f in carr_files])
+vals=collections.Counter(); so=collections.Counter(); eff=collections.Counter(); zyg=collections.Counter(); classif=collections.Counter(); inchip=collections.Counter(); filtercol=collections.Counter()
+vaf_types=collections.Counter(); vaf_nonref_types=collections.Counter(); missing_clin=collections.Counter(); clin_by_zyg=collections.defaultdict(collections.Counter)
+nrows=0
+for sid,full,f in carr_files:
+    wb=openpyxl.load_workbook(f, read_only=False, data_only=True)
+    ws=wb.active
+    rows=list(ws.iter_rows(values_only=True))
+    hdr=rows[1]
+    for r in rows[2:]:
+        d={hdr[i]:r[i] for i in range(min(len(hdr),len(r))) if hdr[i] is not None}
+        nrows+=1
+        z=d.get('Zygosity'); so[d.get('Sequence Ontology (Combined)')]+=1; eff[d.get('Effect (Combined)')]+=1; zyg[z]+=1
+        cl=d.get('Classification'); classif[cl]+=1
+        inchip[d.get('In_CHIP')]+=1
+        filtercol[d.get('Filter')]+=1
+        vaf=d.get('Variant Allele Freq')
+        if z=='Reference':
+            vaf_types['ref:'+str(type(vaf).__name__)+':'+('None' if vaf is None else 'notnone')]+=1
+        else:
+            vaf_nonref_types[z]+=1
+            if vaf is not None:
+                try:
+                    fv=float(vaf)
+                    vals[z]+=1
+                except Exception: pass
+            else:
+                vals['nonref_'+str(z)+'_missing']+=1
+            if cl is None:
+                missing_clin[z]+=1
+            clin_by_zyg[z][cl]+=1
+print('nrows',nrows)
+print('zyg',zyg)
+print('vaf nonref types',vaf_nonref_types)
+print('vaf ref types',vaf_types)
+print('so',so)
+print('eff',eff)
+print('classif',classif)
+print('missing_clin_by_zyg',missing_clin)
+print('inchip',inchip)
+print('filter',filtercol)
+print('clin_by_zyg')
+for k,v in clin_by_zyg.items(): print(k, v)
+PY"

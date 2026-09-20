@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter
+import re
+
+def norm_sample(x):
+    if x is None: return None
+    if isinstance(x, (int,float)) and float(x).is_integer(): return str(int(x))
+    return str(x).strip()
+
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+header=rows[0]
+idx={h:i for i,h in enumerate(header) if h}
+status=[]
+for r in rows[1:]:
+    sid=norm_sample(r[idx['Sample ID']])
+    if sid is None: continue
+    status.append((sid, r[idx['Status']], r[idx['BLM Mutation Status']]))
+print('BLM status counts:', Counter(s[2] for s in status))
+print('clinical status counts:', Counter(s[1] for s in status))
+print('all status rows:')
+for x in status:
+    print(x)
+
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+file_by_id={}
+for p in files:
+    base=re.search(r'CHIP_(.+)\\.xlsx"'$'"', p.name).group(1)
+    # numeric sample id before dash, or full SRR id
+    sid=base.split('-')[0]
+    file_by_id[sid]=p
+print('files total', len(files), 'matched status rows', sum(s[0] in file_by_id for s in status))
+for blm in sorted(Counter(s[2] for s in status)):
+    ids=[sid for sid,_,b in status if b==blm]
+    missing=[sid for sid in ids if sid not in file_by_id]
+    print('\\n', blm, len(ids), 'with files', len(ids)-len(missing), 'missing', missing)
+
+carrier_ids=[sid for sid,_,b in status if b=='Carrier']
+ann=Counter(); eff=Counter(); nrows=0; vafnon=0; vaflt=0
+for sid in carrier_ids:
+    p=file_by_id.get(sid)
+    if not p: continue
+    wb=load_workbook(p, read_only=True, data_only=True)
+    ws=wb.active; ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True)
+    next(it); hdr=next(it)
+    col={h:i for i,h in enumerate(hdr) if h}
+    for r in it:
+        if not r or r[0] is None: continue
+        nrows+=1
+        ann[str(r[col['Sequence Ontology (Combined)']])]+=1
+        eff[str(r[col['Effect (Combined)']])]+=1
+        v=r[col['Variant Allele Freq']]
+        if v is not None:
+            vafnon+=1
+            try:
+                if float(v)<0.3: vaflt+=1
+            except Exception as e: print('bad vaf', v, sid)
+print('\\ncarrier rows', nrows, 'vaf non-null', vafnon, 'vaf<0.3', vaflt)
+print('annotations:')
+for k,v in ann.most_common(): print(v, k)
+print('effects:')
+for k,v in eff.most_common(): print(v, k)
+PY"

@@ -1,0 +1,41 @@
+/bin/bash -c "cd /workspace && python3 - <<'PY'
+import subprocess, zipfile, xml.etree.ElementTree as ET, math
+# get RDS lfc robustly as before
+rscript=r'''
+a<-readRDS('/workspace/inputs/res_1vs97.rds'); b<-readRDS('/workspace/inputs/res_1vs98.rds')
+rna<-attr(a,'rownames',exact=T); rnb<-attr(b,'rownames',exact=T)
+lda<-unclass(attr(a,'listData',exact=T)); ldb<-unclass(attr(b,'listData',exact=T))
+cat('gene\\t97\\t98\\n')
+for(g in sort(union(rna,rnb))) { ia<-match(g,rna); ib<-match(g,rnb); cat(g, format(lda"'$log2FoldChange[ia],digits=12), format(ldb$log2FoldChange[ib],digits=12), sep='"'\\t'); cat('\\n') }
+'''
+out=subprocess.check_output(['Rscript','-e',rscript],cwd='/workspace').decode(); rds={}
+for line in out.strip().splitlines()[1:]:
+ g,a,b=line.split('\\t'); rds[g]=(float(a),float(b))
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(path):
+ z=zipfile.ZipFile(path); root=ET.fromstring(z.read('word/document.xml')); tbl=root.find('.//w:tbl',ns); rows=[]
+ for tr in tbl.findall('.//w:tr',ns):
+  cells=[''.join(p.text or '' for p in tc.findall('.//w:t',ns)) for tc in tr.findall('.//w:tc',ns)]
+  rows.append(cells)
+ return rows
+def cor(a,b):
+ ma=sum(a)/len(a); mb=sum(b)/len(b); num=sum((x-ma)*(y-mb) for x,y in zip(a,b)); da=math.sqrt(sum((x-ma)**2 for x in a)); db=math.sqrt(sum((y-mb)**2 for y in b)); return num/(da*db)
+for path,name in [('/workspace/tmp/s012.docx','S1_HCD'),('/workspace/tmp/s013.docx','S2_colony')]:
+ rows=parse(path)[2:]
+ for colidx,colname in [(1,'rhlR'),(2,'rhlI')]:
+  pairs=[]
+  for r in rows:
+   if len(r)>=3 and r[0].startswith('PA14_') and r[colidx] not in ('','-'):
+    g=r[0].strip()
+    try: x=float(r[colidx])
+    except: continue
+    if g in rds: pairs.append((x,rds[g],g))
+  print('\\n',name,colname,'n',len(pairs))
+  for ridx,label in [(1,'RDS97'),(2,'RDS98')]:
+   x=[p[0] for p in pairs]; y=[p[1][ridx-1] for p in pairs]
+   for neg in [False,True]:
+    yy=[-v for v in y] if neg else y
+    print(label, 'neg' if neg else 'direct','cor',round(cor(x,yy),3),'mae',round(sum(abs(a-b) for a,b in zip(x,yy))/len(x),3))
+   # print a few
+   print('examples',[(p[2],round(p[0],2),round(p[1][ridx-1],2)) for p in pairs[:5]])
+PY"

@@ -1,0 +1,77 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+
+# 1. Load gene metadata, filter for protein_coding
+print("Loading gene metadata...")
+gene_meta = pd.read_csv('/workspace/inputs/GeneMetaInfo_Zenodo.csv', index_col=0)
+print(f"Total genes: {len(gene_meta)}")
+pc_genes = gene_meta[gene_meta['gene_biotype'] == 'protein_coding']
+print(f"Protein-coding genes: {len(pc_genes)}")
+
+# 2. Load sample annotations
+print("\nLoading sample annotations...")
+sample_annot = pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+
+# Get cell types of interest
+cell_types = ['CD4', 'CD8', 'CD14', 'CD19']
+ct_samples = {}
+for ct in cell_types:
+    samples = sample_annot[sample_annot['celltype'] == ct].index.tolist()
+    ct_samples[ct] = samples
+    print(f"{ct}: {len(samples)} samples")
+
+# 3. Load expression data
+print("\nLoading expression data...")
+expr = pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+print(f"Expression matrix: {expr.shape}")
+
+# Filter to protein-coding genes only
+expr_pc = expr[expr.index.isin(pc_genes.index)]
+print(f"After filtering to protein-coding: {expr_pc.shape}")
+
+# Get length info
+lengths = pc_genes['Length']
+# Align
+common_genes = expr_pc.index.intersection(lengths.index)
+print(f"Genes in both datasets: {len(common_genes)}")
+
+# 4. Compute correlations for each cell type
+print("\n--- Correlations ---")
+results = {}
+for ct in cell_types:
+    # Get samples for this cell type that are in the expression data
+    ct_sample_list = [s for s in ct_samples[ct] if s in expr_pc.columns]
+    print(f"\n{ct}: {len(ct_sample_list)} samples in expression data")
+    
+    if len(ct_sample_list) == 0:
+        print(f"  No samples found for {ct}")
+        continue
+    
+    # Mean expression across cell-type samples
+    mean_expr = expr_pc[ct_sample_list].mean(axis=1)
+    
+    # Align with lengths
+    aligned_genes = mean_expr.index.intersection(lengths.index)
+    x = lengths[aligned_genes].values
+    y = mean_expr[aligned_genes].values
+    
+    # Remove genes with zero length (shouldn't exist but be safe)
+    mask = x > 0
+    x = x[mask]
+    y = y[mask]
+    
+    # Compute Pearson correlation
+    r, p = pearsonr(x, y)
+    results[ct] = (r, p)
+    print(f"  Pearson r = {r:.6f}, p = {p:.6e}, |r| = {abs(r):.6f}")
+
+# 5. Find weakest (lowest absolute r)
+print("\n--- Results ---")
+for ct, (r, p) in results.items():
+    print(f"{ct}: r = {r:.6f}, |r| = {abs(r):.6f}")
+
+weakest = min(results, key=lambda k: abs(results[k][0]))
+print(f"\nWeakest correlation: {weakest} (|r| = {abs(results[weakest][0]):.6f})")
+PYEOF

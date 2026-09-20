@@ -1,0 +1,27 @@
+/bin/bash -lc "Rscript - <<'RS'
+# DE foreground
+x <- readRDS('inputs/res_GluFevsGluFePlus.rds')
+d <- as.data.frame(attr(x, 'listData')); rownames(d) <- attr(x, 'rownames')
+fg0 <- rownames(d)["'!is.na(d$padj) & d$padj < 0.05 & d$log2FoldChange > 1.5]
+# Current KEGG organism pathway-gene assignments and names (official REST API)
+ln <- readLines('"'https://rest.kegg.jp/link/pathway/pau', warn=FALSE)
+z <- do.call(rbind, strsplit(ln, '\\t', fixed=TRUE))
+gene <- sub('"'^pau:'"', '', z[,1]); term <- sub('"'^path:'"', '', z[,2])
+term2gene <- unique(data.frame(term=term, gene=gene, stringsAsFactors=FALSE))
+universe <- unique(term2gene"'$gene)
+fg <- intersect(fg0, universe)
+sets <- split(term2gene$gene, term2gene$term)
+# clusterProfiler defaults: terms reached by query, minGSSize=10, maxGSSize=500
+reached <- names(sets)[vapply(sets, function(s) any(fg %in% s), logical(1))]
+reached <- reached[vapply(sets[reached], length, integer(1)) >= 10 & vapply(sets[reached], length, integer(1)) <= 500]
+res <- do.call(rbind, lapply(reached, function(t) {
+  M <- length(sets[[t]]); k <- sum(fg %in% sets[[t]])
+  data.frame(ID=t, Count=k, BgSize=M,
+             pvalue=phyper(k-1, M, length(universe)-M, length(fg), lower.tail=FALSE))
+}))
+res$padj <- p.adjust(res$pvalue, method='"'BH')
+res <- res[order(res"'$pvalue),]
+print(res[res$ID == '"'pau02010',])
+cat('mapped foreground=', length(fg), ' universe=', length(universe), ' tested=', nrow(res), '\\n', sep='')
+cat('top pathways by raw p:\\n'); print(head(res, 10), row.names=FALSE)
+RS"

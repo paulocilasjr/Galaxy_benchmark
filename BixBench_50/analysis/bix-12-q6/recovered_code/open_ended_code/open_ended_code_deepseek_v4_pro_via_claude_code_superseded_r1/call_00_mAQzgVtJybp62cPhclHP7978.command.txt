@@ -1,0 +1,93 @@
+python3 << 'EOF'
+# Independent verification: compute MWU using a different approach
+import os
+
+# Reload the data
+def parse_fasta_alignment(filepath):
+    sequences = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_header is not None:
+                    sequences.append((current_header, ''.join(current_seq)))
+                current_header = line
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            sequences.append((current_header, ''.join(current_seq)))
+    return sequences
+
+def count_pis(sequences):
+    STANDARD_AA = set('ACDEFGHIKLMNPQRSTVWY')
+    seqs = [s for _, s in sequences]
+    aln_len = min(len(s) for s in seqs)
+    n_seqs = len(seqs)
+    pis = 0
+    for pos in range(aln_len):
+        freq = {}
+        for i in range(n_seqs):
+            c = seqs[i][pos]
+            if c in STANDARD_AA:
+                freq[c] = freq.get(c, 0) + 1
+        if sum(1 for v in freq.values() if v >= 2) >= 2:
+            pis += 1
+    return pis
+
+animal_pis = []
+for fname in sorted(os.listdir('/tmp/scogs_animals')):
+    if fname.endswith('.mafft'):
+        seqs = parse_fasta_alignment(os.path.join('/tmp/scogs_animals', fname))
+        animal_pis.append(count_pis(seqs))
+
+fungi_pis = []
+for fname in sorted(os.listdir('/tmp/scogs_fungi')):
+    if fname.endswith('.mafft'):
+        seqs = parse_fasta_alignment(os.path.join('/tmp/scogs_fungi', fname))
+        fungi_pis.append(count_pis(seqs))
+
+# Mann-Whitney U: rank-based method
+# Combine all values with group indicator
+combined = [(v, 0) for v in animal_pis] + [(v, 1) for v in fungi_pis]
+combined.sort(key=lambda x: x[0])
+
+# Assign ranks with tie handling (average/midrank)
+n = len(combined)
+ranks = [0.0] * n
+i = 0
+while i < n:
+    j = i
+    while j < n and combined[j][0] == combined[i][0]:
+        j += 1
+    avg = (i + j + 1) / 2.0  # average of 1-indexed ranks
+    for k in range(i, j):
+        ranks[k] = avg
+    i = j
+
+# Sum ranks for group 0 (animals)
+R1 = sum(ranks[k] for k in range(n) if combined[k][1] == 0)
+n1 = len(animal_pis)
+n2 = len(fungi_pis)
+
+# U for animals
+U1 = R1 - n1 * (n1 + 1) / 2.0
+# U for fungi
+U2 = n1 * n2 - U1
+
+print(f"n_animals={n1}, n_fungi={n2}")
+print(f"Rank sum animals: {R1}")
+print(f"Rank sum fungi: {sum(ranks[k] for k in range(n) if combined[k][1] == 1)}")
+print(f"U (animals) = {U1}")
+print(f"U (fungi) = {U2}")
+print(f"U1 + U2 = {U1 + U2}, n1*n2 = {n1*n2}")
+print(f"Expected U under H0: {n1*n2/2}")
+print(f"PIS range animals: [{min(animal_pis)}, {max(animal_pis)}]")
+print(f"PIS range fungi: [{min(fungi_pis)}, {max(fungi_pis)}]")
+print(f"Mean PIS animals: {sum(animal_pis)/n1:.4f}")
+print(f"Mean PIS fungi: {sum(fungi_pis)/n2:.4f}")
+EOF

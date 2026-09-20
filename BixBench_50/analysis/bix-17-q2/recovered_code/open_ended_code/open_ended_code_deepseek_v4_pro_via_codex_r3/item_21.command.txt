@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+# quick recompute carrier median under variant exclusions for SO terms
+import openpyxl, glob, os, re, collections, statistics
+# trio
+wb=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx', data_only=True); ws=wb.active
+trio=[]
+for r in list(ws.iter_rows(values_only=True))[1:]:
+ sid=re.sub(r'\\s+','',str(r[0])) if r[0] is not None else ''
+ if sid: trio.append((sid,str(r[1]).strip(),str(r[3]).strip()))
+carriers={sid for sid,st,blm in trio if blm=='Carrier'}
+def sid_of(f):
+ tok=os.path.basename(f).replace('.xlsx','').split('_')[-1]
+ if tok.startswith('SRR'): return tok
+ return re.match(r'"'^('"\\d+)',tok).group(1)
+for mode in ['specified','exclude_splice','exclude_splice_upstream','gene_list_only']:
+ vals=[]
+ for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'):
+  sid=sid_of(f)
+  if sid not in carriers: continue
+  wb=openpyxl.load_workbook(f,data_only=True); ws=wb.active; rows=list(ws.iter_rows(values_only=True)); h=rows[1]; idx={n:i for i,n in enumerate(h)}
+  cnt=0
+  for r in rows[2:]:
+   if r[0] is None: continue
+   zyg=str(r[idx['Zygosity']]).strip().lower() if r[idx['Zygosity']] is not None else ''
+   so=str(r[idx['Sequence Ontology (Combined)']]).lower() if r[idx['Sequence Ontology (Combined)']] is not None else ''
+   if zyg=='reference': continue
+   if mode=='specified':
+    if 'intergenic' in so or 'utr' in so or 'intron_variant' in so: continue
+   elif mode=='exclude_splice':
+    if 'intergenic' in so or 'utr' in so or 'intron_variant' in so or 'splice' in so: continue
+   elif mode=='exclude_splice_upstream':
+    if 'intergenic' in so or 'utr' in so or 'intron_variant' in so or 'splice' in so or 'upstream' in so: continue
+   elif mode=='gene_list_only':
+    pass
+   v=r[idx['Variant Allele Freq']]
+   if v is None: continue
+   if float(v)<0.3: cnt+=1
+  vals.append(cnt)
+  wb.close()
+ vals.sort()
+ print(mode, vals, 'median', statistics.median(vals))
+PY"

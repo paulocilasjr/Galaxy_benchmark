@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+# Parse the two needed columns directly and fit an unpenalized logistic MLE by Newton/IRLS.
+import zipfile, xml.etree.ElementTree as ET, re, math
+p='inputs/data.xlsx'; ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+with zipfile.ZipFile(p) as z:
+    ssroot=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    ss=[''.join(t.text or '' for t in si.iter('{%s}t'%ns)) for si in ssroot]
+    sh=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    obs=[]
+    for row in sh.findall('.//{%s}sheetData/{%s}row'%(ns,ns))[1:]:
+        vals={}
+        for c in row.findall('{%s}c'%ns):
+            col=re.match('[A-Z]+',c.attrib['r']).group(); v=c.find('{%s}v'%ns)
+            val=None if v is None else v.text
+            if c.attrib.get('t')=='s' and val is not None: val=ss[int(val)]
+            vals[col]=val
+        if vals.get('A') is not None and vals.get('C') in ('PR','SD','PD') and vals.get('D') not in (None,' '):
+            obs.append((float(vals['D']), 1.0 if vals['C']=='PR' else 0.0))
+# Newton-Raphson for intercept and raw age slope
+b0=b1=0.0
+for it in range(100):
+    g0=g1=h00=h01=h11=0.0
+    ll=0.0
+    for x,y in obs:
+        eta=b0+b1*x
+        q=1/(1+math.exp(-eta))
+        w=q*(1-q)
+        g0 += y-q; g1 += (y-q)*x
+        h00 += w; h01 += w*x; h11 += w*x*x
+        ll += y*eta-math.log1p(math.exp(eta))
+    det=h00*h11-h01*h01
+    d0=(h11*g0-h01*g1)/det
+    d1=(-h01*g0+h00*g1)/det
+    b0 += d0; b1 += d1
+    if max(abs(d0),abs(d1))<1e-13: break
+# inverse information for SE
+v11=h00/det
+print('observations',len(obs),'responses',int(sum(y for x,y in obs)),'nonresponses',len(obs)-int(sum(y for x,y in obs)))
+print('iterations',it+1)
+print('intercept',format(b0,'.15g'))
+print('age_coefficient',format(b1,'.15g'))
+print('age_SE',format(math.sqrt(v11),'.15g'))
+print('odds_ratio_per_year',format(math.exp(b1),'.15g'))
+print('log_likelihood',format(ll,'.15g'))
+print('score',g0,g1)
+PY"

@@ -1,0 +1,77 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+import gc
+import pickle
+
+# Load data
+counts_df = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+
+annot = annot.set_index('sample')
+annot = annot.loc[counts_df.columns]
+annot['batch'] = annot['batch'].astype(str)
+annot['sex'] = annot['sex'].astype(str)
+
+# Minimal prefilter
+row_sums = counts_df.sum(axis=1)
+keep = row_sums >= 5
+counts_filtered = counts_df.loc[keep]
+del counts_df, row_sums
+gc.collect()
+
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_int = counts_filtered.T.round().astype(int)
+
+dds = DeseqDataSet(
+    counts=counts_int,
+    metadata=annot,
+    design_factors="batch + sex",
+    refit_cooks=False,
+    n_cpus=1,
+)
+del counts_int
+gc.collect()
+
+print("Starting deseq2 fitting...")
+dds.deseq2()
+print("DESeq2 fitting done!")
+
+# Save with pickle
+with open('codex_output/dds_fitted.pkl', 'wb') as f:
+    pickle.dump(dds, f)
+print("DDS pickled")
+
+# Now get results for sex contrast (M vs F)
+print("\nRunning Wald test for sex contrast...")
+stat = DeseqStats(dds, contrast=["sex", "M", "F"], n_cpus=1)
+stat.summary()
+print("Wald test done")
+
+# LFC shrinkage (default method = apeglm)
+print("\nRunning LFC shrinkage (default method)...")
+stat.lfc_shrink()
+print("LFC shrinkage done")
+
+# Get results
+res = stat.results_df
+print(f"\nResults shape: {res.shape}")
+print(f"Results columns: {res.columns.tolist()}")
+print(f"\nResults index: {res.index[:5].tolist()}")
+
+# FAM138A
+print(f"\nFAM138A in results: {'FAM138A' in res.index}")
+if 'FAM138A' in res.index:
+    fam = res.loc['FAM138A']
+    print(f"\nFAM138A results:")
+    for col in fam.index:
+        print(f"  {col}: {fam[col]}")
+else:
+    print("FAM138A not in results - checking if it was filtered out...")
+    print(f"FAM138A total count: {counts_filtered.loc['FAM138A'].sum() if 'FAM138A' in counts_filtered.index else 'NOT FOUND'}")
+PYEOF
+

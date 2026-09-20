@@ -1,0 +1,58 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections, statistics, math
+age='inputs/JD_AgeRelated_CpG_noMT_Final.csv'
+lengths_file='inputs/JD_Chromosome_Length.csv'
+lengths={}
+with open(lengths_file, newline='') as f:
+    r=csv.DictReader(f)
+    # handle BOM
+    fields=r.fieldnames
+    chrom_key=fields[0]
+    for row in r:
+        lengths[row[chrom_key]]=int(row['Length'])
+
+filtered=set()
+all_sites=set()
+obs=0
+fobs=0
+with open(age, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        obs += 1
+        chrom=row['Chromosome']
+        pos=row['Pos']
+        start=row['StartPosition']
+        # key by chrom+start; Pos is also chrom_start
+        site=(chrom,start)
+        all_sites.add(site)
+        m=float(row['MethylationPercentage'])
+        if m>90 or m<10:
+            fobs += 1
+            filtered.add(site)
+
+counts=collections.Counter(chrom for chrom,start in filtered)
+densities={chrom: counts[chrom]/lengths[chrom] for chrom in counts if counts[chrom]>0 and chrom in lengths}
+mean=sum(densities.values())/len(densities)
+print('obs', obs)
+print('all_unique_sites', len(all_sites))
+print('filtered_obs', fobs)
+print('filtered_unique_sites', len(filtered))
+print('chromosomes_with_filtered', len(densities))
+print('counts', sorted(counts.items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0]))
+print('densities')
+for c in sorted(densities, key=lambda x: int(x) if x.isdigit() else x):
+    print(c, counts[c], lengths[c], densities[c])
+print('mean', repr(mean), format(mean,'.17g'))
+
+# Alternative: mean methylation per unique site across samples, then filter site mean.
+site_m=collections.defaultdict(list)
+with open(age, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        site_m[(row['Chromosome'], row['StartPosition'])].append(float(row['MethylationPercentage']))
+mean_filtered=[s for s,vals in site_m.items() if (sum(vals)/len(vals)>90 or sum(vals)/len(vals)<10)]
+counts2=collections.Counter(c for c,s in mean_filtered)
+dens2={c: counts2[c]/lengths[c] for c in counts2 if counts2[c]>0 and c in lengths}
+mean2=sum(dens2.values())/len(dens2) if dens2 else float('nan')
+print('alt_mean_site_methyl_filtered_unique_sites', len(mean_filtered), 'chroms', len(dens2), 'mean_density', mean2)
+PY"

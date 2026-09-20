@@ -1,0 +1,96 @@
+/bin/bash -c "python3 - <<'PY'
+import csv, collections
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import PCA
+
+expr_path='/workspace/inputs/ROSMAP_genexp_ad.csv'
+meta_path='/workspace/inputs/ROSMAP_meta_ad.csv'
+
+# Raw expression header to preserve duplicated sample labels without pandas renaming.
+with open(expr_path, newline='') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    # rows: genes x samples, numeric data
+    data = np.array([[float(v) for v in row[1:]] for row in reader], dtype=np.float64)
+
+sample_ids = header[1:]
+gene_ids = [row[0] for row in csv.reader(open(expr_path)) if False]  # not used
+print('matrix genes x samples:', data.shape)
+print('unique sample labels:', len(set(sample_ids)), 'total sample labels:', len(sample_ids))
+print('any NaN in expression:', np.isnan(data).any())
+print('any Inf:', np.isinf(data).any())
+print('min raw:', data.min(), 'max raw:', data.max())
+
+# Metadata companion check.
+with open(meta_path, newline='') as f:
+    r = csv.reader(f)
+    mh = next(r)
+    mrows = list(r)
+meta_ids = [row[0] for row in mrows]
+print('metadata rows:', len(meta_ids), 'unique metadata IDs:', len(set(meta_ids)))
+print('metadata fields:', mh)
+print('metadata IDs missing from expression:', sorted(set(meta_ids)-set(sample_ids)))
+print('expression IDs missing from metadata:', sorted(set(sample_ids)-set(meta_ids)))
+
+counts = collections.Counter(sample_ids)
+collided = {k for k,v in counts.items() if v > 1}
+print('collided primary labels:', len(collided))
+print('collided columns:', sum(counts[k] for k in collided))
+print('resolved columns:', len(sample_ids) - sum(counts[k] for k in collided))
+
+# inspect every metadata row in every repeated-ID group for secondary identity and conflicts
+# (already done separately; here summarize invariant conflicts)
+stable_fields = ['msex', 'apoe_genotype']
+by = collections.defaultdict(list)
+for row in mrows:
+    by[row[0]].append(row)
+conflicts = 0
+for k,v in by.items():
+    if len(v) > 1:
+        for field in stable_fields:
+            fi = mh.index(field)
+            vals = {row[fi] for row in v}
+            if len(vals) > 1:
+                conflicts += 1
+print('stable-field conflict groups:', conflicts)
+
+# Per skill: exclude every occurrence of collided primary IDs.
+keep_cols = [i for i, sid in enumerate(sample_ids) if sid not in collided]
+print('keeping columns:', len(keep_cols))
+
+# samples as rows, genes as columns
+X = data[:, keep_cols].T.astype(np.float64)
+print('fitted orientation samples x genes:', X.shape)
+
+# log10 transform with pseudocount 1
+Xlog = np.log10(X + 1.0)
+print('finite after log:', np.isfinite(Xlog).all())
+
+# remove zero-variance genes after final transform
+var = Xlog.var(axis=0, ddof=1)
+nonconst = var > 0
+print('zero-variance genes after log:', int((~nonconst).sum()))
+Y = Xlog[:, nonconst]
+Yc = Y - Y.mean(axis=0)
+print('centered finite:', np.isfinite(Yc).all())
+
+# numpy exact full SVD
+U, S, Vt = np.linalg.svd(Yc, full_matrices=False)
+eig = S**2 / (Y.shape[0] - 1)
+total_var = eig.sum()
+pc1_np = eig[0] / total_var * 100
+print('num components available:', len(eig))
+print('total variance:', repr(total_var))
+print('PC1 explained variance (numpy full denominator):', repr(pc1_np))
+
+# sklearn PCA n_components=100, full solver
+pca = PCA(n_components=100, svd_solver='full')
+pca.fit(Y)
+print('sklearn components:', pca.n_components_, 'features:', pca.n_features_in_)
+print('sklearn PC1 ratio %:', repr(pca.explained_variance_ratio_[0]*100))
+print('sklearn sum first100 %:', repr(pca.explained_variance_ratio_.sum()*100))
+print('sklearn first eigenvalue:', repr(pca.explained_variance_[0]))
+print('sklearn full total variance (approx):', repr(pca.explained_variance_.sum() / pca.explained_variance_ratio_.sum()))
+print('difference numpy/sklearn:', repr(abs(pc1_np - pca.explained_variance_ratio_[0]*100)))
+PY"

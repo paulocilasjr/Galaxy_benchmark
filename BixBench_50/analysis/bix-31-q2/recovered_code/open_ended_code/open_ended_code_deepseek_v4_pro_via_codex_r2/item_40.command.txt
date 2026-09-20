@@ -1,0 +1,37 @@
+/bin/bash -c "python - <<'PY'
+import time, pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+t0=time.time()
+print('loading...', flush=True)
+counts=pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0).T
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+# align and subset covariates
+meta=meta.loc[counts.index].copy()
+meta['batch']=pd.Categorical(meta['batch'])
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+print('counts shape', counts.shape, 'meta', meta.shape, flush=True)
+print('design matrix factors: batch categories', meta['batch'].cat.categories.tolist(), 'sex', meta['sex'].cat.categories.tolist(), flush=True)
+
+dds=DeseqDataSet(counts=counts, metadata=meta[['batch','sex']], design='~batch+sex', n_cpus=8, quiet=False)
+print('DDS init done', time.time()-t0, flush=True)
+print('design columns', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+dds.deseq2()
+print('deseq2 done', time.time()-t0, flush=True)
+stats=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=8, quiet=False)
+stats.summary()
+print('summary done', time.time()-t0, flush=True)
+print('LFC cols', stats.LFC.columns.tolist(), flush=True)
+print('FAM138A unshrunk row', stats.results_df.loc['FAM138A'].to_dict(), flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+print('shrink done', time.time()-t0, flush=True)
+res=stats.results_df.copy()
+print('FAM138A final row', res.loc['FAM138A'].to_dict(), flush=True)
+print('columns', res.columns.tolist())
+# save relevant output to a temp parquet/csv for inspection
+res.to_csv('/workspace/tmp/de_results_categorical.csv')
+print('saved')
+print('filtered count absLFC>0.5 baseMean>10:', ((res['log2FoldChange'].abs()>0.5)&(res['baseMean']>10)).sum(), flush=True)
+print('elapsed total', time.time()-t0, flush=True)
+PY"

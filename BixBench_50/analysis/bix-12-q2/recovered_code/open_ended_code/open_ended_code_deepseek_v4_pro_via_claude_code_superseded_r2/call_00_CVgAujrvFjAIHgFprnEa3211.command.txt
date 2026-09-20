@@ -1,0 +1,72 @@
+python3 -c "
+import os, glob
+from collections import Counter
+
+def read_fasta(filepath):
+    sequences = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_header is not None:
+                    sequences.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            sequences.append((current_header, ''.join(current_seq)))
+    return sequences
+
+def compute_pis_pct(filepath):
+    seqs = read_fasta(filepath)
+    if len(seqs) < 2:
+        return None
+    seq_lengths = [len(s[1]) for s in seqs]
+    if len(set(seq_lengths)) > 1:
+        return None
+    aln_len = seq_lengths[0]
+    if aln_len == 0:
+        return None
+    seq_strs = [s[1] for s in seqs]
+    pis = 0
+    for i in range(aln_len):
+        col = [s[i] for s in seq_strs]
+        counts = Counter(col)
+        states_ge2 = sum(1 for n in counts.values() if n >= 2)
+        if len(counts) >= 2 and states_ge2 >= 2:
+            pis += 1
+    return pis / aln_len * 100.0
+
+maffts = sorted(glob.glob('/workspace/work/scogs_fungi/*.faa.mafft'))
+results = []
+for f in maffts:
+    pct = compute_pis_pct(f)
+    if pct is not None:
+        results.append(pct)
+
+results.sort()
+n = len(results)
+median = results[n//2] if n % 2 == 1 else (results[n//2 - 1] + results[n//2]) / 2
+
+print(f'Number of alignments: {n}')
+print(f'Median PIS%: {median:.4f}%')
+print(f'Mean PIS%: {sum(results)/len(results):.4f}%')
+print(f'Min: {min(results):.4f}%')
+print(f'Max: {max(results):.4f}%')
+print(f'Q1: {results[n//4]:.4f}%')
+print(f'Q3: {results[3*n//4]:.4f}%')
+print(f'Files with 0% PIS: {sum(1 for r in results if r == 0)}')
+
+# Distribution of PIS values
+print()
+print('Distribution (binned):')
+for thresh in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20]:
+    count = sum(1 for r in results if r >= thresh and r < thresh + 2)
+    print(f'  [{thresh}-{thresh+2})%: {count}')
+" 2>&1
+

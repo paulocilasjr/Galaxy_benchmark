@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout['count_col']=layout.SampleID.str.replace('-','_',regex=False)
+sel=layout[layout.Group.isin(['DMSO','Cisplatin_IC50_CBD_IC50'])].copy()
+sel['condition']=sel.Group.map({'DMSO':'DMSO','Cisplatin_IC50_CBD_IC50':'CBD_cisplatin'})
+cts=counts[sel.count_col.tolist()].T
+cts.columns=counts.index.astype(str)
+cts=cts.loc[:,cts.sum(axis=0)>0]
+meta=sel.set_index('count_col')[['condition']]
+meta['condition']=pd.Categorical(meta.condition,categories=['DMSO','CBD_cisplatin'])
+dds=DeseqDataSet(counts=cts,metadata=meta,design_factors='condition',refit_cooks=True,n_cpus=2)
+dds.deseq2()
+stat=DeseqStats(dds,contrast=['condition','CBD_cisplatin','DMSO'],alpha=0.05,n_cpus=2)
+stat.summary()
+res=stat.results_df
+deg=res[(res.padj<0.05)&(res.log2FoldChange.abs()>=0.5)].copy()
+mp=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+name_map=mp.drop_duplicates('ENSG').set_index('ENSG').gene_name
+lib=__import__('gseapy').get_library('Reactome_2022',organism='Human')
+key=next(k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes'))
+path=set(lib[key])
+deg['gene_name']=name_map.reindex(deg.index.astype(str)).to_numpy()
+syms=set(deg.gene_name.dropna())
+print('DEG count',len(deg),'mapped unique symbols',len(syms),'unmapped',int(deg.gene_name.isna().sum()),'duplicate symbols',len(deg)-len(syms)-int(deg.gene_name.isna().sum()))
+print('target overlap',len(syms&path),'/',len(path),sorted(syms&path))
+print(deg[deg.gene_name.isin(path)][['gene_name','baseMean','log2FoldChange','pvalue','padj']].sort_values('padj').to_string(index=False))
+# print all target genes stats for audit in terminal only
+alltarget=mp[mp.gene_name.isin(path)].drop_duplicates('gene_name').set_index('ENSG').join(res,how='left')
+alltarget['gene_name']=name_map.reindex(alltarget.index.astype(str)).to_numpy()
+print('target full')
+print(alltarget[['gene_name','baseMean','log2FoldChange','pvalue','padj']].sort_values('gene_name').to_string(index=False))
+PY"

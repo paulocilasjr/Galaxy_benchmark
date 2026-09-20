@@ -1,0 +1,56 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) {
+  a <- attributes(readRDS(f))
+  z <- as.data.frame(a"'$listData, stringsAsFactors=FALSE)
+  rownames(z) <- a$rownames
+  z
+}
+res <- lapply(c('"'inputs/res_GluFevsGluFePlus.rds','inputs/res_SuccvsGluFePlus.rds'), read_res)
+names(res) <- c('GluFevsGluFePlus','SuccvsGluFePlus')
+m <- read.delim(url('https://rest.kegg.jp/link/pathway/pau'), header=FALSE, stringsAsFactors=FALSE, col.names=c('gene','path'))
+m"'$gene <- sub('"'"'^[''^:]+:'"', '', m"'$gene)
+m$path <- sub('"'"'^[''^:]+:'"', '', m"'$path)
+terms <- split(m$gene, m$path)
+terms <- lapply(terms, unique)
+run_ora <- function(z, universe_mode='"'kegg', minGS=10, maxGS=500) {
+  fg <- rownames(z)[is.finite(z"'$log2FoldChange) & is.finite(z$padj) & abs(z$log2FoldChange)>1.5 & z$padj<0.05]
+  extID <- unique(unlist(terms))
+  if (universe_mode == '"'tested') extID <- intersect(extID, rownames(z))
+  q <- intersect(unique(fg), extID)
+  qmap <- lapply(q, function(g) names(terms)[vapply(terms, function(s) g %in% s, logical(1))])
+  names(qmap) <- q
+  qdf <- data.frame(extID=rep(names(qmap), times=lengths(qmap)), termID=unlist(qmap), stringsAsFactors=FALSE)
+  qdf <- unique(qdf)
+  qterm2gene <- split(qdf"'$extID, qdf$termID)
+  qterm2gene <- lapply(qterm2gene, unique)
+  term2gene <- lapply(terms, intersect, extID)
+  # terms hit by query only, then size filter as in DOSE
+  tested <- intersect(names(qterm2gene), names(term2gene))
+  term_sizes <- vapply(term2gene[tested], length, integer(1))
+  keep <- term_sizes >= minGS & term_sizes <= maxGS
+  tested <- tested[keep]
+  if (!length(tested)) return(data.frame())
+  k <- vapply(qterm2gene[tested], length, integer(1))
+  M <- vapply(term2gene[tested], length, integer(1))
+  n <- length(q)
+  N <- length(extID)
+  p <- phyper(k-1, M, N-M, n, lower.tail=FALSE)
+  padj <- p.adjust(p, method='"'BH')
+  out <- data.frame(path=tested, k=k, M=M, n=n, N=N, p=p, padj=padj, stringsAsFactors=FALSE)
+  out[order(out"'$p),]
+}
+for (mode in c('"'kegg','tested')) {
+  cat('\\nMODE',mode,'\\n')
+  oo <- lapply(res, run_ora, universe_mode=mode)
+  for (nm in names(oo)) {
+    o <- oo[[nm]]
+    cat(nm, 'tested=', nrow(o), 'sig=', sum(o"'$padj<0.05), '"'\\n')
+    if (sum(o"'$padj<0.05)) print(o[o$padj<0.05, c('"'path','k','M','n','N','p','padj')], row.names=FALSE)
+  }
+  a <- oo[[1]]"'$path[oo[[1]]$padj<0.05]
+  b <- oo[[2]]$path[oo[[2]]$padj<0.05]
+  cat('"'GluFe-only vs Succ=', length(setdiff(a,b)), '\\n')
+  cat('Succ-only vs GluFe=', length(setdiff(b,a)), '\\n')
+  cat('intersection=', length(intersect(a,b)), '\\n')
+}
+RS"

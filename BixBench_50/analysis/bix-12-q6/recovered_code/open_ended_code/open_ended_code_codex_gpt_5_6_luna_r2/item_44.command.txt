@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+from collections import Counter
+from zipfile import ZipFile
+
+
+def fasta_sequences(data):
+    seqs=[]
+    current=[]
+    for line in data.decode('ascii').splitlines():
+        if line.startswith('>'):
+            if current:
+                seqs.append(''.join(current))
+            current=[]
+        else:
+            current.append(line.strip())
+    if current:
+        seqs.append(''.join(current))
+    return seqs
+
+
+def parsimony_informative_count(seqs):
+    lengths={len(s) for s in seqs}
+    assert len(lengths)==1 and seqs
+    count=0
+    for column in zip(*seqs):
+        residues=[state for state in column if state not in '-.?']
+        state_counts=Counter(residues)
+        if sum(n >= 2 for n in state_counts.values()) >= 2:
+            count += 1
+    return count
+
+
+def counts_from_archive(path):
+    with ZipFile(path) as archive:
+        members=[name for name in archive.namelist() if name.endswith('.faa.mafft')]
+        assert members
+        values=[]
+        for member in members:
+            seqs=fasta_sequences(archive.read(member))
+            values.append(parsimony_informative_count(seqs))
+    return values
+
+animals=counts_from_archive('inputs/scogs_animals.zip')
+fungi=counts_from_archive('inputs/scogs_fungi.zip')
+assert (len(animals),len(fungi))==(241,255)
+
+# Midrank U, with animals as the first sample.
+ranked=sorted([(value,0) for value in animals]+[(value,1) for value in fungi])
+rank_sums=[0.0,0.0]
+i=0
+while i < len(ranked):
+    j=i+1
+    while j < len(ranked) and ranked[j][0]==ranked[i][0]:
+        j += 1
+    midrank=(i+1+j)/2
+    for k in range(i,j):
+        rank_sums[ranked[k][1]] += midrank
+    i=j
+u_animals=rank_sums[0]-len(animals)*(len(animals)+1)/2
+u_fungi=rank_sums[1]-len(fungi)*(len(fungi)+1)/2
+# Independent pairwise check (ties contribute one-half).
+pairwise=sum(1 if a>b else 0.5 if a==b else 0 for a in animals for b in fungi)
+assert (u_animals,u_fungi)==(6748.0,54707.0)
+assert pairwise==u_animals
+assert u_animals+u_fungi==len(animals)*len(fungi)
+print(f'animals={len(animals)} fungi={len(fungi)} rank_sums={rank_sums} U_animals={u_animals} U_fungi={u_fungi}')
+PY"

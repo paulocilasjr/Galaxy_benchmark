@@ -1,0 +1,81 @@
+/bin/bash -lc "python -u - <<'PY'
+import csv, collections, time
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+ge_file='inputs/CRISPRGeneEffect.csv'
+ex_file='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def headers(path):
+    with open(path,newline='') as f: return next(csv.reader(f))[1:]
+def eid(s): return s.rsplit(' (',1)[-1].rstrip(')')
+
+t=time.time()
+gh=headers(ge_file); eh=headers(ex_file)
+ex_by_id=collections.defaultdict(list)
+for x in eh: ex_by_id[eid(x)].append(x)
+pairs=[]
+for g in gh:
+    candidates=ex_by_id.get(eid(g),[])
+    if g in candidates: e=g
+    elif len(candidates)==1: e=candidates[0]
+    else: continue
+    pairs.append((g,e))
+print('pairs',len(pairs),'exact',sum(g==e for g,e in pairs),flush=True)
+print('reading gene effect',flush=True)
+ge=pd.read_csv(ge_file,index_col=0)
+print('gene effect loaded',ge.shape,'sec',time.time()-t,flush=True)
+print('reading expression',flush=True)
+ex=pd.read_csv(ex_file,index_col=0)
+print('expression loaded',ex.shape,'sec',time.time()-t,flush=True)
+common=ge.index.intersection(ex.index,sort=False)
+print('common models',len(common),flush=True)
+gcols=[g for g,e in pairs]; ecols=[e for g,e in pairs]
+x=ex.loc[common,ecols].to_numpy(dtype=np.float64,copy=True)
+y=-ge.loc[common,gcols].to_numpy(dtype=np.float64,copy=True) # positive-going essentiality
+print('arrays',x.shape,y.shape,'nonfinite',np.size(x)-np.isfinite(x).sum(),np.size(y)-np.isfinite(y).sum(),flush=True)
+del ge,ex
+print('ranking expression',flush=True)
+rx=stats.rankdata(x,axis=0,nan_policy='omit')
+print('ranking essentiality',flush=True)
+ry=stats.rankdata(y,axis=0,nan_policy='omit')
+valid=np.isfinite(rx)&np.isfinite(ry)
+n=valid.sum(axis=0)
+rx=np.where(valid,rx,np.nan); ry=np.where(valid,ry,np.nan)
+mx=np.nanmean(rx,axis=0); my=np.nanmean(ry,axis=0)
+dx=rx-mx; dy=ry-my
+num=np.nansum(dx*dy,axis=0)
+den=np.sqrt(np.nansum(dx*dx,axis=0)*np.nansum(dy*dy,axis=0))
+rho=num/den
+ok=np.isfinite(rho)&(n>=3)
+df=n[ok]-2
+tstat=rho[ok]*np.sqrt(df/np.maximum((1-rho[ok])*(1+rho[ok]),np.finfo(float).tiny))
+p=np.full(len(pairs),np.nan)
+p[ok]=2*stats.t.sf(np.abs(tstat),df)
+
+def bh(p):
+    q=np.full(p.shape,np.nan)
+    ii=np.flatnonzero(np.isfinite(p)); o=ii[np.argsort(p[ii])]
+    vals=p[o]*len(o)/np.arange(1,len(o)+1)
+    vals=np.minimum.accumulate(vals[::-1])[::-1]
+    q[o]=np.minimum(vals,1)
+    return q
+q=bh(p)
+sig=np.isfinite(q)&(q<0.05)
+print('n range',n.min(),n.max(),'valid tests',ok.sum(),'invalid',len(ok)-ok.sum(),flush=True)
+print('ID_MATCH_RESULT count',sig.sum(),'denom_valid',ok.sum(),'percent_valid',repr(float(sig.sum()/ok.sum()*100)),'denom_all',len(pairs),'percent_all',repr(float(sig.sum()/len(pairs)*100)),flush=True)
+print('rho sign among sig positive',int(((rho>0)&sig).sum()),'negative',int(((rho<0)&sig).sum()),flush=True)
+# Exact-name-only family; subset IDs and rerun BH within only these p-values
+exact=np.array([g==e for g,e in pairs])
+qe=bh(np.where(exact,p,np.nan)); sige=np.isfinite(qe)&(qe<0.05)
+print('EXACT_LABEL_RESULT count',sige.sum(),'denom',int((ok&exact).sum()),'percent',repr(float(sige.sum()/(ok&exact).sum()*100)),flush=True)
+# Checks against scipy individual result
+for j in [0,1,100,1000,10000,len(pairs)-1]:
+    keep=np.isfinite(x[:,j])&np.isfinite(y[:,j])
+    rr,pp=stats.spearmanr(x[keep,j],y[keep,j])
+    print('check',j,pairs[j],rho[j],p[j],rr,pp,flush=True)
+# q threshold diagnostics
+print('raw p<.05',int((p<.05).sum()),'q min/max sig',float(np.nanmin(q)),float(np.nanmax(q[sig])) if sig.any() else None,flush=True)
+print('elapsed',time.time()-t,flush=True)
+PY"

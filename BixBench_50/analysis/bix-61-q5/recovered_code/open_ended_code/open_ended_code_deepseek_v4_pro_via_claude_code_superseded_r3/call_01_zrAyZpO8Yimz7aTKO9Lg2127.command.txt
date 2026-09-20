@@ -1,0 +1,87 @@
+python3 << 'PYEOF'
+# Standard Ts/Tv: count SNVs only, each ALT allele separately
+# For E. coli (haploid), heterozygous calls in diploid caller are artifacts
+# Let's compute both with and without het calls
+
+vcf_path = "/workspace/inputs/SRR35233585_raw_variants.vcf"
+f = open(vcf_path, 'r')
+
+transitions = {('A','G'), ('G','A'), ('C','T'), ('T','C')}
+
+# All SNVs (allele-level)
+ts_all = 0
+tv_all = 0
+# Homozygous-alt only SNVs
+ts_hom = 0
+tv_hom = 0
+# Heterozygous SNVs
+ts_het = 0
+tv_het = 0
+
+snv_site_count = 0
+indel_sites = 0
+
+for line in f:
+    if line.startswith('#'):
+        continue
+    fields = line.strip().split('\t')
+    if len(fields) < 10:
+        continue
+    
+    ref = fields[3]
+    alt_field = fields[4]
+    
+    # Parse genotype
+    fmt = fields[8].split(':')
+    gt_idx = fmt.index('GT')
+    gt = fields[9].split(':')[gt_idx]
+    
+    # Only SNVs
+    if len(ref) != 1:
+        continue
+    
+    alts = alt_field.split(',')
+    
+    for a in alts:
+        if len(a) != 1:
+            continue  # skip indels in mixed records
+        
+        is_ts = (ref, a) in transitions
+        
+        if is_ts:
+            ts_all += 1
+            if gt == '1/1' or gt == '1|1':
+                ts_hom += 1
+            elif gt in ('0/1', '1/0', '0|1', '1|0'):
+                ts_het += 1
+        else:
+            tv_all += 1
+            if gt == '1/1' or gt == '1|1':
+                tv_hom += 1
+            elif gt in ('0/1', '1/0', '0|1', '1|0'):
+                tv_het += 1
+
+f.close()
+
+print("=== All SNVs (allele-level) ===")
+print(f"Ts: {ts_all}, Tv: {tv_all}")
+print(f"Ts/Tv: {ts_all/tv_all:.4f} -> {round(ts_all/tv_all, 2)}")
+
+print("\n=== Homozygous-alt SNVs only ===")
+print(f"Ts: {ts_hom}, Tv: {tv_hom}")
+print(f"Ts/Tv: {ts_hom/tv_hom:.4f} -> {round(ts_hom/tv_hom, 2)}")
+
+print("\n=== Heterozygous SNVs ===")
+print(f"Ts: {ts_het}, Tv: {tv_het}")
+if tv_het > 0:
+    print(f"Ts/Tv: {ts_het/tv_het:.4f} -> {round(ts_het/tv_het, 2)}")
+else:
+    print("Ts/Tv: N/A")
+
+print(f"\nTotal SNV alleles: {ts_all + tv_all}")
+print(f"Total hom-alt alleles: {ts_hom + tv_hom}")
+print(f"Total het alleles: {ts_het + tv_het}")
+
+# Round to 2 decimal places
+print(f"\n=== Final Ts/Tv (all SNVs, rounded to 2 dp): {ts_all/tv_all:.2f} ===")
+PYEOF

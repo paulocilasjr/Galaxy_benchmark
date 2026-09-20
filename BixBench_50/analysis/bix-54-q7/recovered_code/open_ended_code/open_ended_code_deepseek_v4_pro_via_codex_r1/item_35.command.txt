@@ -1,0 +1,45 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+from patsy import dmatrix, cr, build_design_matrices
+import statsmodels.api as sm
+from scipy.optimize import minimize_scalar
+
+df=pd.read_csv('inputs/Swarm_2.csv')
+dd=df[df.StrainNumber=='287_98'].copy()
+dd['p']=dd.Ratio.str.split(':').apply(lambda z: float(z[0])/sum(map(float,z)))
+y=dd.Area.values; x=dd.p.values
+X=dmatrix('cr(p, df=4)', dd, return_type='dataframe')
+model=sm.OLS(y,X).fit()
+design_info=X.design_info
+print('X shape',X.shape,'AIC',model.aic,'columns',X.columns)
+print('knots?', design_info)
+grid=np.linspace(x.min(),x.max(),200001)
+# use training design info
+Xg=build_design_matrices([design_info], {'p':grid}, return_type='dataframe')[0]
+pred=model.predict(Xg)
+i=int(pred.argmax())
+print('max grid p',grid[i],'area',pred[i])
+def pr(p):
+    Xp=build_design_matrices([design_info], {'p':np.array([p])}, return_type='dataframe')[0]
+    return float(model.predict(Xp)[0])
+# bounded minimize
+res=minimize_scalar(lambda p:-pr(p),bounds=(x.min(),x.max()),method='bounded',options={'xatol':1e-14,'maxiter':10000})
+print('opt p',repr(res.x),'area',repr(pr(res.x)))
+# aggregated
+agg=dd.groupby('p',as_index=False).Area.mean()
+y2=agg.Area.values; x2=agg.p.values
+X2=dmatrix('cr(p, df=4)', agg, return_type='dataframe')
+m2=sm.OLS(y2,X2).fit(); di2=X2.design_info
+print('agg AIC',m2.aic)
+grid2=np.linspace(x2.min(),x2.max(),200001)
+Xg2=build_design_matrices([di2], {'p':grid2}, return_type='dataframe')[0]
+pred2=m2.predict(Xg2); i2=int(pred2.argmax())
+print('agg max grid p',grid2[i2],'area',pred2[i2])
+def pr2(p):
+    Xp=build_design_matrices([di2], {'p':np.array([p])}, return_type='dataframe')[0]
+    return float(m2.predict(Xp)[0])
+res2=minimize_scalar(lambda p:-pr2(p),bounds=(x2.min(),x2.max()),method='bounded',options={'xatol':1e-14})
+print('agg opt',repr(res2.x),repr(pr2(res2.x)))
+# prediction at 0.9076577
+print('pred at .9076577',pr(.9076577))
+PY"

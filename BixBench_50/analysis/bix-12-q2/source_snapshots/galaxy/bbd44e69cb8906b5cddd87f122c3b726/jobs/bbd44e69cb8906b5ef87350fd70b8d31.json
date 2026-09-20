@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5ef87350fd70b8d31",
+  "history_id": "bbd44e69cb8906b5cddd87f122c3b726",
+  "tool_id": "fungal_pi_median_phykit_20260716",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-16T03:01:31.184673",
+  "update_time": "2026-07-16T03:04:30.147207",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > job.py <<'PY'\nimport csv\nimport math\nimport os\nimport re\nimport statistics\nimport subprocess\nimport sys\nimport tempfile\nimport zipfile\nfrom pathlib import Path\n\nzip_path = sys.argv[1]\nper_path = sys.argv[2]\nanswer_path = sys.argv[3]\nfailed_path = sys.argv[4]\n\nnum_re = re.compile(r'[-+]?(?:\\d+\\.\\d*|\\.\\d+|\\d+)(?:[eE][-+]?\\d+)?')\n\n\ndef read_fasta_lengths(path):\n    seqs = []\n    current = []\n    with open(path, 'r', encoding='utf-8', errors='replace') as handle:\n        for raw in handle:\n            line = raw.strip()\n            if not line:\n                continue\n            if line.startswith('>'):\n                if current:\n                    seqs.append(''.join(current))\n                    current = []\n            else:\n                current.append(line)\n        if current:\n            seqs.append(''.join(current))\n    if not seqs:\n        raise ValueError('no FASTA sequences')\n    lengths = {len(s) for s in seqs}\n    if len(lengths) != 1:\n        raise ValueError('sequences have unequal aligned lengths: ' + ','.join(map(str, sorted(lengths))))\n    return len(seqs), lengths.pop()\n\n\ndef parse_phykit(raw, aln_len):\n    vals = [float(m.group(0)) for m in num_re.finditer(raw)]\n    if not vals:\n        raise ValueError('no numeric values in PhyKit output: ' + raw.strip())\n    expected = []\n    for i, val in enumerate(vals):\n        rounded = round(val)\n        if abs(val - rounded) < 1e-9 and 0 <= rounded <= aln_len:\n            pct = rounded / aln_len * 100.0 if aln_len else 0.0\n            score = 10.0\n            source = 'derived_from_count'\n            if i + 1 < len(vals):\n                cand = vals[i + 1]\n                cand_pct = cand * 100.0 if 0 <= cand <= 1 and pct > 1 else cand\n                if 0 <= cand_pct <= 100 and abs(cand_pct - pct) <= 0.25:\n                    pct = cand_pct\n                    score = 0.0\n                    source = 'phykit_count_and_percent'\n            expected.append((score, i, rounded, pct, source))\n    if not expected:\n        raise ValueError('no plausible PI count in PhyKit output for length %d: %s' % (aln_len, raw.strip()))\n    expected.sort(key=lambda x: (x[0], x[1]))\n    _, _, count, pct, source = expected[0]\n    return count, pct, source\n\nrows = []\nfailures = []\nwith tempfile.TemporaryDirectory() as tmp:\n    tmpdir = Path(tmp)\n    with zipfile.ZipFile(zip_path) as zf:\n        members = sorted([m for m in zf.namelist() if not m.endswith('/') and m.endswith('.faa.mafft')])\n        if not members:\n            raise SystemExit('no .faa.mafft members found in archive')\n        for idx, member in enumerate(members, 1):\n            safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.basename(member))\n            work = tmpdir / ('%04d_%s' % (idx, safe))\n            try:\n                data = zf.read(member)\n                work.write_bytes(data)\n                seq_count, aln_len = read_fasta_lengths(work)\n                proc = subprocess.run(['phykit', 'parsimony_informative_sites', str(work)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n                if proc.returncode != 0:\n                    raise RuntimeError('phykit failed: ' + proc.stderr.strip())\n                count, pct, source = parse_phykit(proc.stdout, aln_len)\n                if count < 0 or count > aln_len or pct < 0 or pct > 100:\n                    raise ValueError('out-of-range parsed values')\n                rows.append({\n                    'alignment': member,\n                    'sequence_count': seq_count,\n                    'alignment_length': aln_len,\n                    'pi_sites': count,\n                    'pi_percent': pct,\n                    'parse_source': source,\n                    'phykit_stdout': proc.stdout.strip().replace('\\t', ' '),\n                })\n            except Exception as exc:\n                failures.append({'alignment': member, 'error': str(exc)})\n\nwith open(per_path, 'w', newline='') as handle:\n    fieldnames = ['alignment', 'sequence_count', 'alignment_length', 'pi_sites', 'pi_percent', 'parse_source', 'phykit_stdout']\n    writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter='\\t')\n    writer.writeheader()\n    writer.writerows(rows)\n\nwith open(failed_path, 'w', newline='') as handle:\n    writer = csv.DictWriter(handle, fieldnames=['alignment', 'error'], delimiter='\\t')\n    writer.writeheader()\n    writer.writerows(failures)\n\nif failures:\n    raise SystemExit('failed alignments: %d' % len(failures))\nif not rows:\n    raise SystemExit('no successful alignments')\nmedian_pct = statistics.median([r['pi_percent'] for r in rows])\nwith open(answer_path, 'w') as handle:\n    handle.write('metric\\tvalue\\talignments\\n')\n    handle.write('median_pi_percent\\t%.12g\\t%d\\n' % (median_pct, len(rows)))\nPY\npython job.py \"/jetstream2/scratch/main/jobs/78548680/inputs/dataset_178f523f-6705-4cca-b5c3-a22f134c02e6.dat\" per_alignment.tsv answer.tsv failed.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input_zip": {
+      "id": "f9cad7b01a4721353c198e8290eef398",
+      "src": "hda",
+      "uuid": "178f523f-6705-4cca-b5c3-a22f134c02e6"
+    }
+  },
+  "outputs": {
+    "per_alignment": {
+      "id": "f9cad7b01a47213550597fd80d9b544a",
+      "src": "hda",
+      "uuid": "8a8e5e09-aa54-4064-a829-7d1a30a36620"
+    },
+    "answer": {
+      "id": "f9cad7b01a472135fea4067272f5d925",
+      "src": "hda",
+      "uuid": "e83aec90-f8df-4826-a339-ce25aa51a52e"
+    },
+    "failed": {
+      "id": "f9cad7b01a472135316823b3886d12b8",
+      "src": "hda",
+      "uuid": "2e3cd4e8-7340-48f4-8de5-bfbe708fe2ec"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

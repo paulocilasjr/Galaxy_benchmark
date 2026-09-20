@@ -1,0 +1,53 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import sqrt, isfinite
+
+path='inputs/JuliaJong_CRISPRa_BCL2_B3GNT_cacerResTcellCytotoxicity_supplData1_mageck.xlsx'
+wb=load_workbook(path, read_only=True, data_only=True)
+ws=wb['MAGeCK P-values']
+header=list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
+idx1=header.index('Chronic Round1 S1')
+idx2=header.index('Chronic Round1 S2')
+refidx=header.index('RefSeq ID')
+
+x=[]; y=[]; refs=[]; bad=0
+for row in ws.iter_rows(min_row=2, values_only=True):
+    a=row[idx1]; b=row[idx2]
+    try:
+        fa=float(a); fb=float(b)
+    except (TypeError, ValueError):
+        bad += 1
+        continue
+    if isfinite(fa) and isfinite(fb):
+        x.append(fa); y.append(fb); refs.append(row[refidx])
+    else:
+        bad += 1
+
+def average_ranks(vals):
+    order=sorted(range(len(vals)), key=lambda i: vals[i])
+    ranks=[0.0]*len(vals)
+    i=0
+    while i < len(vals):
+        j=i+1
+        vi=vals[order[i]]
+        while j < len(vals) and vals[order[j]] == vi:
+            j += 1
+        # one-based ranks i+1 through j; average = (i+1 + j)/2
+        avg=(i+1 + j)/2.0
+        for k in range(i, j):
+            ranks[order[k]]=avg
+        i=j
+    return ranks
+
+rx=average_ranks(x)
+ry=average_ranks(y)
+mx=sum(rx)/len(rx); my=sum(ry)/len(ry)
+num=sum((a-mx)*(b-my) for a,b in zip(rx,ry))
+den=sqrt(sum((a-mx)**2 for a in rx)*sum((b-my)**2 for b in ry))
+rho=num/den
+print('rows', ws.max_row-1)
+print('paired', len(x), 'bad', bad, 'duplicate_refs', len(refs)-len(set(refs)))
+print('ties S1 groups/items', sum(1 for v in set(x) if x.count(v)>1), sum(c for v in set(x) if (c:=x.count(v))>1))
+print('ties S2 groups/items', sum(1 for v in set(y) if y.count(v)>1), sum(c for v in set(y) if (c:=y.count(v))>1))
+print(format(rho, '.17g'))
+PY"

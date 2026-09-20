@@ -1,0 +1,92 @@
+PYTHONPATH=/workspace/pylib:$PYTHONPATH python3 << 'PYEOF'
+import pandas as pd
+import os
+import re
+import numpy as np
+
+# Read Trio Status
+trio = pd.read_excel('inputs/230215_Trio_Status.xlsx')
+
+# Clean Sample IDs (some have trailing tabs)
+trio['Sample ID'] = trio['Sample ID'].astype(str).str.strip()
+
+# Get BLM carriers
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+carrier_ids = set(carriers['Sample ID'].tolist())
+print(f"BLM carrier sample IDs ({len(carrier_ids)}): {sorted(carrier_ids)}")
+
+# Build mapping from sample ID to CHIP file
+chip_dir = 'inputs/CHIP_DP10_GQ20_PASS'
+sample_to_file = {}
+for f in os.listdir(chip_dir):
+    # Match numeric samples: CHIP_179-P1.xlsx -> 179
+    m = re.search(r'CHIP_(\d+)-', f)
+    if m:
+        sample_to_file[m.group(1)] = os.path.join(chip_dir, f)
+    else:
+        # Match SRR samples: CHIP_SRR5456220.xlsx -> SRR5456220
+        m = re.search(r'CHIP_(SRR\d+)', f)
+        if m:
+            sample_to_file[m.group(1)] = os.path.join(chip_dir, f)
+
+print(f"\nTotal sample-to-file mappings: {len(sample_to_file)}")
+
+# Check which carriers have files
+carriers_with_files = [sid for sid in carrier_ids if sid in sample_to_file]
+carriers_without_files = [sid for sid in carrier_ids if sid not in sample_to_file]
+print(f"Carriers with CHIP files ({len(carriers_with_files)}): {sorted(carriers_with_files)}")
+print(f"Carriers without CHIP files ({len(carriers_without_files)}): {sorted(carriers_without_files)}")
+
+# Sequence Ontology terms to exclude
+exclude_so = {
+    'intron_variant',           # Intronic
+    'intergenic_variant',       # Intergenic (not present but include for safety)
+    '3_prime_UTR_variant',      # UTR
+    '5_prime_UTR_variant',      # UTR
+    '5_prime_UTR_premature_start_codon_gain_variant',  # UTR
+}
+
+# Process each carrier's CHIP file
+carrier_variant_counts = {}
+for sid in sorted(carriers_with_files):
+    fpath = sample_to_file[sid]
+    df = pd.read_excel(fpath, header=None)
+    
+    # Data rows start at index 2 (row 0 = merged headers, row 1 = sub-headers)
+    data = df.iloc[2:].copy()
+    
+    # Col 4 = Zygosity, Col 9 = VAF, Col 13 = Sequence Ontology
+    zygosity = data[4]
+    vaf_str = data[9]
+    so_term = data[13]
+    
+    # Apply filters:
+    # 1. Exclude Reference zygosity
+    is_variant = zygosity != 'Reference'
+    # 2. Exclude Intronic, Intergenic, UTR
+    is_coding = ~so_term.isin(exclude_so)
+    # 3. VAF < 0.3 (parse as float)
+    vaf_num = pd.to_numeric(vaf_str, errors='coerce')
+    has_low_vaf = vaf_num < 0.3
+    
+    # Combined filter
+    filtered = data[is_variant & is_coding & has_low_vaf]
+    
+    count = len(filtered)
+    carrier_variant_counts[sid] = count
+    
+    # Also count total variants (non-reference) for context
+    total_non_ref = len(data[is_variant])
+    total_non_ref_coding = len(data[is_variant & is_coding])
+    
+    print(f"  Sample {sid}: {count} CHIP variants (VAF<0.3, coding) out of {total_non_ref_coding} coding non-ref variants (total non-ref: {total_non_ref})")
+
+print(f"\n=== RESULTS ===")
+print(f"Variant counts per carrier: {list(carrier_variant_counts.values())}")
+counts = list(carrier_variant_counts.values())
+median_val = np.median(counts)
+print(f"Median: {median_val}")
+print(f"Mean: {np.mean(counts):.2f}")
+print(f"Min: {min(counts)}, Max: {max(counts)}")
+PYEOF
+

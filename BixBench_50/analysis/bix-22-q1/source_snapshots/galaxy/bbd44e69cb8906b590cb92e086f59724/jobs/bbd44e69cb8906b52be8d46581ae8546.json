@@ -1,0 +1,66 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b52be8d46581ae8546",
+  "history_id": "bbd44e69cb8906b590cb92e086f59724",
+  "tool_id": "codex_gene_length_expression_pearson_v1",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-02T22:00:01.427867",
+  "update_time": "2026-08-02T22:00:49.320965",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78873403/inputs/dataset_35b40e1a-a815-457e-af97-cd387a73f7f1.dat\" \"/jetstream2/scratch/main/jobs/78873403/inputs/dataset_19d6c629-740f-4bbf-8cce-96ec08fb40c9.dat\" \"/jetstream2/scratch/main/jobs/78873403/inputs/dataset_1dd625a3-b9ea-4bc6-b420-7175061e40ac.dat\" correlations.tsv <<'PY'\nimport csv\nimport math\nimport sys\nfrom scipy.stats import pearsonr\n\nmetadata_path = sys.argv[1]\nsamples_path = sys.argv[2]\nexpression_path = sys.argv[3]\noutput_path = sys.argv[4]\n\ncelltypes = [\"CD4\", \"CD8\", \"CD14\", \"CD19\"]\nwanted = set(celltypes)\n\nprotein_lengths = {}\nwith open(metadata_path, \"r\", newline=\"\") as handle:\n    reader = csv.DictReader(handle)\n    required = {\"Geneid\", \"Length\", \"gene_biotype\"}\n    if not required.issubset(set(reader.fieldnames or [])):\n        raise ValueError(\"gene metadata is missing required fields\")\n    for row in reader:\n        if row[\"gene_biotype\"].strip() != \"protein_coding\":\n            continue\n        gene_id = row[\"Geneid\"].strip()\n        if not gene_id:\n            raise ValueError(\"empty protein-coding gene identifier\")\n        if gene_id in protein_lengths:\n            raise ValueError(\"duplicate protein-coding gene identifier: \" + gene_id)\n        length_text = row[\"Length\"].strip()\n        if not length_text:\n            raise ValueError(\"empty gene length for: \" + gene_id)\n        length = float(length_text)\n        if not math.isfinite(length):\n            raise ValueError(\"non-finite gene length for: \" + gene_id)\n        protein_lengths[gene_id] = length\n\nsample_to_celltype = {}\nall_annotation_samples = set()\nwith open(samples_path, \"r\", newline=\"\") as handle:\n    reader = csv.DictReader(handle)\n    required = {\"sample\", \"celltype\"}\n    if not required.issubset(set(reader.fieldnames or [])):\n        raise ValueError(\"sample annotation is missing required fields\")\n    for row in reader:\n        sample = row[\"sample\"].strip()\n        celltype = row[\"celltype\"].strip()\n        if not sample:\n            raise ValueError(\"empty sample identifier\")\n        if sample in all_annotation_samples:\n            raise ValueError(\"duplicate sample identifier: \" + sample)\n        all_annotation_samples.add(sample)\n        if celltype in wanted:\n            sample_to_celltype[sample] = celltype\n\nwith open(expression_path, \"r\", newline=\"\") as handle:\n    reader = csv.reader(handle)\n    header = next(reader)\n    if header and header[0].startswith(\"\\ufeff\"):\n        header[0] = header[0].lstrip(\"\\ufeff\")\n    if len(header) < 2:\n        raise ValueError(\"expression matrix has no sample columns\")\n    expression_samples = header[1:]\n    if len(set(expression_samples)) != len(expression_samples):\n        raise ValueError(\"duplicate expression sample identifier\")\n    expression_sample_set = set(expression_samples)\n    missing_annotations = sorted(expression_sample_set - all_annotation_samples)\n    missing_expression = sorted(all_annotation_samples - expression_sample_set)\n    if missing_annotations or missing_expression:\n        raise ValueError(\"expression and annotation sample identifiers do not match\")\n    indices = {celltype: [] for celltype in celltypes}\n    for index, sample in enumerate(expression_samples, 1):\n        celltype = sample_to_celltype.get(sample)\n        if celltype is not None:\n            indices[celltype].append(index)\n    sample_counts = {celltype: len(indices[celltype]) for celltype in celltypes}\n    if any(sample_counts[celltype] < 2 for celltype in celltypes):\n        raise ValueError(\"fewer than two samples for a requested cell type\")\n    lengths = []\n    means = {celltype: [] for celltype in celltypes}\n    matched_genes = set()\n    seen_expression_ids = set()\n    for row_number, row in enumerate(reader, 2):\n        if not row:\n            continue\n        if len(row) != len(header):\n            raise ValueError(\"expression row has the wrong number of columns at line \" + str(row_number))\n        gene_id = row[0].strip()\n        if gene_id in seen_expression_ids:\n            raise ValueError(\"duplicate expression gene identifier: \" + gene_id)\n        seen_expression_ids.add(gene_id)\n        if gene_id not in protein_lengths:\n            continue\n        matched_genes.add(gene_id)\n        lengths.append(protein_lengths[gene_id])\n        for celltype in celltypes:\n            total = 0.0\n            for index in indices[celltype]:\n                value_text = row[index].strip()\n                if not value_text:\n                    raise ValueError(\"empty expression value at line \" + str(row_number))\n                value = float(value_text)\n                if not math.isfinite(value):\n                    raise ValueError(\"non-finite expression value at line \" + str(row_number))\n                total += value\n            means[celltype].append(total / sample_counts[celltype])\n\nif matched_genes != set(protein_lengths):\n    missing_genes = sorted(set(protein_lengths) - matched_genes)\n    raise ValueError(\"protein-coding metadata genes missing from expression matrix: \" + str(len(missing_genes)))\n\nwith open(output_path, \"w\", newline=\"\") as handle:\n    writer = csv.writer(handle, delimiter=\"\\t\", lineterminator=\"\\n\")\n    writer.writerow([\"cell_type\", \"protein_coding_genes\", \"samples_averaged\", \"pearson_r\", \"abs_pearson_r\"])\n    for celltype in celltypes:\n        correlation, _ = pearsonr(lengths, means[celltype])\n        writer.writerow([\n            celltype,\n            len(lengths),\n            sample_counts[celltype],\n            \"%.17g\" % float(correlation),\n            \"%.17g\" % abs(float(correlation))\n        ])\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135c9cb6eff770976a8",
+      "src": "hda",
+      "uuid": "1dd625a3-b9ea-4bc6-b420-7175061e40ac"
+    },
+    "metadata": {
+      "id": "f9cad7b01a4721356508756e8dca89ac",
+      "src": "hda",
+      "uuid": "35b40e1a-a815-457e-af97-cd387a73f7f1"
+    },
+    "samples": {
+      "id": "f9cad7b01a47213534ea978681850919",
+      "src": "hda",
+      "uuid": "19d6c629-740f-4bbf-8cce-96ec08fb40c9"
+    }
+  },
+  "outputs": {
+    "correlations": {
+      "id": "f9cad7b01a472135882d57769cc8d3fb",
+      "src": "hda",
+      "uuid": "df24e5e5-a4a3-4f32-ba3b-f7bcdfdb5871"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 122, in <module>\nNameError: name 'PY' is not defined\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 122, in <module>\nNameError: name 'PY' is not defined\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

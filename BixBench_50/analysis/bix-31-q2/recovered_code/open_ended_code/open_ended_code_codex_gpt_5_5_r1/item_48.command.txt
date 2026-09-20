@@ -1,0 +1,70 @@
+/bin/bash -lc "rm -f codex_output/answer.txt
+python - <<'PY'
+import os
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_gxs = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+counts_gxs = counts_gxs.astype(np.int32, copy=False)
+arr = counts_gxs.to_numpy(copy=False)
+
+# Full-matrix DESeq2 median-of-ratios size factors.
+pos_all = (arr > 0).all(axis=1)
+logmeans = np.log(arr[pos_all, :]).mean(axis=1)
+log_ratios = np.log(arr[pos_all, :]) - logmeans[:, None]
+size_factors = np.exp(np.median(log_ratios, axis=0))
+
+# Full-matrix normalized baseMean for the requested expression threshold.
+inv_sf = 1.0 / size_factors
+base = np.empty(arr.shape[0], dtype=np.float64)
+for start in range(0, arr.shape[0], 5000):
+    end = min(start + 5000, arr.shape[0])
+    base[start:end] = arr[start:end, :].astype(np.float64, copy=False).dot(inv_sf) / arr.shape[1]
+base_s = pd.Series(base, index=counts_gxs.index)
+keep = (base_s > 10)
+keep.loc['FAM138A'] = True
+print('fit_genes', int(keep.sum()), 'threshold_genes', int((base_s > 10).sum()), 'FAM_baseMean_full', base_s.loc['FAM138A'], flush=True)
+
+counts = counts_gxs.loc[keep].T
+meta = pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample')
+meta = meta.loc[counts.index].copy()
+meta['batch'] = pd.Categorical(meta['batch'].astype(str))
+meta['sex'] = pd.Categorical(meta['sex'], categories=['F','M'])
+
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=meta,
+    design='~ batch + sex',
+    quiet=False,
+    n_cpus=1,
+    low_memory=True,
+)
+# Use full-matrix size factors rather than recomputing them on the reduced genes.
+dds.obs['size_factors'] = size_factors
+dds.layers['normed_counts'] = dds.X / size_factors[:, None]
+dds.var['_normed_means'] = np.asarray(dds.layers['normed_counts']).mean(axis=0)
+
+dds.fit_genewise_dispersions()
+dds.fit_dispersion_trend()
+dds.fit_dispersion_prior()
+dds.fit_MAP_dispersions()
+dds.fit_LFC()
+dds.calculate_cooks()
+if dds.refit_cooks:
+    dds.refit()
+dds.cooks_outlier()
+
+stat = DeseqStats(dds, contrast=['sex','M','F'], quiet=False, n_cpus=1)
+stat.summary()
+print('LFC columns', list(stat.LFC.columns), flush=True)
+stat.lfc_shrink(coeff='sex[T.M]')
+row = stat.results_df.loc['FAM138A']
+print('FAM138A_ROW')
+print(row.to_string())
+print('FILTER_PASS', bool((abs(row['log2FoldChange']) > 0.5) and (row['baseMean'] > 10)))
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w') as f:
+    f.write(f\"{row['log2FoldChange']:.15g}\\n\")
+PY"

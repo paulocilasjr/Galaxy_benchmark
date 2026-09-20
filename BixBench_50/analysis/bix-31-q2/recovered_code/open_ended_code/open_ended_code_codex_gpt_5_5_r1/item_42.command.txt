@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+import pandas as pd
+counts_gxs = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+# Downcast numeric block after the gene-name index is parsed.
+counts_gxs = counts_gxs.astype(np.int32, copy=False)
+arr = counts_gxs.to_numpy(copy=False)
+pos_all = (arr > 0).all(axis=1)
+print('all_positive_genes', int(pos_all.sum()))
+if not pos_all.any():
+    raise RuntimeError('No genes usable for ratio size factors')
+logmeans = np.log(arr[pos_all, :]).mean(axis=1)
+log_ratios = np.log(arr[pos_all, :]) - logmeans[:, None]
+sf = np.exp(np.median(log_ratios, axis=0))
+print('sf summary', float(sf.min()), float(np.median(sf)), float(sf.max()))
+inv_sf = 1.0 / sf
+base = np.empty(arr.shape[0], dtype=np.float64)
+chunk=5000
+for start in range(0, arr.shape[0], chunk):
+    end = min(start+chunk, arr.shape[0])
+    base[start:end] = arr[start:end, :].astype(np.float64, copy=False).dot(inv_sf) / arr.shape[1]
+base_s = pd.Series(base, index=counts_gxs.index)
+print('baseMean>10 genes', int((base_s>10).sum()))
+print('FAM138A baseMean', base_s.loc['FAM138A'], 'raw mean', counts_gxs.loc['FAM138A'].mean())
+print('FAM included threshold?', bool(base_s.loc['FAM138A']>10))
+PY"

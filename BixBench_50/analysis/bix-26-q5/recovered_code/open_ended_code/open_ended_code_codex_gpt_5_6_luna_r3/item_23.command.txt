@@ -1,0 +1,42 @@
+/bin/bash -lc "Rscript - <<'RS'
+link <- read.delim('https://rest.kegg.jp/link/pathway/pau', header=FALSE, col.names=c('gene','pathway'), quote='', comment.char='')
+link"'$gene <- sub('"'"'^pau:'"','',link"'$gene); link$pathway <- sub('"'"'^path:pau'"','',link"'$pathway)
+path <- read.delim('"'https://rest.kegg.jp/list/pathway/pau', header=FALSE, col.names=c('pathway','name'), quote='', comment.char='')
+path"'$pathway <- sub('"'"'^pau'"','',path"'$pathway); path$name <- sub('"' - Pseudomonas aeruginosa.*"'$'"','',path"'$name)
+sets_all <- split(link$gene, link$pathway); sets_all <- lapply(sets_all, unique)
+files <- list(GluFevsGluFePlus='"'/workspace/inputs/res_GluFevsGluFePlus.rds', SuccvsGluFePlus='/workspace/inputs/res_SuccvsGluFePlus.rds')
+res <- list()
+for (nm in names(files)) {
+ x<-readRDS(files[[nm]]); genes<-attr(x,'rownames',exact=TRUE); d<-x@listData
+ sig<-genes[abs(d"'$log2FoldChange)>1.5 & d$padj<0.05]
+ res[[nm]] <- list(all=genes,sig=sig)
+}
+ora <- function(sig, universe_mode=c('"'kegg','tested','tested_mapped'), sizes=TRUE) {
+ universe_all <- res[[1]]"'$all # same 5828
+ if (universe_mode=='"'kegg') { U <- unique(link"'$gene) } else if (universe_mode=='"'tested') { U <- universe_all } else { U <- intersect(universe_all, unique(link"'$gene)) }
+ S <- intersect(sig,U)
+ sets <- lapply(sets_all, intersect, y=U)
+ keep <- vapply(sets,length,integer(1)) >= if(sizes) 10 else 1L & vapply(sets,length,integer(1)) <= if(sizes) 500 else Inf
+ # precedence risk; explicit
+ sz <- vapply(sets,length,integer(1)); keep <- if(sizes) sz>=10 & sz<=500 else sz>=1
+ sets <- sets[keep]
+ vals <- lapply(sets, function(g) {
+  k <- sum(S %in% g); M <- length(g); N <- length(U); n <- length(S)
+  c(k=k,M=M,N=N,n=n,p=if(k>0) phyper(k-1,M,N-M,n,lower.tail=FALSE) else 1)
+ })
+ tab <- do.call(rbind, vals); tab <- as.data.frame(tab); tab$padj <- p.adjust(tab$p,'"'BH'); tab"'$pathway <- rownames(tab); rownames(tab)<-NULL
+ tab$name <- path$name[match(tab$pathway,path$pathway)]
+ tab <- tab[order(tab$padj,tab$p),c('"'pathway','name','k','M','N','n','p','padj')]
+ tab
+}
+for (mode in c('kegg','tested','tested_mapped')) {
+ cat('\\n### mode',mode,'###\\n')
+ tabs <- lapply(res, function(z) ora(z"'$sig,mode))
+ for (nm in names(tabs)) {
+  t<-tabs[[nm]]; cat(nm,'"'sig',sum(t"'$padj<0.05),'"'of',nrow(t),'mapped genes',t"'$n[1], '"'\\n')
+  print(t[t"'$padj<0.05,,drop=FALSE], row.names=FALSE)
+ }
+ a<-tabs[[1]]$pathway[tabs[[1]]$padj<0.05]; b<-tabs[[2]]$pathway[tabs[[2]]$padj<0.05]
+ cat('"'DIFF first-only count=',sum(a%in%setdiff(a,b)),'IDs=',paste(setdiff(a,b),collapse=','),'\\n')
+}
+RS"

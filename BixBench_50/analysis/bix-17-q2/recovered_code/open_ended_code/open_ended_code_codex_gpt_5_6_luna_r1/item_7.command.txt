@@ -1,0 +1,81 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+from statistics import median
+import openpyxl, re
+
+root=Path('/workspace/inputs')
+# status map normalized sample IDs
+wb=openpyxl.load_workbook(root/'230215_Trio_Status.xlsx',data_only=True)
+status={}
+for row in wb.active.iter_rows(min_row=2,values_only=True):
+    sid=row[0]
+    if sid is None: continue
+    sid=str(sid).strip()
+    status[sid]={'status':row[1], 'blm':row[3], 'sex':row[2], 'age':row[4]}
+
+wb=openpyxl.load_workbook(root/'230214_Schenz_et_al_2022_CHIP_Genes.xlsx',data_only=True)
+chip_genes={str(row[0]).strip() for row in wb.active.iter_rows(values_only=True) if row[0] is not None}
+
+# robust xlsx read, using non-read-only because dimension metadata is malformed in most files
+
+def rows_for(p):
+    wb=openpyxl.load_workbook(p,data_only=True,read_only=False)
+    ws=wb.active
+    it=ws.iter_rows(values_only=True)
+    top=next(it); hdr=next(it)
+    idx={str(v).strip():i for i,v in enumerate(hdr) if v is not None}
+    for row in it:
+        yield top,hdr,idx,row
+
+counts=[]
+print('CARRIER_STATUS_AND_FILES')
+for p in sorted((root/'CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    m=re.search(r'_CHIP_(.+)\\.xlsx"'$'"',p.name)
+    sample_key=m.group(1).split('-')[0] if m else p.stem
+    s=status.get(sample_key)
+    if not s or s['blm']"'!='"'Carrier':
+        continue
+    it=rows_for(p)
+    top,hdr,idx,row=next(it)
+    # reset iterable by processing first row too
+    allrows=[row]+[x[3] for x in it]
+    vaf_i=idx['Variant Allele Freq']; z_i=idx['Zygosity']; so_i=idx['Sequence Ontology (Combined)']; gene_i=idx['Gene Names']; in_i=idx['In_CHIP']
+    def fnum(x):
+        try: return float(x)
+        except (TypeError,ValueError): return None
+    passrows=[]
+    for x in allrows:
+        v=fnum(x[vaf_i])
+        so=str(x[so_i] or '')
+        z=x[z_i]
+        gene=str(x[gene_i] or '').strip()
+        # CHIP means membership in supplied CHIP genes; verify against workbook field too
+        if v is not None and v < 0.3 and z "'!= '"'Reference' and gene in chip_genes and not re.search(r'intron|intergenic|utr',so,re.I):
+            passrows.append(x)
+    # alternate useful diagnostics
+    vafrows=[x for x in allrows if (fnum(x[vaf_i]) is not None and fnum(x[vaf_i])<0.3)]
+    nonref=[x for x in vafrows if x[z_i] "'!= '"'Reference']
+    ann_excl=[x for x in nonref if not re.search(r'intron|intergenic|utr',str(x[so_i] or ''),re.I)]
+    print(sample_key, s['status'], p.stem, 'n_vaf<.3',len(vafrows),'nonref',len(nonref),'ann_ok',len(ann_excl),'chipgene_ok',len(passrows))
+    for x in passrows:
+        print('  ',x[idx['Chr:Pos']],x[gene_i],x[so_i],x[z_i],x[vaf_i])
+    counts.append((sample_key,len(passrows)))
+print('COUNTS',counts)
+print('SORTED',sorted(c for _,c in counts))
+print('N',len(counts),'MEDIAN',median([c for _,c in counts]) if counts else None)
+
+print('\\nCARRIER_STATUS_MISSING_FILES')
+for sid,s in sorted(status.items(), key=lambda kv: kv[0]):
+    if s['blm']=='Carrier':
+        matched=list((root/'CHIP_DP10_GQ20_PASS').glob(f'*_CHIP_{sid}-*.xlsx'))
+        print(sid, bool(matched), [x.name for x in matched])
+
+print('\\nUNIQUE_ONTOLOGY_VALUES')
+allso=Counter()
+for p in sorted((root/'CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+  wb=openpyxl.load_workbook(p,data_only=True,read_only=False); ws=wb.active
+  it=ws.iter_rows(values_only=True); next(it); hdr=next(it); idx={str(v).strip():i for i,v in enumerate(hdr) if v is not None}
+  allso.update(str(row[idx['Sequence Ontology (Combined)']] or '') for row in it)
+print(allso)
+PY"

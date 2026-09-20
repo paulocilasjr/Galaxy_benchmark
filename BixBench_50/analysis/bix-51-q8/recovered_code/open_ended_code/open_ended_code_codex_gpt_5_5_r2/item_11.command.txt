@@ -1,0 +1,70 @@
+/bin/bash -lc "python - <<'PY'
+# Parse XLSX, fit binary logistic regression PR vs SD/PD with Newton-Raphson.
+from zipfile import ZipFile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import re, math
+import numpy as np
+p=Path('/workspace/inputs/data.xlsx')
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def col_index(cell_ref):
+    s=re.match(r'([A-Z]+)', cell_ref).group(1); n=0
+    for ch in s: n=n*26+ord(ch)-64
+    return n-1
+with ZipFile(p) as z:
+    ss=[]
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    for si in root.findall('a:si', ns):
+        ss.append(''.join(t.text or '' for t in si.findall('.//a:t', ns)))
+    sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    rows=[]
+    for row in sheet.findall('.//a:sheetData/a:row', ns):
+        vals={}
+        for c in row.findall('a:c', ns):
+            ref=c.attrib['r']; typ=c.attrib.get('t'); v=c.find('a:v', ns)
+            val='' if v is None else v.text
+            if typ=='s' and val"'!='"'': val=ss[int(val)]
+            vals[col_index(ref)]=val
+        if vals:
+            rows.append([vals.get(i,'') for i in range(max(vals)+1)])
+width=max(len(r) for r in rows)
+rows=[r+['']*(width-len(r)) for r in rows]
+header=rows[0]
+records=[]
+for r in rows[1:]:
+    d=dict(zip(header,r))
+    if d.get('Sequence number','').strip():
+        records.append(d)
+x=[]; y=[]
+for d in records:
+    age=float(d['Age'])
+    eff=d['Efficacy'].strip()
+    if eff not in {'PR','SD','PD'}:
+        raise ValueError(eff)
+    x.append([1.0, age])
+    y.append(1.0 if eff=='PR' else 0.0)
+X=np.array(x); y=np.array(y)
+beta=np.zeros(X.shape[1])
+for it in range(100):
+    eta=X@beta
+    # stable sigmoid
+    p_hat=1/(1+np.exp(-eta))
+    W=p_hat*(1-p_hat)
+    grad=X.T@(y-p_hat)
+    H=-(X.T*W)@X
+    step=np.linalg.solve(H, grad)
+    beta_new=beta-step
+    if np.max(np.abs(beta_new-beta))<1e-12:
+        beta=beta_new
+        break
+    beta=beta_new
+ll=(y*np.log(p_hat)+(1-y)*np.log(1-p_hat)).sum()
+print('n', len(y), 'events_PR', int(y.sum()), 'non', int(len(y)-y.sum()))
+print('iterations', it+1)
+print('intercept', repr(float(beta[0])))
+print('age_beta', repr(float(beta[1])))
+# also fit opposite event, centered, and group-coded for sanity
+print('OR age', math.exp(float(beta[1])))
+# verify score near zero
+eta=X@beta; ph=1/(1+np.exp(-eta)); print('score', X.T@(y-ph))
+PY"

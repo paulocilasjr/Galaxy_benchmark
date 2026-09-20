@@ -1,0 +1,39 @@
+/bin/bash -lc "mkdir -p codex_output && Rscript - <<'RS'
+read_res <- function(f) {
+  x <- readRDS(f)
+  a <- attributes(x)
+  data.frame(gene=a"'$rownames, a$listData, check.names=FALSE)
+}
+fetch <- function(url) readLines(url, warn=FALSE)
+links <- do.call(rbind, strsplit(fetch('"'https://rest.kegg.jp/link/pathway/pau'), '\\t'))
+links <- as.data.frame(links, stringsAsFactors=FALSE)
+colnames(links) <- c('gene','pathway')
+links"'$gene <- sub('"'"'^pau:'"', '', links"'$gene)
+links$pathway <- sub('"'"'^path:'"', '', links"'$pathway)
+ora <- function(d, minGS=10, maxGS=500) {
+  universe <- intersect(d$gene, unique(links$gene))
+  foreground <- d$gene[!is.na(d$padj) & !is.na(d$log2FoldChange) & abs(d$log2FoldChange) > 1.5 & d$padj < 0.05]
+  foreground <- intersect(foreground, universe)
+  M <- length(universe)
+  n <- length(foreground)
+  by_path <- split(links$gene, links$pathway)
+  rows <- lapply(names(by_path), function(pid) {
+    geneset <- intersect(unique(by_path[[pid]]), universe)
+    N <- length(geneset)
+    if (N < minGS || N > maxGS) return(NULL)
+    k <- sum(foreground %in% geneset)
+    if (k == 0) return(NULL)
+    data.frame(ID=pid, pvalue=phyper(k - 1, N, M - N, n, lower.tail=FALSE))
+  })
+  res <- do.call(rbind, rows)
+  if (is.null(res) || nrow(res) == 0) return(character())
+  res$padj <- p.adjust(res$pvalue, method='"'BH')
+  res"'$ID[res$padj < 0.05]
+}
+iron_sig <- ora(read_res('"'inputs/res_GluFevsGluFePlus.rds'))
+innate_sig <- ora(read_res('inputs/res_SuccvsGluFePlus.rds'))
+answer <- length(setdiff(iron_sig, innate_sig))
+writeLines(as.character(answer), 'codex_output/answer.txt')
+cat(answer, '\\n')
+RS
+cat codex_output/answer.txt"

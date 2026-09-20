@@ -1,0 +1,40 @@
+/bin/bash -lc "Rscript - <<'RS'
+# Independent base-R validation of the requested set difference.
+read_res <- function(f) {
+  a <- attributes(readRDS(f)); z <- as.data.frame(a"'$listData, stringsAsFactors=FALSE)
+  rownames(z) <- a$rownames; z
+}
+files <- c(iron='"'inputs/res_GluFevsGluFePlus.rds', innate='inputs/res_SuccvsGluFePlus.rds')
+m <- read.delim(url('https://rest.kegg.jp/link/pathway/pau'), header=FALSE, stringsAsFactors=FALSE, col.names=c('gene','path'))
+m"'$gene <- sub('"'"'^[''^:]+:'"', '', m"'$gene); m$path <- sub('"'"'^[''^:]+:'"', '', m"'$path)
+sets <- lapply(split(m$gene, m$path), unique)
+names_by_path <- read.delim(url('"'https://rest.kegg.jp/list/pathway/pau'), header=FALSE, stringsAsFactors=FALSE, col.names=c('path','name'))
+names_by_path"'$path <- sub('"'"'^path:'"', '', names_by_path"'$path)
+name_map <- setNames(sub('"' - Pseudomonas aeruginosa UCBPP-PA14"'$'"', '', names_by_path"'$name), names_by_path$path)
+ora <- function(z, min_size=10L, max_size=500L) {
+  fg <- rownames(z)[is.finite(z$log2FoldChange) & is.finite(z$padj) & abs(z$log2FoldChange)>1.5 & z$padj<0.05]
+  bg <- intersect(unique(unlist(sets)), rownames(z))
+  q <- intersect(unique(fg), bg)
+  qhits <- vapply(sets, function(s) sum(q %in% s), integer(1))
+  sizes <- vapply(sets, function(s) sum(intersect(s,bg) %in% bg), integer(1))
+  tested <- qhits > 0L & sizes >= min_size & sizes <= max_size
+  p <- phyper(qhits[tested]-1L, sizes[tested], length(bg)-sizes[tested], length(q), lower.tail=FALSE)
+  adj <- p.adjust(p, '"'BH')
+  data.frame(path=names(sets)[tested], hits=qhits[tested], size=sizes[tested], p=p, padj=adj, stringsAsFactors=FALSE)
+}
+out <- lapply(files, function(f) ora(read_res(f))); sig <- lapply(out, function(x) x"'$path[x$padj < .05])
+cat('"'Foreground and mapped counts:\\n')
+for (i in seq_along(files)) {
+  z <- read_res(files[[i]]); fg <- rownames(z)[abs(z"'$log2FoldChange)>1.5 & z$padj<.05]
+  cat(names(files)[i], length(fg), '"'foreground;', length(intersect(fg, unique(unlist(sets)))), 'mapped; ', length(sig[[i]]), 'significant\\n', sep=' ')
+}
+cat('Iron significant:\\n'); print(data.frame(path=sig"'$iron, description=unname(name_map[sig$iron]), padj=out$iron$padj[match(sig$iron,out$iron$path)]), row.names=FALSE)
+cat('"'Innate significant:\\n'); print(data.frame(path=sig"'$innate, description=unname(name_map[sig$innate]), padj=out$innate$padj[match(sig$innate,out$innate$path)]), row.names=FALSE)
+cat('"'Iron-only:', paste(setdiff(sig"'$iron,sig$innate), collapse='"','), ' count=', length(setdiff(sig"'$iron,sig$innate)), '"'\\n', sep='')
+# Check sensitivity to standard size filter vs no size filter.
+for (ms in c(1L, 5L, 10L)) {
+  oo <- lapply(files, function(f) ora(read_res(f), min_size=ms, max_size=Inf))
+  ss <- lapply(oo, function(x) x"'$path[x$padj<.05])
+  cat('"'minGSSize=',ms,' iron-only=',length(setdiff(ss"'$iron,ss$innate)),'"' iron sig=',length(ss"'$iron),'"' innate sig=',length(ss"'$innate),'"'\\n',sep='')
+}
+RS"

@@ -1,0 +1,27 @@
+/bin/bash -lc "python -m pip install --disable-pip-version-check --no-deps --target /workspace/.phykit203_tmp phykit==2.0.3 >/dev/null && PYTHONPATH=/workspace/.phykit203_tmp python - <<'PY'
+import zipfile, tempfile, io, contextlib
+from pathlib import Path
+from types import SimpleNamespace
+from scipy.stats import mannwhitneyu
+from phykit import __version__
+from phykit.services.alignment.rcv import RelativeCompositionVariability
+print('version',__version__)
+vals={}
+with tempfile.TemporaryDirectory(dir='/workspace') as d:
+ for label,zpath in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+  vals[label]=[]
+  with zipfile.ZipFile(zpath) as z:
+   for name in sorted(z.namelist()):
+    if not name.endswith('.faa.mafft'): continue
+    p=Path(d)/(label+'_'+Path(name).name); p.write_bytes(z.read(name))
+    obj=RelativeCompositionVariability(SimpleNamespace(alignment=str(p)))
+    raw=obj.calculate_rcv()
+    out=io.StringIO()
+    with contextlib.redirect_stdout(out): obj.run()
+    shown=float(out.getvalue().strip())
+    vals[label].append((raw,shown))
+    if abs(round(raw,4)-shown)>0: raise RuntimeError((name,raw,shown))
+ for ix,name in [(0,'raw function'),(1,'CLI output')]:
+  r=mannwhitneyu([x[ix] for x in vals['animals']],[x[ix] for x in vals['fungi']],alternative='two-sided',method='auto')
+  print(name,'n',len(vals['animals']),len(vals['fungi']),'U',r.statistic,'p',repr(r.pvalue))
+PY"

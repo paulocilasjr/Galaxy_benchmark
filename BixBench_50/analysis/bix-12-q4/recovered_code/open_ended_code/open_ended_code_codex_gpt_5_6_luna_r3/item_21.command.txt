@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter,defaultdict
+import re
+
+def table(zpath):
+    out={}
+    with ZipFile(zpath) as z:
+        fn=next(n for n in z.namelist() if n.endswith('full_table.tsv'))
+        for line in z.read(fn).decode().splitlines():
+            if not line or line.startswith('#'): continue
+            f=line.split('\\t')
+            out[f[0]]=f[1:]
+    return out
+
+def scogs(zpath):
+    with ZipFile(zpath) as z:
+        d={}
+        for n in z.namelist():
+            if n.endswith('.faa') and not n.endswith('.faa.mafft'):
+                d[n[:-4]]=z.read(n).decode().count('>')
+        return d
+alltables={}
+for clade in ['Animals','Fungi']:
+    for sp in ['Cele','Ggal','Mmus','Xlae'] if clade=='Animals' else ['Ncra','Scer','Spom','Umay']:
+        t=table(f'inputs/{clade}_{sp}.busco.zip')
+        alltables[f'{clade}_{sp}']=t
+        print(clade,sp,'ids',len(t),'status',Counter(v[0] for v in t.values()))
+for clade in ['animals','fungi']:
+    d=scogs(f'inputs/scogs_{clade}.zip')
+    print('\\n',clade,'scog ids',len(d),'seq-counts',Counter(d.values()))
+    print('missing single? ids with seq count', {k:v for k,v in Counter(d.values()).items()})
+    print('ids seq=1',sorted(k for k,v in d.items() if v==1)[:50])
+    print('ids seq=4',len([1 for v in d.values() if v==4]))
+# map status per scog
+for clade, spp, z in [('animals',['Cele','Ggal','Mmus','Xlae'],'inputs/scogs_animals.zip'),('fungi',['Ncra','Scer','Spom','Umay'],'inputs/scogs_fungi.zip')]:
+    d=scogs(z)
+    print('\\nMAP',clade)
+    for cnt in sorted(set(d.values())):
+        ids=[k for k,v in d.items() if v==cnt]
+        print('seq',cnt,'n',len(ids),'examples')
+        for k in ids[:8]:
+            sts=[alltables[('Animals_' if clade=='animals' else 'Fungi_')+sp].get(k,['NA'])[0] for sp in spp]
+            print(k,sts)
+PY"

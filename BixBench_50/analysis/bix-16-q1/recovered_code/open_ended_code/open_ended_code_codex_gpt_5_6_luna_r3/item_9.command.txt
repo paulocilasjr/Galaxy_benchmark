@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, re
+from collections import Counter, defaultdict
+from pathlib import Path
+
+paths = {
+    'crispr': Path('inputs/CRISPRGeneEffect.csv'),
+    'expr': Path('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'),
+    'model': Path('inputs/Model.csv'),
+}
+
+def first_fields(p):
+    ids=[]
+    with p.open('rb') as f:
+        next(f)
+        for line in f:
+            ids.append(line.split(b',',1)[0].decode(errors='replace'))
+    return ids
+
+def header(p):
+    with p.open(newline='') as f:
+        return next(csv.reader(f))
+
+ids={k:first_fields(p) for k,p in paths.items()}
+for k,v in ids.items():
+    c=Counter(v)
+    print(k, 'rows',len(v), 'unique',len(c), 'duplicate_ids',sum(n>1 for n in c.values()), 'blank',sum(x=='' for x in v))
+print('crispr_expr_intersection', len(set(ids['crispr']) & set(ids['expr'])))
+print('crispr_model_intersection', len(set(ids['crispr']) & set(ids['model'])))
+print('expr_model_intersection', len(set(ids['expr']) & set(ids['model'])))
+print('all_three_intersection', len(set(ids['crispr']) & set(ids['expr']) & set(ids['model'])))
+
+hs={k:header(p) for k,p in paths.items()}
+for k,h in hs.items():
+    print(k, 'header_len',len(h), 'blank_first',h[0]=='', 'unique_nonblank',len(set(h[1:])), 'dup_full',sum(n>1 for n in Counter(h[1:]).values()))
+# Exact matrix column matches and parsed symbol matches
+hc=set(hs['crispr'][1:]); he=set(hs['expr'][1:])
+print('exact_gene_header_intersection',len(hc&he))
+
+def sym(x):
+    m=re.match(r'"'^(.*) '"\\((["'^()]*)'"\\)"'$'"',x)
+    return m.group(1) if m else x
+sc=defaultdict(list); se=defaultdict(list)
+for x in hs['crispr'][1:]: sc[sym(x)].append(x)
+for x in hs['expr'][1:]: se[sym(x)].append(x)
+common=set(sc)&set(se)
+print('symbol_intersection',len(common),'crispr_symbols',len(sc),'expr_symbols',len(se))
+print('symbol_dup_crispr',sum(len(v)>1 for v in sc.values()),'symbol_dup_expr',sum(len(v)>1 for v in se.values()))
+print('common_symbol_with_multiple_either',sum(len(sc[s])>1 or len(se[s])>1 for s in common))
+print('sample common nonexact',[(s,sc[s],se[s]) for s in sorted(common) if not (set(sc[s])&set(se[s]))][:10])
+print('model_only_crispr',len(set(ids['crispr'])-set(ids['expr'])))
+print('model_only_expr',len(set(ids['expr'])-set(ids['crispr'])))
+PY"

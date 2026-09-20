@@ -1,0 +1,103 @@
+/bin/bash -lc "python3 - <<'PY'
+import io, zipfile, itertools, statistics
+
+archive = 'inputs/scogs_fungi.zip'
+member = '981902at2759.faa.mafft.clipkit.treefile'
+with zipfile.ZipFile(archive) as zf:
+    newick = zf.read(member).decode().strip()
+print('newick:', newick)
+
+# Minimal Newick parser for named tips and branch lengths.
+class Node:
+    def __init__(self, name=None, length=0.0, children=None):
+        self.name = name
+        self.length = length
+        self.children = children or []
+        self.parent = None
+        for child in self.children:
+            child.parent = self
+
+def parse_newick(s):
+    s = s.rstrip(';').strip()
+    i = 0
+    def subtree():
+        nonlocal i
+        children = []
+        if i < len(s) and s[i] == '(':
+            i += 1
+            while True:
+                children.append(subtree())
+                if s[i] == ',':
+                    i += 1
+                    continue
+                if s[i] == ')':
+                    i += 1
+                    break
+                raise ValueError(f'bad Newick at {i}: {s[i:]}')
+        start = i
+        while i < len(s) and s[i] not in ',():':
+            i += 1
+        name = s[start:i].strip() or None
+        length = 0.0
+        if i < len(s) and s[i] == ':':
+            i += 1
+            start = i
+            while i < len(s) and s[i] not in ',():' :
+                i += 1
+            length = float(s[start:i])
+        return Node(name, length, children)
+    root = subtree()
+    if i "'!= len(s):
+        raise ValueError(f'"'unparsed Newick at {i}: {s[i:]}')
+    return root
+
+root = parse_newick(newick)
+tips = []
+def collect(n):
+    if n.children:
+        for c in n.children:
+            collect(c)
+    else:
+        tips.append(n)
+collect(root)
+assert len(tips) == 4
+
+def patristic(a, b):
+    da = {}
+    x = a
+    dist = 0.0
+    while x is not None:
+        da[x] = dist
+        dist += x.length
+        x = x.parent
+    x = b
+    dist = 0.0
+    while x not in da:
+        dist += x.length
+        x = x.parent
+    return da[x] + dist
+
+pairs = []
+for a, b in itertools.combinations(tips, 2):
+    pairs.append((a.name, b.name, patristic(a, b)))
+print('pairs:')
+for p in pairs:
+    print(p[0], p[1], f'{p[2]:.10f}')
+values = sorted(v for _, _, v in pairs)
+median = statistics.median(values)
+print('sorted:', [f'{x:.10f}' for x in values])
+print('median:', f'{median:.10f}')
+
+# Independent explicit calculation from the six path sums.
+expected = sorted([
+    0.7104773274 + 1.4449700366 + 0.6126881082,
+    0.7104773274 + 1.0514665806 + 0.6126881082,
+    0.7104773274 + 1.4152587494,
+    1.4449700366 + 1.0514665806,
+    1.4449700366 + 0.6126881082 + 1.4152587494,
+    1.0514665806 + 0.6126881082 + 1.4152587494,
+])
+assert all(abs(a-b) < 1e-12 for a,b in zip(values, expected))
+assert abs(median - (expected[2] + expected[3])/2) < 1e-12
+print('independent check: PASS')
+PY"

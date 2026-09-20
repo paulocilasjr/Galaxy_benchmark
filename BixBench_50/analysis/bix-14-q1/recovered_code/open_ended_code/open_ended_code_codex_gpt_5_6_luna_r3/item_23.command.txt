@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from pathlib import Path
+from collections import Counter
+import re, openpyxl
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+def col(ref):
+    return ''.join(ch for ch in ref if ch.isalpha())
+def read_rows(path):
+    with ZipFile(path) as z:
+        sroot=ET.fromstring(z.read('xl/sharedStrings.xml'))
+        strings=[''.join(t.text or '' for t in si.iter(NS+'t')) for si in sroot.findall(NS+'si')]
+        wroot=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        for row in wroot.find(NS+'sheetData').findall(NS+'row')[2:]:
+            values={}
+            for cell in row.findall(NS+'c'):
+                node=cell.find(NS+'v')
+                if node is None: continue
+                value=node.text
+                if cell.attrib.get('t')=='s': value=strings[int(value)]
+                values[col(cell.attrib['r'])]=value
+            yield values
+meta=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active
+carrier={str(r[0]).strip() for r in meta.iter_rows(min_row=2,values_only=True) if r[3]=='Carrier'}
+coding={'synonymous_variant','missense_variant','inframe_insertion','inframe_deletion','frameshift_variant','stop_gained','stop_lost','start_lost','coding_sequence_variant'}
+num=den=exact=0
+seen_files=0
+for path in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+    token=re.search(r'CHIP_(.+)\\.xlsx"'$'"',path.name).group(1)
+    match=re.match(r'\\d+',token); sample=match.group(0) if match else token
+    if sample not in carrier: continue
+    seen_files += 1
+    for row in read_rows(path):
+        try: vaf=float(row['J'])
+        except (KeyError,TypeError,ValueError): continue
+        if vaf == 0.3: exact += 1
+        if vaf < 0.3 and row.get('N') in coding:
+            den += 1
+            if row['N']=='synonymous_variant': num += 1
+assert seen_files == 19
+assert exact == 0
+assert (num,den)==(30,41)
+print(f'carrier_workbooks={seen_files} numerator={num} denominator={den} fraction={num/den:.17g}')
+PY"

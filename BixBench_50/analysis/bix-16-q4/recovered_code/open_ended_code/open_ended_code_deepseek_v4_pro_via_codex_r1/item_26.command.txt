@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from scipy import stats
+E=pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0, low_memory=False)
+X=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0, low_memory=False)
+print('dtypes',E.iloc[:,0].dtype,X.iloc[:,0].dtype,'mem MB',E.memory_usage(deep=True).sum()/1e6,X.memory_usage(deep=True).sum()/1e6)
+common_samples=E.index.intersection(X.index); common_genes=E.columns.intersection(X.columns)
+e=E.loc[common_samples, common_genes].to_numpy(dtype=np.float64, copy=True)
+x=X.loc[common_samples, common_genes].to_numpy(dtype=np.float64, copy=True)
+print(e.shape,x.shape)
+n=e.shape[1]; rho=np.empty(n); p=np.empty(n)
+t=time.time()
+for j in range(n):
+    rho[j],p[j]=stats.spearmanr(e[:,j],x[:,j],nan_policy='omit')
+print('loop',time.time()-t)
+pvals=p.copy(); order=np.argsort(pvals); q=np.empty(n); running=np.inf
+for idx in range(n-1,-1,-1):
+    running=min(running,pvals[order[idx]]*n/(idx+1)); q[idx]=running
+q=np.minimum(q,1.0); qfull=np.empty(n); qfull[:]=np.nan; qfull[order]=q
+sig=qfull<0.05
+print('float64 sig',sig.sum(),sig.sum()/n*100)
+np.savez('/tmp/spearman_float64.npz', rho=rho,p=p,q=qfull,sig=sig)
+# Compare with previous
+D=np.load('/tmp/spearman_results.npz',allow_pickle=True)
+print('rho max abs diff',np.nanmax(np.abs(rho-D['rho'])))
+print('p max abs diff',np.nanmax(np.abs(p-D['p'])))
+print('sig diff',np.sum(sig "'!= D['"'sig']))
+# show few differing
+inds=np.where(sig "'!= D['"'sig'])[0]
+print('ndiff',len(inds))
+for i in inds[:20]:
+    print(common_genes[i],'rho32',D['rho'][i],'rho64',rho[i],'p32',D['p'][i],'p64',p[i],'q32',D['q'][i],'q64',qfull[i])
+PY"

@@ -1,0 +1,41 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+sel_groups = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+sel = layout[layout.Group.isin(sel_groups)].copy()
+# order as layout
+cols = [s.replace('-','_') for s in sel.SampleID]
+meta = sel.set_index('SampleID')[['Group']].rename_axis(index='sample')
+meta.index = meta.index.str.replace('-','_')
+# prefilter across all 30
+keep = (counts > 10).any(axis=1)
+sub = counts.loc[keep, cols]
+print('sub', sub.shape, 'meta', meta)
+# ensure order matching
+sub = sub[meta.index]
+print('group counts', meta.Group.value_counts())
+dds = DeseqDataSet(counts=sub, metadata=meta, design_factors='Group', n_cpus=4)
+print('dds created, obs', dds.n_obs, 'vars', dds.n_vars)
+dds.deseq2()
+print('deseq2 done')
+ds = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], n_cpus=4)
+ds.summary()
+res = ds.results_df.copy()
+print('res shape', res.shape)
+print(res.head())
+print('NA counts', res.isna().sum())
+# filter criteria
+sig = res[(res.padj <= 0.05) & (res.log2FoldChange.abs() >= 0.5) & (res.baseMean >= 10)].copy()
+print('sig DEGs', sig.shape)
+print(sig.head())
+print('lfc range', sig.log2FoldChange.min(), sig.log2FoldChange.max())
+print('baseMean min', sig.baseMean.min(), 'padj max', sig.padj.max())
+# save interim to tmp for subsequent
+res.to_csv('/workspace/tmp/pydeseq2_res.csv')
+sig.to_csv('/workspace/tmp/sig_deg.csv')
+print(sig.index[:10].tolist())
+PY"

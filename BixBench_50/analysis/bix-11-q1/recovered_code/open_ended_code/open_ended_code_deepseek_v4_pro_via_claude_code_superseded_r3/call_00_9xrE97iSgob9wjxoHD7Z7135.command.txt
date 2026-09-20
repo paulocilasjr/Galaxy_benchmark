@@ -1,0 +1,64 @@
+python3 -c "
+from compute_treeness import parse_newick, sum_branch_lengths
+import zipfile, tempfile, os, re, statistics
+from collections import Counter
+
+def analyze_trees(zip_path, label):
+    size_counts = Counter()
+    nleaf_counts = Counter()
+    treeness_by_size = {}
+    
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        tree_files = sorted([f for f in zf.namelist() if f.endswith('.treefile')])
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for tf in tree_files:
+                zf.extract(tf, tmpdir)
+                tree_path = os.path.join(tmpdir, tf)
+                
+                with open(tree_path, 'r') as f:
+                    s = f.read().strip()
+                
+                if not s or s == ';':
+                    continue
+                
+                root = parse_newick(s)
+                intern = [0.0]; term = [0.0]
+                sum_branch_lengths(root, intern, term)
+                
+                # Count nodes
+                def count_nodes(node):
+                    leaves = 0
+                    internals = 0
+                    is_leaf = len(node.children)==0 and node.label is not None
+                    if is_leaf:
+                        leaves = 1
+                    else:
+                        internals = 1
+                    for c in node.children:
+                        cl, ci = count_nodes(c)
+                        leaves += cl
+                        internals += ci
+                    return leaves, internals
+                
+                nleaves, ninternals = count_nodes(root)
+                nleaf_counts[nleaves] += 1
+                
+                total = intern[0] + term[0]
+                treeness = intern[0]/total if total > 0 else 0
+                
+                if nleaves not in treeness_by_size:
+                    treeness_by_size[nleaves] = []
+                treeness_by_size[nleaves].append(treeness)
+    
+    print(f'{label}:')
+    print(f'  Leaf count distribution: {dict(sorted(nleaf_counts.items()))}')
+    for nl, vals in sorted(treeness_by_size.items()):
+        m = statistics.median(vals)
+        print(f'  {nl}-leaf trees: N={len(vals)}, median treeness={m:.6f}, range=[{min(vals):.6f}, {max(vals):.6f}]')
+
+analyze_trees('/workspace/inputs/scogs_animals.zip', 'ANIMALS')
+print()
+analyze_trees('/workspace/inputs/scogs_fungi.zip', 'FUNGI')
+"
+

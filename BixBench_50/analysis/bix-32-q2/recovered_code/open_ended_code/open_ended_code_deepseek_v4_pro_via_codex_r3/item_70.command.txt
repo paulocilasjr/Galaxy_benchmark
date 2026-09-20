@@ -1,0 +1,31 @@
+/bin/bash -c "python3 - <<'PY'
+# compute variant universe=all measured 5828, q>0, min/max 10..500, BH
+import pandas as pd, numpy as np
+from scipy.stats import hypergeom
+
+def bh(p):
+ p=np.asarray(p,float); o=np.argsort(p); n=len(p); scaled=p[o]*n/np.arange(1,n+1); adj_sorted=np.minimum.accumulate(scaled[::-1])[::-1]; out=np.empty(n); out[o]=adj_sorted; return np.minimum(1,out)
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path']); link['gene']=link['gene'].str.split(':',expand=True)[1]; link['path']=link['path'].str.split(':',expand=True)[1]
+allkg=set(link.gene)
+files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+for universe_name in ['all_measured','measured_annotated']:
+ print('\\nUNI',universe_name)
+ for strain,fn in files.items():
+  df=pd.read_csv('/workspace/tmp/'+fn); allmeas=set(df.gene)
+  for direction,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+   gene=set(df.loc[expr,'gene']); U=allmeas if universe_name=='all_measured' else allmeas&allkg
+   mapped=[g for g in gene if g in allkg]  # clusterProfiler maps selected only; n selected annotated
+   n=len(mapped); rows=[]
+   for p,gdf in link.groupby('path'):
+    term=set(gdf.gene); m=len(term)
+    if m<10 or m>500: continue
+    q=len(term&gene)
+    if q==0: continue
+    # hypergeom population U, m intersect U
+    mi=len(term&U)
+    if mi==0: continue
+    pv=hypergeom.sf(q-1,len(U),mi,n)
+    rows.append((p,pv))
+   d=pd.DataFrame(rows,columns=['path','pval']); d['padj']=bh(d.pval.values)
+   print(strain,direction,'U',len(U),'n',n,'tested',len(d),'sig',int((d.padj<=.05).sum()))
+PY"

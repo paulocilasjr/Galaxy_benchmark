@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+# print examples of Carrier rows with VAF<0.3 and Zygosity Reference
+from zipfile import ZipFile
+from pathlib import Path
+import xml.etree.ElementTree as ET
+NS={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def colnum(cellref):
+    s=''.join(ch for ch in cellref if ch.isalpha()); n=0
+    for ch in s: n=n*26+ord(ch.upper())-64
+    return n-1
+def read_xlsx(path):
+    with ZipFile(path) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', NS): ss.append(''.join(t.text or '' for t in si.findall('.//a:t', NS)))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        out=[]
+        for rr in root.findall('a:sheetData/a:row', NS):
+            vals=[]
+            for c in rr.findall('a:c', NS):
+                idx=colnum(c.attrib.get('r','A1'))
+                while len(vals)<idx: vals.append('')
+                typ=c.attrib.get('t')
+                if typ=='inlineStr': val=''.join(t.text or '' for t in c.findall('.//a:t', NS))
+                else:
+                    v=c.find('a:v', NS); val='' if v is None else v.text or ''
+                    if typ=='s' and val"'!='"'': val=ss[int(val)]
+                vals.append(val)
+            out.append(vals)
+        return out
+meta=read_xlsx('inputs/230215_Trio_Status.xlsx'); mi={h:i for i,h in enumerate(meta[0])}
+carriers={r[mi['Sample ID']].strip() for r in meta[1:] if r[mi['BLM Mutation Status']].strip()=='Carrier'}
+shown=0
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    sid=p.stem.replace('230209_Exome_GRCh38_CHIP_','').split('-')[0].strip()
+    if sid not in carriers: continue
+    rows=read_xlsx(p); top=rows[0]; hdr=rows[1]; idx={h:i for i,h in enumerate(hdr)}
+    for r in rows[2:]:
+        if idx['Variant Allele Freq'] >= len(r): continue
+        v=r[idx['Variant Allele Freq']]
+        if not v: continue
+        try: vf=float(v)
+        except: continue
+        if vf<0.3 and r[idx['Zygosity']]=='Reference':
+            print('\\nfile',p.name,'sample',sid)
+            print('top header:',top[:12])
+            print({k:(r[idx[k]] if idx[k]<len(r) else '') for k in ['Chr:Pos','Ref/Alt','Zygosity','Read Depths (DP)','Genotype Qualities (GQ)','Variant Allele Freq','Gene Names','Sequence Ontology (Combined)','Effect (Combined)','HGVS c. (Clinically Relevant)','HGVS p. (Clinically Relevant)']})
+            shown+=1
+            if shown>=8: raise SystemExit
+PY"

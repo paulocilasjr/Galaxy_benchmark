@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,re,numpy as np
+from pathlib import Path
+trio=pd.read_excel('inputs/230215_Trio_Status.xlsx',dtype={'Sample ID':str})
+trio['Sample ID']=trio['Sample ID'].str.strip()
+carriers=set(trio.loc[trio['BLM Mutation Status'].eq('Carrier'),'Sample ID'])
+counts={}; duplicates={}; retained_total=0; boundaries=[]
+for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'):
+    sid=re.match(r'(\\d+|SRR\\d+)',p.stem.replace('230209_Exome_GRCh38_CHIP_','')).group(1)
+    if sid not in carriers: continue
+    d=pd.read_excel(p,header=1)
+    vaf=pd.to_numeric(d['Variant Allele Freq'],errors='coerce')
+    excluded_annotation=d['Sequence Ontology (Combined)'].fillna('').astype(str).str.contains(r'intron|intergenic|UTR',case=False,regex=True)
+    keep=d['Zygosity'].ne('Reference') & ~excluded_annotation & vaf.lt(0.3)
+    out=d.loc[keep]
+    counts[sid]=len(out); retained_total += len(out)
+    duplicates[sid]=int(out.duplicated(['Chr:Pos','Ref/Alt']).sum())
+    boundaries.extend(vaf[(d['Zygosity'].ne('Reference')) & ~excluded_annotation & vaf.between(.299999,.300001,inclusive='both')].tolist())
+assert all(d==0 for d in duplicates.values())
+assert all(pd.read_excel(p,header=1)['In_CHIP'].fillna(False).all() for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+assert set(counts)==carriers-{'533'}
+assert np.median(list(counts.values()))==2
+assert np.median(list(counts.values())+[0])==2
+print('analyzed_carriers',len(counts),'missing_callsets',sorted(carriers-set(counts)))
+print('retained_variants',retained_total,'duplicates',sum(duplicates.values()))
+print('counts',dict(sorted(counts.items(),key=lambda x:int(x[0]))))
+print('median_available',np.median(list(counts.values())))
+print('median_if_missing_counted_zero',np.median(list(counts.values())+[0]))
+print('near_boundary_values',sorted(set(boundaries)))
+PY
+[ -d codex_output ] && echo 'codex_output exists' || echo 'codex_output missing'"

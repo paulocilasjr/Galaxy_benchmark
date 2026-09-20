@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+import glob, re, collections, os
+
+def rows_xlsx(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    try: ws.reset_dimensions()
+    except Exception: pass
+    yield from ws.iter_rows(values_only=True)
+
+# status
+status=[]
+for i,row in enumerate(rows_xlsx('inputs/230215_Trio_Status.xlsx'),1):
+    if i==1: header=row; continue
+    if row and row[0] is not None:
+        status.append(dict(zip(header,row)))
+print('status rows',len(status))
+print('status counts',collections.Counter(r['BLM Mutation Status'] for r in status))
+print('first 20 status')
+for r in status[:20]: print(r)
+print('all carriers IDs', [r['Sample ID'] for r in status if r['BLM Mutation Status']=='Carrier'])
+
+# files sample ids
+files=sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+def sid_from_file(f):
+    base=Path(f).stem
+    s=base.replace('230209_Exome_GRCh38_CHIP_','')
+    return s
+print('nfiles',len(files))
+print('first file ids', [sid_from_file(f) for f in files[:10]])
+print('last file ids', [sid_from_file(f) for f in files[-10:]])
+
+# sample variant file row1/2 full columns
+f=files[0]
+rs=rows_xlsx(f)
+row1=next(rs); row2=next(rs)
+print('\\ncolumns for',f)
+for i,(g,h) in enumerate(zip(row1+(None,)*40,row2+(None,)*40),1):
+    if g is not None or h is not None:
+        print(i, repr(g), repr(h))
+
+# unique values in relevant cols from first few files and row counts
+rel=['Zygosity','Variant Allele Freq','Sequence Ontology (Combined)','Effect (Combined)','Classification','In_CHIP','In_DNAm','Gene Names','Primary Findings','Filter']
+for f in files[:3]:
+    rs=rows_xlsx(f); next(rs); hdr=next(rs)
+    idx={h:i for i,h in enumerate(hdr) if h is not None}
+    counts=collections.Counter(); vals={c:collections.Counter() for c in rel if c in idx}
+    n=0
+    for row in rs:
+        if not row or row[0] is None: continue
+        n+=1
+        for c in vals:
+            vals[c][row[idx[c]]]+=1
+    print('\\nfile',sid_from_file(f),'rows',n)
+    for c in vals:
+        print(c, vals[c].most_common(12))
+PY"

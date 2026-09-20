@@ -1,0 +1,66 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, statistics, itertools
+
+def parse_newick(s):
+    pos=0
+    def parse_node():
+        nonlocal pos
+        while pos < len(s) and s[pos].isspace(): pos+=1
+        children=[]
+        label=''
+        length=None
+        if pos < len(s) and s[pos]=='(':
+            pos+=1
+            while True:
+                children.append(parse_node())
+                while pos < len(s) and s[pos].isspace(): pos+=1
+                if pos < len(s) and s[pos]==',':
+                    pos+=1
+                    continue
+                elif pos < len(s) and s[pos]==')':
+                    pos+=1
+                    break
+                else:
+                    raise ValueError('Expected , or ) at '+str(pos)+': '+s[pos:pos+20])
+        else:
+            start=pos
+            while pos < len(s) and s[pos] not in ':(),;':
+                pos+=1
+            label=s[start:pos].strip()
+        while pos < len(s) and s[pos].isspace(): pos+=1
+        if pos < len(s) and s[pos]==':':
+            pos+=1
+            start=pos
+            while pos < len(s) and (s[pos].isdigit() or s[pos] in '.eE+-'):
+                pos+=1
+            length=float(s[start:pos])
+        return {'label':label,'length':length,'children':children}
+    root=parse_node()
+    return root
+
+def all_leaf_pairs_dists(root):
+    leaves=[]
+    def collect(node, dist_so_far):
+        if not node['children']:
+            leaves.append((node['label'],dist_so_far))
+            return
+        for ch in node['children']:
+            collect(ch, dist_so_far + (ch['length'] if ch['length'] is not None else 0.0))
+    collect(root,0.0)
+    return [(a[0],b[0],a[1]+b[1]) for a,b in itertools.combinations(leaves,2)]
+
+def summarize(z):
+    with zipfile.ZipFile(z) as f:
+        vals=[]
+        for n in f.namelist():
+            if n.endswith('.treefile'):
+                s=f.read(n).decode().strip().rstrip(';')
+                root=parse_newick(s)
+                ds=[d for _,_,d in all_leaf_pairs_dists(root)]
+                vals.append(statistics.mean(ds))
+    return vals
+for g in ['animals','fungi']:
+    vals=summarize(f'/workspace/inputs/scogs_{g}.zip')
+    print(g,len(vals),statistics.median(vals),statistics.mean(vals),min(vals),max(vals))
+print('ratio', statistics.median(summarize('/workspace/inputs/scogs_fungi.zip'))/statistics.median(summarize('/workspace/inputs/scogs_animals.zip')))
+PY"

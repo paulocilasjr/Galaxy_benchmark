@@ -1,0 +1,74 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import numpy as np
+from scipy.stats import rankdata
+import re, os, math, time
+
+ge_path = 'inputs/CRISPRGeneEffect.csv'
+expr_path = 'inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+model_path = 'inputs/Model.csv'
+
+# Read headers and use exact source labels for same-gene pairing.
+ge_cols = list(pd.read_csv(ge_path, nrows=0).columns)
+expr_cols = list(pd.read_csv(expr_path, nrows=0).columns)
+ge_gene_cols = ge_cols[1:]
+expr_gene_set = set(expr_cols[1:])
+common = [c for c in ge_gene_cols if c in expr_gene_set]
+print('shared_gene_labels', len(common), flush=True)
+
+# Load only shared genes. The first unnamed column is the DepMap model ID.
+ge = pd.read_csv(ge_path, usecols=[ge_cols[0]] + common)
+expr = pd.read_csv(expr_path, usecols=[expr_cols[0]] + common)
+ge = ge.rename(columns={ge_cols[0]: 'ModelID'}).set_index('ModelID')
+expr = expr.rename(columns={expr_cols[0]: 'ModelID'}).set_index('ModelID')
+
+# Confirm model metadata is compatible; use common observed model IDs from data matrices.
+models = set(pd.read_csv(model_path, usecols=['ModelID'])['ModelID'])
+shared_models = ge.index.intersection(expr.index)
+print('shared_models_before_model_filter', len(shared_models), 'in_model_metadata', sum(m in models for m in shared_models), flush=True)
+# All shared rows should be ModelIDs; if metadata has all of them, this leaves scope unchanged.
+shared_models = pd.Index([m for m in shared_models if m in models])
+print('shared_models_used', len(shared_models), flush=True)
+
+ge = ge.loc[shared_models, common]
+expr = expr.loc[shared_models, common]
+
+x_arr = expr.to_numpy(dtype=np.float64, copy=False)
+# Essentiality is positive-going; DepMap gene effect is negative-going.
+y_arr = -ge.to_numpy(dtype=np.float64, copy=False)
+
+best_col = None
+best_rho = np.inf
+best_n = None
+best_idx = None
+
+for j, col in enumerate(common):
+    x = x_arr[:, j]
+    y = y_arr[:, j]
+    mask = np.isfinite(x) & np.isfinite(y)
+    n = int(mask.sum())
+    if n < 3:
+        continue
+    xv = x[mask]
+    yv = y[mask]
+    # Spearman is Pearson correlation of average ranks after pairwise filtering.
+    rx = rankdata(xv, method='average')
+    ry = rankdata(yv, method='average')
+    rx -= rx.mean()
+    ry -= ry.mean()
+    denom = math.sqrt(float(np.dot(rx, rx) * np.dot(ry, ry)))
+    if denom == 0.0:
+        continue
+    rho = float(np.dot(rx, ry) / denom)
+    if rho < best_rho:
+        best_rho = rho
+        best_col = col
+        best_n = n
+        best_idx = j
+
+symbol = re.sub(r' \\(["'^()]*'"\\)"'$'"', '', best_col)
+print('best', best_col, symbol, best_rho, best_n, flush=True)
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w', encoding='utf-8') as f:
+    f.write(symbol + '\\n')
+PY"

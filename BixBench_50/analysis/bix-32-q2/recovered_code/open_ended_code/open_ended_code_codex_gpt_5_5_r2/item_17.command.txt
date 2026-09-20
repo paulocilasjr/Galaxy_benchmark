@@ -1,0 +1,71 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) {
+  x <- readRDS(f)
+  ld <- attr(x, \"listData\")
+  data.frame(gene=attr(x, \"rownames\"), baseMean=ld"'$baseMean, lfc=ld$log2FoldChange, padj=ld$padj, stringsAsFactors=FALSE)
+}
+files <- c(`97`="inputs/res_1vs97.rds", `98`="inputs/res_1vs98.rds", `99`="inputs/res_1vs99.rds")
+res <- lapply(files, read_res)
+# KEGG PA14 pathway-to-gene mapping
+links <- system("curl -fsSL '"'https://rest.kegg.jp/link/pathway/pau'\", intern=TRUE)
+parts <- strsplit(links, \"\\t\")
+map <- data.frame(gene=sub('"'^pau:'"', '', vapply(parts, "'`[`, character(1), 1)),
+                  pathway=sub('"'"'^path:'"', '', vapply(parts, "'`[`, character(1), 2)),
+                  stringsAsFactors=FALSE)
+# use all result genes that have KEGG pathway annotation as the eligible universe
+all_genes <- Reduce(intersect, lapply(res, function(d) d$gene))
+map <- map[map$gene %in% all_genes,]
+universe <- sort(intersect(all_genes, unique(map$gene)))
+path2genes <- split(map$gene, map$pathway)
+path2genes <- lapply(path2genes, function(g) unique(intersect(g, universe)))
+# ORA function; optional clusterProfiler-like size filter
+ora <- function(fg, minGS=1, maxGS=Inf) {
+  fg <- unique(intersect(fg, universe))
+  N <- length(universe); n <- length(fg)
+  sizes <- vapply(path2genes, length, integer(1))
+  keep <- sizes >= minGS & sizes <= maxGS
+  pt <- names(path2genes)[keep]
+  out <- data.frame(pathway=pt, size=sizes[pt], hit=integer(length(pt)), pvalue=NA_real_)
+  for (i in seq_along(pt)) {
+    genes <- path2genes[[pt[i]]]
+    M <- length(genes); k <- sum(fg %in% genes)
+    out$hit[i] <- k
+    out$pvalue[i] <- if (k > 0) phyper(k-1, M, N-M, n, lower.tail=FALSE) else 1
+  }
+  out$padj <- p.adjust(out$pvalue, method='"'BH')
+  out[order(out"'$padj, out$pvalue, out$pathway),]
+}
+run_variant <- function(minGS=1, maxGS=Inf, require_raw_p=FALSE) {
+  sig <- list(up=list(), down=list())
+  for (nm in names(res)) {
+    d <- res[[nm]]
+    fg_up <- d$gene[!is.na(d$lfc) & d$lfc > 1.5]
+    fg_down <- d$gene[!is.na(d$lfc) & d$lfc < -1.5]
+    ou <- ora(fg_up, minGS, maxGS)
+    od <- ora(fg_down, minGS, maxGS)
+    filt <- function(o) {
+      idx <- !is.na(o$padj) & o$padj < 0.05
+      if (require_raw_p) idx <- idx & o$pvalue < 0.05
+      o$pathway[idx]
+    }
+    sig$up[[nm]] <- filt(ou)
+    sig$down[[nm]] <- filt(od)
+    cat('"'strain', nm, 'fg up/down mapped', length(intersect(fg_up, universe)), length(intersect(fg_down, universe)),
+        'sig up/down', length(sig"'$up[[nm]]), length(sig$down[[nm]]), '"'\\n')
+    cat('  up:', paste(sig"'$up[[nm]], collapse='"','), '\\n')
+    cat('  down:', paste(sig"'$down[[nm]], collapse='"','), '\\n')
+  }
+  common_up <- Reduce(intersect, sig"'$up)
+  common_down <- Reduce(intersect, sig$down)
+  cat('"'common up', length(common_up), paste(sort(common_up), collapse=','), '\\n')
+  cat('common down', length(common_down), paste(sort(common_down), collapse=','), '\\n')
+  cat('total', length(union(common_up, common_down)), '\\n')
+}
+cat('Universe', length(universe), 'pathways', length(path2genes), '\\n')
+cat('\\nVariant all gene sets, BH padj<0.05\\n')
+run_variant(1, Inf, FALSE)
+cat('\\nVariant clusterProfiler min10 max500, BH padj<0.05\\n')
+run_variant(10, 500, FALSE)
+cat('\\nVariant clusterProfiler min10 max500, raw p<0.05 and BH padj<0.05\\n')
+run_variant(10, 500, TRUE)
+RS"

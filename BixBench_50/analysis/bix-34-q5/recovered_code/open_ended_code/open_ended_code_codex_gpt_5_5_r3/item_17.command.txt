@@ -1,0 +1,71 @@
+/bin/bash -lc "python - <<'PY'
+# Compute all-tree and shared-BUSCO-ID variants from treefiles to check sensitivity.
+import zipfile, statistics, itertools
+class Node:
+    __slots__=('name','length','children','parent')
+    def __init__(self,name=None,length=0.0):
+        self.name=name; self.length=length; self.children=[]; self.parent=None
+
+def parse(s):
+    s=s.strip().rstrip(';'); n=len(s); i=0
+    def ws(i):
+        while i<n and s[i].isspace(): i+=1
+        return i
+    def name_len(i):
+        i=ws(i); start=i
+        while i<n and s[i] not in ':,()': i+=1
+        name=s[start:i].strip() or None
+        i=ws(i); L=0.0
+        if i<n and s[i]==':':
+            i+=1; start=i
+            while i<n and s[i] not in ',()': i+=1
+            L=float(s[start:i].strip())
+        return name,L,i
+    def sub(i):
+        i=ws(i)
+        if s[i]=='(':
+            node=Node(); i+=1
+            while True:
+                c,i=sub(i); c.parent=node; node.children.append(c); i=ws(i)
+                if i<n and s[i]==',': i+=1; continue
+                if i<n and s[i]==')': i+=1; break
+                raise ValueError((i,s[i:i+10]))
+            name,L,i=name_len(i); node.name=name; node.length=L
+            return node,i
+        name,L,i=name_len(i); return Node(name,L),i
+    root,i=sub(0); root.length=0; return root
+
+def tips(root):
+    out=[]; stack=[root]
+    while stack:
+        x=stack.pop()
+        if x.children: stack.extend(x.children)
+        else: out.append(x)
+    return out
+
+def d(a,b):
+    m={}; x=a; acc=0
+    while x:
+        m[id(x)]=acc; acc+=x.length; x=x.parent
+    x=b; acc=0
+    while x:
+        if id(x) in m: return acc+m[id(x)]
+        acc+=x.length; x=x.parent
+
+def mp(s):
+    ts=tips(parse(s)); return statistics.mean(d(a,b) for a,b in itertools.combinations(ts,2))
+
+def vals(zname):
+    out={}
+    with zipfile.ZipFile(zname) as z:
+        for name in z.namelist():
+            if name.endswith('.treefile'):
+                out[name.split('.')[0]]=mp(z.read(name).decode())
+    return out
+A=vals('inputs/scogs_animals.zip'); F=vals('inputs/scogs_fungi.zip')
+common=sorted(A.keys() & F.keys())
+print('animals',len(A),'fungi',len(F),'common',len(common))
+for label, aa, ff in [('all', list(A.values()), list(F.values())), ('common_ids', [A[k] for k in common], [F[k] for k in common])]:
+    ma=statistics.median(aa); mf=statistics.median(ff)
+    print(label, 'animal_median', repr(ma), 'fungi_median', repr(mf), 'fungi/animal', repr(mf/ma), 'animal/fungi', repr(ma/mf))
+PY"

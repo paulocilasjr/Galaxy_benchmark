@@ -1,0 +1,88 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.local_packages python3 - <<'PY'
+import csv, collections, time, warnings
+import numpy as np
+from scipy.stats import rankdata
+
+cp='inputs/CRISPRGeneEffect.csv'
+ep='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def read_header_ids(path):
+    with open(path, newline='', encoding='utf-8', errors='replace') as f:
+        rd=csv.reader(f)
+        header=next(rd)
+        ids=[row[0] for row in rd]
+    return header, ids
+
+def feature_id(x):
+    p=x.rfind('(')
+    return x[p+1:-1] if p >= 0 and x.endswith(')') else x
+
+start=time.time()
+ch,cids=read_header_ids(cp)
+eh,eids=read_header_ids(ep)
+e_row={x:i for i,x in enumerate(eids)}
+shared_ids=[x for x in cids if x in e_row]
+c_rows=np.array([i for i,x in enumerate(cids) if x in e_row],dtype=np.int64)
+e_rows=np.array([e_row[x] for x in shared_ids],dtype=np.int64)
+e_id_cols=collections.defaultdict(list); e_label_col={}
+for j,x in enumerate(eh[1:],1):
+    e_id_cols[feature_id(x)].append(j); e_label_col[x]=j
+pairs=[]
+for cj,x in enumerate(ch[1:],1):
+    fid=feature_id(x)
+    if fid in e_id_cols:
+        ej=e_label_col.get(x,e_id_cols[fid][0])
+        pairs.append((cj,ej,x,eh[ej],fid,x==eh[ej]))
+assert len({p[0] for p in pairs})==len(pairs)
+assert len({p[1] for p in pairs})==len(pairs)
+ccols=[p[0] for p in pairs]; ecols=[p[1] for p in pairs]
+exact=np.array([p[5] for p in pairs],dtype=bool)
+print('shared_models',len(shared_ids),'feature_pairs',len(pairs),'exact_label_pairs',int(exact.sum()),flush=True)
+
+def read_matrix(path,usecols):
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        x=np.genfromtxt(path,delimiter=',',skip_header=1,usecols=usecols,dtype=np.float64,
+                         missing_values=['','NA','NaN','nan'],filling_values=np.nan,
+                         invalid_raise=True,autostrip=True)
+    if x.ndim==1: x=x.reshape((-1,1))
+    return x
+
+t=time.time(); C_all=read_matrix(cp,ccols); print('loaded_CRISPR',C_all.shape,'sec',round(time.time()-t,2),flush=True)
+t=time.time(); E_all=read_matrix(ep,ecols); print('loaded_expression',E_all.shape,'sec',round(time.time()-t,2),flush=True)
+C=C_all[c_rows,:]; E=E_all[e_rows,:]
+print('aligned',C.shape,E.shape,'missing_entries',int(np.isnan(C).sum()),int(np.isnan(E).sum()),'total_sec',round(time.time()-start,2),flush=True)
+del C_all,E_all
+# Feature-wise pairwise-complete Spearman. Fast complete-column path plus explicit missing fallback.
+p=len(pairs); bio=np.full(p,np.nan); valid_n=np.zeros(p,dtype=np.int32)
+complete=np.isfinite(C).all(axis=0) & np.isfinite(E).all(axis=0)
+idx=np.flatnonzero(complete)
+if idx.size:
+    t=time.time()
+    rc=rankdata(C[:,idx],axis=0,method='average')
+    re=rankdata(E[:,idx],axis=0,method='average')
+    rc-=rc.mean(axis=0); re-=re.mean(axis=0)
+    den=np.sqrt(np.sum(rc*rc,axis=0)*np.sum(re*re,axis=0))
+    rr=np.sum(rc*re,axis=0)/den
+    bio[idx]=-rr; valid_n[idx]=C.shape[0]
+    print('ranked_complete',idx.size,'sec',round(time.time()-t,2),flush=True)
+for j in np.flatnonzero(~complete):
+    ok=np.isfinite(C[:,j]) & np.isfinite(E[:,j])
+    n=int(ok.sum()); valid_n[j]=n
+    if n>=2:
+        rc=rankdata(C[ok,j],method='average'); re=rankdata(E[ok,j],method='average')
+        rc-=rc.mean(); re-=re.mean()
+        den=np.sqrt(np.sum(rc*rc)*np.sum(re*re))
+        if den "'!= 0: bio[j]=-np.sum(rc*re)/den
+finite=np.isfinite(bio)
+count_id=int(np.sum(finite & (bio>=0.6)))
+count_exact=int(np.sum(finite & exact & (bio>=0.6)))
+print('"'finite',int(finite.sum()),'valid_n_range',int(valid_n[finite].min()),int(valid_n[finite].max()),'count_ID_match',count_id,'count_exact_label',count_exact,flush=True)
+ordidx=np.flatnonzero(finite)[np.argsort(-bio[finite])[:20]]
+print('TOP')
+for j in ordidx:
+ print(pairs[j][2], 'expr=',pairs[j][3], 'essentiality_rho=',repr(float(bio[j])), 'exact=',bool(exact[j]), 'n=',int(valid_n[j]))
+print('THRESHOLD_NEAR')
+for j in np.flatnonzero(finite & (bio>=0.55) & (bio<=0.65)):
+ print(pairs[j][2],repr(float(bio[j])),bool(exact[j]),int(valid_n[j]))
+PY"

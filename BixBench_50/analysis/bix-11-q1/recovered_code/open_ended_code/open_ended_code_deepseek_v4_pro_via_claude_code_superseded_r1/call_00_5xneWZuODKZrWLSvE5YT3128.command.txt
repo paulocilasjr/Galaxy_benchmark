@@ -1,0 +1,112 @@
+python3 << 'EOF'
+# Verify PhyKIT treeness manually for a few trees
+import re
+
+def parse_newick_branch_lengths(tree_str):
+    """Parse Newick string and return (terminal_lengths, internal_lengths)"""
+    # Remove trailing semicolon
+    tree_str = tree_str.strip().rstrip(';')
+    
+    terminal_lengths = []
+    internal_lengths = []
+    
+    # Stack to track context
+    # We need to find all ':number' patterns and determine if they're internal or terminal
+    
+    # Better approach: parse the tree recursively
+    def parse_node(s, pos=0):
+        """Parse a node starting at position pos, return (children lengths info, new_pos)"""
+        nonlocal terminal_lengths, internal_lengths
+        
+        if pos >= len(s):
+            return pos
+            
+        if s[pos] == '(':
+            # Internal node
+            pos += 1
+            child_branches = []
+            while pos < len(s) and s[pos] != ')':
+                # Parse child
+                child_pos = parse_node(s, pos)
+                pos = child_pos
+                if pos < len(s) and s[pos] == ',':
+                    pos += 1
+            
+            if pos < len(s) and s[pos] == ')':
+                pos += 1
+            
+            # Check for label:length
+            # Skip label (could be alphanumeric)
+            label_end = pos
+            while label_end < len(s) and s[label_end] not in [':', ',', ')', ';', '(']:
+                label_end += 1
+            
+            if label_end < len(s) and s[label_end] == ':':
+                # This is an internal branch with length
+                length_start = label_end + 1
+                length_end = length_start
+                while length_end < len(s) and s[length_end] in '0123456789.-+eE':
+                    length_end += 1
+                length = float(s[length_start:length_end])
+                internal_lengths.append(length)
+                pos = length_end
+            else:
+                pos = label_end
+                
+            return pos
+        else:
+            # Terminal node (label or label:length)
+            label_end = pos
+            while label_end < len(s) and s[label_end] not in [':', ',', ')', ';', '(']:
+                label_end += 1
+            
+            if label_end < len(s) and s[label_end] == ':':
+                # Terminal branch with length
+                length_start = label_end + 1
+                length_end = length_start
+                while length_end < len(s) and s[length_end] in '0123456789.-+eE':
+                    length_end += 1
+                length = float(s[length_start:length_end])
+                terminal_lengths.append(length)
+                pos = length_end
+            else:
+                pos = label_end
+            
+            return pos
+    
+    parse_node(tree_str, 0)
+    return terminal_lengths, internal_lengths
+
+# Test with example trees
+test_trees = [
+    "(Animals_Cele:1.5246608168,Animals_Ggal:0.4600442996,Animals_Mmus:0.3539942333);",
+    "(Fungi_Ncra:0.6115347635,(Fungi_Scer:0.8477554676,Fungi_Umay:1.0205896749):0.2287356319,Fungi_Spom:0.6183325036);",
+]
+
+for t in test_trees:
+    term, intern = parse_newick_branch_lengths(t)
+    total = sum(term) + sum(intern)
+    treeness = sum(intern) / total if total > 0 else 0
+    print(f"Tree: {t[:60]}...")
+    print(f"  Terminal lengths: {term}")
+    print(f"  Internal lengths: {intern}")
+    print(f"  Treeness: {treeness:.4f}")
+    print()
+
+# Now verify a few files to make sure PhyKIT matches
+import subprocess
+
+# Check animal tree that gave 0.0884
+for treefile in ['/tmp/scogs_animals/1018517at2759.faa.mafft.clipkit.treefile',
+                 '/tmp/scogs_animals/1010730at2759.faa.mafft.clipkit.treefile']:
+    with open(treefile) as f:
+        tree_str = f.read().strip()
+    term, intern = parse_newick_branch_lengths(tree_str)
+    total = sum(term) + sum(intern)
+    treeness = sum(intern) / total if total > 0 else 0
+    print(f"File: {treefile}")
+    print(f"  Tree: {tree_str}")
+    print(f"  Terminal: {term}, sum={sum(term):.4f}")
+    print(f"  Internal: {intern}, sum={sum(intern):.4f}")
+    print(f"  Manual treeness: {treeness:.4f}")
+EOF

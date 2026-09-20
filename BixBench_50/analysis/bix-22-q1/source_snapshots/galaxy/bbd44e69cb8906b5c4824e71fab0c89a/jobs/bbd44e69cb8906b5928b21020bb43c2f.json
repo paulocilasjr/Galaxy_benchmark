@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5928b21020bb43c2f",
+  "history_id": "bbd44e69cb8906b5c4824e71fab0c89a",
+  "tool_id": "codex_gene_length_average_expression_pearson_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-03T12:19:52.621044",
+  "update_time": "2026-08-03T12:21:08.357034",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython -c 'import numpy, scipy; from scipy.stats import pearsonr'\ncat > analysis.py <<'PY'\nimport csv\nimport math\nimport sys\n\nimport numpy as np\nfrom scipy.stats import pearsonr\n\nexpression_path, metadata_path, samples_path = sys.argv[1:4]\nwanted = (\"CD4\", \"CD8\", \"CD14\", \"CD19\")\n\nsample_to_celltype = {}\nwith open(samples_path, \"r\", newline=\"\") as handle:\n    reader = csv.DictReader(handle)\n    required = {\"sample\", \"celltype\"}\n    if not required.issubset(set(reader.fieldnames or [])):\n        raise RuntimeError(\"Sample annotation lacks sample/celltype columns\")\n    for row in reader:\n        sample = (row[\"sample\"] or \"\").strip()\n        celltype = (row[\"celltype\"] or \"\").strip()\n        if not sample:\n            raise RuntimeError(\"Blank sample name in annotation\")\n        if sample in sample_to_celltype and sample_to_celltype[sample] != celltype:\n            raise RuntimeError(\"Conflicting sample annotation: \" + sample)\n        sample_to_celltype[sample] = celltype\n\nprotein_meta = {}\nwith open(metadata_path, \"r\", newline=\"\") as handle:\n    reader = csv.reader(handle)\n    header = next(reader)\n    gene_col = header.index(\"Geneid\")\n    length_col = header.index(\"Length\")\n    biotype_col = header.index(\"gene_biotype\")\n    for row in reader:\n        if len(row) <= max(gene_col, length_col, biotype_col):\n            raise RuntimeError(\"Short row in gene metadata\")\n        gene_id = row[gene_col].strip()\n        if not gene_id:\n            raise RuntimeError(\"Blank gene identifier in metadata\")\n        if gene_id in protein_meta:\n            raise RuntimeError(\"Duplicate gene identifier in metadata: \" + gene_id)\n        if row[biotype_col].strip() == \"protein_coding\":\n            length = float(row[length_col])\n            if not math.isfinite(length):\n                raise RuntimeError(\"Non-finite gene length: \" + gene_id)\n            protein_meta[gene_id] = length\n\nwith open(expression_path, \"r\", newline=\"\") as handle:\n    reader = csv.reader(handle)\n    expression_header = next(reader)\n    if len(expression_header) < 2:\n        raise RuntimeError(\"Expression matrix has no sample columns\")\n    selected_indices = {celltype: [] for celltype in wanted}\n    seen_samples = set()\n    for index, sample in enumerate(expression_header[1:], start=1):\n        sample = sample.strip()\n        if sample in seen_samples:\n            raise RuntimeError(\"Duplicate expression sample column: \" + sample)\n        seen_samples.add(sample)\n        celltype = sample_to_celltype.get(sample)\n        if celltype in selected_indices:\n            selected_indices[celltype].append(index)\n    for celltype in wanted:\n        if not selected_indices[celltype]:\n            raise RuntimeError(\"No expression samples annotated as \" + celltype)\n\n    lengths = {celltype: [] for celltype in wanted}\n    averages = {celltype: [] for celltype in wanted}\n    seen_genes = set()\n    for row in reader:\n        if not row:\n            continue\n        gene_id = row[0].strip()\n        if not gene_id:\n            raise RuntimeError(\"Blank gene identifier in expression matrix\")\n        if gene_id in seen_genes:\n            raise RuntimeError(\"Duplicate gene identifier in expression matrix: \" + gene_id)\n        seen_genes.add(gene_id)\n        if gene_id not in protein_meta:\n            continue\n        for celltype in wanted:\n            values = []\n            for index in selected_indices[celltype]:\n                if index >= len(row):\n                    raise RuntimeError(\"Short expression row: \" + gene_id)\n                value = float(row[index])\n                if not math.isfinite(value):\n                    raise RuntimeError(\"Non-finite expression value: \" + gene_id)\n                values.append(value)\n            average = float(np.mean(np.asarray(values, dtype=np.float64)))\n            lengths[celltype].append(protein_meta[gene_id])\n            averages[celltype].append(average)\n\nresults = []\nfor celltype in wanted:\n    x = np.asarray(lengths[celltype], dtype=np.float64)\n    y = np.asarray(averages[celltype], dtype=np.float64)\n    if x.size < 3 or y.size != x.size:\n        raise RuntimeError(\"Insufficient paired genes for \" + celltype)\n    correlation, unused_pvalue = pearsonr(x, y)\n    correlation = float(correlation)\n    results.append((celltype, len(selected_indices[celltype]), int(x.size), correlation, abs(correlation)))\n\nwith open(\"correlations.tsv\", \"w\", newline=\"\") as handle:\n    writer = csv.writer(handle, delimiter=\"\\t\", lineterminator=\"\\n\")\n    writer.writerow((\"cell_type\", \"n_samples\", \"n_protein_coding_genes\", \"pearson_r\", \"absolute_pearson_r\"))\n    for result in results:\n        writer.writerow((result[0], result[1], result[2], \"%.17g\" % result[3], \"%.17g\" % result[4]))\n\nweakest = min(results, key=lambda result: result[4])\nwith open(\"weakest.txt\", \"w\", newline=\"\") as handle:\n    handle.write(weakest[0] + \"\\n\")\nPY\npython analysis.py \"/jetstream2/scratch/main/jobs/78884572/inputs/dataset_1dd625a3-b9ea-4bc6-b420-7175061e40ac.dat\" \"/jetstream2/scratch/main/jobs/78884572/inputs/dataset_35b40e1a-a815-457e-af97-cd387a73f7f1.dat\" \"/jetstream2/scratch/main/jobs/78884572/inputs/dataset_19d6c629-740f-4bbf-8cce-96ec08fb40c9.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135c0df99bce5804096",
+      "src": "hda",
+      "uuid": "1dd625a3-b9ea-4bc6-b420-7175061e40ac"
+    },
+    "metadata": {
+      "id": "f9cad7b01a4721355343e9ac5a1fa74d",
+      "src": "hda",
+      "uuid": "35b40e1a-a815-457e-af97-cd387a73f7f1"
+    },
+    "samples": {
+      "id": "f9cad7b01a47213580417fff5cc9e978",
+      "src": "hda",
+      "uuid": "19d6c629-740f-4bbf-8cce-96ec08fb40c9"
+    }
+  },
+  "outputs": {
+    "correlations": {
+      "id": "f9cad7b01a4721351875d32961980f1a",
+      "src": "hda",
+      "uuid": "7c1c66e1-53ae-4c8e-a29a-0290353e3417"
+    },
+    "weakest": {
+      "id": "f9cad7b01a47213581f2df43fb9dc301",
+      "src": "hda",
+      "uuid": "240fb37a-9550-49c6-9fb6-35554e70f5ae"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+import csv, re, time
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata, spearmanr
+pe='inputs/CRISPRGeneEffect.csv'
+px='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+with open(pe,newline='') as f: he=next(csv.reader(f))[1:]
+with open(px,newline='') as f: hx=next(csv.reader(f))[1:]
+common_set=set(hx)&set(he)
+genes=[g for g in he if g in common_set]
+use=set(genes)
+dtype={g:np.float32 for g in genes}
+print('reading effect',flush=True)
+t=time.time()
+e=pd.read_csv(pe,usecols=lambda c: c=='Unnamed: 0' or c in use,dtype=dtype,index_col=0)
+print('effect',e.shape,'seconds',round(time.time()-t,1),flush=True)
+print('reading expression',flush=True)
+t=time.time()
+x=pd.read_csv(px,usecols=lambda c: c=='Unnamed: 0' or c in use,dtype=dtype,index_col=0)
+print('expr',x.shape,'seconds',round(time.time()-t,1),flush=True)
+ids=e.index.intersection(x.index,sort=False)
+e=e.loc[ids,genes]
+x=x.loc[ids,genes]
+E=e.to_numpy(copy=False); X=x.to_numpy(copy=False)
+nanE=np.isnan(E).sum(axis=0); nanX=np.isnan(X).sum(axis=0)
+print('aligned',E.shape,'total nan effect',int(nanE.sum()),'expr',int(nanX.sum()),'genes any nan',int(np.count_nonzero(nanE+nanX)),flush=True)
+rho=np.full(len(genes),np.nan)
+ns=np.zeros(len(genes),dtype=int)
+chunk=512
+t=time.time()
+for start in range(0,len(genes),chunk):
+    stop=min(start+chunk,len(genes))
+    a=X[:,start:stop]; b=E[:,start:stop]
+    complete=~(np.isnan(a).any(axis=0)|np.isnan(b).any(axis=0))
+    if complete.any():
+        ar=rankdata(a[:,complete],axis=0,method='average')
+        br=rankdata(b[:,complete],axis=0,method='average')
+        ar-=ar.mean(axis=0); br-=br.mean(axis=0)
+        vals=np.sum(ar*br,axis=0)/np.sqrt(np.sum(ar*ar,axis=0)*np.sum(br*br,axis=0))
+        jj=np.flatnonzero(complete)+start
+        rho[jj]=vals; ns[jj]=a.shape[0]
+    for local in np.flatnonzero(~complete):
+        mask=np.isfinite(a[:,local])&np.isfinite(b[:,local])
+        ns[start+local]=mask.sum()
+        if mask.sum()>=2:
+            rho[start+local]=spearmanr(a[mask,local],b[mask,local]).statistic
+    if start%4096==0: print('ranked',stop,flush=True)
+print('correlations seconds',round(time.time()-t,1),flush=True)
+order=np.argsort(rho)
+print('\\nMost negative RAW GENE EFFECT correlations (equiv most positive essentiality):')
+for i in order[:10]: print(genes[i],repr(float(rho[i])),int(ns[i]))
+print('\\nMost positive RAW GENE EFFECT correlations (equiv most negative essentiality):')
+for i in order[-10:][::-1]: print(genes[i],repr(float(rho[i])),int(ns[i]))
+PY"

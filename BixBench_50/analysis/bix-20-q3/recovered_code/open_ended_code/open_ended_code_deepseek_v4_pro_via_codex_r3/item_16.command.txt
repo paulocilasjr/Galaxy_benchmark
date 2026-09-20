@@ -1,0 +1,48 @@
+/bin/bash -c "python - <<'PY'
+import openpyxl, glob, os, re, collections
+meta={}
+wb=openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx', data_only=True); ws=wb.active
+for r in list(ws.iter_rows(values_only=True))[1:]:
+    meta[str(r[0]).strip()]=(r[2],r[3])
+carrier={k for k,v in meta.items() if v[1]=='Carrier'}
+files=glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+rows=[]
+for f in files:
+    b=os.path.basename(f); full=re.search(r'CHIP_(.+?)\\.xlsx"'$'"',b).group(1); mm=re.match(r'(\\d+)',full); sid=mm.group(1) if mm else full
+    if sid not in carrier: continue
+    wb=openpyxl.load_workbook(f, data_only=True); ws=wb.active; rs=list(ws.iter_rows(values_only=True)); hdr=rs[1]
+    for r in rs[2:]:
+        d={hdr[i]:r[i] for i in range(min(len(hdr),len(r))) if hdr[i] is not None}; d['sample']=sid
+        rows.append(d)
+
+def region_excluded(so):
+    if so is None: return False # unknown, not explicitly excluded? but no None in selected
+    s=str(so).lower()
+    if 'intergenic' in s: return True
+    if 'intron' in s: return True
+    if '_utr' in s or s.startswith('utr') or 'untranslated' in s: return True
+    return False
+
+# baseline selection order variants after reference & region before VAF/class? produce several variants
+def passes(d, region_filter=True, require_clin=True, nonref=True):
+    if nonref and d.get('Zygosity')=='Reference': return False
+    so=d.get('Sequence Ontology (Combined)')
+    if region_filter and region_excluded(so): return False
+    vaf=d.get('Variant Allele Freq')
+    try: fv=float(vaf)
+    except: return False
+    if not (fv<0.3): return False
+    if require_clin and d.get('Classification') is None: return False
+    return True
+for name, func in [
+('region+splice keep', lambda d: passes(d,True,True)),
+('no region filter', lambda d: passes(d,False,True)),
+('region but exclude splice too? (coding/syn/missense/inframe/frameshift only)', lambda d: d.get('Zygosity')"'!='"'Reference' and d.get('Sequence Ontology (Combined)') in ['synonymous_variant','missense_variant','inframe_insertion','inframe_deletion','frameshift_variant'] and float(d.get('Variant Allele Freq') or -1)<.3 and d.get('Classification') is not None),
+]:
+    sel=[d for d in rows if func(d)]
+    ben=[d for d in sel if d.get('Classification') in ('Benign','Likely Benign')]
+    print('\\n',name,'N',len(sel),'B/LB',len(ben),'prop',len(ben)/len(sel) if sel else None)
+    print('SO counts',collections.Counter(d.get('Sequence Ontology (Combined)') for d in sel))
+    print('class counts',collections.Counter(d.get('Classification') for d in sel))
+    print('samples',len(set(d['sample'] for d in sel)))
+PY"

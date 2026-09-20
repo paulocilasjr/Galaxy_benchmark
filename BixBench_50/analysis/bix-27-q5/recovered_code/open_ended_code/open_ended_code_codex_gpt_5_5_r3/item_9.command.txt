@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+expr_path = Path('inputs/ROSMAP_genexp_ad.csv')
+meta_path = Path('inputs/ROSMAP_meta_ad.csv')
+
+with expr_path.open(newline='') as f:
+    header = next(csv.reader(f))
+sample_ids = header[1:]
+counts = collections.Counter(sample_ids)
+collided = {sid for sid, n in counts.items() if n > 1}
+keep_positions = [i for i, sid in enumerate(sample_ids) if sid not in collided]
+keep_ids = [sample_ids[i] for i in keep_positions]
+
+with meta_path.open(newline='') as f:
+    meta_rows = list(csv.DictReader(f))
+meta_counts = collections.Counter(r['projid'] for r in meta_rows)
+assert collections.Counter(sample_ids) == meta_counts
+assert len(keep_ids) == len(set(keep_ids))
+assert all(meta_counts[sid] == 1 for sid in keep_ids)
+
+# Expression file is genes x samples; keep resolved sample columns, then transpose to samples x genes.
+df = pd.read_csv(expr_path, index_col=0)
+values = df.to_numpy(dtype=np.float64)[:, keep_positions]
+genes = list(df.index)
+print('genes', len(genes), 'unique_genes', len(set(genes)))
+print('original_samples', len(sample_ids), 'unique_primary_ids', len(set(sample_ids)))
+print('collided_ids', len(collided), 'excluded_records', len(sample_ids)-len(keep_ids), 'fitted_samples', len(keep_ids))
+print('nan_count', np.isnan(values).sum(), 'min_value', np.nanmin(values))
+
+X = np.log10(values + 1.0).T
+# Remove zero-variance genes after transform if present. This does not change total nonzero variance.
+variances = X.var(axis=0, ddof=1)
+nonzero = variances > 0
+print('zero_variance_genes', int((~nonzero).sum()))
+X = X[:, nonzero]
+Xc = X - X.mean(axis=0)
+# Exact PCA via SVD. Percent variance explained by PC1 over the complete fitted feature space.
+s = np.linalg.svd(Xc, full_matrices=False, compute_uv=False)
+ratio1 = (s[0] ** 2) / np.sum(Xc ** 2)
+percent = ratio1 * 100.0
+print('pc1_percent', repr(percent))
+
+out = Path('codex_output')
+out.mkdir(exist_ok=True)
+(out / 'answer.txt').write_text(f'{percent:.10f}%\\n')
+PY
+cat codex_output/answer.txt"

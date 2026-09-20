@@ -1,0 +1,103 @@
+export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:$PYTHONPATH"
+python3 << 'PYEOF'
+import re, requests, time
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+with open("/tmp/de_iron.txt") as f:
+    iron_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/de_innate.txt") as f:
+    innate_de = [l.strip() for l in f if l.strip()]
+with open("/tmp/all_genes.txt") as f:
+    all_genes = [l.strip() for l in f if l.strip()]
+
+def fetch_kegg(url):
+    for i in range(3):
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200: return r.text
+            time.sleep(2)
+        except: time.sleep(2)
+    return None
+
+link_text = fetch_kegg("https://rest.kegg.jp/link/pau/pathway")
+lines = [l for l in link_text.strip().split('\n') if l]
+pw2genes = {}
+for line in lines:
+    parts = line.strip().split('\t')
+    if len(parts) >= 2:
+        pw = parts[0].strip(); gene = parts[1].strip()
+        if pw not in pw2genes: pw2genes[pw] = set()
+        pw2genes[pw].add(gene)
+
+pw_text = fetch_kegg("https://rest.kegg.jp/list/pathway/pau")
+pw_name = {}
+for line in pw_text.strip().split('\n'):
+    if not line: continue
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pid = parts[0].strip()
+        name = re.sub(r'\s+-\s+Pseudomonas aeruginosa.*', '', parts[1].strip())
+        pw_name['path:' + pid] = name
+
+def to_kegg(g): return f"pau:{g}"
+all_kegg_genes = set()
+for genes in pw2genes.values(): all_kegg_genes.update(genes)
+
+universe = set(to_kegg(g) for g in all_genes) & all_kegg_genes
+iron_fg = set(to_kegg(g) for g in iron_de) & all_kegg_genes
+innate_fg = set(to_kegg(g) for g in innate_de) & all_kegg_genes
+
+pathways = {}
+for pw, genes in pw2genes.items():
+    giu = genes & universe
+    if len(giu) >= 3: pathways[pw] = giu
+
+def do_ora(fg, universe, pathways):
+    results = {}
+    N, n = len(universe), len(fg)
+    for pw, pw_genes in pathways.items():
+        a = len(pw_genes & fg)
+        if a == 0: continue
+        b, c = len(pw_genes) - a, n - a
+        d = N - a - b - c
+        _, pv = fisher_exact([[a, b], [c, d]], alternative='greater')
+        results[pw] = {'name': pw_name.get(pw, pw), 'count': a, 'pw_size': len(pw_genes), 'pvalue': pv}
+    pvals = [r['pvalue'] for r in results.values()]
+    pw_list = list(results.keys())
+    if pvals:
+        _, padj, _, _ = multipletests(pvals, method='fdr_bh')
+        for i, pw in enumerate(pw_list): results[pw]['padj'] = padj[i]
+    return results
+
+iron_res = do_ora(iron_fg, universe, pathways)
+innate_res = do_ora(innate_fg, universe, pathways)
+
+# Check all pathways with raw p < 0.05 in either condition
+all_pws = set(list(iron_res.keys()) + list(innate_res.keys()))
+borderline = []
+for pw in all_pws:
+    ir = iron_res.get(pw, {})
+    inr = innate_res.get(pw, {})
+    if ir.get('padj', 1) < 0.05 or inr.get('padj', 1) < 0.05:
+        borderline.append((pw, ir, inr))
+
+print(f"Pathways with padj < 0.05 in either condition: {len(borderline)}")
+for pw, ir, inr in sorted(borderline, key=lambda x: min(x[1].get('padj',1), x[2].get('padj',1))):
+    iron_padj = f"{ir.get('padj', 1):.2e}" if ir else "N/A"
+    innate_padj = f"{inr.get('padj', 1):.2e}" if inr else "N/A"
+    iron_sig = "SIG" if ir.get('padj', 1) < 0.05 else "ns"
+    innate_sig = "SIG" if inr.get('padj', 1) < 0.05 else "ns"
+    name = ir.get('name') or inr.get('name') or pw
+    print(f"  {name}: iron[{iron_sig}]={iron_padj}, innate[{innate_sig}]={innate_padj}")
+
+iron_sig_set = {pw for pw, r in iron_res.items() if r['padj'] < 0.05}
+innate_sig_set = {pw for pw, r in innate_res.items() if r['padj'] < 0.05}
+iron_only = iron_sig_set - innate_sig_set
+
+print(f"\n=== FINAL: {len(iron_only)} pathways sig in iron but not in innate ===")
+for pw in sorted(iron_only):
+    name = iron_res[pw]['name']
+    print(f"  {name} (iron padj={iron_res[pw]['padj']:.2e})")
+PYEOF
+

@@ -1,0 +1,28 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+p='/workspace/inputs/count.csv'
+x=pd.read_csv(p,index_col=0)
+counts=x.T
+metadata=pd.DataFrame({'condition':['KL']*3+['WL']*3}, index=counts.index)
+print('shape',counts.shape,'zero rows',(counts.sum(0)==0).sum())
+t=time.time()
+dds=DeseqDataSet(counts=counts,metadata=metadata,design='~condition',refit_cooks=True,n_cpus=1,quiet=False)
+dds.deseq2()
+print('fit sec',time.time()-t)
+print('variables', list(dds.varm.keys()))
+print('obs design',dds.obsm['design_matrix'])
+stat=DeseqStats(dds,contrast=['condition','WL','KL'],alpha=.05,n_cpus=1,quiet=False)
+stat.summary()
+print('result cols',stat.results_df.columns)
+print('pre ranges',stat.results_df[['baseMean','log2FoldChange','pvalue','padj']].describe())
+print('coeffs',dds.varm['LFC'].columns)
+stat.lfc_shrink(coeff='condition[T.WL]')
+r=stat.results_df
+print('post',r[['baseMean','log2FoldChange','pvalue','padj']].describe())
+for pc in ['pvalue','padj']:
+ s=r[(r[pc]<.05)&(r.log2FoldChange.abs()>1)&(r.baseMean>10)]
+ print(pc,'N',len(s),'up',(s.log2FoldChange>0).sum(),'down',(s.log2FoldChange<0).sum())
+ print(s.sort_values(pc).head(10)[['baseMean','log2FoldChange','pvalue','padj']].to_string())
+PY"

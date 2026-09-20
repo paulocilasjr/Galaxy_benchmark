@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+import numpy as np
+from collections import Counter
+
+meta_path='inputs/GeneMetaInfo_Zenodo.csv'
+expr_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+ann_path='inputs/Sample_annotated_Zenodo.csv'
+
+# Load metadata keyed by the expression row identifier.
+meta={}
+with open(meta_path, newline='') as f:
+    rd=csv.DictReader(f)
+    for row in rd:
+        key=row['']
+        if row['gene_biotype']=='protein_coding':
+            meta[key]=(float(row['Length']), row['Geneid'])
+
+# Map expression columns to annotated immune cell types.
+with open(ann_path, newline='') as f:
+    ann={row['sample']: row['celltype'] for row in csv.DictReader(f)}
+with open(expr_path, newline='') as f:
+    rd=csv.reader(f)
+    header=next(rd)
+    sample_names=header[1:]
+
+celltypes=['CD4','CD8','CD14','CD19']
+indices={ct:[i+1 for i,s in enumerate(sample_names) if ann[s]==ct] for ct in celltypes}
+print('sample counts:', {ct:len(ix) for ct,ix in indices.items()})
+
+lengths=[]
+values={ct:[] for ct in celltypes}
+seen=0
+coding_seen=0
+mismatch=[]
+missing=[]
+with open(expr_path, newline='') as f:
+    rd=csv.reader(f)
+    next(rd)
+    for row in rd:
+        seen += 1
+        key=row[0]
+        if key not in meta:
+            continue
+        coding_seen += 1
+        lengths.append(meta[key][0])
+        for ct in celltypes:
+            vals=np.fromiter((float(row[i]) for i in indices[ct]), dtype=np.float64)
+            values[ct].append(vals.mean())
+
+x=np.asarray(lengths, dtype=np.float64)
+print('expression rows:', seen, 'protein-coding rows matched:', coding_seen, 'length n:', x.size)
+for ct in celltypes:
+    y=np.asarray(values[ct], dtype=np.float64)
+    r=np.corrcoef(x,y)[0,1]
+    print(f'{ct}: r={r:.12f}, abs={abs(r):.12f}, mean_expression_range=({y.min():.6g},{y.max():.6g}), zero_means={(y==0).sum()}')
+PY"

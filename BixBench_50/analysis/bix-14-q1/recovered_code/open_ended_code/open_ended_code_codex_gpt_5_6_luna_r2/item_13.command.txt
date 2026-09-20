@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+import re, math
+
+carrier_ids={'185','184','285','287','353','354','556','557','533','381','396','397','489','490','499','500','503','504','613','614'}
+files=[]
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    m=re.search(r'_CHIP_(\\d+)',p.name)
+    if m and m.group(1) in carrier_ids:
+        files.append((m.group(1),p))
+print('carrier files present',len(files), [x[0] for x in files])
+all_effect=Counter(); all_so=Counter(); low_effect=Counter(); low_so=Counter(); low_rows=[]
+for sid,p in files:
+    ws=load_workbook(p,data_only=True,read_only=False).active
+    hdr=[c.value for c in ws[2]]
+    idx={h:i for i,h in enumerate(hdr)}
+    counts=Counter(); so=Counter(); n=0
+    for vals in ws.iter_rows(min_row=3,values_only=True):
+        # use genotype VAF (col 10)
+        v=vals[idx['Variant Allele Freq']]
+        if isinstance(v,(int,float)) and not isinstance(v,bool):
+            all_effect[str(vals[idx['Effect (Combined)']])] += 1
+            all_so[str(vals[idx['Sequence Ontology (Combined)']])] += 1
+            if v < 0.3:
+                n += 1
+                eff=str(vals[idx['Effect (Combined)']]); ont=str(vals[idx['Sequence Ontology (Combined)']])
+                low_effect[eff]+=1; low_so[ont]+=1
+                low_rows.append((sid, vals[idx['Chr:Pos']], vals[idx['Ref/Alt']], v, vals[idx['Zygosity']], vals[idx['Gene Names']], ont, eff, vals[idx['HGVS c. (Clinically Relevant)']]))
+                counts[eff]+=1; so[ont]+=1
+    print('\\nSID',sid,'lowVAF rows',n,'effects',dict(counts),'SO',dict(so))
+print('\\nALL VAF nonblank effects',all_effect)
+print('\\nLOW VAF effects',low_effect)
+print('\\nLOW VAF SO',low_so)
+print('\\nlow rows',len(low_rows))
+for r in low_rows[:40]: print(r)
+PY"

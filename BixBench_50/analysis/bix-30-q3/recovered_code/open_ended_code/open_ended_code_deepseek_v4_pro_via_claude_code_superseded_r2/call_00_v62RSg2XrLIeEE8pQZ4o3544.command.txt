@@ -1,0 +1,139 @@
+source /workspace/venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+df = pd.read_excel('inputs/pone.0150501.s002.xls')
+
+# Column layout:
+# Col 0: miRNA name
+# Cols 1-10: P_1 through P_10 (patients)
+# Cols 11-20: C_11 through C_20 (controls)
+# P_3 = col index 3, C_18 = col index 18
+
+data = df.iloc[1:, 1:].apply(pd.to_numeric, errors='coerce')
+mir_names = df.iloc[1:, 0].values
+
+# Exclude P_3 (col 3) and C_18 (col 18)
+# Patient cols: 1,2,4,5,6,7,8,9,10 (skip 3)
+# Control cols: 11,12,13,14,15,16,17,19,20 (skip 18)
+patient_cols = [1, 2, 4, 5, 6, 7, 8, 9, 10]  # 9 patients after excluding P_3
+control_cols = [11, 12, 13, 14, 15, 16, 17, 19, 20]  # 9 controls after excluding C_18
+
+# Print to verify
+print('Patient columns used:', [data.columns[c] for c in patient_cols])
+print('Control columns used:', [data.columns[c] for c in control_cols])
+
+# Step 1: Per-sample mean of detected miRNAs (Ct < 34)
+sample_means = {}
+all_sample_cols = patient_cols + control_cols
+for c in all_sample_cols:
+    vals = pd.to_numeric(data.iloc[:, c], errors='coerce').dropna().values.astype(float)
+    detected = vals[vals < 34]
+    sample_means[c] = np.mean(detected)
+    col_name = data.columns[c]
+    print(f'  {col_name}: mean Ct (Ct<34) = {sample_means[c]:.4f}, n_detected = {len(detected)}/{len(vals)}')
+
+# Step 2: Compute ΔCt = Ct - sample_mean for each miRNA
+# Using all non-NaN values (not filtering by Ct<34 for the miRNA-specific values)
+p_values = []
+analysis_results = []
+
+for i in range(data.shape[0]):
+    if pd.isna(mir_names[i]):
+        continue
+    
+    mir = mir_names[i]
+    
+    # Patient ΔCt values
+    p_delta = []
+    for c in patient_cols:
+        val = data.iloc[i, c]
+        if pd.notna(val):
+            val_f = float(val)
+            delta = val_f - sample_means[c]
+            p_delta.append(delta)
+    
+    # Control ΔCt values
+    c_delta = []
+    for c in control_cols:
+        val = data.iloc[i, c]
+        if pd.notna(val):
+            val_f = float(val)
+            delta = val_f - sample_means[c]
+            c_delta.append(delta)
+    
+    p_delta = np.array(p_delta)
+    c_delta = np.array(c_delta)
+    
+    if len(p_delta) < 2 or len(c_delta) < 2:
+        continue
+    
+    # Student's t-test (equal variance)
+    t_stat, p_val = stats.ttest_ind(p_delta, c_delta, equal_var=True)
+    p_values.append(p_val)
+    
+    mean_diff = np.mean(p_delta) - np.mean(c_delta)
+    fc = 2**(-mean_diff)  # fold change (patient/control)
+    analysis_results.append((mir, np.mean(p_delta), np.mean(c_delta), mean_diff, fc, p_val, t_stat))
+
+p_values = np.array(p_values)
+n_tests = len(p_values)
+
+print(f'\nTotal miRNAs tested: {n_tests}')
+print(f'Raw p <= 0.05: {np.sum(p_values <= 0.05)}')
+print(f'Raw p <= 0.01: {np.sum(p_values <= 0.01)}')
+print(f'Raw p <= 0.001: {np.sum(p_values <= 0.001)}')
+
+# Sort results by p-value
+sorted_results = sorted(analysis_results, key=lambda x: x[5])
+print('\nTop 15 miRNAs by p-value:')
+for mir, pm, cm, diff, fc, pv, ts in sorted_results[:15]:
+    direction = 'UP in patients' if fc > 1 else 'DOWN in patients'
+    print(f'  {mir}: ΔCt_diff={diff:.4f}, FC={fc:.3f}, p={pv:.6f}, t={ts:.4f}')
+
+# Bonferroni correction
+bonf_p = np.minimum(p_values * n_tests, 1.0)
+bonf_sig = np.sum(bonf_p <= 0.05)
+print(f'\nBonferroni significant (p_adj <= 0.05): {bonf_sig}')
+
+# Show which miRNAs are Bonferroni-significant
+bonf_sig_idx = np.where(bonf_p <= 0.05)[0]
+print('Bonferroni-significant miRNAs:')
+for idx in bonf_sig_idx:
+    mir = analysis_results[idx][0]
+    pv = analysis_results[idx][5]
+    print(f'  {mir}: raw p={pv:.6f}, adj p={bonf_p[idx]:.6f}')
+
+# Benjamini-Yekutieli correction
+sorted_idx = np.argsort(p_values)
+sorted_p = p_values[sorted_idx]
+sorted_names = [analysis_results[j][0] for j in sorted_idx]
+
+n = n_tests
+harmonic = np.sum(1.0 / np.arange(1, n + 1))
+print(f'\nHarmonic number H_{n}: {harmonic:.6f}')
+
+by_p = np.ones(n)
+for i in range(n):
+    rank = i + 1
+    by_p[i] = min(sorted_p[i] * n * harmonic / rank, 1.0)
+
+# Monotonicity enforcement
+for i in range(n - 2, -1, -1):
+    by_p[i] = min(by_p[i], by_p[i + 1])
+
+by_sig = np.sum(by_p <= 0.05)
+print(f'Benjamini-Yekutieli significant (p_adj <= 0.05): {by_sig}')
+
+# BY significant miRNAs
+by_sig_indices = np.where(by_p <= 0.05)[0]
+print('BY-significant miRNAs:')
+for idx in by_sig_indices:
+    mir = sorted_names[idx]
+    raw_p = sorted_p[idx]
+    print(f'  {mir}: raw p={raw_p:.6f}, BY adj p={by_p[idx]:.6f}')
+
+print(f'\nRatio: {bonf_sig}:{by_sig}')
+"
+

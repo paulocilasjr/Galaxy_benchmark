@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5a4830763b0ffc05c",
+  "history_id": "bbd44e69cb8906b519a476f3040e85cf",
+  "tool_id": "blm-chip-median-v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T06:05:10.697966",
+  "update_time": "2026-07-15T06:05:39.315814",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78535325/inputs/dataset_39bb89a6-f20c-4874-8578-22d3d44c08d4.dat\" answer.txt counts.tsv summary.tsv <<'PY'\nimport io\nimport os\nimport re\nimport sys\nimport zipfile\nimport statistics\nimport xml.etree.ElementTree as ET\n\nNS_MAIN = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'\nNS_REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'\nNS_PKG_REL = '{http://schemas.openxmlformats.org/package/2006/relationships}'\n\ndef col_to_index(cell_ref):\n    letters = ''.join(ch for ch in cell_ref if ch.isalpha())\n    n = 0\n    for ch in letters:\n        n = n * 26 + (ord(ch.upper()) - ord('A') + 1)\n    return n - 1\n\ndef text_of(elem):\n    if elem is None:\n        return ''\n    return ''.join(t.text or '' for t in elem.iter() if t.tag == NS_MAIN + 't')\n\ndef sheet_path_from_workbook(zf):\n    wb = ET.fromstring(zf.read('xl/workbook.xml'))\n    rels = ET.fromstring(zf.read('xl/_rels/workbook.xml.rels'))\n    relmap = {r.attrib['Id']: r.attrib['Target'] for r in rels.findall(NS_PKG_REL + 'Relationship')}\n    first_sheet = wb.find(NS_MAIN + 'sheets').find(NS_MAIN + 'sheet')\n    target = relmap[first_sheet.attrib[NS_REL + 'id']]\n    if target.startswith('/'):\n        return target.lstrip('/')\n    if target.startswith('xl/'):\n        return target\n    return 'xl/' + target\n\ndef read_xlsx_bytes(data):\n    with zipfile.ZipFile(io.BytesIO(data)) as zf:\n        shared = []\n        if 'xl/sharedStrings.xml' in zf.namelist():\n            root = ET.fromstring(zf.read('xl/sharedStrings.xml'))\n            for si in root.findall(NS_MAIN + 'si'):\n                shared.append(text_of(si))\n        root = ET.fromstring(zf.read(sheet_path_from_workbook(zf)))\n        rows = []\n        for row in root.iter(NS_MAIN + 'row'):\n            vals = {}\n            max_idx = -1\n            for c in row.findall(NS_MAIN + 'c'):\n                ref = c.attrib.get('r', '')\n                idx = col_to_index(ref) if ref else max_idx + 1\n                max_idx = max(max_idx, idx)\n                t = c.attrib.get('t')\n                v = c.find(NS_MAIN + 'v')\n                if t == 's':\n                    raw = v.text if v is not None and v.text is not None else ''\n                    value = shared[int(raw)] if raw != '' else ''\n                elif t == 'inlineStr':\n                    value = text_of(c.find(NS_MAIN + 'is'))\n                else:\n                    value = v.text if v is not None and v.text is not None else ''\n                vals[idx] = value\n            if max_idx >= 0:\n                rows.append([vals.get(i, '') for i in range(max_idx + 1)])\n        return rows\n\ndef cell(row, idx):\n    if idx is None or idx >= len(row):\n        return ''\n    return str(row[idx]).strip()\n\ndef index_headers(header_row):\n    idx = {}\n    for i, h in enumerate(header_row):\n        h = str(h).strip()\n        if h and h not in idx:\n            idx[h] = i\n    return idx\n\ndef parse_float(value):\n    s = str(value).strip()\n    if not s:\n        return None\n    try:\n        return float(s)\n    except ValueError:\n        return None\n\ndef sample_key(value):\n    s = str(value).strip()\n    if re.fullmatch(r'\\d+\\.0', s):\n        s = s[:-2]\n    return s\n\ndef key_from_variant_filename(name):\n    base = os.path.basename(name)\n    m = re.search(r'_CHIP_(.+)\\.xlsx$', base)\n    if not m:\n        return None\n    token = m.group(1)\n    if re.match(r'^\\d+', token):\n        return re.match(r'^(\\d+)', token).group(1)\n    return token\n\ndef split_genes(value):\n    return {g.strip() for g in re.split(r'[,;]', str(value)) if g.strip()}\n\narchive_path, answer_path, counts_path, summary_path = sys.argv[1:5]\nwith zipfile.ZipFile(archive_path) as archive:\n    members = [n for n in archive.namelist() if n.lower().endswith('.xlsx') and not n.endswith('/')]\n    by_base = {os.path.basename(n): n for n in members}\n    chip_rows = read_xlsx_bytes(archive.read(by_base['230214_Schenz_et_al_2022_CHIP_Genes.xlsx']))\n    chip_genes = {cell(r, 0) for r in chip_rows if cell(r, 0)}\n    trio_rows = read_xlsx_bytes(archive.read(by_base['230215_Trio_Status.xlsx']))\n    trio_header = index_headers(trio_rows[0])\n    sid_i = trio_header['Sample ID']\n    role_i = trio_header['Status']\n    blm_i = trio_header['BLM Mutation Status']\n    carriers = {}\n    for r in trio_rows[1:]:\n        sid = sample_key(cell(r, sid_i))\n        if cell(r, blm_i) == 'Carrier':\n            carriers[sid] = {'role': cell(r, role_i), 'blm': cell(r, blm_i)}\n    variant_members = {}\n    for n in members:\n        base = os.path.basename(n)\n        if base in ('230214_Schenz_et_al_2022_CHIP_Genes.xlsx', '230215_Trio_Status.xlsx'):\n            continue\n        k = key_from_variant_filename(n)\n        if k:\n            variant_members[k] = n\n    region_exclude = re.compile(r'(intron|intergenic|utr)', re.IGNORECASE)\n    counts = []\n    missing = []\n    details = []\n    for sid in sorted(carriers, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x)):\n        member = variant_members.get(sid)\n        if member is None:\n            missing.append(sid)\n            continue\n        rows = read_xlsx_bytes(archive.read(member))\n        if len(rows) < 3:\n            raise RuntimeError('Variant workbook has fewer than three rows: ' + member)\n        header = index_headers(rows[1])\n        needed = ['Zygosity', 'Variant Allele Freq', 'Gene Names', 'Sequence Ontology (Combined)', 'Effect (Combined)']\n        absent = [h for h in needed if h not in header]\n        if absent:\n            raise RuntimeError('Missing columns in ' + member + ': ' + ','.join(absent))\n        in_chip_i = header.get('In_CHIP')\n        count = 0\n        for r in rows[2:]:\n            if in_chip_i is not None:\n                in_chip = cell(r, in_chip_i).lower() == 'true'\n            else:\n                in_chip = bool(split_genes(cell(r, header['Gene Names'])) & chip_genes)\n            if not in_chip:\n                continue\n            if cell(r, header['Zygosity']).lower() == 'reference':\n                continue\n            region_text = cell(r, header['Sequence Ontology (Combined)']) + ' ' + cell(r, header['Effect (Combined)'])\n            if region_exclude.search(region_text):\n                continue\n            vaf = parse_float(cell(r, header['Variant Allele Freq']))\n            if vaf is None:\n                continue\n            if vaf < 0.3:\n                count += 1\n        counts.append(count)\n        details.append((sid, carriers[sid]['role'], carriers[sid]['blm'], count, os.path.basename(member)))\nif not counts:\n    raise RuntimeError('No BLM carrier samples with variant workbooks were available for median calculation')\nmed = statistics.median(counts)\nanswer = str(int(med)) if float(med).is_integer() else str(med)\nwith open(answer_path, 'w') as out:\n    out.write(answer + '\\n')\nwith open(counts_path, 'w') as out:\n    out.write('sample_id\\tstatus\\tblm_mutation_status\\tsomatic_chip_variant_count\\tvariant_workbook\\n')\n    for row in details:\n        out.write('\\t'.join(map(str, row)) + '\\n')\nwith open(summary_path, 'w') as out:\n    out.write('metric\\tvalue\\n')\n    out.write('carrier_rows_in_trio_status\\t' + str(len(carriers)) + '\\n')\n    out.write('carrier_rows_with_variant_workbook\\t' + str(len(counts)) + '\\n')\n    out.write('carrier_rows_missing_variant_workbook\\t' + ','.join(missing) + '\\n')\n    out.write('chip_gene_count\\t' + str(len(chip_genes)) + '\\n')\n    out.write('median_somatic_chip_variant_count\\t' + answer + '\\n')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input_archive": {
+      "id": "f9cad7b01a4721352753701bb79f2b8e",
+      "src": "hda",
+      "uuid": "39bb89a6-f20c-4874-8578-22d3d44c08d4"
+    }
+  },
+  "outputs": {
+    "answer": {
+      "id": "f9cad7b01a4721351562028b63085cc7",
+      "src": "hda",
+      "uuid": "d6fb8610-b3e4-4064-9068-519ee616d31c"
+    },
+    "counts": {
+      "id": "f9cad7b01a472135c59488afb2d9e670",
+      "src": "hda",
+      "uuid": "0b016ef6-2084-4788-b2cd-95f6f21eee2d"
+    },
+    "summary": {
+      "id": "f9cad7b01a47213569ac19ffa4161b51",
+      "src": "hda",
+      "uuid": "b0952d84-9e3f-45c0-87c6-36163abb7ea4"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

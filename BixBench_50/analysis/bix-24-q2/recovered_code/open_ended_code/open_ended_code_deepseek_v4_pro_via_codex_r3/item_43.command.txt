@@ -1,0 +1,24 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts = pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+col_map={c:c.replace('_','-') for c in counts.columns}; counts=counts.rename(columns=col_map)
+layout=pd.read_csv('/workspace/inputs/sample_layout.csv').set_index('SampleID')
+# subset DMSO group 3 and CBD group 7
+sel=[s for s in counts.columns if s.split('-')[0] in ['3','7']]
+meta=layout.loc[sel,['Group']].copy()
+meta['group']=pd.Categorical(meta['Group'], categories=['DMSO','CBD_IC50'])
+ct=counts[sel].T.copy(); ct.index.name='sample'
+print(ct.shape, meta)
+dds=DeseqDataSet(counts=ct, metadata=meta[['group']], design='~group', quiet=False, n_cpus=4)
+dds.deseq2()
+stat=DeseqStats(dds, contrast=['group','CBD_IC50','DMSO'], alpha=0.05, independent_filter=True, cooks_filter=True, n_cpus=4)
+stat.summary()
+res=stat.results_df
+print(res.shape, res.padj.notna().sum(), (res.padj<0.05).sum())
+sig=res[(res.padj<0.05)&(res.log2FoldChange.abs()>0.5)]
+print('sig',len(sig),'up',(sig.log2FoldChange>0).sum(),'down',(sig.log2FoldChange<0).sum())
+res.to_csv('/workspace/tmp/deseq2_pairwise_6samples.tsv',sep='\\t')
+print(sig.sort_values('padj').head(30).to_string())
+PY"

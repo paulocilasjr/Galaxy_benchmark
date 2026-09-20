@@ -1,0 +1,71 @@
+/bin/bash -lc "python3 - <<'PY'
+import math, csv, re
+from collections import defaultdict
+p2g=defaultdict(set);g2p=defaultdict(set)
+for line in open('/workspace/tmp/pau_link.tsv'):
+    g,p=line.strip().split('\\t');g=re.sub(r'["'^:]+:'"','',g);p=re.sub(r'["'^:]+:'"','',p);p2g[p].add(g);g2p[g].add(p)
+names={l.split('\\t',1)[0] for l in open('/workspace/tmp/pau_pathways.tsv')}
+p2g={p:g for p,g in p2g.items() if p in names};g2p={g:{p for p in ps if p in names} for g,ps in g2p.items()}
+N=len({g for gs in p2g.values() for g in gs})
+
+def bh(ps):
+    n=len(ps)
+    if n==0:return []
+    # sorted ascending index
+    s=sorted(range(n), key=lambda i:ps[i])
+    # order decreasing p (same as rev(s)), rank i descending
+    # produce raw adjusted in original order
+    out=[0.0]*n
+    cummin=1.0
+    # iterate ascending reverse (largest to smallest), rank = n, n-1, ...
+    for rank,i in enumerate(reversed(s)):
+        r=n-rank # n, n-1...
+        raw=ps[i]*n/r
+        if raw < cummin: cummin=raw
+        out[i]=min(cummin,1.0)
+    return out
+
+def qvalues(ps):
+    # pi0 bootstrap approximation
+    m=len(ps); lam=[i/20 for i in range(1,20)]
+    W=[sum(p>=l for p in ps) for l in lam]
+    pi0s=[W[i]/(m*(1-lam[i])) for i in range(len(lam))]
+    minpi0=sorted(pi0s)[int((len(pi0s)-1)*0.1)] if len(pi0s)>1 else min(pi0s)
+    mses=[(W[i]/(m*m*(1-lam[i])**2))*(1-W[i]/m)+(pi0s[i]-minpi0)**2 for i in range(len(lam))]
+    minmse=min(mses); pi0=min(min([pi0s[i] for i,v in enumerate(mses) if v==minmse]),1)
+    # q values exactly R qvalue with pi0 (pfdr false)
+    o=sorted(range(m), key=lambda i:-ps[i]); ro=[0]*m
+    for rank,i in enumerate(o): ro[i]=rank
+    cum=1.0; vals=[]
+    for rank,i in enumerate(o):
+        raw=ps[i]*m/(rank+1)
+        cum=min(cum,raw)
+        vals.append(cum)
+    return [min(pi0*vals[ro[i]],1.0) for i in range(m)]
+
+def ora(gs, full_filter=True):
+    gs=set(gs)&set(g2p); mapped={g:set(g2p[g]) for g in gs}; qts=set().union(*mapped.values()) if mapped else set()
+    qts={t for t in qts if 10<=len(p2g[t])<=500}; n=len(mapped); rows=[]
+    for t in sorted(qts):
+        k=len(p2g[t]&set(mapped));M=len(p2g[t]);den=math.comb(N,n);p=sum(math.comb(M,i)*math.comb(N-M,n-i)/den for i in range(k,min(n,M)+1));rows.append((t,k,M,n,p))
+    ps=[r[4] for r in rows];pa=bh(ps);qv=qvalues(ps)
+    out=[]
+    for r,a,q in zip(rows,pa,qv):
+        t,k,M,n,p=r
+        ok=(p<=.05 and a<=.05 and (not full_filter or q<=.2))
+        out.append((t,p,a,q,k,M,n,ok))
+    return out
+
+for st in ['97','98','99']:
+    genes=[(r['gene'],float(r['lfc'])) for r in csv.DictReader(open(f'/workspace/tmp/res_{st}.csv'))]
+    for direction,pred in [('up',lambda x:x>1.5),('down',lambda x:x<-1.5)]:
+        res=ora([g for g,l in genes if pred(l)])
+        ids=[r[0] for r in res if r[7]]
+        print(st,direction,'sig',len(ids),ids)
+        globals()[f'{direction}_{st}']=set(ids)
+
+up=up_97&up_98&up_99;down=down_97&down_98&down_99
+print('UP COMMON',len(up),up)
+print('DOWN COMMON',len(down),down)
+print('UNION',len(up|down),up|down)
+PY"

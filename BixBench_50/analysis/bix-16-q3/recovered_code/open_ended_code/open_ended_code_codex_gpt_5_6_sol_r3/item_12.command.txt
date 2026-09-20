@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+import csv, time
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+
+ge_path='inputs/CRISPRGeneEffect.csv'
+ex_path='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+with open(ge_path,newline='') as f:
+    ge_header=next(csv.reader(f))
+with open(ex_path,newline='') as f:
+    ex_header=next(csv.reader(f))
+ex_pos={x:i for i,x in enumerate(ex_header)}
+genes=[x for x in ge_header[1:] if x in ex_pos]
+ge_use=[0]+[i for i,x in enumerate(ge_header) if i and x in ex_pos]
+ex_use=[0]+[ex_pos[x] for x in genes]
+dtypes={x:np.float32 for x in genes}
+
+t=time.time()
+ge=pd.read_csv(ge_path,usecols=ge_use,index_col=0,dtype=dtypes)
+print('loaded gene effect',ge.shape,'seconds',round(time.time()-t,2),flush=True)
+t=time.time()
+ex=pd.read_csv(ex_path,usecols=ex_use,index_col=0,dtype=dtypes)
+print('loaded expression',ex.shape,'seconds',round(time.time()-t,2),flush=True)
+# Force common feature order and align observations by ModelID in gene-effect order.
+ge=ge.loc[:,genes]
+ex=ex.loc[:,genes]
+models=ge.index[ge.index.isin(ex.index)]
+ge=ge.loc[models]
+ex=ex.loc[models]
+assert ge.index.equals(ex.index) and ge.columns.equals(ex.columns)
+G=ge.to_numpy(dtype=np.float64,copy=False)
+X=ex.to_numpy(dtype=np.float64,copy=False)
+print('aligned',G.shape,'gene-effect missing',int(np.isnan(G).sum()),'expression missing',int(np.isnan(X).sum()),flush=True)
+
+rhos=np.empty(len(genes),dtype=np.float64)
+ns=np.empty(len(genes),dtype=np.int32)
+for j in range(len(genes)):
+    valid=np.isfinite(G[:,j]) & np.isfinite(X[:,j])
+    ns[j]=valid.sum()
+    if ns[j] < 2:
+        rhos[j]=np.nan
+    else:
+        # Essentiality is positive-going, so negate negative-going Chronos gene effect.
+        rhos[j]=spearmanr(X[valid,j],-G[valid,j]).statistic
+
+finite=np.isfinite(rhos)
+count=int(np.sum(finite & (rhos>=0.6)))
+order=np.argsort(np.where(finite,rhos,-np.inf))[::-1]
+print('valid correlations',int(finite.sum()),'n range',int(ns[finite].min()),int(ns[finite].max()))
+print('count >= 0.6',count)
+print('rho boundary above',[(genes[i],float(rhos[i]),int(ns[i])) for i in order if rhos[i]>=0.6][-5:])
+print('rho boundary below',[(genes[i],float(rhos[i]),int(ns[i])) for i in order if rhos[i]<0.6][:5])
+print('top 10',[(genes[i],float(rhos[i]),int(ns[i])) for i in order[:10]])
+PY"

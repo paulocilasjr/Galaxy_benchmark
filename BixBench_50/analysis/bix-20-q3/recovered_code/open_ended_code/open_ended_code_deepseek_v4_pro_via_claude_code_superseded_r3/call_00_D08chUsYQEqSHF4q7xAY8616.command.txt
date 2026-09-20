@@ -1,0 +1,127 @@
+python3 << 'PYEOF'
+import openpyxl
+import os
+import glob
+from collections import Counter
+
+# Step 1: Get carrier samples from Trio Status
+wb_trio = openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws_trio = wb_trio['Sheet1']
+
+carrier_samples = set()
+for row in ws_trio.iter_rows(min_row=2, values_only=True):
+    if row[3] == 'Carrier':
+        carrier_samples.add(str(row[0]).strip())
+
+print(f"Carrier samples: {sorted(carrier_samples)} ({len(carrier_samples)} total)")
+
+# Step 2: Build mapping from sample ID to file path
+variant_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS/'
+all_files = glob.glob(os.path.join(variant_dir, '*.xlsx'))
+
+sample_to_file = {}
+for fpath in all_files:
+    fname = os.path.basename(fpath)
+    parts = fname.replace('.xlsx', '').split('_')
+    last_part = parts[-1]
+    if '-' in last_part:
+        sid = last_part.split('-')[0]
+    else:
+        sid = last_part
+    sample_to_file[sid] = fpath
+
+# SO terms to exclude
+exclude_so_terms = ['intron_variant', 'intergenic', 'UTR']
+
+# Counters
+total_with_clinvar = 0
+benign_likely_benign = 0
+
+# Detailed breakdown
+filter_stats = Counter()
+
+for sid in sorted(carrier_samples):
+    if sid not in sample_to_file:
+        print(f"  WARNING: No file for carrier sample {sid}")
+        continue
+    
+    fpath = sample_to_file[sid]
+    wb = openpyxl.load_workbook(fpath)
+    ws = wb[wb.sheetnames[0]]
+    
+    file_total = 0
+    file_benign = 0
+    
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        zygosity = str(row[4]) if row[4] is not None else ''
+        vaf_str = row[9]
+        so = str(row[13]) if row[13] is not None else ''
+        clinvar = str(row[25]) if row[25] is not None else ''
+        in_chip = str(row[29]) if row[29] is not None else ''
+        
+        # Filter 1: Must be a CHIP gene variant (In_CHIP=True)
+        if in_chip != 'True':
+            filter_stats['not_in_chip'] += 1
+            continue
+        
+        # Filter 2: Must be somatic - VAF < 0.3
+        if vaf_str is None:
+            filter_stats['vaf_none'] += 1
+            continue
+        try:
+            vaf = float(vaf_str)
+        except (ValueError, TypeError):
+            filter_stats['vaf_parse_error'] += 1
+            continue
+        
+        if vaf >= 0.3:
+            filter_stats['vaf_ge_0.3'] += 1
+            continue
+        
+        # Filter 3: Exclude reference (non-variant) calls
+        if zygosity == 'Reference':
+            filter_stats['reference_call'] += 1
+            continue
+        
+        # Filter 4: Exclude intronic, intergenic, UTR regions
+        so_lower = so.lower()
+        is_excluded_region = False
+        for term in exclude_so_terms:
+            if term.lower() in so_lower:
+                is_excluded_region = True
+                break
+        if is_excluded_region:
+            filter_stats[f'excluded_{so}'] += 1
+            continue
+        
+        # Filter 5: Must have ClinVar classification
+        if clinvar == '' or clinvar == 'None':
+            filter_stats['no_clinvar'] += 1
+            continue
+        
+        # This variant passes all filters
+        file_total += 1
+        
+        # Check if Benign or Likely Benign
+        if clinvar == 'Benign' or clinvar == 'Likely Benign':
+            file_benign += 1
+    
+    if file_total > 0:
+        print(f"  Sample {sid}: {file_benign}/{file_total} = {file_benign/file_total:.4f}")
+    
+    total_with_clinvar += file_total
+    benign_likely_benign += file_benign
+
+print(f"\n=== RESULTS ===")
+print(f"Total somatic CHIP variants (VAF<0.3) with ClinVar classifications: {total_with_clinvar}")
+print(f"Classified as Benign or Likely Benign: {benign_likely_benign}")
+if total_with_clinvar > 0:
+    proportion = benign_likely_benign / total_with_clinvar
+    print(f"Proportion: {proportion:.6f} ({proportion*100:.2f}%)")
+else:
+    print("Proportion: N/A (no variants found)")
+
+print(f"\nFilter statistics:")
+for k, v in filter_stats.most_common(20):
+    print(f"  {k}: {v}")
+PYEOF

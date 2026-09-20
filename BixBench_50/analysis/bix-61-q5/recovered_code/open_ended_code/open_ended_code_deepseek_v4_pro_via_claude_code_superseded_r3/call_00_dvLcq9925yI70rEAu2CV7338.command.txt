@@ -1,0 +1,71 @@
+python3 << 'PYEOF'
+import gzip
+import sys
+
+vcf_path = "/workspace/inputs/SRR35233585_raw_variants.vcf"
+
+# Check if gzipped
+if vcf_path.endswith('.gz'):
+    f = gzip.open(vcf_path, 'rt')
+else:
+    f = open(vcf_path, 'r')
+
+ts = 0  # transitions
+tv = 0  # transversions
+total_snv = 0
+multiallelic = 0
+
+# Transition pairs
+transitions = {
+    ('A', 'G'), ('G', 'A'),
+    ('C', 'T'), ('T', 'C')
+}
+
+for line in f:
+    if line.startswith('#'):
+        continue
+    fields = line.strip().split('\t')
+    if len(fields) < 5:
+        continue
+    
+    ref = fields[3]
+    alt = fields[4]
+    
+    # Skip if REF or ALT has multiple bases (indels, MNPs)
+    if len(ref) != 1:
+        continue
+    if ',' in alt:
+        # Multiallelic - count each ALT allele
+        alt_alleles = alt.split(',')
+        all_single_base = all(len(a) == 1 for a in alt_alleles)
+        if not all_single_base:
+            continue  # mixed SNV/indel, skip
+        multiallelic += 1
+        for a in alt_alleles:
+            total_snv += 1
+            if (ref, a) in transitions:
+                ts += 1
+            else:
+                tv += 1
+        continue
+    if len(alt) != 1:
+        continue
+    
+    # Single base substitution
+    total_snv += 1
+    if (ref, alt) in transitions:
+        ts += 1
+    else:
+        tv += 1
+
+f.close()
+
+print(f"Total SNV alleles: {total_snv}")
+print(f"Transitions (Ts): {ts}")
+print(f"Transversions (Tv): {tv}")
+print(f"Multiallelic records: {multiallelic}")
+if tv > 0:
+    print(f"Ts/Tv ratio: {ts/tv:.2f}")
+else:
+    print("Ts/Tv: undefined (Tv=0)")
+PYEOF

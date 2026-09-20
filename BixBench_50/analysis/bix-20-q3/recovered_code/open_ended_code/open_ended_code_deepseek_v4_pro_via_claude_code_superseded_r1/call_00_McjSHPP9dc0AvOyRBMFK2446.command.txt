@@ -1,0 +1,54 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import numpy as np
+
+# Let me check the two Carrier samples with 0 results: 396 and 504
+variant_dir = "inputs/CHIP_DP10_GQ20_PASS"
+
+for sid in [396, 504]:
+    fname = f"230209_Exome_GRCh38_CHIP_{sid}-PF.xlsx" if sid == 396 else f"230209_Exome_GRCh38_CHIP_{sid}-PM.xlsx"
+    fpath = os.path.join(variant_dir, fname)
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:].copy()
+    
+    zygosity = data[4]
+    seq_ontology = data[13]
+    vaf = pd.to_numeric(data[9], errors='coerce')
+    classification = data[25]
+    
+    print(f"\n=== Sample {sid} ===")
+    print(f"Total rows: {len(data)}")
+    print(f"Zygosity counts: {zygosity.value_counts().to_dict()}")
+    
+    # Non-reference variants
+    non_ref = data[zygosity != 'Reference']
+    print(f"Non-reference variants: {len(non_ref)}")
+    
+    # Non-ref with VAF
+    non_ref_vaf = non_ref[pd.to_numeric(non_ref[9], errors='coerce').notna()]
+    print(f"Non-ref with VAF: {len(non_ref_vaf)}")
+    print(f"VAF values: {sorted(pd.to_numeric(non_ref_vaf[9], errors='coerce').tolist())}")
+    
+    # Non-ref with VAF < 0.3
+    non_ref_low_vaf = non_ref[pd.to_numeric(non_ref[9], errors='coerce') < 0.3]
+    print(f"Non-ref with VAF < 0.3: {len(non_ref_low_vaf)}")
+    
+    if len(non_ref_low_vaf) > 0:
+        print("VAF < 0.3 variants:")
+        for _, row in non_ref_low_vaf.iterrows():
+            print(f"  {row[0]} {row[1]} Zyg:{row[4]} VAF:{row[9]} Gene:{row[12]} SO:{row[13]} ClinVar:{row[25]}")
+    
+    # Check variants that pass all filters except ClinVar
+    exclude_seq = ['intron_variant', 'intergenic_variant', 'intergenic_region', 
+                   '3_prime_UTR_variant', '5_prime_UTR_variant',
+                   '5_prime_UTR_premature_start_codon_gain_variant']
+    
+    combined = data[(zygosity != 'Reference') & 
+                    (~seq_ontology.isin(exclude_seq)) & 
+                    (vaf < 0.3)]
+    print(f"\nPassing all filters except ClinVar: {len(combined)}")
+    for _, row in combined.iterrows():
+        print(f"  {row[0]} {row[1]} Zyg:{row[4]} VAF:{row[9]} Gene:{row[12]} SO:{row[13]} ClinVar:{row[25]}")
+
+PYEOF

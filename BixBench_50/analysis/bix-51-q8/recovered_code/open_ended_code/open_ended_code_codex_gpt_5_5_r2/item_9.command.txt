@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import re, collections, statistics
+p=Path('/workspace/inputs/data.xlsx')
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def col_index(cell_ref):
+    s=re.match(r'([A-Z]+)', cell_ref).group(1); n=0
+    for ch in s: n=n*26+ord(ch)-64
+    return n-1
+def read_xlsx(p):
+    with ZipFile(p) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', ns):
+                ss.append(''.join(t.text or '' for t in si.findall('.//a:t', ns)))
+        sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for row in sheet.findall('.//a:sheetData/a:row', ns):
+            vals={}
+            for c in row.findall('a:c', ns):
+                ref=c.attrib['r']; t=c.attrib.get('t'); v=c.find('a:v', ns)
+                val='' if v is None else v.text
+                if t=='s' and val"'!='"'': val=ss[int(val)]
+                vals[col_index(ref)]=val
+            if vals:
+                rows.append([vals.get(i,'') for i in range(max(vals)+1)])
+        width=max(len(r) for r in rows)
+        return [r+['']*(width-len(r)) for r in rows]
+rows=read_xlsx(p)
+header=rows[0]
+recs=[]
+for r in rows[1:]:
+    if str(r[0]).strip() or str(r[1]).strip() or str(r[2]).strip() or str(r[3]).strip():
+        rec=dict(zip(header,r))
+        if rec.get('Sequence number','').strip(): recs.append(rec)
+print('n records',len(recs))
+for c in ['Groups','Efficacy','Age','Gender','Family history','ECOG-PS','Child-Pugh','Chemotherapy experience','HBV infection']:
+    ctr=collections.Counter(str(rec[c]).strip() for rec in recs)
+    print(c, ctr)
+print('age minmaxmean', min(float(r['Age']) for r in recs), max(float(r['Age']) for r in recs), statistics.mean(float(r['Age']) for r in recs))
+print('cross group efficacy')
+ct=collections.defaultdict(collections.Counter)
+for rec in recs:
+    ct[rec['Groups'].strip()][rec['Efficacy'].strip()]+=1
+for g in sorted(ct): print(g, dict(ct[g]))
+print('records around response changes')
+for rec in recs[:120]:
+    print(rec['Sequence number'], rec['Groups'], rec['Efficacy'], rec['Age'])
+PY"

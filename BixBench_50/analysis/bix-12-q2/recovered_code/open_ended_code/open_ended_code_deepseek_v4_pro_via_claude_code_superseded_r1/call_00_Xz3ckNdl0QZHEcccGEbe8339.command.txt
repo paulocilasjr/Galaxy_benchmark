@@ -1,0 +1,97 @@
+python3 << 'PYEOF'
+import zipfile
+from collections import Counter
+import sys
+
+def parse_fasta(text):
+    sequences = []
+    current_header = None
+    current_seq = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            if current_header is not None:
+                sequences.append((current_header, ''.join(current_seq)))
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_header is not None:
+        sequences.append((current_header, ''.join(current_seq)))
+    return sequences
+
+def count_parsimony_informative(sequences):
+    """
+    Parsimony informative sites: columns where at least two different
+    character states each occur in at least two sequences.
+    Gaps ('-') are treated as a character state (AMAS convention).
+    """
+    if not sequences:
+        return 0, 0
+    seqs = [s for _, s in sequences]
+    lengths = {len(s) for s in seqs}
+    if len(lengths) != 1:
+        raise ValueError(f"Sequences have different lengths: {lengths}")
+    n_sites = lengths.pop()
+    pis_count = 0
+    for col in range(n_sites):
+        chars = [s[col] for s in seqs]
+        counts = Counter(chars)
+        states_with_min2 = sum(1 for c in counts.values() if c >= 2)
+        if states_with_min2 >= 2:
+            pis_count += 1
+    return pis_count, n_sites
+
+def median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if n % 2 == 0:
+        return (s[n//2 - 1] + s[n//2]) / 2
+    return s[n//2]
+
+with zipfile.ZipFile('/workspace/inputs/scogs_fungi.zip', 'r') as zf:
+    mafft_files = [name for name in zf.namelist() if name.endswith('.faa.mafft')]
+    
+    percentages = []
+    skipped = []
+    
+    for fname in sorted(mafft_files):
+        content = zf.read(fname).decode('utf-8')
+        sequences = parse_fasta(content)
+        
+        if len(sequences) < 2:
+            skipped.append(fname)
+            continue
+        
+        pis, total = count_parsimony_informative(sequences)
+        pct = (pis / total * 100) if total > 0 else 0.0
+        percentages.append(pct)
+
+print(f"Alignments processed: {len(percentages)}")
+print(f"Skipped (<2 seqs): {len(skipped)}")
+
+med = median(percentages)
+mean = sum(percentages) / len(percentages)
+
+# Verify position
+sorted_pcts = sorted(percentages)
+n = len(sorted_pcts)
+print(f"N = {n}, median position = {n//2} (0-indexed)")
+print(f"Median value: {sorted_pcts[n//2]}")
+print(f"Median (computed): {med}")
+print(f"Mean: {mean}")
+
+# Show values around median
+mid = n // 2
+print(f"Values around median:")
+for i in range(max(0, mid-5), min(n, mid+6)):
+    marker = " <-- MEDIAN" if (n % 2 == 1 and i == mid) else ""
+    print(f"  [{i}] {sorted_pcts[i]:.6f}%{marker}")
+
+# Print answer with sufficient precision
+print(f"\n=== FINAL ANSWER ===")
+print(f"{med}%")
+PYEOF
+

@@ -1,0 +1,76 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv,time
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+def header(fn):
+    with open(fn,newline='') as f:
+        return next(csv.reader(f))
+
+t0=time.time()
+cr_h=header('inputs/CRISPRGeneEffect.csv')
+ex_h=header('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+ex_set=set(ex_h[1:])
+common=[g for g in cr_h[1:] if g in ex_set]
+cr_use=[0]+[i for i,g in enumerate(cr_h) if i and g in ex_set]
+ex_pos={g:i for i,g in enumerate(ex_h)}
+ex_use=[0]+[ex_pos[g] for g in common]
+dtype={g:np.float64 for g in common}
+cr=pd.read_csv('inputs/CRISPRGeneEffect.csv',usecols=cr_use,index_col=0,dtype=dtype)
+ex=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv',usecols=ex_use,index_col=0,dtype=dtype)
+ids=cr.index.intersection(ex.index)
+# Reindex both matrices to the same model order and common gene order.
+cr=cr.loc[ids,common]
+ex=ex.loc[ids,common]
+A=cr.to_numpy(copy=False)
+B=ex.to_numpy(copy=False)
+n_model,n_gene=A.shape
+print('loaded',A.shape,'seconds',round(time.time()-t0,2),flush=True)
+# Spearman ranks and two-sided asymptotic p-values, gene by gene in chunks.
+rvals=np.full(n_gene,np.nan,dtype=np.float64)
+ns=np.zeros(n_gene,dtype=np.int32)
+chunk=512
+for st in range(0,n_gene,chunk):
+    en=min(st+chunk,n_gene)
+    a=A[:,st:en]
+    b=B[:,st:en]
+    mask=np.isfinite(a) & np.isfinite(b)
+    ns[st:en]=mask.sum(axis=0)
+    aa=np.where(mask,a,np.nan)
+    bb=np.where(mask,b,np.nan)
+    ra=stats.rankdata(aa,axis=0,nan_policy='omit')
+    rb=stats.rankdata(bb,axis=0,nan_policy='omit')
+    n=ns[st:en].astype(np.float64)
+    mean=(n+1.0)/2.0
+    da=ra-mean
+    db=rb-mean
+    num=np.nansum(da*db,axis=0)
+    den=np.sqrt(np.nansum(da*da,axis=0)*np.nansum(db*db,axis=0))
+    r=num/den
+    rvals[st:en]=r
+print('ranked seconds',round(time.time()-t0,2),'n range',int(ns.min()),int(ns.max()),'nan r',int(np.isnan(rvals).sum()),flush=True)
+# scipy.stats.spearmanr uses the standard large-sample t approximation for its two-sided p-value.
+df=ns.astype(np.float64)-2.0
+with np.errstate(divide='ignore',invalid='ignore'):
+    tstat=rvals*np.sqrt(df/(1.0-rvals*rvals))
+pvals=2.0*stats.t.sf(np.abs(tstat),df)
+pvals[(np.abs(rvals)>=1.0) & np.isfinite(rvals)]=0.0
+# Benjamini-Hochberg adjusted p-values over every valid tested gene.
+valid=np.isfinite(pvals)
+m=int(valid.sum())
+order=np.argsort(pvals[valid])
+ps=pvals[valid][order]
+q_sorted=ps*m/np.arange(1,m+1,dtype=np.float64)
+q_sorted=np.minimum.accumulate(q_sorted[::-1])[::-1]
+q=np.full(n_gene,np.nan,dtype=np.float64)
+q_valid=np.empty(m,dtype=np.float64); q_valid[order]=q_sorted; q[valid]=q_valid
+sig=valid & (q<0.05)
+pos=sig & (rvals>0); neg=sig & (rvals<0)
+print('genes tested',m,'significant',int(sig.sum()),'positive',int(pos.sum()),'negative',int(neg.sum()),flush=True)
+print('percentage',repr(100.0*sig.sum()/m),flush=True)
+print('q min/max sig',float(np.nanmin(q)),float(np.nanmax(q[sig])) if sig.any() else None,flush=True)
+print('p cutoff around',[(i+1,float(ps[i]),float(q_sorted[i])) for i in range(max(0,np.searchsorted(q_sorted,0.05)-3),min(m,np.searchsorted(q_sorted,0.05)+3))],flush=True)
+print('r range significant',float(np.nanmin(rvals[sig])) if sig.any() else None,float(np.nanmax(rvals[sig])) if sig.any() else None,flush=True)
+print('total seconds',round(time.time()-t0,2),flush=True)
+PY"

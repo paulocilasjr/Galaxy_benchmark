@@ -1,0 +1,63 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(path) {
+  x <- readRDS(path)
+  data.frame(
+    gene = attr(x, \"rownames\"),
+    baseMean = x@listData"'$baseMean,
+    log2FoldChange = x@listData$log2FoldChange,
+    lfcSE = x@listData$lfcSE,
+    stat = x@listData$stat,
+    pvalue = x@listData$pvalue,
+    padj = x@listData$padj,
+    stringsAsFactors = FALSE
+  )
+}
+
+link_lines <- readLines("https://rest.kegg.jp/link/pathway/pau", warn = FALSE)
+links <- do.call(rbind, strsplit(link_lines, "'"\\t\", fixed = TRUE))
+map <- data.frame(gene = sub(\""'^pau:", "", links[,1]), pathway = sub("''^path:", "", links[,2]), stringsAsFactors = FALSE)
+
+ora <- function(res, minGSSize = 1L, maxGSSize = Inf, universe_mode = c("tested_mapped", "kegg_all")) {
+  universe_mode <- match.arg(universe_mode)
+  fg <- res$gene[!is.na(res$padj) & abs(res$log2FoldChange) > 1.5 & res$padj < 0.05]
+  if (universe_mode == "tested_mapped") {
+    universe <- intersect(res$gene, unique(map$gene))
+  } else {
+    universe <- unique(map$gene)
+  }
+  fg <- intersect(fg, universe)
+  m2 <- map[map$gene %in% universe, ]
+  gs <- split(unique(m2$gene), m2$pathway)
+  gs <- gs[lengths(gs) >= minGSSize & lengths(gs) <= maxGSSize]
+  hits <- vapply(gs, function(g) sum(g %in% fg), integer(1))
+  gs <- gs[hits > 0]
+  hits <- hits[hits > 0]
+  M <- length(universe)
+  N <- length(fg)
+  K <- lengths(gs)
+  p <- phyper(hits - 1, K, M - K, N, lower.tail = FALSE)
+  padj <- p.adjust(p, method = "BH")
+  out <- data.frame(pathway = names(gs), k = hits, K = K, N = N, M = M, pvalue = p, padj = padj, stringsAsFactors = FALSE)
+  out[order(out$padj, out$pvalue, out$pathway), ]
+}
+
+glu <- read_res("inputs/res_GluFevsGluFePlus.rds")
+succ <- read_res("inputs/res_SuccvsGluFePlus.rds")
+cat("fg counts", sum(!is.na(glu$padj) & abs(glu$log2FoldChange)>1.5 & glu$padj<0.05), sum(!is.na(succ$padj) & abs(succ$log2FoldChange)>1.5 & succ$padj<0.05), "'"\\n\")
+cat(\"mapped tested\", length(intersect(glu"'$gene, unique(map$gene))), length(intersect(succ$gene, unique(map$gene))), "'"\\n\")
+for (mode in c(\"tested_mapped\", \"kegg_all\")) {
+  for (minmax in c(\"all\", \"cp\")) {
+    min <- if (minmax == \"cp\") 10L else 1L
+    max <- if (minmax == \"cp\") 500L else Inf
+    eg <- ora(glu, min, max, mode)
+    es <- ora(succ, min, max, mode)
+    sg <- eg"'$pathway[eg$padj < 0.05]
+    ss <- es$pathway[es$padj < 0.05]
+    ans <- setdiff(sg, ss)
+    cat("MODE", mode, "FILTER", minmax, "sig_glu", length(sg), "sig_succ", length(ss), "setdiff", length(ans), "'"\\n\")
+    cat(\"only_glu\", paste(ans, collapse=\",\"), \"\\n\")
+    cat(\"sig_glu\", paste(sg, collapse=\",\"), \"\\n\")
+    cat(\"sig_succ\", paste(ss, collapse=\",\"), \"\\n\")
+  }
+}
+RS"

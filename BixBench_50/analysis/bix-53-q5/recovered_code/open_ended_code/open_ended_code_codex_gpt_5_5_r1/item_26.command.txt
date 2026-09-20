@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_raw = pd.read_csv('inputs/count.csv')
+counts = counts_raw.set_index('geneID').T
+counts = counts.astype(int)
+metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in counts.index]}, index=counts.index)
+print('counts', counts.shape)
+print(metadata)
+
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', ref_level=['condition','KL'], quiet=False, n_cpus=1)
+dds.deseq2()
+print('dds done')
+print('var columns', list(dds.var.columns)[:20])
+print('LFC columns', getattr(dds, 'varm', {}).keys() if hasattr(dds,'varm') else 'no')
+
+stat_res = DeseqStats(dds, contrast=['condition','WL','KL'], alpha=0.05, quiet=False, n_cpus=1)
+stat_res.summary()
+print('summary done')
+print(stat_res.results_df.head())
+print('LFC columns', stat_res.LFC.columns)
+print('res cols before shrink', stat_res.results_df.columns)
+coeff = [c for c in stat_res.LFC.columns if c "'!= '"'Intercept'][0]
+print('coeff', coeff)
+stat_res.lfc_shrink(coeff=coeff)
+print('shrink done')
+print(stat_res.results_df.head())
+print('res cols after shrink', stat_res.results_df.columns)
+# Write a minimal temp? no
+sig = stat_res.results_df[(stat_res.results_df['pvalue'] < 0.05) & (stat_res.results_df['baseMean'] > 10) & (stat_res.results_df['log2FoldChange'].abs() > 1)]
+print('sig genes', len(sig))
+print(sig.head(20))
+PY"

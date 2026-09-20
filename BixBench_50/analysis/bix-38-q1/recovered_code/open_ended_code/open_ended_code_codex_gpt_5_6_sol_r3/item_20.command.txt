@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from subprocess import run
+from statistics import median
+from Bio import Phylo
+import json, math
+out={}
+for group in ('animals','fungi'):
+    files=sorted(Path('.scratch_phylo',group).glob('*.treefile'))
+    vals=[]; exact=[]; leaf_counts=[]; missing=0; failed=[]
+    for f in files:
+        p=run(['python','-m','phykit','total_tree_length',str(f)],capture_output=True,text=True)
+        if p.returncode:
+            failed.append((f.name,p.stderr.strip()))
+            continue
+        try: vals.append(float(p.stdout.strip()))
+        except Exception: failed.append((f.name,p.stdout.strip())); continue
+        tree=Phylo.read(str(f),'newick')
+        branches=[clade.branch_length for clade in tree.find_clades() if clade is not tree.root]
+        missing += sum(x is None for x in branches)
+        exact.append(sum(x for x in branches if x is not None))
+        leaf_counts.append(len(tree.get_terminals()))
+    out[group]={
+      'selected':len(files),'processed':len(vals),'failed':failed,'missing_nonroot_branch_lengths':missing,
+      'leaf_count_distribution':{str(n):leaf_counts.count(n) for n in sorted(set(leaf_counts))},
+      'phykit_min':min(vals),'phykit_median':median(vals),'phykit_max':max(vals),
+      'exact_median':median(exact)
+    }
+out['fold_fungi_over_animals_phykit']=out['fungi']['phykit_median']/out['animals']['phykit_median']
+out['fold_animals_over_fungi_phykit']=1/out['fold_fungi_over_animals_phykit']
+out['fold_fungi_over_animals_exact']=out['fungi']['exact_median']/out['animals']['exact_median']
+print(json.dumps(out,indent=2))
+PY"

@@ -1,0 +1,44 @@
+/bin/bash -lc "Rscript - <<'RS'
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(openxlsx)
+})
+cat('R packages loaded\\n')
+count_path <- '/workspace/inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt'
+cold_path <- '/workspace/inputs/Issy_ASXL1_blood_coldata_gender.xlsx'
+counts <- read.table(count_path, header=TRUE, row.names=1, check.names=FALSE)
+cat('counts dim raw', dim(counts), '\\n')
+coldata <- read.xlsx(cold_path)
+coldata <- coldata["'!is.na(coldata$sample), ]
+cat('"'coldata rows', nrow(coldata), '\\n')
+print(table(coldata"'$condition, coldata$sex))
+rownames(coldata) <- coldata$sample
+keep <- intersect(coldata$sample, colnames(counts))
+cat('"'keep length', length(keep), 'coldata samples', nrow(coldata), 'count columns', ncol(counts), '\\n')
+cat('extra count columns not in coldata:', paste(setdiff(colnames(counts), coldata"'$sample), collapse='"','), '\\n')
+stopifnot(length(keep) == nrow(coldata))
+counts <- counts[, keep, drop=FALSE]
+coldata <- coldata[colnames(counts), , drop=FALSE]
+coldata"'$condition <- factor(coldata$condition, levels=c('"'Control','ASXL1'))
+coldata"'$sex <- factor(coldata$sex, levels=c('"'F','M'))
+stopifnot(all(rownames(coldata) == colnames(counts)))
+cat('condition table\\n')
+print(table(coldata"'$condition))
+cat('"'sex table\\n')
+print(table(coldata"'$sex))
+cat('"'counts are integers:', all(counts == round(counts)), 'min max', min(counts), max(counts), '\\n')
+dds <- DESeqDataSetFromMatrix(countData=as.matrix(counts), colData=coldata, design=~sex+condition)
+cat('starting DESeq\\n')
+print(system.time(dds <- DESeq(dds)))
+cat('results names:', paste(resultsNames(dds), collapse=', '), '\\n')
+res <- results(dds, name='condition_ASXL1_vs_Control')
+cat('unshrunken padj<0.05:', sum(res"'$padj < 0.05, na.rm=TRUE), '"'of', nrow(res), '\\n')
+cat('starting apeglm shrink\\n')
+print(system.time(resLFC <- lfcShrink(dds, coef='condition_ASXL1_vs_Control', type='apeglm')))
+cat('resLFC columns:', paste(colnames(resLFC), collapse=', '), '\\n')
+n <- sum(resLFC"'$padj < 0.05, na.rm=TRUE)
+cat('"'PADJ_SIG', n, '\\n')
+cat('NA padj', sum(is.na(resLFC"'$padj)), '"'nonNA', sum("'!is.na(resLFC$padj)), '"'\\n')
+cat('summary padj\\n'); print(summary(resLFC"'$padj))
+RS'

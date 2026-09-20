@@ -1,0 +1,71 @@
+/tmp/phykit_env/bin/python << 'EOF'
+import subprocess
+import os
+from scipy.stats import mannwhitneyu
+
+PHYKIT = "/tmp/phykit_env/bin/phykit"
+
+SHARED_GENES = [
+    '1014314at2759', '1018517at2759', '1193442at2759', '1249159at2759',
+    '1269649at2759', '1342242at2759', '1346432at2759', '1405073at2759',
+    '1428854at2759', '1504863at2759', '1525971at2759', '1620056at2759',
+    '341721at2759', '453044at2759', '570797at2759', '664730at2759',
+    '673132at2759', '974865at2759', '996662at2759'
+]
+
+SCOS_A = "/tmp/scogs_a"
+SCOS_F = "/tmp/scogs_f"
+
+def run_cmd(cmd, timeout=60):
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return result.stdout.strip(), result.stderr, result.returncode
+
+animal_rates = []
+fungal_rates = []
+
+print("Computing evo_rates from existing SCOS IQ-TREE trees...")
+for i, gene in enumerate(SHARED_GENES):
+    a_tree = f"{SCOS_A}/{gene}.faa.mafft.clipkit.treefile"
+    f_tree = f"{SCOS_F}/{gene}.faa.mafft.clipkit.treefile"
+    
+    # Animal evo_rate
+    stdout, stderr, rc = run_cmd([PHYKIT, "evo_rate", a_tree])
+    if rc != 0:
+        print(f"  [{i+1}/19] {gene}: ERROR animal - {stderr}")
+        continue
+    a_rate = float(stdout)
+    
+    # Fungal evo_rate
+    stdout, stderr, rc = run_cmd([PHYKIT, "evo_rate", f_tree])
+    if rc != 0:
+        print(f"  [{i+1}/19] {gene}: ERROR fungal - {stderr}")
+        continue
+    f_rate = float(stdout)
+    
+    animal_rates.append(a_rate)
+    fungal_rates.append(f_rate)
+    print(f"  [{i+1}/19] {gene}: animal={a_rate:.6f}, fungal={f_rate:.6f}")
+
+print(f"\nSuccessfully processed {len(animal_rates)} genes")
+
+print(f"\nAnimal rates (n={len(animal_rates)}):")
+for g, r in zip(SHARED_GENES, animal_rates):
+    print(f"  {g}: {r:.6f}")
+print(f"Mean: {sum(animal_rates)/len(animal_rates):.6f}")
+
+print(f"\nFungal rates (n={len(fungal_rates)}):")
+for g, r in zip(SHARED_GENES, fungal_rates):
+    print(f"  {g}: {r:.6f}")
+print(f"Mean: {sum(fungal_rates)/len(fungal_rates):.6f}")
+
+# Mann-Whitney U test
+stat, p_value = mannwhitneyu(animal_rates, fungal_rates, alternative='two-sided')
+print(f"\nMann-Whitney U statistic: {stat}")
+print(f"p-value: {p_value}")
+
+# Write answer
+os.makedirs("/workspace/codex_output", exist_ok=True)
+with open("/workspace/codex_output/answer.txt", 'w') as f:
+    f.write(f"{stat}\n")
+print(f"\nAnswer written to /workspace/codex_output/answer.txt")
+EOF

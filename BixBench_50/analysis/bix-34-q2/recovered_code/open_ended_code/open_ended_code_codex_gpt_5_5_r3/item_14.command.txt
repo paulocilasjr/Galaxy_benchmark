@@ -1,0 +1,82 @@
+/bin/bash -lc "python3 - <<'PY'
+from itertools import combinations
+from statistics import median
+
+# Minimal Newick parser sufficient for this tree: labels, branch lengths, nested clades.
+text = open('/workspace/tmp_981902/981902at2759.faa.mafft.clipkit.treefile').read().strip()
+if text.endswith(';'):
+    text = text[:-1]
+
+class Node:
+    def __init__(self, name=None, length=0.0):
+        self.name = name
+        self.length = length
+        self.children = []
+        self.parent = None
+
+def parse_subtree(i):
+    node = Node()
+    if text[i] == '(':
+        i += 1
+        while True:
+            child, i = parse_subtree(i)
+            child.parent = node
+            node.children.append(child)
+            if text[i] == ',':
+                i += 1
+                continue
+            if text[i] == ')':
+                i += 1
+                break
+    # optional name
+    start = i
+    while i < len(text) and text[i] not in ':,()':
+        i += 1
+    if i > start:
+        node.name = text[start:i]
+    if i < len(text) and text[i] == ':':
+        i += 1
+        start = i
+        while i < len(text) and text[i] not in ',()':
+            i += 1
+        node.length = float(text[start:i])
+    return node, i
+
+root, pos = parse_subtree(0)
+assert pos == len(text), (pos, len(text), text[pos:])
+leaves = []
+def walk(n):
+    if not n.children:
+        leaves.append(n)
+    for c in n.children:
+        walk(c)
+walk(root)
+
+def ancestors(n):
+    out = {}
+    d = 0.0
+    while n is not None:
+        out[n] = d
+        d += n.length
+        n = n.parent
+    return out
+
+def dist(a,b):
+    aa = ancestors(a)
+    d = 0.0
+    n = b
+    while n not in aa:
+        d += n.length
+        n = n.parent
+    return aa[n] + d
+
+pairs = []
+for a,b in combinations(leaves, 2):
+    pairs.append((a.name,b.name,dist(a,b)))
+vals = sorted(x[2] for x in pairs)
+print('pairs')
+for p in pairs:
+    print(p[0], p[1], f'{p[2]:.10f}')
+print('sorted', ' '.join(f'{v:.10f}' for v in vals))
+print('median', f'{median(vals):.10f}')
+PY"

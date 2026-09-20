@@ -1,0 +1,85 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, math
+from decimal import Decimal, getcontext
+getcontext().prec=50
+
+class Node:
+    def __init__(self, children=None, length=Decimal(0)):
+        self.children=children or []; self.length=length
+
+def parse(s):
+    i=0; L=len(s)
+    def ws():
+        nonlocal i
+        while i<L and s[i].isspace(): i+=1
+    def lbl():
+        nonlocal i
+        ws(); start=i
+        while i<L and s[i] not in ':,();' and not s[i].isspace(): i+=1
+        return s[start:i]
+    def bl():
+        nonlocal i
+        ws()
+        if i<L and s[i]==':':
+            i+=1; ws(); start=i
+            while i<L and s[i] not in ',();' and not s[i].isspace(): i+=1
+            return Decimal(s[start:i])
+        return Decimal(0)
+    def rec():
+        nonlocal i
+        ws()
+        if s[i]=='(':
+            i+=1; ch=[]
+            while True:
+                ch.append(rec()); ws()
+                if s[i]==',': i+=1
+                else: i+=1; break
+            lbl()
+            return Node(ch,bl())
+        lbl(); return Node([],bl())
+    return rec()
+
+def edge_mean(root):
+    edges=[]
+    def dfs(n):
+        if not n.children: return 1
+        k=sum(dfs(c) for c in n.children)
+        return k
+    N=dfs(root)
+    def add(n):
+        def leaves(x): return 1 if not x.children else sum(leaves(c) for c in x.children)
+        k=leaves(n)
+        if k<N: edges.append(n.length*k*(N-k))
+        for c in n.children: add(c)
+    add(root)
+    return sum(edges,Decimal(0))/Decimal(math.comb(N,2))
+
+def direct_mean(root):
+    paths=[]
+    def tips(n,path):
+        p=path+[(id(n),n.length)]
+        if not n.children: paths.append(p)
+        for c in n.children: tips(c,p)
+    tips(root,[])
+    vals=[]
+    for a in range(len(paths)):
+        da={node:length for node,length in paths[a]}
+        for b in range(a+1,len(paths)):
+            db={node:length for node,length in paths[b]}
+            vals.append(sum((da.get(e,Decimal(0)) if e not in db else Decimal(0)) for e in da)+sum((db.get(e,Decimal(0)) if e not in da else Decimal(0)) for e in db))
+    return sum(vals,Decimal(0))/len(vals)
+
+med={}
+for group in ('animals','fungi'):
+    vals=[]
+    with zipfile.ZipFile(f'inputs/scogs_{group}.zip') as z:
+        for n in sorted(x for x in z.namelist() if x.endswith('.treefile')):
+            root=parse(z.read(n).decode())
+            x=edge_mean(root); y=direct_mean(root)
+            assert x==y,(n,x,y)
+            vals.append(x)
+    vals.sort(); N=len(vals)
+    med[group]=vals[N//2] if N%2 else (vals[N//2-1]+vals[N//2])/2
+    print(group,'N',N,'median',med[group])
+print('ratio_fungi_to_animals', med['fungi']/med['animals'])
+PY"

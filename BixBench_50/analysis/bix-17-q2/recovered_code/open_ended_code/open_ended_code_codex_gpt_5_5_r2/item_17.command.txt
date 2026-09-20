@@ -1,0 +1,75 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+import glob, os, re, statistics, math
+from collections import defaultdict, Counter
+
+def iter_rows(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    ws.reset_dimensions()
+    yield from ws.iter_rows(values_only=True)
+
+def sample_id_from_path(f):
+    base=os.path.basename(f)
+    token=base.replace('230209_Exome_GRCh38_CHIP_','').replace('.xlsx','')
+    return token.split('-')[0].strip()
+
+def num(x):
+    if x is None: return None
+    if isinstance(x,(int,float)): return float(x)
+    s=str(x).strip()
+    if s=='': return None
+    try: return float(s)
+    except ValueError: return None
+
+def excluded_region(so):
+    s=str(so or '').lower()
+    # user-specified exclusions: Intronic, Intergenic, UTR regions
+    return ('intron' in s) or ('intergenic' in s) or ('utr' in s)
+
+status_rows=list(iter_rows('inputs/230215_Trio_Status.xlsx'))
+h=status_rows[0]; idx={name:i for i,name in enumerate(h) if name is not None}
+status={str(r[idx['Sample ID']]).strip(): str(r[idx['BLM Mutation Status']]).strip() for r in status_rows[1:] if r and r[0] is not None}
+files={sample_id_from_path(f):f for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+carrier_ids=[sid for sid,st in status.items() if st=='Carrier']
+carrier_available=[sid for sid in carrier_ids if sid in files]
+print('carrier_ids', carrier_ids)
+print('available', carrier_available)
+print('missing', [sid for sid in carrier_ids if sid not in files])
+counts={}
+detail=[]
+for sid in carrier_available:
+    f=files[sid]
+    rows=iter_rows(f)
+    group=next(rows); header=next(rows)
+    # direct indexes from observed schema
+    n=0; reasons=Counter(); kept=[]
+    for r in rows:
+        if not r or r[0] is None: continue
+        z=str(r[4] if len(r)>4 and r[4] is not None else '').strip()
+        so=r[13] if len(r)>13 else None
+        v=num(r[9] if len(r)>9 else None)
+        if z == 'Reference':
+            reasons['reference']+=1; continue
+        if excluded_region(so):
+            reasons['region']+=1; continue
+        if v is None:
+            reasons['no_vaf']+=1; continue
+        if not (v < 0.3):
+            reasons['vaf>=0.3']+=1; continue
+        n+=1
+        kept.append((r[0], r[12], so, z, v))
+    counts[sid]=n
+    detail.append((sid,n,reasons,kept[:10]))
+
+print('counts sorted by carrier order')
+for sid in carrier_available:
+    print(sid, counts[sid])
+vals=[counts[sid] for sid in carrier_available]
+print('n', len(vals), 'vals sorted', sorted(vals), 'median', statistics.median(vals))
+vals20=vals+[0]*len([sid for sid in carrier_ids if sid not in files])
+print('including missing as 0: n',len(vals20),'sorted',sorted(vals20),'median',statistics.median(vals20))
+print('\\nper sample reason/kept examples')
+for sid,n,reasons,kept in detail:
+    print('\\n',sid,'n',n,'reasons',dict(reasons),'kept_examples',kept[:5])
+PY"

@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import collections, zipfile
+from scipy.stats import mannwhitneyu, rankdata
+AA=set('ACDEFGHIKLMNPQRSTVWY')
+
+def records(raw):
+    seqs=[]; seq=[]
+    for line in raw.decode('ascii').splitlines():
+        if line.startswith('>'):
+            if seq: seqs.append(''.join(seq)); seq=[]
+        elif line.strip(): seq.append(line.strip().upper())
+    if seq: seqs.append(''.join(seq))
+    return seqs
+
+def pi_percentages(path):
+    values=[]
+    counts=[]
+    with zipfile.ZipFile(path) as archive:
+        names=sorted(n for n in archive.namelist() if n.endswith('.faa.mafft'))
+        for name in names:
+            seqs=records(archive.read(name))
+            lengths={len(s) for s in seqs}
+            assert len(lengths)==1
+            length=lengths.pop()
+            informative=0
+            for column in zip(*seqs):
+                state_counts=collections.Counter(c for c in column if c in AA)
+                informative += sum(n >= 2 for n in state_counts.values()) >= 2
+            counts.append(informative)
+            values.append(100.0*informative/length)
+    return values,counts
+animals,ac=pi_percentages('inputs/scogs_animals.zip')
+fungi,fc=pi_percentages('inputs/scogs_fungi.zip')
+res=mannwhitneyu(animals,fungi,alternative='two-sided',method='asymptotic')
+allv=animals+fungi
+manual=sum(rankdata(allv,method='average')[:len(animals)])-len(animals)*(len(animals)+1)/2
+print('n:',len(animals),len(fungi))
+print('zero PI:',sum(c==0 for c in ac),sum(c==0 for c in fc))
+print('scipy:',res)
+print('manual U for animals:',manual)
+print('complement U for fungi:',len(animals)*len(fungi)-manual)
+assert res.statistic==manual==6948.0
+PY"

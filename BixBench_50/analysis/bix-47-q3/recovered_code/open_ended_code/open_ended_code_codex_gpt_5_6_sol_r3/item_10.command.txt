@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+# Independently validate cohort target, CHIP membership, and site-level count from raw XLSX XML.
+from pathlib import Path
+from openpyxl import load_workbook
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from collections import Counter
+import re
+meta=load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True).active
+hdr=[c.value for c in next(meta.iter_rows())]
+rows=[dict(zip(hdr,[c.value for c in row])) for row in meta.iter_rows()]
+target=max((r for r in rows if r['Sex']=='M' and r['BLM Mutation Status']=='Carrier'),key=lambda r:r['Age'])
+print('target',target)
+genes=[r[0] for r in load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx',read_only=True,data_only=True).active.iter_rows(values_only=True)]
+print('NOTCH1 in supplied CHIP genes', 'NOTCH1' in genes, 'gene-list n',len(genes))
+p=next(Path('inputs/CHIP_DP10_GQ20_PASS').glob(f\"*_{target['Sample ID']}-*.xlsx\"))
+print('workbook',p.name)
+N='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+with ZipFile(p) as z:
+ ss=[''.join(t.text or '' for t in si.iter(N+'t')) for si in ET.fromstring(z.read('xl/sharedStrings.xml')).findall(N+'si')]
+ sh=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+ data=[]
+ for rx in sh.findall('.//'+N+'row')[2:]:
+  r={}
+  for c in rx.findall(N+'c'):
+   col=re.match('[A-Z]+',c.attrib['r']).group(); v=c.find(N+'v')
+   r[col]=None if v is None else (ss[int(v.text)] if c.attrib.get('t')=='s' else v.text)
+  data.append(r)
+nonref=[r for r in data if r.get('E') in {'Heterozygous','Homozygous Variant'}]
+print('non-reference rows',len(nonref),'unique sites',len({(r.get('A'),r.get('B')) for r in nonref}))
+print('all PASS',all(r.get('T')=='PASS' for r in nonref),'all DP>=10',all(float(r['H'])>=10 for r in nonref),'all GQ>=20',all(float(r['I'])>=20 for r in nonref))
+counts=Counter(r['AE'] for r in nonref)
+print('top counts',counts.most_common(10))
+print('winner unique sites',len({(r['A'],r['B']) for r in nonref if r['AE']=='NOTCH1'}))
+PY"

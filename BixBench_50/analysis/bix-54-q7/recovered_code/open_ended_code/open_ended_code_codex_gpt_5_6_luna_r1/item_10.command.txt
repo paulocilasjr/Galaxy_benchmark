@@ -1,0 +1,54 @@
+/bin/bash -lc "Rscript - <<'RS'
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+mi <- subset(d, StrainNumber == '287_98')
+parts <- strsplit(mi"'$Ratio, '"':', fixed=TRUE)
+mi"'$x <- vapply(parts, function(z) as.numeric(z[1]) / sum(as.numeric(z)), numeric(1))
+cat('"'n=', nrow(mi), ' range=', range(mi"'$x), '"'\\n', sep='')
+mods <- list(
+  quadratic = lm(Area ~ poly(x, 2, raw=TRUE), data=mi),
+  cubic = lm(Area ~ poly(x, 3, raw=TRUE), data=mi),
+  natural_spline_df4 = lm(Area ~ splines::ns(x, df=4), data=mi)
+)
+for (nm in names(mods)) {
+  m <- mods[[nm]]
+  cat('\\n', nm, '\\n', sep='')
+  cat('AIC=', AIC(m), ' BIC=', BIC(m), ' R2=', summary(m)"'$r.squared, '"' adjR2=', summary(m)"'$adj.r.squared, '"' RMSE=', sqrt(mean(residuals(m)"'^2)), '"'\\n', sep='')
+  print(coef(m))
+}
+# robust maximum by dense grid and local optimize around candidate grid maxima
+predmax <- function(m, lo=0, hi=1) {
+  g <- seq(lo, hi, length.out=1000001)
+  p <- as.numeric(predict(m, newdata=data.frame(x=g)))
+  i <- which.max(p)
+  left <- if (i == 1) lo else g[i-1]
+  right <- if (i == length(g)) hi else g[i+1]
+  opt <- optimize(function(z) -as.numeric(predict(m, newdata=data.frame(x=z))), c(left, right), maximum=FALSE)
+  # include endpoints
+  candx <- c(lo, hi, opt"'$minimum)
+  candp <- as.numeric(predict(m, newdata=data.frame(x=candx)))
+  j <- which.max(candp)
+  c(x=candx[j], pred=candp[j])
+}
+cat('"'\\nMAX over [0,1]\\n')
+for (nm in names(mods)) print(c(model=nm, predmax(mods[[nm]], 0, 1)))
+cat('\\nMAX over observed mixture range\\n')
+for (nm in names(mods)) print(c(model=nm, predmax(mods[[nm]], min(mi"'$x), max(mi$x))))
+# all relevant rows incl pure 98/287; exclude strain1
+rel <- subset(d, StrainNumber %in% c('"'98','287','287_98'))
+rel"'$x <- ifelse(rel$StrainNumber == '"'98', 0, ifelse(rel"'$StrainNumber == '"'287', 1, NA_real_))
+ix <- is.na(rel"'$x)
+parts2 <- strsplit(rel$Ratio[ix], '"':', fixed=TRUE)
+rel"'$x[ix] <- vapply(parts2, function(z) as.numeric(z[1]) / sum(as.numeric(z)), numeric(1))
+mods2 <- list(
+  quadratic = lm(Area ~ poly(x, 2, raw=TRUE), data=rel),
+  cubic = lm(Area ~ poly(x, 3, raw=TRUE), data=rel),
+  natural_spline_df4 = lm(Area ~ splines::ns(x, df=4), data=rel)
+)
+cat('"'\\nALL relevant n=', nrow(rel), '\\n', sep='')
+for (nm in names(mods2)) {
+  m <- mods2[[nm]]
+  cat(nm, 'AIC=', AIC(m), ' BIC=', BIC(m), ' R2=', summary(m)"'$r.squared, '"' adjR2=', summary(m)"'$adj.r.squared, '"'\\n', sep='')
+}
+cat('\\nALL MAX over [0,1]\\n')
+for (nm in names(mods2)) print(c(model=nm, predmax(mods2[[nm]], 0, 1)))
+RS"

@@ -1,0 +1,50 @@
+/bin/bash -lc "Rscript - <<'RS'
+parse_rds <- function(f) {
+  a <- attributes(readRDS(f))
+  list(gene=a[[\"rownames\"]], lfc=a[[\"listData\"]][[\"log2FoldChange\"]], padj=a[[\"listData\"]][[\"padj\"]])
+}
+ln <- readLines(\"https://rest.kegg.jp/link/pathway/pau\", warn=FALSE)
+sp <- strsplit(ln, \"\\t\", fixed=TRUE)
+map <- data.frame(gene=sub(\""'^pau:", "", vapply(sp, `[`, "", 1)), path=sub("''^path:", "", vapply(sp, `[`, "", 2)), stringsAsFactors=FALSE)
+sets <- split(map$gene, map$path)
+sets <- lapply(sets, unique)
+cat("KEGG paths",length(sets),"genes",length(unique(map$gene)),"'"\\n\")
+res <- lapply(list.files(\"inputs\", pattern=\""'^res_.*'"\\\\.rds"'$", full.names=TRUE), parse_rds)
+for (i in seq_along(res)) {
+  r <- res[[i]]; cat("file",basename(list.files("inputs", pattern="''^res_.*'"\\\\.rds"'$", full.names=TRUE)[i]),"genes",length(r$gene),"mapped",sum(r$gene %in% unique(map$gene)),"up",sum(r$lfc>1.5),"down",sum(r$lfc < -1.5),"abs",sum(abs(r$lfc)>1.5),"padj05",sum(r$padj<.05),"'"\\n\")
+}
+bg_input <- unique(res[[1]]"'$gene)
+bg_kegg <- unique(map$gene)
+calc <- function(r, bg, minGS=1, maxGS=Inf, pcut=.05, adjcut=.05, add_padj=FALSE) {
+  bg <- intersect(bg, unique(map$gene))
+  ss <- lapply(sets, intersect, y=bg)
+  keep <- vapply(ss, length, integer(1)) >= minGS & vapply(ss, length, integer(1)) <= maxGS
+  ss <- ss[keep]
+  N <- length(bg)
+  out <- lapply(c(up="up",down="down"), function(dir) {
+    sel <- intersect(r$gene[if (dir=="up") r$lfc>1.5 else r$lfc < -1.5], bg)
+    n <- length(sel)
+    k <- vapply(ss, function(g) sum(sel %in% g), integer(1))
+    K <- vapply(ss, length, integer(1))
+    p <- phyper(k-1, K, N-K, n, lower.tail=FALSE)
+    adj <- p.adjust(p, method="BH")
+    data.frame(path=names(ss),K=K,k=k,p=p,adj=adj, n=n, stringsAsFactors=FALSE)
+  })
+  names(out) <- c("up","down")
+  out
+}
+for (bgname in c("input","kegg")) {
+  bg <- if(bgname=="input") bg_input else bg_kegg
+  for (minGS in c(1,5,10)) for (maxGS in c(Inf,500)) {
+    if (maxGS < minGS) next
+    z <- lapply(res, calc, bg=bg, minGS=minGS, maxGS=maxGS)
+    for (cut in c(.05,.1,.2)) {
+      for (dir in c("up","down")) {
+        sig <- lapply(z, function(zz) zz[[dir]]$path[zz[[dir]]$adj < cut])
+        inter <- Reduce(intersect,sig)
+        if (length(inter)>0 || (minGS==10 && maxGS==500 && cut==.05)) cat("variant",bgname,"min",minGS,"max",maxGS,"adj",cut,"dir",dir,"per",paste(vapply(sig,length,integer(1)),collapse=","),"intersection",length(inter),"'"\\n\")
+      }
+    }
+  }
+}
+RS"

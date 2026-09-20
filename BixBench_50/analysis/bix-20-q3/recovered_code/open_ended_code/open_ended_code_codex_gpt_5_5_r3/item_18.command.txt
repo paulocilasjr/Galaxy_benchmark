@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+import glob,re,collections
+
+def rows(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    try: ws.reset_dimensions()
+    except Exception: pass
+    yield from ws.iter_rows(values_only=True)
+
+# unique statuses after trimming IDs, full class distribution for all filtered variants by BLM status
+status_rows=rows('inputs/230215_Trio_Status.xlsx')
+h=next(status_rows)
+status={}
+for r in status_rows:
+    if r and r[0] is not None:
+        d=dict(zip(h,r)); status[str(d['Sample ID']).strip()]=d['BLM Mutation Status']
+files={re.match(r'(\\d+|SRR\\d+)', Path(f).stem.replace('230209_Exome_GRCh38_CHIP_','')).group(1):f for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')}
+print('trimmed status counts', collections.Counter(status.values()))
+print('files no status', sorted(set(files)-set(status))[:10], len(set(files)-set(status)))
+print('status no files', sorted(set(status)-set(files))[:10], len(set(status)-set(files)))
+
+def fnum(x):
+    try: return float(x)
+    except: return None
+for blm in ['Carrier']:
+    c=collections.Counter(); cls=collections.Counter(); so=collections.Counter()
+    for sid,st in status.items():
+        if st"'!=blm or sid not in files: continue
+        it=rows(files[sid]); next(it); hdr=next(it); idx={k:i for i,k in enumerate(hdr) if k}
+        for r in it:
+            if not r or r[0] is None: continue
+            if str(r[idx['"'In_CHIP']]).lower()"'!='"'true': continue
+            if str(r[idx['Zygosity']]).strip().lower()=='reference': continue
+            v=fnum(r[idx['Variant Allele Freq']])
+            if v is None or v>=0.3: continue
+            seq=str(r[idx['Sequence Ontology (Combined)']] or '')
+            if any(t in seq.lower() for t in ('intron','intergenic','utr')): continue
+            so[seq]+=1
+            cl=r[idx['Classification']]
+            cls[str(cl).strip() if cl is not None and str(cl).strip() else '<missing>']+=1
+    print('SO after filters', so)
+    print('Class after filters', cls)
+PY"

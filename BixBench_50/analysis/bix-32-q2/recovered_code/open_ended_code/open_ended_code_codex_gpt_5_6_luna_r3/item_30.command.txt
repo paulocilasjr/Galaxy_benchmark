@@ -1,0 +1,17 @@
+/bin/bash -lc "Rscript - <<'RS'
+paths <- c(\"/workspace/inputs/res_1vs97.rds\", \"/workspace/inputs/res_1vs98.rds\", \"/workspace/inputs/res_1vs99.rds\")
+res <- lapply(paths, function(p) { x <- readRDS(p); ld <- attr(x,\"listData\"); data.frame(gene=attr(x,\"rownames\"),lfc=ld"'$log2FoldChange,padj=ld$padj) })
+names(res) <- c("97","98","99")
+links <- read.delim("https://rest.kegg.jp/link/pathway/pau",header=FALSE,sep="'"\\t\",quote=\"\",stringsAsFactors=FALSE)
+links"'$V1 <- sub("''^pau:","",links$V1); links$V2 <- sub("''^path:","",links$V2)
+gs0 <- lapply(split(links$V1,links$V2),unique)
+run <- function(fg, uni, minGS=1,maxGS=Inf, family="hits", cutoff="padj") {
+  gs <- lapply(gs0,intersect,y=uni); sz <- lengths(gs); k <- vapply(gs,function(z)length(intersect(z,fg)),integer(1)); keep <- sz>=minGS & sz<=maxGS; test <- keep & k>0; N <- length(uni); n <- length(intersect(fg,uni)); p <- rep(NA_real_,length(gs)); p[test] <- phyper(k[test]-1,sz[test],N-sz[test],n,lower.tail=FALSE); pa <- rep(NA_real_,length(gs)); idx <- if(family=="hits") test else keep; pa[idx] <- p.adjust(p[idx],"BH"); sig <- if(cutoff=="padj") pa<.05 else p<.05; names(gs)[which(!is.na(sig)&sig)]
+}
+report <- function(uniName, uni, family, minGS, maxGS, cutoff) {
+  out <- list(); cat("U",uniName,"N",length(uni),"family",family,"min",minGS,"max",maxGS,"cut",cutoff,"'"\\n\")
+  for (sgn in c(\"pos\",\"neg\")) { x <- lapply(res,function(d) { z <- d"'$lfc > 1.5; if(sgn=="neg") z <- d$lfc < -1.5; if(cutoff=="padj") z <- z & d$padj<.05; run(d$gene[z],uni,minGS,maxGS,family,cutoff) }); inter <- Reduce(intersect,x); cat(sgn,"sizes",paste(lengths(x),collapse=","),"inter",length(inter),paste(inter,collapse=","),"'"\\n\"); out[[sgn]] <- inter }
+  cat(\"total\",length(unique(unlist(out))),\"sum\",sum(lengths(out)),\"\\n\")
+}
+for (uniName in c(\"res\",\"kegg\")) { uni <- if(uniName==\"res\") unique(unlist(lapply(res,"'`[[`,"gene"))) else unique(links$V1); for (family in c("hits","all")) for (cutoff in c("padj","raw")) report(uniName,uni,family,1,Inf,cutoff) }
+RS'

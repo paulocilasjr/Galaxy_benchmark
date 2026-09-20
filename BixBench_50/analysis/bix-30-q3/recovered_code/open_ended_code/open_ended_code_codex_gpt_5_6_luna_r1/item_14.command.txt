@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess, math
+path='inputs/pone.0150501.s002.xls'
+s=xlrd.open_workbook(path).sheet_by_index(0)
+rows=[]
+def vec(vals):
+    return 'c(' + ','.join('%.17g'%v for v in vals) + ')'
+expr_equal=[]; expr_welch=[]
+for i in range(2,s.nrows):
+    x=[float(s.cell_value(i,j)) for j in range(1,11) if not isinstance(s.cell_value(i,j),str)]
+    y=[float(s.cell_value(i,j)) for j in range(11,21) if not isinstance(s.cell_value(i,j),str)]
+    rows.append((s.cell_value(i,0),x,y))
+    expr_equal.append('t.test(%s,%s,var.equal=TRUE)"'$p.value'"'%(vec(x),vec(y)))
+    expr_welch.append('t.test(%s,%s,var.equal=FALSE)"'$p.value'"'%(vec(x),vec(y)))
+script='options(warn=-1); pe <- c(%s); pw <- c(%s); cat(sprintf(\"%%.17g %% .17g\\\\n\", pe,pw), sep=\"\")' % (','.join(expr_equal),','.join(expr_welch))
+r=subprocess.run(['R','--vanilla','--slave'],input=script,text=True,capture_output=True,check=True)
+ps=[]
+for line in r.stdout.strip().splitlines():
+    a,b=line.split(); ps.append((float(a),float(b)))
+print('rows',len(rows),'pvals',len(ps))
+
+def bonf(p):
+    m=len(p)
+    return [min(1,m*x) for x in p]
+def by(p):
+    m=len(p); c=sum(1.0/i for i in range(1,m+1))
+    order=sorted(range(m),key=lambda i:p[i])
+    adj=[1.0]*m; running=1.0
+    # adjusted p for sorted p: min over k>=i p_(k)*m*c/(k+1)
+    for pos in range(m-1,-1,-1):
+        val=p[order[pos]]*m*c/(pos+1)
+        running=min(running,val)
+        adj[order[pos]]=min(1.0,running)
+    return adj
+for kind,k in [('equal',0),('welch',1)]:
+    raw=[v[k] for v in ps]
+    print('\\n',kind,'raw p<=.05',sum(x<=.05 for x in raw))
+    pb=bonf(raw); py=by(raw)
+    print('Bonf',sum(x<=.05 for x in pb),'BY',sum(x<=.05 for x in py))
+    print('Bonf sig',[(rows[i][0],raw[i],pb[i]) for i in range(len(raw)) if pb[i]<=.05])
+    print('BY sig',[(rows[i][0],raw[i],py[i]) for i in range(len(raw)) if py[i]<=.05])
+PY"

@@ -1,0 +1,33 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, re, time
+from scipy.stats import spearmanr
+start=time.time()
+print('loading data', flush=True)
+eff=pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0)
+expr=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0)
+clean=lambda col: re.sub(r'\\s*\\(.*\\)"'$'"','',col)
+eff.columns=[clean(c) for c in eff.columns]
+expr.columns=[clean(c) for c in expr.columns]
+common_rows=eff.index.intersection(expr.index)
+common_genes=eff.columns.intersection(expr.columns)
+# align rows and columns in common sorted order
+eff=eff.loc[common_rows, common_genes]
+expr=expr.loc[common_rows, common_genes]
+E=expr.to_numpy(dtype=np.float64)
+# essentiality = -gene_effect (positive-going dependency)
+D=-eff.to_numpy(dtype=np.float64)
+print('shapes', E.shape, D.shape, 'loading', time.time()-start, flush=True)
+rows=[]
+for j,g in enumerate(common_genes):
+    x=E[:,j]
+    y=D[:,j]
+    mask=~np.isnan(y)
+    if mask.sum() >= 2:
+        rho=spearmanr(x[mask], y[mask]).correlation
+        if np.isfinite(rho):
+            rows.append((rho,g,int(mask.sum())))
+res=pd.DataFrame(rows, columns=['rho','gene','n']).sort_values('rho')
+print('computed', len(res), 'elapsed total', time.time()-start, flush=True)
+print(res.head(20).to_string(index=False))
+print('min gene', res.iloc[0]['gene'], 'rho', res.iloc[0]['rho'], 'n', res.iloc[0]['n'])
+PY"

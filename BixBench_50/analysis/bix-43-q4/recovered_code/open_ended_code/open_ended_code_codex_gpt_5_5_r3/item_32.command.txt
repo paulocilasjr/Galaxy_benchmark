@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+# To avoid another DE fit, use a lighter local reconstruction? no saved result. Fit again but only print matching terms.
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['count_id'] = layout['SampleID'].str.replace('-', '_', regex=False)
+meta = layout[layout['Group'].isin(['DMSO', 'Cisplatin_IC50_CBD_IC50'])].copy()
+cts = counts.loc[:, meta['count_id']].T
+cts.index = meta['count_id'].values
+metadata = meta.set_index('count_id')[['Group']]
+metadata['Group'] = pd.Categorical(metadata['Group'], categories=['DMSO','Cisplatin_IC50_CBD_IC50'])
+cts = cts.loc[:, cts.sum(axis=0) > 0]
+dds = DeseqDataSet(counts=cts.astype(int), metadata=metadata, design='~ Group', ref_level=['Group','DMSO'], quiet=True, n_cpus=8)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05, quiet=True, n_cpus=8)
+stat_res.summary()
+res = stat_res.results_df
+sig = res[(res['padj'].notna()) & (res['padj'] < 0.05) & (res['log2FoldChange'].abs() >= 0.5)]
+mapdf = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t')
+genes = sig.reset_index(names='ENSG').merge(mapdf, on='ENSG', how='left')['gene_name'].dropna().drop_duplicates().astype(str).tolist()
+r = gp.enrichr(gene_list=genes, gene_sets='Reactome_2022', organism='human', outdir=None, no_plot=True).results
+sel = r[r['Term'].str.contains('TP53|Cell Cycle|Transcription', case=False, regex=True)]
+print(sel[['Term','Overlap','Adjusted P-value','Genes']].to_string(index=False, max_colwidth=200))
+print('n results', len(r))
+print('top 20')
+print(r[['Term','Overlap','Adjusted P-value','Genes']].head(20).to_string(index=False, max_colwidth=160))
+PY"

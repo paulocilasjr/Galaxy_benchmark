@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, numpy as np
+from scipy.stats import pearsonr
+# annotation maps
+ann={}
+with open('inputs/Sample_annotated_Zenodo.csv',newline='') as f:
+    for d in csv.DictReader(f): ann[d['sample']]=d['celltype']
+# gene lengths and pc gene order
+lengths={}; pcs=[]
+with open('inputs/GeneMetaInfo_Zenodo.csv',newline='') as f:
+    for d in csv.DictReader(f):
+        if d['gene_biotype']=='protein_coding':
+            lengths[d['Geneid']]=float(d['Length']); pcs.append(d['Geneid'])
+pcset=set(pcs)
+# read header and identify columns
+with open('inputs/BatchCorrectedReadCounts_Zenodo.csv',newline='') as f:
+    header=next(f).strip().split(',')
+cols=header[1:]
+typecols={t:[i for i,c in enumerate(cols) if ann.get(c)==t] for t in ['CD4','CD8','CD14','CD19']}
+# read all numeric matrix with numpy (skip first row and first col)
+print('reading matrix...')
+M=np.loadtxt('inputs/BatchCorrectedReadCounts_Zenodo.csv', delimiter=',', skiprows=1, usecols=range(1,len(header)), dtype=np.float64)
+genes=[row[0] for row in csv.reader(open('inputs/BatchCorrectedReadCounts_Zenodo.csv',newline='')) if False] # not needed
+# read gene names separately quickly
+with open('inputs/BatchCorrectedReadCounts_Zenodo.csv',newline='') as f:
+    r=csv.reader(f); next(r)
+    genenames=[row[0] for row in r]
+print(M.shape, len(genenames))
+mask=np.array([g in pcset for g in genenames])
+L=np.array([lengths[g] for g in genenames if g in pcset], dtype=float)
+Mpc=M[mask]
+print('mask sum',mask.sum(),'L',L.shape,'Mpc',Mpc.shape)
+for t in ['CD4','CD8','CD14','CD19']:
+    sub=Mpc[:, typecols[t]]
+    mean=sub.mean(axis=1)
+    r,p=pearsonr(L,mean)
+    print(t, r, p, np.corrcoef(L,mean)[0,1])
+PY"

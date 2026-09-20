@@ -1,0 +1,69 @@
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+from collections import Counter
+import json
+
+def parse(path):
+    seqs=[]; name=None; chars=[]
+    for line in path.read_text().splitlines():
+        if line.startswith('>'):
+            if name is not None: seqs.append((name,''.join(chars)))
+            name=line[1:].strip(); chars=[]
+        else:
+            chars.append(line.strip())
+    if name is not None: seqs.append((name,''.join(chars)))
+    return seqs
+
+def count_pis(path, exclude=set('-?X*.x')):
+    seqs=parse(path)
+    if len(seqs)<4:
+        return 0, len(seqs)
+    L=len(seqs[0][1])
+    # ensure equal lengths
+    assert all(len(s)==L for _,s in seqs)
+    pis=0
+    for i in range(L):
+        col=[s[i].upper() for _,s in seqs if s[i].upper() not in exclude]
+        if len(col)<4:
+            continue
+        cnt=Counter(col)
+        if sum(1 for v in cnt.values() if v>=2)>=2:
+            pis+=1
+    return pis, len(seqs)
+
+def ranks(vals):
+    order=sorted(range(len(vals)), key=lambda i:(vals[i],i))
+    r=[0.0]*len(vals); i=0
+    while i<len(order):
+        j=i
+        while j+1<len(order) and vals[order[j+1]]==vals[order[i]]:
+            j+=1
+        avg=(i+j)/2+1
+        for k in range(i,j+1): r[order[k]]=avg
+        i=j+1
+    return r
+for group in ['animals','fungi']:
+    files=sorted(Path('/workspace/tmp',group).glob('*.mafft'))
+    vals={}
+    dist=[]
+    for f in files:
+        pi,n=count_pis(f)
+        vals[f.name]=pi
+        dist.append(n)
+    Path('/workspace/tmp',f'{group}_raw_pis.json').write_text(json.dumps(vals,sort_keys=True))
+    arr=list(vals.values())
+    print(group,'files',len(arr),'sum',sum(arr),'mean',sum(arr)/len(arr),'minmax',min(arr),max(arr),'zeros',sum(v==0 for v in arr))
+    from collections import Counter as C
+    print('taxa dist',C(dist))
+    print('quantiles', sorted(arr)[0], sorted(arr)[len(arr)//4], sorted(arr)[len(arr)//2], sorted(arr)[3*len(arr)//4], sorted(arr)[-1])
+an=json.loads(Path('/workspace/tmp/animals_raw_pis.json').read_text())
+fu=json.loads(Path('/workspace/tmp/fungi_raw_pis.json').read_text())
+# preserve sorted file order by name from all groups
+animal_keys=sorted(an)
+fungi_keys=sorted(fu)
+x=[an[k] for k in animal_keys]
+y=[fu[k] for k in fungi_keys]
+r=ranks(x+y); n=len(x); R=sum(r[:n]); U=n*len(y)+n*(n+1)/2-R
+print('n1',n,'n2',len(y),'R1',R,'U1',U,'U2',n*len(y)-U)
+# scipy if available? no. install? not needed.
+PY"

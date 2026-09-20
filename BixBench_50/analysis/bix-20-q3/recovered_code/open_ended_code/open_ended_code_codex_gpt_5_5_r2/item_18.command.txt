@@ -1,0 +1,140 @@
+/bin/bash -lc "python3 - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+from collections import Counter, defaultdict
+import re, math
+
+def rows_from_xlsx(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb.worksheets[0]
+    ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True)
+    top=next(it); hdr=next(it)
+    for row in it:
+        if not any(v is not None for v in row): continue
+        yield dict(zip(hdr,row))
+
+def read_status():
+    wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+    ws=wb.active
+    rows=list(ws.iter_rows(values_only=True))
+    hdr=rows[0]
+    out=[]
+    for r in rows[1:]:
+        if r[0] is None: continue
+        d=dict(zip(hdr,r))
+        sid=str(d['Sample ID']).strip()
+        if sid.endswith('.0'): sid=sid[:-2]
+        d['sid']=sid
+        out.append(d)
+    return out
+
+def sample_id_from_file(p):
+    s=p.stem.split('CHIP_')[-1]
+    return s.split('-')[0]
+
+def to_float(x):
+    if x is None: return None
+    if isinstance(x,(int,float)): return float(x)
+    s=str(x).strip()
+    if not s: return None
+    if s.endswith('%'):
+        return float(s[:-1])/100
+    return float(s)
+
+def exclude_region(so):
+    s=(so or '').lower()
+    return ('intron' in s) or ('intergenic' in s) or ('utr' in s)  # catches 3_prime_UTR/5_prime_UTR
+
+def has_class(c):
+    return c is not None and str(c).strip() not in ('','-','.')
+
+def benign_like(c):
+    s=str(c).strip().lower()
+    return s in {'benign','likely benign','likely benign'}
+
+status=read_status()
+carriers={d['sid'] for d in status if d['BLM Mutation Status']=='Carrier'}
+files={sample_id_from_file(p):p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+print('carrier ids', sorted(carriers))
+print('missing carrier files', sorted(carriers-set(files)))
+carrier_files=[files[s] for s in sorted(carriers & set(files), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x))]
+print('carrier files', len(carrier_files), [p.name for p in carrier_files])
+# gene list
+gwb=load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx', read_only=True, data_only=True)
+genes={str(r[0]).strip() for r in gwb.active.iter_rows(values_only=True) if r[0]}
+print('genes',len(genes), sorted(list(genes))[:5], sorted(list(genes))[-5:])
+
+allrows=[]
+stage=Counter()
+classes=Counter()
+classes_prefilter=Counter()
+so_counter=Counter()
+zyg_counter=Counter()
+examples=[]
+for p in carrier_files:
+    sid=sample_id_from_file(p)
+    for d in rows_from_xlsx(p):
+        d['_sample']=sid; d['_file']=p.name
+        stage['raw']+=1
+        # In_CHIP/gene list check counts
+        zyg_counter[d.get('Zygosity')]+=1
+        vaf=to_float(d.get('Variant Allele Freq'))
+        d['_vaf']=vaf
+        # core filters stepwise
+        if str(d.get('In_CHIP')).strip().lower()"'!='"'true':
+            stage['not_in_chip']+=1; continue
+        stage['in_chip']+=1
+        if str(d.get('Zygosity')).strip().lower()=='reference':
+            stage['reference']+=1; continue
+        stage['nonref']+=1
+        if vaf is None:
+            stage['vaf_missing_nonref']+=1; continue
+        if not (vaf < 0.3):
+            stage['vaf_ge_0.3']+=1; continue
+        stage['vaf_lt_0.3']+=1
+        so=d.get('Sequence Ontology (Combined)')
+        so_counter[so]+=1
+        if exclude_region(so):
+            stage['excluded_region']+=1; continue
+        stage['coding_region_kept']+=1
+        c=d.get('Classification')
+        if not has_class(c):
+            stage['no_class']+=1; continue
+        stage['with_class']+=1
+        classes[c]+=1
+        d['_key']=(d.get('Chr:Pos'), d.get('Ref/Alt'), d.get('Gene Names'), d.get('HGVS c. (Clinically Relevant)'), d.get('HGVS p. (Clinically Relevant)'), c)
+        allrows.append(d)
+        if len(examples)<20: examples.append(d)
+
+print('stage', stage)
+print('zyg', zyg_counter)
+print('classes after filters', classes)
+print('numer exact benign/lb', sum(n for c,n in classes.items() if str(c).strip().lower() in {'benign','likely benign'}), 'denom', sum(classes.values()))
+print('proportion', sum(n for c,n in classes.items() if str(c).strip().lower() in {'benign','likely benign'})/sum(classes.values()) if classes else None)
+print('SO after vaf before exclusion top', so_counter.most_common(30))
+print('examples after final filters:')
+for d in examples:
+    print(d['_sample'], d['Chr:Pos'], d['Ref/Alt'], d['Gene Names'], d['Zygosity'], d['_vaf'], d['Sequence Ontology (Combined)'], d['Classification'])
+# unique by sample+variant vs unique variant
+unique_variant={ (d['Chr:Pos'],d['Ref/Alt']) : d for d in allrows}
+unique_full={ d['_key']: d for d in allrows}
+print('n rows',len(allrows),'unique chr/refalt',len(unique_variant),'unique full',len(unique_full))
+for name,vals in [('chrref', unique_variant.values()),('full', unique_full.values())]:
+    cc=Counter(d['Classification'] for d in vals)
+    num=sum(n for c,n in cc.items() if str(c).strip().lower() in {'benign','likely benign'})
+    den=sum(cc.values())
+    print('unique',name,cc,'numdenprop',num,den,(num/den if den else None))
+# Alternative without In_CHIP filter
+cc2=Counter(); den2=0; num2=0
+for p in carrier_files:
+    for d in rows_from_xlsx(p):
+        if str(d.get('Zygosity')).strip().lower()=='reference': continue
+        vaf=to_float(d.get('Variant Allele Freq'))
+        if vaf is None or not vaf<0.3: continue
+        if exclude_region(d.get('Sequence Ontology (Combined)')): continue
+        c=d.get('Classification')
+        if not has_class(c): continue
+        cc2[c]+=1
+print('without in_chip classes',cc2,'numdenprop',sum(n for c,n in cc2.items() if str(c).strip().lower() in {'benign','likely benign'}),sum(cc2.values()),sum(n for c,n in cc2.items() if str(c).strip().lower() in {'benign','likely benign'})/sum(cc2.values()) if cc2 else None)
+PY"

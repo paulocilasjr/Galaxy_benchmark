@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+from fractions import Fraction
+from collections import Counter
+from zipfile import ZipFile
+
+
+def fasta_records(data):
+    records=[]
+    name=None
+    parts=[]
+    for line in data.decode('ascii').splitlines():
+        if line.startswith('>'):
+            if name is not None:
+                records.append((name,''.join(parts)))
+            name=line[1:].split()[0]
+            parts=[]
+        elif line.strip():
+            parts.append(line.strip())
+    if name is not None:
+        records.append((name,''.join(parts)))
+    return records
+
+rows=[]
+with ZipFile('inputs/scogs_fungi.zip') as z:
+    mafft_names=[n for n in z.namelist() if n.endswith('.faa.mafft')]
+    assert len(mafft_names)==255
+    for name in mafft_names:
+        recs=fasta_records(z.read(name))
+        lengths={len(s) for _,s in recs}
+        assert len(lengths)==1 and recs
+        L=next(iter(lengths))
+        informative=0
+        for col in zip(*(s for _,s in recs)):
+            states=[c for c in col if c not in '-.?']
+            counts=Counter(states)
+            if sum(v >= 2 for v in counts.values()) >= 2:
+                informative += 1
+        pct=Fraction(100*informative,L)
+        rows.append((pct,name,len(recs),informative,L))
+
+rows.sort()
+mid=rows[len(rows)//2]
+print('files',len(rows),'median_entry',mid[1])
+print('taxa_counts',Counter(r[2] for r in rows))
+print('median_pct_fraction',mid[0], 'decimal',float(mid[0]))
+print('median_rank',len(rows)//2+1,'informative',mid[3],'length',mid[4])
+print('neighbors')
+for row in rows[len(rows)//2-3:len(rows)//2+4]:
+    print(row[0],row[1],row[2],row[3],row[4])
+# Verify no noncanonical symbols and no malformed sequence count.
+print('noncanonical',sorted({c for _,_,_,_,_ in []}))
+PY"

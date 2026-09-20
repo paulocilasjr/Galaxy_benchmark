@@ -1,0 +1,53 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, scipy.stats as st, re, time
+pge='inputs/CRISPRGeneEffect.csv'; pex='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+t=time.time(); ge=pd.read_csv(pge,index_col=0); ex=pd.read_csv(pex,index_col=0)
+print('loaded',ge.shape,ex.shape,'sec',round(time.time()-t,2),flush=True)
+rows=ge.index.intersection(ex.index,sort=False)
+cols=ge.columns.intersection(ex.columns,sort=False)
+g=ge.loc[rows,cols].to_numpy(); x=ex.loc[rows,cols].to_numpy(); labels=np.asarray(cols)
+res=np.full(len(cols),np.nan)
+complete=~np.isnan(g).any(axis=0)
+print('aligned',len(rows),len(cols),'complete',complete.sum(),'incomplete',(~complete).sum(),flush=True)
+# Chunked vectorized Spearman for complete columns.
+ci=np.flatnonzero(complete)
+for start in range(0,len(ci),1000):
+ ix=ci[start:start+1000]
+ rx=st.rankdata(x[:,ix],axis=0,method='average')
+ rg=st.rankdata(g[:,ix],axis=0,method='average')
+ rx-=rx.mean(axis=0); rg-=rg.mean(axis=0)
+ res[ix]=(rx*rg).sum(axis=0)/np.sqrt((rx*rx).sum(axis=0)*(rg*rg).sum(axis=0))
+# Pairwise-complete ranking for incomplete columns.
+for j in np.flatnonzero(~complete):
+ m=~np.isnan(g[:,j])
+ if m.sum() >= 2:
+  rx=st.rankdata(x[m,j],method='average'); rg=st.rankdata(g[m,j],method='average')
+  rx-=rx.mean(); rg-=rg.mean()
+  den=np.sqrt((rx*rx).sum()*(rg*rg).sum())
+  if den: res[j]=(rx*rg).sum()/den
+order_hi=np.argsort(np.nan_to_num(res,nan=-np.inf))[::-1]
+order_lo=np.argsort(np.nan_to_num(res,nan=np.inf))
+print('TOP raw GE positive == essentiality negative')
+for j in order_hi[:15]: print(labels[j],repr(res[j]),'n',int((~np.isnan(g[:,j])).sum()))
+print('TOP raw GE negative == essentiality positive')
+for j in order_lo[:10]: print(labels[j],repr(res[j]),'n',int((~np.isnan(g[:,j])).sum()))
+# Evaluate non-exact symbol labels sharing a unique Entrez ID.
+def parsed(columns):
+ d={}
+ for c in columns:
+  m=re.fullmatch(r'(.+) \\((\\d+)\\)',c)
+  d.setdefault(m.group(2),[]).append(c)
+ return d
+dg=parsed(ge.columns); dx=parsed(ex.columns)
+extra=[]
+for eid in set(dg)&set(dx):
+ if len(dg[eid])==len(dx[eid])==1 and dg[eid][0]"'!=dx[eid][0]:
+  cg,cx=dg[eid][0],dx[eid][0]
+  a=ge.loc[rows,cg].to_numpy(); b=ex.loc[rows,cx].to_numpy(); m=~np.isnan(a)
+  if m.sum()>=2:
+   rho=st.spearmanr(a[m],b[m]).statistic
+   extra.append((rho,cg,cx,int(m.sum())))
+print('"'TOP stable-ID renamed pairs raw GE positive')
+for z in sorted(extra,reverse=True)[:15]: print(z)
+print('elapsed',round(time.time()-t,2))
+PY"

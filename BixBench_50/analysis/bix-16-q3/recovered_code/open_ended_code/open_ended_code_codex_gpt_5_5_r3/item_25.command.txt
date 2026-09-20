@@ -1,0 +1,56 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+import csv
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata
+
+def read_matrix(path):
+    with open(path, newline='') as f:
+        header = next(csv.reader(f))
+    dtype = {col: np.float32 for col in header[1:]}
+    return pd.read_csv(path, index_col=0, dtype=dtype)
+
+ge = read_matrix('inputs/CRISPRGeneEffect.csv')
+expr = read_matrix('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+
+common_rows = ge.index.intersection(expr.index)
+common_cols = ge.columns.intersection(expr.columns)
+ge = ge.loc[common_rows, common_cols]
+expr = expr.loc[common_rows, common_cols]
+
+count = 0
+valid_corrs = 0
+near = []
+for gene in common_cols:
+    x = expr[gene].to_numpy(dtype=np.float64, copy=False)
+    y = -ge[gene].to_numpy(dtype=np.float64, copy=False)
+    mask = np.isfinite(x) & np.isfinite(y)
+    n = int(mask.sum())
+    if n < 2:
+        continue
+    rx = rankdata(x[mask], method='average')
+    ry = rankdata(y[mask], method='average')
+    rx -= rx.mean()
+    ry -= ry.mean()
+    denom = np.sqrt(np.dot(rx, rx) * np.dot(ry, ry))
+    if denom == 0:
+        continue
+    rho = float(np.dot(rx, ry) / denom)
+    valid_corrs += 1
+    if rho >= 0.6:
+        count += 1
+    if 0.59 <= rho <= 0.61:
+        near.append((gene, rho, n))
+
+print('common_rows', len(common_rows))
+print('common_cols', len(common_cols))
+print('valid_corrs', valid_corrs)
+print('count_ge_0.6', count)
+print('near_threshold', len(near))
+print('closest_to_threshold')
+for item in sorted(near, key=lambda t: abs(t[1]-0.6))[:20]:
+    print(item[0], f'{item[1]:.12f}', item[2])
+Path('codex_output').mkdir(exist_ok=True)
+Path('codex_output/answer.txt').write_text(str(count) + '\\n')
+PY"

@@ -1,0 +1,60 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+# Sanity check: examine top significant correlations
+import csv, numpy as np
+from scipy import stats
+
+# Load headers
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    crispr_genes = next(csv.reader(f))[1:]
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    expr_genes = next(csv.reader(f))[1:]
+
+cg_map = {g: i for i, g in enumerate(crispr_genes)}
+eg_map = {g: i for i, g in enumerate(expr_genes)}
+common = sorted(set(cg_map) & set(eg_map))
+
+# Common lines
+cc = set()
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    r = csv.reader(f); next(r)
+    for row in r: cc.add(row[0])
+ec = set()
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    r = csv.reader(f); next(r)
+    for row in r: ec.add(row[0])
+cl = sorted(cc & ec)
+cl_set = set(cl)
+
+# Load a few top genes to check
+# From the previous run we know the significant genes
+# Let's test a handful of genes covering the range of p-values
+test_genes = common[:20]  # first 20 genes 
+
+for gene in test_genes:
+    ci = cg_map[gene]
+    ei = eg_map[gene]
+    
+    # Read data
+    x_vals, y_vals = [], []
+    with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+        r = csv.reader(f); next(r)
+        for row in r:
+            if row[0] in cl_set:
+                x_vals.append(float(row[ei+1]))
+    
+    with open('inputs/CRISPRGeneEffect.csv') as f:
+        r = csv.reader(f); next(r)
+        for row in r:
+            if row[0] in cl_set:
+                v = row[ci+1].strip()
+                y_vals.append(float(v) if v else np.nan)
+    
+    x = np.array(x_vals); y = np.array(y_vals)
+    valid = ~np.isnan(x) & ~np.isnan(y)
+    rho, p = stats.spearmanr(x[valid], y[valid])
+    
+    # Significance at various thresholds
+    bonf_sig = "Bonf*" if p < 0.05/len(common) else ""
+    print(f'{gene}: rho={rho:+.4f}, p={p:.4e}, n={np.sum(valid)} {bonf_sig}')
+PYEOF
+

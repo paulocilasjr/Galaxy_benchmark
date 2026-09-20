@@ -1,0 +1,53 @@
+/bin/bash -c "Rscript - <<'RS'
+library(splines)
+d <- read.csv('/workspace/inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+print(d)
+# mixture rows only
+m <- d[d"'$StrainNumber=='"'287_98',]
+# parse ratio num:den, prop strain 287 = num/(num+den)
+sp <- strsplit(m"'$Ratio, '"':')
+num <- as.numeric(sapply(sp, "'`[`,1)); den <- as.numeric(sapply(sp, `[`,2))
+m$p <- num/(num+den)
+print(m[,c('"'DishNumber','Ratio','Area','p')])
+# complete same-system boundaries: StrainNumber 287 p=1, 98 p=0
+b <- d[d"'$StrainNumber %in% c('"'98','287'),]
+b"'$p <- ifelse(b$StrainNumber=='"'287',1,0)
+full <- rbind(m[,c('Area','p')], b[,c('Area','p')])
+for (scope in c('mixture','boundaries')) {
+  dat <- if (scope=='mixture') m[,c('Area','p')] else full
+  cat('\\nSCOPE',scope,'n',nrow(dat),'p range',range(dat"'$p),'"'\\n')
+  fits <- list(
+    quad=lm(Area ~ p + I(p"'^2), data=dat),
+    cubic=lm(Area ~ p + I(p''^2) + I(p''^3), data=dat),
+    ns4=lm(Area ~ ns(p, df=4), data=dat)
+  )
+  for (nm in names(fits)) {
+    f <- fits[[nm]]
+    pred <- function(p) predict(f, newdata=data.frame(p=p))
+    rng <- range(dat$p)
+    if (nm=='"'ns4') {
+      # optimize via grid to find max predicted
+      grid <- seq(rng[1], rng[2], length.out=100001)
+      y <- pred(grid)
+      i <- which.max(y); optp <- grid[i]; maxy <- y[i]
+    } else {
+      co <- coef(f)
+      # stationary points
+      if (nm=='quad') {
+        sp <- -co[2]/(2*co[3])
+        cand <- c(rng[1], rng[2], sp)
+      } else {
+        a <- co[4]; b <- co[3]; c <- co[2]
+        disc <- b"'^2 - 3*a*c
+        sp <- if (disc>=0) (-b + c(-1,1)*sqrt(disc))/(3*a) else numeric(0)
+        cand <- c(rng[1], rng[2], sp)
+      }
+      cand <- cand[cand>=rng[1]-1e-12 & cand<=rng[2]+1e-12]
+      y <- pred(cand); i <- which.max(y); optp <- cand[i]; maxy <- y[i]
+    }
+    cat(nm,'"'df',attr(logLik(f),'df'),'AIC',AIC(f),'BIC',BIC(f),
+        'adjR2',summary(f)"'$adj.r.squared,'"'optp',format(optp,digits=12),
+        'maxArea',format(maxy,digits=15),'\\n')
+  }
+}
+RS"

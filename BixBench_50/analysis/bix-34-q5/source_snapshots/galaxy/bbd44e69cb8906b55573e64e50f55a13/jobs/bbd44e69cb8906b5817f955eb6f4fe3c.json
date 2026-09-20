@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5817f955eb6f4fe3c",
+  "history_id": "bbd44e69cb8906b55573e64e50f55a13",
+  "tool_id": "codex_patristic_distance_ratio_scogs_v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-01T16:44:07.114881",
+  "update_time": "2026-08-01T16:45:05.052361",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > patristic_ratio.py <<'PY'\nimport math\nimport re\nimport statistics\nimport subprocess\nimport sys\nimport tempfile\nimport zipfile\nfrom pathlib import Path\n\nmean_pattern = re.compile(r\"^\\s*mean:\\s*([-+0-9.eE]+)\\s*$\", re.MULTILINE)\n\ndef process_group(group, archive_path):\n    with zipfile.ZipFile(archive_path) as archive:\n        members = sorted(\n            name for name in archive.namelist()\n            if name.endswith(\".treefile\") and not name.endswith(\"/\")\n        )\n        if not members:\n            raise RuntimeError(f\"{group}: no .treefile members found\")\n        values = []\n        failures = []\n        with tempfile.TemporaryDirectory(prefix=f\"{group}_\") as work:\n            work_path = Path(work)\n            for index, member in enumerate(members):\n                tree_path = work_path / f\"{index}.treefile\"\n                tree_path.write_bytes(archive.read(member))\n                completed = subprocess.run(\n                    [\"phykit\", \"patristic_distances\", str(tree_path)],\n                    check=False,\n                    capture_output=True,\n                    text=True,\n                )\n                if completed.returncode != 0:\n                    failures.append((member, completed.stderr.strip() or completed.stdout.strip()))\n                    continue\n                match = mean_pattern.search(completed.stdout)\n                if match is None:\n                    failures.append((member, \"PhyKit output did not contain a mean line\"))\n                    continue\n                value = float(match.group(1))\n                if not math.isfinite(value):\n                    failures.append((member, \"PhyKit returned a non-finite mean\"))\n                    continue\n                values.append((member, value))\n        if failures:\n            details = \"; \".join(f\"{name}: {message}\" for name, message in failures[:5])\n            raise RuntimeError(\n                f\"{group}: {len(failures)} of {len(members)} selected treefiles failed; {details}\"\n            )\n        if len(values) != len(members):\n            raise RuntimeError(f\"{group}: processed {len(values)} of {len(members)} selected treefiles\")\n        return members, values\n\ndef main():\n    animals_members, animals_values = process_group(\"Animals\", sys.argv[1])\n    fungi_members, fungi_values = process_group(\"Fungi\", sys.argv[2])\n    animal_median = statistics.median(value for _, value in animals_values)\n    fungi_median = statistics.median(value for _, value in fungi_values)\n    ratio = fungi_median / animal_median\n\n    with open(\"per_tree_means.tsv\", \"w\", encoding=\"utf-8\") as output:\n        output.write(\"group\\tmember\\tmean_patristic_distance\\n\")\n        for member, value in animals_values:\n            output.write(f\"Animals\\t{member}\\t{value:.17g}\\n\")\n        for member, value in fungi_values:\n            output.write(f\"Fungi\\t{member}\\t{value:.17g}\\n\")\n\n    with open(\"patristic_summary.tsv\", \"w\", encoding=\"utf-8\") as output:\n        output.write(\n            \"group\\tselected_treefiles\\tprocessed_treefiles\\tfailed_treefiles\\tmedian_mean_patristic_distance\\n\"\n        )\n        output.write(\n            f\"Animals\\t{len(animals_members)}\\t{len(animals_values)}\\t0\\t{animal_median:.17g}\\n\"\n        )\n        output.write(\n            f\"Fungi\\t{len(fungi_members)}\\t{len(fungi_values)}\\t0\\t{fungi_median:.17g}\\n\"\n        )\n        output.write(f\"Fungi_over_Animals\\t2\\t2\\t0\\t{ratio:.17g}\\n\")\n\n    with open(\"ratio.txt\", \"w\", encoding=\"utf-8\") as output:\n        output.write(f\"{ratio:.17g}\\n\")\n\nif __name__ == \"__main__\":\n    main()\nPY\npython patristic_ratio.py \"/jetstream2/scratch/main/jobs/78854321/inputs/dataset_08ec74c0-a79d-4683-b47a-f894a91d31f7.dat\" \"/jetstream2/scratch/main/jobs/78854321/inputs/dataset_feeb634d-25aa-4b7f-b5e9-96db97e1de1f.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "animals_zip": {
+      "id": "f9cad7b01a4721351e297a648213e3e6",
+      "src": "hda",
+      "uuid": "08ec74c0-a79d-4683-b47a-f894a91d31f7"
+    },
+    "fungi_zip": {
+      "id": "f9cad7b01a47213571f95d7ed5d4dd6f",
+      "src": "hda",
+      "uuid": "feeb634d-25aa-4b7f-b5e9-96db97e1de1f"
+    }
+  },
+  "outputs": {
+    "per_tree": {
+      "id": "f9cad7b01a4721352647f4d9d0b87120",
+      "src": "hda",
+      "uuid": "a17ae88b-7cbf-4ec1-ad0c-db70bf12794f"
+    },
+    "summary": {
+      "id": "f9cad7b01a472135a4f9ba0ea58717f0",
+      "src": "hda",
+      "uuid": "31a26750-868e-40b6-8064-724cabd0499e"
+    },
+    "ratio": {
+      "id": "f9cad7b01a472135316c22aff0b7eeef",
+      "src": "hda",
+      "uuid": "e6281794-e779-4ddf-ae98-948cad5809a9"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

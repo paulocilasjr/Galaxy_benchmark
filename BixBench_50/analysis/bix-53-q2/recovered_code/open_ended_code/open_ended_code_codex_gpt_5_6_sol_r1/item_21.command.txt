@@ -1,0 +1,26 @@
+/bin/bash -lc "/workspace/.deseq2env/bin/Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(apeglm))
+cts <- read.csv('inputs/count.csv', row.names=1, check.names=FALSE)
+run_de <- function(samples) {
+  m <- as.matrix(cts[, samples, drop=FALSE])
+  storage.mode(m) <- 'integer'
+  condition <- factor(ifelse(startsWith(samples, 'KL'), 'KL', 'WL'), levels=c('WL','KL'))
+  coldata <- data.frame(condition=condition, row.names=samples)
+  stopifnot(identical(colnames(m), rownames(coldata)))
+  dds <- DESeqDataSetFromMatrix(m, coldata, ~ condition)
+  dds <- DESeq(dds, quiet=TRUE)
+  cat('resultsNames:', paste(resultsNames(dds), collapse=','), '\\n')
+  unshrunk <- results(dds, contrast=c('condition','KL','WL'), alpha=0.05)
+  shrunk <- lfcShrink(dds, coef='condition_KL_vs_WL', type='apeglm', res=unshrunk, quiet=TRUE)
+  x <- as.data.frame(shrunk)
+  sig <- x["'!is.na(x$pvalue) & x$pvalue < 0.05 & !is.na(x$log2FoldChange) & abs(x$log2FoldChange) > 1 & x$baseMean > 10, ]
+  c(total=nrow(sig), KL_up=sum(sig$log2FoldChange > 1), KL_down=sum(sig$log2FoldChange < -1), tested=sum(!is.na(x$pvalue)))
+}
+full <- run_de(c('"'KL1','KL2','KL3','WL1','WL2','WL3'))
+reduced <- run_de(c('KL1','KL2','WL1','WL2'))
+cat('full', paste(names(full), full, sep='=', collapse=' '), '\\n')
+cat('reduced', paste(names(reduced), reduced, sep='=', collapse=' '), '\\n')
+cat('difference', reduced[['total']] - full[['total']], '\\n')
+cat('DESeq2_version', as.character(packageVersion('DESeq2')), 'apeglm_version', as.character(packageVersion('apeglm')), '\\n')
+RS"

@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd,numpy as np
+from scipy.stats import ttest_ind,ttest_rel
+s=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+names=[s.cell_value(i,0) for i in range(2,s.nrows)]; samp=[s.cell_value(1,j) for j in range(1,s.ncols)]
+X=np.array([[float(s.cell_value(i,j)) if isinstance(s.cell_value(i,j),(int,float)) else np.nan for j in range(1,s.ncols)] for i in range(2,s.nrows)])
+keep=np.array([q not in ('P_3','C_18') for q in samp]); pat=np.array([q.startswith('P_') for q in samp])&keep; con=np.array([q.startswith('C_') for q in samp])&keep
+
+def report(label,Y,test='ind',family=None):
+ ps=[]
+ for r in Y:
+  a=r[pat];b=r[con];a=a[np.isfinite(a)];b=b[np.isfinite(b)]
+  p=ttest_ind(a,b,equal_var=True).pvalue if test=='ind' else ttest_rel(a,b,nan_policy='omit').pvalue
+  ps.append(p)
+ ps=np.array(ps); finite=np.isfinite(ps)
+ if family is not None: finite &= family
+ m=sum(finite); bon=np.where(finite,ps*m,np.nan)
+ c=sum(1/np.arange(1,m+1)); ix=np.flatnonzero(finite); o=ix[np.argsort(ps[ix])]; by=np.full(len(ps),np.nan); q=ps[o]*m*c/np.arange(1,m+1); q=np.minimum.accumulate(q[::-1])[::-1];by[o]=q
+ print(label,'m',m,'raw',sum((ps<=.05)&finite),'bon',sum(bon<=.05),'BY',sum(by<=.05),'min',names[np.nanargmin(bon)],np.nanmin(ps),np.nanmin(bon),np.nanmin(by))
+
+for nanfill in [34,35,40]:
+ for cap in ['none','cap34']:
+  Z=X.copy(); Z[np.isnan(Z)]=nanfill
+  if cap=='cap34': Z=np.minimum(Z,34)
+  for meanmode in ['det','all','common']:
+   if meanmode=='det': means=np.nanmean(np.where(Z<34,Z,np.nan),axis=0)
+   elif meanmode=='all': means=np.mean(Z,axis=0)
+   else:
+    common=np.all(Z[:,keep]<34,axis=1); means=np.mean(Z[common],axis=0)
+   Y=-(Z-means)
+   report(f'fill{nanfill} {cap} {meanmode}',Y)
+means=np.nanmean(np.where(X<34,X,np.nan),axis=0);Y=-(X-means); common=np.all((X[:,keep]<34)&np.isfinite(X[:,keep]),axis=1)
+report('family common det mean',Y,family=common)
+report('paired det mean',Y,'paired')
+PY"

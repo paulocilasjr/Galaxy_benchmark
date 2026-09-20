@@ -1,0 +1,63 @@
+/bin/bash -c "python3 - <<'PY'
+import openpyxl, glob, os, re, statistics
+
+trio_ws = openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx', data_only=True).active
+carriers = []
+for row in trio_ws.iter_rows(min_row=2, values_only=True):
+    sample_id = str(row[0]).strip().replace('\\t', '').strip()
+    blm_status = str(row[3]).strip()
+    if blm_status == 'Carrier':
+        carriers.append(sample_id)
+
+file_map = {}
+for path in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'):
+    token = os.path.basename(path).split('_')[-1].split('.')[0]
+    file_map[token] = path
+
+def resolve_path(sample_id):
+    if sample_id in file_map:
+        return file_map[sample_id]
+    if re.fullmatch(r'\\d+', sample_id):
+        candidates = [t for t in file_map if re.fullmatch(re.escape(sample_id) + r'-[A-Z0-9]+', t)]
+        if len(candidates) == 1:
+            return file_map[candidates[0]]
+    return None
+
+excluded_ontology = {
+    'intron_variant',
+    'intergenic_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+def count_chip_variants(path):
+    ws = openpyxl.load_workbook(path, data_only=True).active
+    count = 0
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        zygosity = row[4]
+        ontology = row[13]
+        vaf_raw = row[9]
+        if zygosity == 'Reference':
+            continue
+        if ontology in excluded_ontology:
+            continue
+        try:
+            vaf = float(vaf_raw)
+        except (TypeError, ValueError):
+            continue
+        if vaf < 0.3:
+            count += 1
+    return count
+
+counts = []
+for sample_id in carriers:
+    path = resolve_path(sample_id)
+    if path is None:
+        continue
+    counts.append(count_chip_variants(path))
+
+print('carrier sample IDs:', carriers)
+print('counts:', counts)
+print('median:', statistics.median(counts))
+PY"

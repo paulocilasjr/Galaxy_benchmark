@@ -1,0 +1,114 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+from statistics import mean, median
+from itertools import combinations
+import math
+
+class Node:
+    __slots__=('label','edge','children')
+    def __init__(self,label=None,edge=0.0):
+        self.label=label; self.edge=edge; self.children=[]
+
+def parse_newick(text):
+    s=text.strip()
+    assert s.endswith(';')
+    s=s[:-1]
+    pos=0
+    def read_token(stops):
+        nonlocal pos
+        start=pos
+        while pos < len(s) and s[pos] not in stops:
+            pos += 1
+        return s[start:pos].strip()
+    def read_node():
+        nonlocal pos
+        if s[pos]=='(':
+            pos += 1
+            node=Node()
+            while True:
+                node.children.append(read_node())
+                if s[pos]==',':
+                    pos += 1
+                elif s[pos]==')':
+                    pos += 1
+                    break
+                else:
+                    raise AssertionError(s[pos:])
+            if pos < len(s) and s[pos] not in ',():':
+                node.label=read_token(',():')
+            if pos < len(s) and s[pos]==':':
+                pos += 1
+                node.edge=float(read_token(',()'))
+            return node
+        label=read_token(',():')
+        node=Node(label=label)
+        if pos < len(s) and s[pos]==':':
+            pos += 1
+            node.edge=float(read_token(',()'))
+        return node
+    root=read_node()
+    assert pos==len(s),(pos,s[pos:])
+    return root
+
+def graph_distances(root):
+    graph={}
+    def add(node):
+        graph[id(node)]=[]
+        for child in node.children:
+            graph[id(node)].append((id(child),child.edge))
+            add(child)
+            graph[id(child)].append((id(node),child.edge))
+    add(root)
+    leaves=[]
+    def get_leaves(node):
+        if node.children:
+            for c in node.children: get_leaves(c)
+        else: leaves.append(node)
+    get_leaves(root)
+    assert all(x.label and math.isfinite(x.edge) and x.edge>=0 for x in leaves)
+    dist=[]
+    for a,b in combinations(leaves,2):
+        seen={id(a):0.0}; stack=[a]
+        while stack:
+            cur=stack.pop()
+            if id(cur)==id(b): break
+            for nxt,w in graph[id(cur)]:
+                if nxt not in seen:
+                    seen[nxt]=seen[id(cur)]+w
+                    stack.append(next(x for x in leaves if id(x)==nxt) if False else None)
+        # Above node stack is awkward; use node lookup for a clean BFS.
+        lookup={id(a):a}
+        # Re-run with graph-node lookup built from traversal.
+        lookup={}
+        def collect(n):
+            lookup[id(n)]=n
+            for c in n.children: collect(c)
+        collect(root)
+        seen={id(a):0.0}; stack=[a]
+        while stack:
+            cur=stack.pop()
+            for nxt,w in graph[id(cur)]:
+                if nxt not in seen:
+                    seen[nxt]=seen[id(cur)]+w
+                    stack.append(lookup[nxt])
+        dist.append(seen[id(b)])
+    return leaves,dist
+
+summaries={}
+for group in ('animals','fungi'):
+    archive=Path('inputs')/f'scogs_{group}.zip'
+    per_tree=[]
+    with ZipFile(archive) as z:
+        tree_names=[n for n in z.namelist() if n.endswith('.treefile')]
+        assert len(tree_names)==(100 if group=='animals' else 249)
+        for name in tree_names:
+            leaves,dist=graph_distances(parse_newick(z.read(name).decode()))
+            assert len(leaves)>=3 and all(math.isfinite(x) for x in dist)
+            per_tree.append(mean(dist))
+    summaries[group]=(median(per_tree),len(per_tree),min(per_tree),max(per_tree))
+    print(group, 'n=',len(per_tree), 'median=',format(summaries[group][0],'.17g'), 'min=',format(min(per_tree),'.17g'), 'max=',format(max(per_tree),'.17g'))
+ratio=summaries['fungi'][0]/summaries['animals'][0]
+assert math.isfinite(ratio) and ratio>0
+print('ratio fungi/animals=',format(ratio,'.17g'))
+PY"

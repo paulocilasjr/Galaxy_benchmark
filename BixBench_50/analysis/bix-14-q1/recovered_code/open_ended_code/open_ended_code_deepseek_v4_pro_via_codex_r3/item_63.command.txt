@@ -1,0 +1,51 @@
+/bin/bash -lc "cd /workspace && python - <<'PY'
+import glob, os, re, openpyxl
+# BLM mutation carriers with available variant files
+carrier_ids = {
+    '185','184','285','287','353','354','556','557','381','396','397',
+    '489','490','499','500','503','504','613','614'
+}
+# 533 is a carrier in Trio_Status but has no provided variant file.
+coding_so = {
+    'synonymous_variant','missense_variant','splice_region_variant',
+    'stop_gained','stop_lost','start_lost','frameshift_variant',
+    'inframe_insertion','inframe_deletion'
+}
+
+def sample_id(path):
+    base = os.path.basename(path)
+    m = re.search(r'CHIP_(\\d+)-', base)
+    return m.group(1) if m else None
+
+denominator = 0
+synonymous = 0
+for path in sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')):
+    sid = sample_id(path)
+    if sid not in carrier_ids:
+        continue
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    # Rows before the data: row 1 is the merged table title, row 2 is column headers.
+    for row in rows[2:]:
+        so = row[13]
+        if so not in coding_so:
+            continue
+        try:
+            vaf = float(row[9])
+        except (TypeError, ValueError):
+            continue
+        if vaf < 0.3:
+            denominator += 1
+            if so == 'synonymous_variant':
+                synonymous += 1
+
+fraction = synonymous / denominator
+print(f'carrier files: {len(carrier_ids)}')
+print(f'coding variants with VAF < 0.3: {denominator}')
+print(f'synonymous among those: {synonymous}')
+print(f'fraction: {fraction"'!r}'"')
+open('codex_output/answer.txt','w').write(f'{fraction}\\n')
+PY
+cat codex_output/answer.txt"

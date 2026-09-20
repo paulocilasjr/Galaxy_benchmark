@@ -1,0 +1,59 @@
+/bin/bash -lc "Rscript - <<'RS'
+# replicate DOSE ORA in base R using cached KEGG mapping
+read_tab <- function(file, header=TRUE) read.csv(file, stringsAsFactors=FALSE)
+for (spec in c('GluFevsGluFePlus','SuccvsGluFePlus')) {
+  df <- read.csv(paste0('/workspace/res_',spec,'.csv'), stringsAsFactors=FALSE)
+  cat('\\n',spec,'rows',nrow(df),'pass',sum(abs(df"'$log2FoldChange)>1.5 & !is.na(df$padj) & df$padj<0.05, na.rm=TRUE),'"'\\n')
+}
+link <- readLines('/tmp/kegg_link_pathway_pau.txt')
+name_lines <- readLines('/tmp/kegg_list_pathway_pau.txt')
+# strip prefixes
+link_rows <- strsplit(link, '\\t')
+gene <- sapply(link_rows, function(x) sub('"'^[''^:]+:'"','',x[1]))
+path <- sapply(link_rows, function(x) sub('"'^[''^:]+:'"','',x[2]))
+p2g <- unique(data.frame(path=path, gene=gene, stringsAsFactors=FALSE))
+p2n <- setNames(sub('\\t.*','',name_lines), sub('"'^[''^'"\\t]*\\t','',name_lines))
+# clusterProfiler name df: first col ID, second name
+name_tab <- do.call(rbind, strsplit(name_lines, '\\t'))
+colnames(name_tab) <- c('path','name')
+# filter mapping to named terms
+p2g <- p2g[p2g"'$path %in% name_tab[,'"'path'],,drop=FALSE]
+cat('mapping rows',nrow(p2g),'genes',length(unique(p2g"'$gene)),'"'terms',length(unique(p2g"'$path)),'"'\\n')
+
+ora_base <- function(gene_vec, p2g) {
+  gene_vec <- unique(as.character(gene_vec))
+  # EXTID2TERMID mapping
+  e2p <- split(p2g"'$path, p2g$gene)
+  qe2p <- e2p[gene_vec]
+  len <- lengths(qe2p)
+  qe2p <- qe2p[len>0]
+  if(length(qe2p)==0) return(NULL)
+  qdf <- data.frame(extID=rep(names(qe2p), times=lengths(qe2p)), termID=unlist(qe2p, use.names=FALSE), stringsAsFactors=FALSE)
+  qdf <- unique(qdf)
+  qterm2ext <- split(qdf$extID, qdf$termID)
+  extID <- unique(p2g$gene)
+  qterm2ext <- lapply(qterm2ext, intersect, extID)
+  qterms <- unique(names(qterm2ext))
+  term2ext <- split(p2g$gene, p2g$path)[qterms]
+  term2ext <- lapply(term2ext, intersect, extID)
+  idx <- lengths(term2ext) >=10 & lengths(term2ext) <=500
+  term2ext <- term2ext[idx]
+  qterm2ext <- qterm2ext[idx]
+  qterms <- unique(names(qterm2ext))
+  term2ext <- term2ext[qterms]
+  qterm2ext <- qterm2ext[qterms]
+  k <- lengths(qterm2ext); M <- lengths(term2ext)
+  N <- length(extID); n <- length(qe2p)
+  pvalues <- mapply(function(kk, mm) phyper(kk-1, mm, N-mm, n, lower.tail=FALSE), k, M)
+  padj <- p.adjust(pvalues, method='"'BH')
+  res <- data.frame(ID=qterms, Count=k, Size=M, pvalue=pvalues, p.adjust=padj, stringsAsFactors=FALSE)
+  res[order(pvalues),]
+}
+for (spec in c('GluFevsGluFePlus','SuccvsGluFePlus')) {
+  df <- read.csv(paste0('/workspace/res_',spec,'.csv'), stringsAsFactors=FALSE)
+  genes <- df"'$gene[abs(df$log2FoldChange)>1.5 & !is.na(df$padj) & df$padj<0.05]
+  res <- ora_base(genes,p2g)
+  cat('"'\\n',spec,'tested',nrow(res),'sig',sum(res"'$p.adjust<0.05),'"'\\n')
+  print(res[res"'$p.adjust<0.05,c('"'ID','Count','Size','pvalue','p.adjust')])
+}
+RS"

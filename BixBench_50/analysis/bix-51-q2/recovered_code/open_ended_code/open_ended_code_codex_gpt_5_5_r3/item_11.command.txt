@@ -1,0 +1,65 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import exp, log, isfinite
+
+wb=load_workbook('inputs/data.xlsx', data_only=True, read_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+headers=list(rows[0])
+idx_eff=headers.index('Efficacy')
+idx_bmi=headers.index('BMI')
+data=[]
+for row in rows[1:]:
+    eff=row[idx_eff]
+    bmi=row[idx_bmi]
+    if eff is None and bmi is None:
+        continue
+    if eff is None or bmi is None:
+        raise SystemExit(f'missing row: {row}')
+    y=1 if eff == 'PR' else 0
+    data.append((float(bmi), y))
+
+# Newton-Raphson on beta for Bernoulli log likelihood.
+b=[0.0, 0.0]
+for it in range(100):
+    g=[0.0, 0.0]
+    h=[[0.0, 0.0],[0.0, 0.0]] # negative Hessian: X' W X
+    ll=0.0
+    for x,y in data:
+        eta=b[0]+b[1]*x
+        if eta >= 0:
+            p=1.0/(1.0+exp(-eta))
+            ll += y*eta - (eta + log(1.0+exp(-eta)))
+        else:
+            p=exp(eta)/(1.0+exp(eta))
+            ll += y*eta - log(1.0+exp(eta))
+        diff=y-p
+        w=p*(1.0-p)
+        g[0] += diff
+        g[1] += diff*x
+        h[0][0] += w
+        h[0][1] += w*x
+        h[1][0] += w*x
+        h[1][1] += w*x*x
+    det=h[0][0]*h[1][1]-h[0][1]*h[1][0]
+    step0=( h[1][1]*g[0] - h[0][1]*g[1])/det
+    step1=(-h[1][0]*g[0] + h[0][0]*g[1])/det
+    b[0] += step0
+    b[1] += step1
+    if max(abs(step0), abs(step1)) < 1e-12:
+        break
+# final ll
+ll=0.0
+for x,y in data:
+    eta=b[0]+b[1]*x
+    if eta >= 0:
+        ll += y*eta - (eta + log(1.0+exp(-eta)))
+    else:
+        ll += y*eta - log(1.0+exp(eta))
+aic=2*2 - 2*ll
+print('n', len(data), 'events', sum(y for _,y in data))
+print('beta', repr(b[0]), repr(b[1]))
+print('logLik', repr(ll))
+print('AIC', format(aic, '.15g'))
+print('iters', it+1)
+PY"

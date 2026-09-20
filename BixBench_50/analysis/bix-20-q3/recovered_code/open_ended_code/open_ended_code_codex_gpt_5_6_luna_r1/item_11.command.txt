@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter, defaultdict
+from openpyxl import load_workbook
+import re, math
+base=Path('inputs')
+# status
+wb=load_workbook(base/'230215_Trio_Status.xlsx',read_only=True,data_only=True); ws=wb.active
+status={str(row[0]).strip():row for row in ws.iter_rows(min_row=2,values_only=True) if row[0] is not None}
+carriers={sid for sid,row in status.items() if str(row[3]).strip()=='Carrier'}
+
+def file_id(path):
+    tail=path.stem.split('_CHIP_',1)[1]
+    if tail.split('-',1)[0].isdigit(): return tail.split('-',1)[0]
+    return tail
+
+files=sorted((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+carrier_paths=[p for p in files if file_id(p) in carriers]
+print('carrier paths',len(carrier_paths),[(file_id(p),p.name) for p in carrier_paths])
+print('missing carrier IDs',sorted(carriers-{file_id(p) for p in files}))
+
+# helper row dict
+def getrows(path):
+  wb=load_workbook(path,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions()
+  it=ws.iter_rows(values_only=True); top=next(it); hdr=next(it)
+  h={str(x).strip():i for i,x in enumerate(hdr) if x is not None}
+  for rn,row in enumerate(it,start=3):
+    yield rn,{k:(row[i] if i<len(row) else None) for k,i in h.items()}
+
+allc=Counter(); soc=Counter(); classc=Counter(); zc=Counter(); examples=defaultdict(list)
+for p in carrier_paths:
+  for rn,r in getrows(p):
+    allc['rows']+=1
+    z=str(r['Zygosity']) if r['Zygosity'] is not None else None
+    zc[z]+=1
+    v=r['Variant Allele Freq']
+    try: vf=float(v)
+    except: vf=None
+    if vf is not None and vf<0.3:
+      allc['vaf_lt_0.3']+=1
+      if z "'!= '"'Reference':
+        allc['vaf_lt_ref_excluded']+=1
+        so=str(r['Sequence Ontology (Combined)']) if r['Sequence Ontology (Combined)']] is not None else None
+        # identify regions with keywords
+        low=so.lower() if so else ''
+        exclude=any(x in low for x in ['intron','intergenic','utr'])
+        if exclude: allc['region_excluded']+=1
+        else:
+          allc['region_kept']+=1
+          cl=r['Classification']
+          if cl is not None and str(cl).strip()"'!='"'': allc['classification_present']+=1
+          if cl in ('Benign','Likely Benign'): allc['benign_lb']+=1
+          soc[so]+=1; classc[str(cl) if cl is not None else None]+=1
+          if len(examples[(z,so,cl)])<3: examples[(z,so,cl)].append((p.name,rn,r['Chr:Pos'],r['Ref/Alt'],r['Gene Names'],v))
+print('\\naggregate stage',allc)
+print('zyg',zc)
+print('kept SO',soc)
+print('kept classifications',classc)
+print('\\nexamples None zygosity')
+n=0
+for p in carrier_paths:
+  for rn,r in getrows(p):
+    if r['Zygosity'] is None and n<20:
+      print(p.name,rn,{k:r[k] for k in ['Chr:Pos','Ref/Alt','Zygosity','Variant Allele Freq','Gene Names','Sequence Ontology (Combined)','Classification','In_CHIP']})
+      n+=1
+print('none examples total shown',n)
+PY"

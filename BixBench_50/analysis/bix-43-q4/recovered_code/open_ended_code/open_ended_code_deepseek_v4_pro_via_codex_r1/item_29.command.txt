@@ -1,0 +1,56 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd
+import gseapy
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+# Prepare data
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+counts.index.name = 'gene'
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample')
+counts = counts[layout.index].T
+metadata = layout[['Group']].copy()
+metadata.columns = ['group']
+metadata['group'] = pd.Categorical(metadata['group'])
+
+# Differential expression: combined treatment vs DMSO
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~group',
+    design_factors='group',
+    ref_level=['group','DMSO'],
+    n_cpus=4,
+    quiet=True,
+)
+dds.deseq2()
+stat = DeseqStats(
+    dds,
+    contrast=['group','Cisplatin_IC50_CBD_IC50','DMSO'],
+    alpha=0.05,
+    cooks_filter=True,
+    independent_filter=True,
+    n_cpus=4,
+    quiet=True,
+)
+stat.summary()
+res = stat.results_df.copy()
+mask = (res['padj'] < 0.05) & (res['log2FoldChange'].abs() >= 0.5)
+degs = res.loc[mask]
+print('DEG count:', len(degs))
+
+# Map Ensembl IDs to symbols for Enrichr
+mapping = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t').set_index('ENSG')['gene_name']
+symbols = degs.index.map(mapping).dropna().drop_duplicates().sort_values().tolist()
+print('Mapped unique DEG symbols:', len(symbols))
+
+# gseapy Enrichr, Reactome_2022
+enr = gseapy.enrichr(gene_list=symbols, gene_sets='Reactome_2022', organism='human', outdir=None, cutoff=1.0)
+term_target = 'TP53 Regulates Transcription Of Cell Cycle Genes'
+rows = enr.results[enr.results['Term'].str.contains(term_target, case=False, na=False)]
+print('Target pathway rows:')
+print(rows[['Term','Overlap','P-value','Adjusted P-value','Genes']].to_string(index=False))
+print('ANSWER_OVERLAP=', rows.iloc[0]['Overlap'])
+PY"

@@ -1,0 +1,47 @@
+/bin/bash -lc "python - <<'PY'
+import csv
+from collections import Counter, defaultdict
+from fractions import Fraction
+from decimal import Decimal, getcontext
+
+age_path = 'inputs/JD_AgeRelated_CpG_noMT_Final.csv'
+len_path = 'inputs/JD_Chromosome_Length.csv'
+
+rows = []
+with open(age_path, newline='') as f:
+    rows = list(csv.DictReader(f))
+
+eq10 = sum(float(r['MethylationPercentage']) == 10 for r in rows)
+eq90 = sum(float(r['MethylationPercentage']) == 90 for r in rows)
+filtered = [r for r in rows if float(r['MethylationPercentage']) > 90 or float(r['MethylationPercentage']) < 10]
+filtered_groups = defaultdict(list)
+for r in filtered:
+    filtered_groups[r['Pos']].append(r)
+print('exactly 10% rows:', eq10, 'exactly 90% rows:', eq90)
+print('filtered rows / unique positions:', len(filtered), len(filtered_groups))
+print('filtered positions with multiple qualifying rows:', {p: len(rs) for p, rs in filtered_groups.items() if len(rs) > 1})
+
+lengths = {}
+with open(len_path, newline='') as f:
+    rd = csv.reader(f)
+    header = next(rd)
+    cidx = [i for i,x in enumerate(header) if x.lstrip('\\ufeff') == 'Chromosome'][0]
+    lidx = header.index('Length')
+    for row in rd:
+        lengths[row[cidx]] = int(row[lidx])
+
+# Position is the verified unique CpG key; coordinate tuple independently gives same result.
+unique_positions = {r['Pos']: r for r in filtered}
+unique_coordinates = {(r['Chromosome'], r['StartPosition'], r['EndPosition']) for r in filtered}
+print('unique Pos vs unique coordinates:', len(unique_positions), len(unique_coordinates))
+counts = Counter(r['Chromosome'] for r in unique_positions.values())
+included = [(c, counts[c], lengths[c]) for c in lengths if counts[c] > 0]
+print('included chromosomes / count / length:', included)
+
+exact_mean = sum((Fraction(n, length) for _, n, length in included), Fraction(0, 1)) / len(included)
+getcontext().prec = 50
+exact_decimal = Decimal(exact_mean.numerator) / Decimal(exact_mean.denominator)
+print('exact mean decimal:', exact_decimal)
+print('exact mean scientific:', format(exact_decimal, 'E'))
+print('exact numerator/denominator:', exact_mean.numerator, exact_mean.denominator)
+PY"

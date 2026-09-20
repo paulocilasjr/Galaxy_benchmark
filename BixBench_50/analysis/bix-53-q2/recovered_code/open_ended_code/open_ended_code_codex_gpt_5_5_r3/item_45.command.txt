@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv').set_index('geneID')
+
+def run(samples):
+    counts = raw[samples].T
+    metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in samples]}, index=samples)
+    dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', quiet=True, n_cpus=1)
+    dds.deseq2()
+    stat = DeseqStats(dds, contrast=['condition', 'KL', 'WL'], alpha=0.05, quiet=True, n_cpus=1)
+    stat.summary()
+    coeffs = [c for c in stat.LFC.columns if c "'!= '"'Intercept']
+    if coeffs "'!= ['"'condition[T.WL]']:
+        raise RuntimeError(f'Unexpected coefficients: {list(stat.LFC.columns)}')
+    stat.lfc_shrink(coeff='condition[T.WL]')
+    res = stat.results_df
+    sig = res[(res['pvalue'] < 0.05) & (res['baseMean'] > 10) & (res['log2FoldChange'].abs() > 1)]
+    return int(sig.shape[0])
+
+full = run(['KL1','KL2','KL3','WL1','WL2','WL3'])
+minus3 = run(['KL1','KL2','WL1','WL2'])
+if minus3 > full:
+    direction = 'increase'
+elif minus3 < full:
+    direction = 'decrease'
+else:
+    direction = 'no change'
+print(f'full={full} minus3={minus3} direction={direction}')
+PY"

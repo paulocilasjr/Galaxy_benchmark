@@ -1,0 +1,71 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b571ac61a90311789a",
+  "history_id": "bbd44e69cb8906b512f46daa1ca2ebf4",
+  "tool_id": "codex_rosmap_log10_pca_20260803",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-03T05:51:39.617461",
+  "update_time": "2026-08-03T05:57:53.700272",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.R <<'RSCRIPT'\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 2) stop(\"Expected expression and metadata paths\")\nexpr_path <- args[[1]]\nmeta_path <- args[[2]]\n\nexpr <- read.csv(expr_path, header = TRUE, check.names = FALSE,\n                 stringsAsFactors = FALSE, na.strings = c(\"\", \"NA\"))\nmeta <- read.csv(meta_path, header = TRUE, check.names = FALSE,\n                 stringsAsFactors = FALSE, na.strings = c(\"\", \"NA\"))\n\nif (ncol(expr) < 2L) stop(\"Expression matrix must have gene IDs plus sample columns\")\nif (!(\"projid\" %in% names(meta))) stop(\"Metadata must contain projid\")\nif (any(is.na(names(expr)[-1])) || any(names(expr)[-1] == \"\")) stop(\"Blank expression sample ID\")\nif (any(is.na(meta$projid)) || any(meta$projid == \"\")) stop(\"Blank metadata projid\")\n\ngene_ids <- as.character(expr[[1L]])\nsample_ids <- as.character(names(expr)[-1L])\nmeta_ids <- as.character(meta$projid)\n\nif (anyDuplicated(gene_ids)) stop(\"Duplicate gene identifiers are not resolved\")\nif (!setequal(unique(sample_ids), unique(meta_ids))) {\n  stop(\"Expression and metadata primary ID sets do not match\")\n}\nif (!setequal(sample_ids, meta_ids)) {\n  stop(\"Expression and metadata multiplicities do not match\")\n}\n\nexpr_dup_ids <- sort(names(which(table(sample_ids) > 1L)))\nmeta_dup_ids <- sort(names(which(table(meta_ids) > 1L)))\nif (!setequal(expr_dup_ids, meta_dup_ids)) stop(\"Repeated-ID groups do not match\")\n\nstable_fields <- setdiff(names(meta), \"projid\")\nmetadata_conflict <- setNames(logical(length(meta_dup_ids)), meta_dup_ids)\nif (length(meta_dup_ids) > 0L && length(stable_fields) > 0L) {\n  for (id in meta_dup_ids) {\n    block <- meta[meta$projid == id, stable_fields, drop = FALSE]\n    metadata_conflict[[id]] <- any(vapply(block, function(v) {\n      length(unique(v[!is.na(v)])) > 1L\n    }, logical(1)))\n  }\n}\n\n# Repeated primary IDs have no explicit secondary identity in the supplied\n# metadata. Treat every such group as an unresolved identity collision and\n# exclude every occurrence from a subject/sample-level PCA.\nkeep_sample <- !(sample_ids %in% expr_dup_ids)\nfitted_sample_ids <- sample_ids[keep_sample]\nif (length(fitted_sample_ids) < 2L) stop(\"No resolved samples remain\")\n\nnumeric_part <- expr[, -1L, drop = FALSE]\nX_gene_by_sample <- as.matrix(numeric_part)\nsuppressWarnings(storage.mode(X_gene_by_sample) <- \"numeric\")\nif (any(!is.finite(X_gene_by_sample))) stop(\"Expression matrix contains non-finite values\")\nif (any(X_gene_by_sample < 0)) stop(\"Expression matrix contains negative values\")\n\nX <- t(X_gene_by_sample[, keep_sample, drop = FALSE])\nrownames(X) <- fitted_sample_ids\ncolnames(X) <- gene_ids\n\n# Requested transform: log10(expression + pseudocount 1), after identity\n# resolution and before PCA.\npseudocount <- 1\nX <- log10(X + pseudocount)\nif (any(!is.finite(X))) stop(\"Transformed matrix contains non-finite values\")\n\nfeature_variance <- apply(X, 2L, var)\nkeep_feature <- is.finite(feature_variance) & feature_variance > 0\nif (!any(keep_feature)) stop(\"No positive-variance genes remain after transform\")\nX <- X[, keep_feature, drop = FALSE]\n\nrequested_components <- 100L\nif (nrow(X) <= requested_components) stop(\"Fewer than 101 resolved samples; cannot fit 100 components\")\n\n# Classical PCA: observations are rows, genes are columns; center features,\n# do not scale them. The denominator is total variance over the full retained\n# feature space, not only the first 100 components.\nfit <- prcomp(X, center = TRUE, scale. = FALSE, rank. = requested_components)\nn_fitted_components <- length(fit$sdev)\nif (n_fitted_components != requested_components) stop(\"PCA did not produce 100 components\")\ncentered <- sweep(X, 2L, fit$center, \"-\")\ntotal_variance <- sum(centered^2) / (nrow(X) - 1L)\neigenvalues <- fit$sdev^2\nexplained_ratio <- eigenvalues / total_variance\nexplained_percent <- 100 * explained_ratio\n\nvariance_out <- data.frame(\n  component = seq_len(n_fitted_components),\n  eigenvalue = eigenvalues,\n  explained_variance_ratio = explained_ratio,\n  explained_variance_percent = explained_percent,\n  cumulative_explained_variance_percent = 100 * cumsum(explained_ratio)\n)\nwrite.table(variance_out, file = \"pca_variance.tsv\", sep = \"\\t\",\n            row.names = FALSE, quote = FALSE, na = \"NA\")\n\nsummary_metric <- c(\n  \"analysis_method\",\n  \"matrix_orientation\",\n  \"raw_expression_sample_columns\",\n  \"raw_expression_unique_sample_ids\",\n  \"metadata_rows\",\n  \"metadata_unique_projids\",\n  \"repeated_primary_id_groups\",\n  \"excluded_unresolved_sample_columns\",\n  \"fitted_resolved_samples\",\n  \"raw_gene_rows\",\n  \"retained_positive_variance_genes\",\n  \"removed_zero_variance_genes\",\n  \"transform\",\n  \"pseudocount\",\n  \"centering\",\n  \"scaling\",\n  \"requested_components\",\n  \"fitted_components\",\n  \"total_variance_denominator\",\n  \"pc1_explained_variance_ratio\",\n  \"pc1_explained_variance_percent\"\n)\nsummary_value <- c(\n  \"classical PCA via R prcomp\",\n  \"samples as rows; genes as columns\",\n  as.character(length(sample_ids)),\n  as.character(length(unique(sample_ids))),\n  as.character(nrow(meta)),\n  as.character(length(unique(meta_ids))),\n  as.character(length(expr_dup_ids)),\n  as.character(sum(!keep_sample)),\n  as.character(nrow(X)),\n  as.character(length(gene_ids)),\n  as.character(ncol(X)),\n  as.character(length(gene_ids) - ncol(X)),\n  \"log10(x + 1)\",\n  as.character(pseudocount),\n  \"feature-centered\",\n  \"unscaled\",\n  as.character(requested_components),\n  as.character(n_fitted_components),\n  \"sum of variances over all retained genes\",\n  sprintf(\"%.17g\", explained_ratio[[1L]]),\n  sprintf(\"%.17g\", explained_percent[[1L]])\n)\nsummary_out <- data.frame(metric = summary_metric, value = summary_value,\n                          stringsAsFactors = FALSE)\nwrite.table(summary_out, file = \"pca_summary.tsv\", sep = \"\\t\",\n            row.names = FALSE, quote = FALSE, na = \"NA\")\n\nif (length(expr_dup_ids) > 0L) {\n  audit <- meta[meta$projid %in% expr_dup_ids, , drop = FALSE]\n  audit$metadata_conflict_on_stable_field <- unname(metadata_conflict[as.character(audit$projid)])\n  audit$identity_status <- \"unresolved collision; excluded\"\n  audit$identity_reason <- \"repeated primary projid without explicit secondary identity\"\n} else {\n  audit <- data.frame(\n    projid = character(0),\n    metadata_conflict_on_stable_field = logical(0),\n    identity_status = character(0),\n    identity_reason = character(0),\n    stringsAsFactors = FALSE\n  )\n}\nwrite.table(audit, file = \"identity_audit.tsv\", sep = \"\\t\",\n            row.names = FALSE, quote = FALSE, na = \"NA\")\n\nRSCRIPT\nRscript analysis.R \"/jetstream2/scratch/main/jobs/78877714/inputs/dataset_82587448-4b78-4eca-b95d-32ab21930d64.dat\" \"/jetstream2/scratch/main/jobs/78877714/inputs/dataset_3a2c4501-6f77-46f5-950c-58423ad1a640.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135ab8e114d8c81ac48",
+      "src": "hda",
+      "uuid": "82587448-4b78-4eca-b95d-32ab21930d64"
+    },
+    "metadata": {
+      "id": "f9cad7b01a472135cee29504ea4ec615",
+      "src": "hda",
+      "uuid": "3a2c4501-6f77-46f5-950c-58423ad1a640"
+    }
+  },
+  "outputs": {
+    "summary": {
+      "id": "f9cad7b01a472135c4452916f9e0b6b4",
+      "src": "hda",
+      "uuid": "7c8ee210-8c93-48c0-b779-a29cdd70b788"
+    },
+    "variance": {
+      "id": "f9cad7b01a472135737299dd1cc2073e",
+      "src": "hda",
+      "uuid": "b7b2874f-c212-4af3-acbf-b94fd9ae89d1"
+    },
+    "identity_audit": {
+      "id": "f9cad7b01a47213524656ec1895df0c2",
+      "src": "hda",
+      "uuid": "4b1f6771-c8d1-475c-90c5-c0755ecf606d"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Error: PCA did not produce 100 components\nExecution halted\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Error: PCA did not produce 100 components\nExecution halted\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

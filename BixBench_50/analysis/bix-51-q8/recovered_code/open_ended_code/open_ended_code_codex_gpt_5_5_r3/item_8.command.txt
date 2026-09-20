@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from pathlib import Path
+import re, json, math, statistics
+path=Path('/workspace/inputs/data.xlsx')
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+def col_to_idx(ref):
+    m=re.match(r'([A-Z]+)', ref)
+    col=m.group(1)
+    idx=0
+    for ch in col:
+        idx=idx*26+ord(ch)-64
+    return idx-1
+
+with ZipFile(path) as z:
+    # shared strings
+    ss=[]
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    for si in root.findall('a:si', ns):
+        parts=[]
+        for t in si.findall('.//a:t', ns):
+            parts.append(t.text or '')
+        ss.append(''.join(parts))
+    sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    rows=[]
+    for row in sheet.findall('.//a:sheetData/a:row', ns):
+        vals={}
+        for c in row.findall('a:c', ns):
+            ref=c.attrib.get('r','')
+            idx=col_to_idx(ref)
+            typ=c.attrib.get('t')
+            v=c.find('a:v', ns)
+            if typ=='inlineStr':
+                text=''.join(t.text or '' for t in c.findall('.//a:t', ns))
+            elif v is None:
+                text=''
+            elif typ=='s':
+                text=ss[int(v.text)]
+            elif typ=='b':
+                text=bool(int(v.text))
+            else:
+                text=v.text
+            vals[idx]=text
+        if vals:
+            maxidx=max(vals)
+            rows.append([vals.get(i,'') for i in range(maxidx+1)])
+    # normalize row lengths
+    maxlen=max(map(len, rows))
+    rows=[r+['']*(maxlen-len(r)) for r in rows]
+    print('nrows including header', len(rows), 'ncols', maxlen)
+    header=rows[0]
+    print('header:', header)
+    for r in rows[:12]:
+        print(r)
+    # column summaries
+    cols=list(zip(*rows[1:]))
+    for i,name in enumerate(header):
+        vals=[v for v in cols[i] if v"'!='"'']
+        uniq=[]
+        for v in vals:
+            if v not in uniq: uniq.append(v)
+        print('\\nCOL', i, repr(name), 'nonmissing', len(vals), 'unique', len(set(vals)))
+        print('sample uniq:', uniq[:30])
+PY"

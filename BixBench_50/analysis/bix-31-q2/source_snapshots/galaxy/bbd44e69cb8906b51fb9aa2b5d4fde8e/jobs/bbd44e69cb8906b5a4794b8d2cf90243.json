@@ -1,0 +1,76 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5a4794b8d2cf90243",
+  "history_id": "bbd44e69cb8906b51fb9aa2b5d4fde8e",
+  "tool_id": "pydeseq2-sex-de-fam138a-v1",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-02T11:44:59.338586",
+  "update_time": "2026-08-02T11:53:57.195863",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/78867375/inputs/dataset_d4c351a9-51fe-41e0-be48-3700d1431fc8.dat\" \"/jetstream2/scratch/main/jobs/78867375/inputs/dataset_487b6c89-1b24-4064-b3fb-89ec1cb0aaa9.dat\" \\\n  pydeseq2_results.tsv filtered_results.tsv fam138a_row.tsv analysis_info.txt <<'PY'\nimport importlib.metadata\nimport os\nimport sys\n\nimport numpy as np\nimport pandas as pd\n\nfrom pydeseq2.dds import DeseqDataSet\nfrom pydeseq2.ds import DeseqStats\n\ncounts_path, metadata_path, results_path, filtered_path, target_path, info_path = sys.argv[1:]\n\ncounts = pd.read_csv(counts_path, index_col=0)\nmetadata = pd.read_csv(metadata_path, index_col=0)\n\ncounts.index = counts.index.astype(str)\ncounts.columns = counts.columns.astype(str)\nmetadata.index = metadata.index.astype(str)\n\nif counts.index.isna().any() or counts.index.duplicated().any():\n    raise ValueError(\"Counts gene identifiers must be present and unique.\")\nif counts.columns.duplicated().any():\n    raise ValueError(\"Counts sample identifiers must be unique.\")\nif metadata.index.isna().any() or metadata.index.duplicated().any():\n    raise ValueError(\"Metadata sample identifiers must be present and unique.\")\nif set(counts.columns) != set(metadata.index):\n    raise ValueError(\"Counts and metadata sample identifiers do not match.\")\nif \"batch\" not in metadata.columns or \"sex\" not in metadata.columns:\n    raise ValueError(\"Metadata must contain batch and sex columns.\")\nif metadata[[\"batch\", \"sex\"]].isna().any().any():\n    raise ValueError(\"Batch and sex cannot contain missing values.\")\n\nmetadata = metadata.loc[counts.columns].copy()\nmetadata[\"batch\"] = metadata[\"batch\"].astype(str)\nmetadata[\"sex\"] = metadata[\"sex\"].astype(str)\nif set(metadata[\"sex\"]) != {\"F\", \"M\"}:\n    raise ValueError(\"The sex factor must contain exactly F and M.\")\nmetadata[\"batch\"] = pd.Categorical(\n    metadata[\"batch\"],\n    categories=sorted(metadata[\"batch\"].unique()),\n    ordered=True,\n)\nmetadata[\"sex\"] = pd.Categorical(metadata[\"sex\"], categories=[\"F\", \"M\"], ordered=True)\nmetadata.index.name = \"sample\"\n\nif counts.isna().any().any():\n    raise ValueError(\"Counts contain missing values.\")\nif (counts < 0).any().any():\n    raise ValueError(\"Counts contain negative values.\")\nif not all(pd.api.types.is_integer_dtype(dtype) for dtype in counts.dtypes):\n    values = counts.to_numpy(dtype=float)\n    if not np.isfinite(values).all() or not np.equal(values, np.floor(values)).all():\n        raise ValueError(\"Counts must be finite, non-negative integers.\")\n    counts = counts.astype(np.int64)\n\nslots = max(1, int(os.environ.get(\"GALAXY_SLOTS\", \"1\")))\ndds = DeseqDataSet(\n    counts=counts,\n    metadata=metadata,\n    design=\"~batch + sex\",\n    refit_cooks=True,\n    n_cpus=slots,\n    quiet=True,\n)\ndds.deseq2()\n\nstats = DeseqStats(\n    dds,\n    contrast=[\"sex\", \"M\", \"F\"],\n    alpha=0.05,\n    quiet=True,\n    n_cpus=slots,\n)\nstats.summary()\n\ndesign_columns = list(stats.LFC.columns)\nsex_coefficients = [\n    column for column in design_columns\n    if str(column) == \"sex[T.M]\"\n]\nif len(sex_coefficients) != 1:\n    sex_coefficients = [\n        column for column in design_columns\n        if str(column).startswith(\"sex\") and \"M\" in str(column)\n    ]\nif len(sex_coefficients) != 1:\n    raise ValueError(\n        \"Could not identify the single M-vs-F sex coefficient: \"\n        + repr(design_columns)\n    )\ncoefficient = sex_coefficients[0]\ncontrast_vector = np.asarray(stats.contrast_vector, dtype=float)\ncoefficient_index = design_columns.index(coefficient)\nnonzero_contrast = np.flatnonzero(np.abs(contrast_vector) > 1e-12)\nif len(nonzero_contrast) != 1 or nonzero_contrast[0] != coefficient_index:\n    raise ValueError(\n        \"The requested M-vs-F contrast is not the single sex coefficient: \"\n        + repr(list(zip(design_columns, contrast_vector)))\n    )\n\n# PyDESeq2's lfc_shrink() uses its default shrinkage method and default adapt=True.\n# It is applied after summary() so testing columns remain from the unshrunk Wald fit.\nstats.lfc_shrink(coeff=coefficient)\n\nresults = stats.results_df.copy()\nresults.index.name = \"gene\"\nresults = results[[\n    \"baseMean\",\n    \"log2FoldChange\",\n    \"lfcSE\",\n    \"stat\",\n    \"pvalue\",\n    \"padj\",\n]]\nif \"FAM138A\" not in results.index:\n    raise ValueError(\"FAM138A is absent from the fitted result table.\")\n\nfinite_lfc = np.isfinite(results[\"log2FoldChange\"])\nfinite_base = np.isfinite(results[\"baseMean\"])\nfiltered = results[\n    finite_lfc\n    & finite_base\n    & (results[\"log2FoldChange\"].abs() > 0.5)\n    & (results[\"baseMean\"] > 10)\n]\n\nresults.reset_index().to_csv(results_path, sep=\"\\t\", index=False, na_rep=\"NA\")\nfiltered.reset_index().to_csv(filtered_path, sep=\"\\t\", index=False, na_rep=\"NA\")\nresults.loc[[\"FAM138A\"]].reset_index().to_csv(\n    target_path, sep=\"\\t\", index=False, na_rep=\"NA\"\n)\n\ntarget = results.loc[\"FAM138A\"]\ntry:\n    version = importlib.metadata.version(\"pydeseq2\")\nexcept importlib.metadata.PackageNotFoundError:\n    version = \"unknown\"\n\nwith open(info_path, \"w\", encoding=\"utf-8\") as handle:\n    handle.write(\"method=pydeseq2\\n\")\n    handle.write(\"pydeseq2_version=\" + str(version) + \"\\n\")\n    handle.write(\"design=~batch + sex\\n\")\n    handle.write(\"contrast=sex:M_vs_F\\n\")\n    handle.write(\"coefficient=\" + str(coefficient) + \"\\n\")\n    handle.write(\"lfc_shrinkage=default (apeglm in PyDESeq2)\\n\")\n    handle.write(\"counts_input=BatchCorrectedReadCounts_Zenodo.csv\\n\")\n    handle.write(\"samples=\" + str(counts.shape[1]) + \"\\n\")\n    handle.write(\"genes=\" + str(counts.shape[0]) + \"\\n\")\n    handle.write(\"filter=abs(log2FoldChange)>0.5 AND baseMean>10\\n\")\n    handle.write(\"filtered_rows=\" + str(filtered.shape[0]) + \"\\n\")\n    handle.write(\"FAM138A_baseMean=\" + repr(target[\"baseMean\"]) + \"\\n\")\n    handle.write(\"FAM138A_log2FoldChange=\" + repr(target[\"log2FoldChange\"]) + \"\\n\")\n    handle.write(\n        \"FAM138A_passes_filter=\"\n        + str(\n            bool(\n                np.isfinite(target[\"log2FoldChange\"])\n                and np.isfinite(target[\"baseMean\"])\n                and abs(target[\"log2FoldChange\"]) > 0.5\n                and target[\"baseMean\"] > 10\n            )\n        )\n        + \"\\n\"\n    )\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a4721358e7f0860514a8abe",
+      "src": "hda",
+      "uuid": "d4c351a9-51fe-41e0-be48-3700d1431fc8"
+    },
+    "metadata": {
+      "id": "f9cad7b01a472135439849443d4bfa6b",
+      "src": "hda",
+      "uuid": "487b6c89-1b24-4064-b3fb-89ec1cb0aaa9"
+    }
+  },
+  "outputs": {
+    "results": {
+      "id": "f9cad7b01a4721357083117fde48b3e8",
+      "src": "hda",
+      "uuid": "12e7cb5d-d183-44e5-b4d9-4a1dd5481c9a"
+    },
+    "filtered": {
+      "id": "f9cad7b01a472135568d97f798684960",
+      "src": "hda",
+      "uuid": "069b18e5-f68e-4405-beac-cd1d3b8feae5"
+    },
+    "target": {
+      "id": "f9cad7b01a472135acf946ca4373aa1c",
+      "src": "hda",
+      "uuid": "3babf27e-072b-4c6a-909d-91af87f872ea"
+    },
+    "info": {
+      "id": "f9cad7b01a4721359f7c3ffa077eebfc",
+      "src": "hda",
+      "uuid": "c24b20ff-eae6-49cc-a455-146eb3570e8e"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 57, in <module>\n  File \"/usr/local/lib/python3.14/site-packages/pydeseq2/dds.py\", line 249, in __init__\n    super().__init__(X=counts.astype(int), obs=metadata)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/legacy_api_wrap/__init__.py\", line 88, in fn_compatible\n    return fn(*args_all, **kw)\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 252, in __init__\n    self._init_as_actual(\n    ~~~~~~~~~~~~~~~~~~~~^\n        X=X,\n        ^^^^\n    ...<12 lines>...\n        filemode=filemode,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 442, in _init_as_actual\n    self._obs = _gen_dataframe(\n                ~~~~~~~~~~~~~~^\n        obs, [\"obs_names\", \"row_names\"], source=source, attr=\"obs\", length=n_obs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/functools.py\", line 982, in wrapper\n    return dispatch(args[0].__class__)(*args, **kw)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/aligned_df.py\", line 89, in _gen_dataframe_df\n    raise _mk_df_error(source, attr, length, len(anno))\nValueError: Observations annot. `obs` must have as many rows as `X` has rows (59453), but has 723 rows.\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 57, in <module>\n  File \"/usr/local/lib/python3.14/site-packages/pydeseq2/dds.py\", line 249, in __init__\n    super().__init__(X=counts.astype(int), obs=metadata)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/legacy_api_wrap/__init__.py\", line 88, in fn_compatible\n    return fn(*args_all, **kw)\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 252, in __init__\n    self._init_as_actual(\n    ~~~~~~~~~~~~~~~~~~~~^\n        X=X,\n        ^^^^\n    ...<12 lines>...\n        filemode=filemode,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/anndata.py\", line 442, in _init_as_actual\n    self._obs = _gen_dataframe(\n                ~~~~~~~~~~~~~~^\n        obs, [\"obs_names\", \"row_names\"], source=source, attr=\"obs\", length=n_obs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.14/functools.py\", line 982, in wrapper\n    return dispatch(args[0].__class__)(*args, **kw)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.14/site-packages/anndata/_core/aligned_df.py\", line 89, in _gen_dataframe_df\n    raise _mk_df_error(source, attr, length, len(anno))\nValueError: Observations annot. `obs` must have as many rows as `X` has rows (59453), but has 723 rows.\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,58 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile
+from collections import Counter, defaultdict
+
+zip_path='inputs/scogs_animals.zip'
+
+def parse_fasta(data):
+    seqs=[]; name=None; parts=[]
+    for raw in data.decode().splitlines():
+        line=raw.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None: seqs.append((name,''.join(parts)))
+            name=line[1:].split()[0]; parts=[]
+        else: parts.append(line)
+    if name is not None: seqs.append((name,''.join(parts)))
+    return seqs
+
+def pi(seqs, missing_chars):
+    total=0; examples=[]
+    for i,col in enumerate(zip(*(s for _,s in seqs)), start=1):
+        states=[c.upper() for c in col if c in missing_chars]
+        # not used
+    total=0
+    for i,col in enumerate(zip(*(s for _,s in seqs)), start=1):
+        states=[c.upper() for c in col if c not in missing_chars]
+        cnt=Counter(states)
+        if sum(v>=2 for v in cnt.values()) >= 2:
+            total+=1
+            if len(examples)<8: examples.append((i,''.join(col),dict(cnt)))
+    return total, examples
+
+variants={
+    'exclude_gap_only': set('-'),
+    'exclude_gap_unknown_X?': set('-?Xx'),
+    'exclude_gap_unknown_X?*': set('-?Xx*'),
+    'include_gap_exclude_?': set('?'),
+}
+with zipfile.ZipFile(zip_path) as z:
+    names=[n for n in z.namelist() if n.endswith('.faa.mafft')]
+    rows=[]
+    char_counts=Counter()
+    for n in names:
+        seqs=parse_fasta(z.read(n))
+        for _,s in seqs: char_counts.update(s)
+        vals={k: pi(seqs, miss)[0] for k,miss in variants.items()}
+        rows.append((n, vals, len(seqs), len(seqs[0]) if seqs else 0))
+    print('chars containing non-AA/gap:', {k:v for k,v in char_counts.items() if k not in set('ACDEFGHIKLMNPQRSTVWY-')})
+    for key in variants:
+        m=max(r[1][key] for r in rows)
+        print(key, 'max', m, 'files', [r[0] for r in rows if r[1][key]==m])
+    for target in ['1428854at2759.faa.mafft','570797at2759.faa.mafft']:
+        seqs=parse_fasta(z.read(target))
+        print('\\n', target, 'taxa', [x for x,_ in seqs], 'len', len(seqs[0]))
+        for key,miss in variants.items():
+            c, ex=pi(seqs,miss)
+            print(key,c,'examples',ex[:3])
+PY"

@@ -1,0 +1,17 @@
+/bin/bash -lc "Rscript - <<'RS'
+suppressPackageStartupMessages({library(DESeq2); library(AnnotationDbi); library(org.Hs.eg.db); library(GO.db)})
+cts <- as.matrix(read.csv('inputs/counts_raw_unfiltered.csv', row.names=1, check.names=FALSE))
+meta <- read.csv('inputs/sample_layout.csv',check.names=FALSE,stringsAsFactors=FALSE)
+meta"'$count_id <- gsub('"'-','_',meta"'$SampleID); cts <- cts[,meta$count_id]; colnames(cts)<-meta$SampleID; rownames(meta)<-meta$SampleID
+meta$Group <- relevel(factor(meta$Group), ref='"'DMSO')
+dds <- DESeq(DESeqDataSetFromMatrix(cts,meta,~Group),quiet=TRUE)
+r <- as.data.frame(results(dds,contrast=c('Group','CBD_IC50','DMSO'),alpha=.05)); r"'$gene<-rownames(r)
+sig<-subset(r,!is.na(padj)&padj<.05&abs(log2FoldChange)>.5)
+cat('"'all-sample fit: tested',sum("'!is.na(r$padj)),'"'sig',nrow(sig),'up',sum(sig"'$log2FoldChange>0),'"'down',sum(sig"'$log2FoldChange<0),'"'\\n')
+base_u<-r"'$gene[!is.na(r$padj)]
+ann<-AnnotationDbi::select(org.Hs.eg.db,keys=unique(base_u),keytype='"'ENSEMBL',columns=c('GOALL','ONTOLOGYALL'))
+ann<-unique(ann["'!is.na(ann$GOALL)&ann$ONTOLOGYALL=='"'BP',c('ENSEMBL','GOALL')]); u<-intersect(base_u,unique(ann"'$ENSEMBL)); ann<-ann[ann$ENSEMBL%in%u,]
+met_ids<-unique(c('"'GO:0008152',unlist(GOBPOFFSPRING[['GO:0008152']],use.names=FALSE)))
+ora<-function(fg,minsize=10,maxsize=500){fg<-intersect(fg,u);sets<-lapply(split(ann"'$ENSEMBL,ann$GOALL),unique);sets<-sets[lengths(sets)>=minsize&lengths(sets)<=maxsize];hit<-vapply(sets,function(s)sum(fg%in%s),integer(1));ok<-hit>0;sets<-sets[ok];hit<-hit[ok];K<-lengths(sets);p<-phyper(hit-1,K,length(u)-K,length(fg),lower.tail=FALSE);o<-data.frame(GO=names(sets),Term=Term(GOTERM[names(sets)]),hit=hit,size=K,p=p,padj=p.adjust(p,'"'BH'));o[order(o"'$padj,o$p),]}
+for(nm in c('"'UP','DOWN')){fg<-if(nm=='UP')sig"'$gene[sig$log2FoldChange>0] else sig$gene[sig$log2FoldChange<0]; o<-ora(fg); sm<-o[o$padj<.05,]; mm<-sm[sm$GO%in%met_ids,];cat(nm,'"'mapped fg',length(intersect(fg,u)),'sig BP',nrow(sm),'sig metabolic',nrow(mm),'best metabolic padj',if(nrow(mm))min(mm"'$padj) else NA,'"'\\n');print(head(mm,20),row.names=FALSE)}
+RS"

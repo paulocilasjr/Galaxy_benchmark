@@ -1,0 +1,25 @@
+/bin/bash -lc "cat > /workspace/tmp/run_deseq2.R <<'EOF'
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(org.Mm.eg.db))
+counts <- read.csv('/workspace/inputs/count.csv', row.names=1, check.names=FALSE)
+counts <- as.matrix(counts)
+storage.mode(counts) <- 'integer'
+coldata <- data.frame(condition=factor(c('KL','KL','KL','WL','WL','WL'), levels=c('KL','WL')), row.names=colnames(counts))
+dds <- DESeqDataSetFromMatrix(countData=counts, colData=coldata, design=~condition)
+dds <- DESeq(dds)
+res <- results(dds, contrast=c('condition','WL','KL'), alpha=0.05)
+res <- lfcShrink(dds, coef='condition_WL_vs_KL', type='apeglm', res=res, svalue=FALSE)
+write.csv(as.data.frame(res), '/workspace/tmp/r_deseq_results_apeglm.csv')
+cat('res_done n=', nrow(res), '\\n', sep='')
+for(pcol in c('pvalue','padj')) {
+ mask <- which("'!is.na(res[[pcol]]) & res[[pcol]] < 0.05 & !is.na(res$log2FoldChange) & abs(res$log2FoldChange) > 1 & res$baseMean > 10)
+ cat(pcol, length(mask), '"'\\n')
+}
+# map significant padj genes to symbols
+mask <- which("'!is.na(res$padj) & res$padj < 0.05 & !is.na(res$log2FoldChange) & abs(res$log2FoldChange) > 1 & res$baseMean > 10)
+ids <- rownames(res)[mask]
+sym <- mapIds(org.Mm.eg.db, keys=ids, keytype='"'ENSEMBL', column='SYMBOL', multiVals='first')
+writeLines(sym["'!is.na(sym)], '"'/workspace/tmp/r_sig_symbols_padj.txt')
+cat('symbols', sum("'!is.na(sym)), '"'\\n')
+EOF
+/workspace/tmp/bin/bin/micromamba run -p /workspace/tmp/mamba_env Rscript /workspace/tmp/run_deseq2.R"

@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+
+control = 'DMSO'
+treatment = 'Cisplatin_IC50_CBD_IC50'
+meta = layout[layout['Group'].isin([control, treatment])].copy()
+meta = meta.set_index('sample')
+meta = meta.loc[[s for s in meta.index if s in counts.columns]]
+
+count_sub = counts[meta.index].T.astype(int)
+metadata = pd.DataFrame({'condition': meta['Group']}, index=meta.index)
+
+print('samples', metadata['condition'].to_dict())
+print('genes', count_sub.shape[1])
+
+dds = DeseqDataSet(
+    counts=count_sub,
+    metadata=metadata,
+    design='~condition',
+    ref_level=['condition', control],
+    n_cpus=1,
+    quiet=False,
+)
+dds.deseq2()
+stat_res = DeseqStats(
+    dds,
+    contrast=['condition', treatment, control],
+    alpha=0.05,
+    n_cpus=1,
+    quiet=False,
+)
+stat_res.summary()
+res = stat_res.results_df.copy()
+print(res.head())
+print(res.columns.tolist())
+
+deg = res[(res['padj'].notna()) & (res['padj'] < 0.05) & (res['log2FoldChange'].abs() >= 0.5)].copy()
+print('DEG_ENSG', len(deg))
+
+mapping = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t')
+map_series = mapping.dropna(subset=['ENSG','gene_name']).drop_duplicates('ENSG').set_index('ENSG')['gene_name']
+deg['gene_name'] = deg.index.to_series().map(map_series)
+genes = sorted(set(deg['gene_name'].dropna().astype(str)))
+print('DEG_mapped_unique_symbols', len(genes))
+print('first_symbols', genes[:20])
+
+enr = gp.enrichr(gene_list=genes, gene_sets='Reactome_2022', organism='human', outdir=None, no_plot=True, cutoff=1.0, verbose=True)
+results = enr.results
+print('enrichr columns', results.columns.tolist())
+print('n_terms', len(results))
+term = 'TP53 Regulates Transcription Of Cell Cycle Genes'
+row = results[results['Term'].eq(term)]
+if row.empty:
+    print(results[results['Term'].str.contains('TP53 Regulates Transcription', case=False, na=False)].to_string(index=False))
+    raise SystemExit('target term not found')
+print(row.to_string(index=False))
+print('ANSWER', row.iloc[0]['Overlap'])
+PY"

@@ -1,0 +1,53 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5abcf27aa502b601e",
+  "history_id": "bbd44e69cb8906b5b5ec47ed802c2c11",
+  "tool_id": "codex_pca_pc1_variance_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T03:32:37.552248",
+  "update_time": "2026-07-15T03:33:37.804255",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > run_pca.py <<'PY'\nimport csv\nimport math\nimport sys\nfrom collections import Counter, defaultdict\n\nimport numpy as np\n\nexp_path, meta_path, out_path = sys.argv[1:4]\n\nwith open(meta_path, newline='') as f:\n    meta_rows = list(csv.DictReader(f))\nif not meta_rows or 'projid' not in meta_rows[0]:\n    raise SystemExit('metadata must contain projid')\nmeta_ids = [r['projid'] for r in meta_rows]\nmeta_by_id = defaultdict(list)\nfor r in meta_rows:\n    meta_by_id[r['projid']].append(r)\n\nwith open(exp_path, newline='') as f:\n    reader = csv.reader(f)\n    header = next(reader)\n    if not header or header[0] != 'gene':\n        raise SystemExit('expression table must have gene as first column')\n    sample_ids = header[1:]\n    sample_counts = Counter(sample_ids)\n    if sample_counts != Counter(meta_ids):\n        raise SystemExit('expression sample IDs and metadata projid values do not match as multisets')\n\n    repeated_ids = {sid for sid, n in sample_counts.items() if n > 1}\n    # Required identity gate: repeated primary labels lack a secondary sample key.\n    # The complete repeated groups are excluded before fitting sample-level PCA.\n    keep_indices = [i for i, sid in enumerate(sample_ids) if sample_counts[sid] == 1]\n    keep_sample_ids = [sample_ids[i] for i in keep_indices]\n    if len(keep_sample_ids) < 101:\n        raise SystemExit('not enough resolved observations for 100 PCA components')\n\n    genes = []\n    gene_vectors = []\n    for line_no, row in enumerate(reader, start=2):\n        if len(row) != len(header):\n            raise SystemExit(f'row {line_no} has {len(row)} fields, expected {len(header)}')\n        gene = row[0]\n        vals = []\n        for i in keep_indices:\n            try:\n                x = float(row[i + 1])\n            except ValueError as e:\n                raise SystemExit(f'non-numeric value at row {line_no}, sample {sample_ids[i]}') from e\n            if x + 1.0 <= 0.0:\n                raise SystemExit(f'log10 pseudocount transform invalid at row {line_no}, sample {sample_ids[i]}')\n            vals.append(math.log10(x + 1.0))\n        genes.append(gene)\n        gene_vectors.append(vals)\n\nif not gene_vectors:\n    raise SystemExit('no gene rows found')\n\nX = np.asarray(gene_vectors, dtype=np.float64).T\nif not np.isfinite(X).all():\n    raise SystemExit('transformed matrix contains non-finite values')\n\n# Remove zero-variance features after the requested transform.\nfeature_var = X.var(axis=0, ddof=1)\nfeature_mask = feature_var > 0.0\nX = X[:, feature_mask]\nif X.shape[1] == 0:\n    raise SystemExit('no nonzero-variance genes remain')\n\n# PCA on samples as rows and genes as columns: center features, do not scale.\nXc = X - X.mean(axis=0)\ntotal_ss = float(np.sum(Xc * Xc))\nif total_ss <= 0.0:\n    raise SystemExit('total fitted variance is zero')\n\n# Exact SVD gives ordinary covariance-style PCA. n_components is 100 as requested.\nU, S, Vt = np.linalg.svd(Xc, full_matrices=False)\nn_components = 100\nif len(S) < n_components:\n    raise SystemExit('SVD returned fewer components than requested')\nexplained_variance_ratio = (S[:n_components] ** 2) / total_ss\npc1_percent = float(explained_variance_ratio[0] * 100.0)\n\n# Diagnostics are included to validate output semantics; local extraction reads pc1_percent only.\nwith open(out_path, 'w', newline='') as out:\n    w = csv.writer(out, delimiter='\\t')\n    w.writerow(['metric', 'value'])\n    w.writerow(['pc1_percent_total_variance', format(pc1_percent, '.15g')])\n    w.writerow(['requested_components', n_components])\n    w.writerow(['original_sample_columns', len(sample_ids)])\n    w.writerow(['unique_primary_sample_ids', len(sample_counts)])\n    w.writerow(['excluded_repeated_primary_ids', len(repeated_ids)])\n    w.writerow(['fitted_samples', X.shape[0]])\n    w.writerow(['original_genes', len(genes)])\n    w.writerow(['fitted_nonzero_variance_genes', X.shape[1]])\nPY\npython run_pca.py \"/jetstream2/scratch/main/jobs/78533163/inputs/dataset_82587448-4b78-4eca-b95d-32ab21930d64.dat\" \"/jetstream2/scratch/main/jobs/78533163/inputs/dataset_3a2c4501-6f77-46f5-950c-58423ad1a640.dat\" result.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "exp": {
+      "id": "f9cad7b01a47213511183875dba45594",
+      "src": "hda",
+      "uuid": "82587448-4b78-4eca-b95d-32ab21930d64"
+    },
+    "meta": {
+      "id": "f9cad7b01a472135e43f97a2bbd77c60",
+      "src": "hda",
+      "uuid": "3a2c4501-6f77-46f5-950c-58423ad1a640"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a47213564203115746ef8e1",
+      "src": "hda",
+      "uuid": "ce4cf2af-689a-49c7-92e8-f25a4cfe974d"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,17 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv
+import numpy as np,pandas as pd
+from scipy import stats
+
+def h(f):
+    with open(f,newline='') as x:return next(csv.reader(x))
+ch=h('inputs/CRISPRGeneEffect.csv'); eh=h('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'); eset=set(eh[1:]); genes=[g for g in ch[1:] if g in eset]
+cu=[0]+[i for i,g in enumerate(ch) if i and g in eset]; ep={g:i for i,g in enumerate(eh)}; eu=[0]+[ep[g] for g in genes]; dt={g:np.float32 for g in genes}
+cr=pd.read_csv('inputs/CRISPRGeneEffect.csv',usecols=cu,index_col=0,dtype=dt); ex=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv',usecols=eu,index_col=0,dtype=dt); ids=cr.index.intersection(ex.index); a=cr.loc[ids,genes].to_numpy(dtype=np.float32); b=ex.loc[ids,genes].to_numpy(dtype=np.float32)
+ng=a.shape[1]; rs=np.empty(ng); ns=np.empty(ng,dtype=int)
+for s in range(0,ng,512):
+    e=min(s+512,ng); m=np.isfinite(a[:,s:e]) & np.isfinite(b[:,s:e]); aa=np.where(m,a[:,s:e],np.nan); bb=np.where(m,b[:,s:e],np.nan); ra=stats.rankdata(aa,axis=0,nan_policy='omit'); rb=stats.rankdata(bb,axis=0,nan_policy='omit'); n=m.sum(0).astype(float); mu=(n+1)/2; da=ra-mu; db=rb-mu; rs[s:e]=np.nansum(da*db,0)/np.sqrt(np.nansum(da*da,0)*np.nansum(db*db,0)); ns[s:e]=n
+p=2*stats.t.sf(np.abs(rs*np.sqrt((ns-2)/(1-rs*rs))),ns-2); p[np.abs(rs)>=1]=0
+q=stats.false_discovery_control(p,method='bh'); sig=q<.05
+print('float32',int(sig.sum()),100*sig.mean(),'positive',int((sig & (rs>0)).sum()),'negative',int((sig & (rs<0)).sum()))
+PY"

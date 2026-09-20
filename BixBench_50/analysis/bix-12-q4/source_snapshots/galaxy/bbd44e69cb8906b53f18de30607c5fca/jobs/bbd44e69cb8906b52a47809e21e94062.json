@@ -1,0 +1,68 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b52a47809e21e94062",
+  "history_id": "bbd44e69cb8906b53f18de30607c5fca",
+  "tool_id": "codex-pis-mann-whitney-v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-16T03:17:41.154773",
+  "update_time": "2026-07-16T03:18:45.657672",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > job.py <<'PYCODE'\nimport pathlib\nimport re\nimport subprocess\nimport sys\nimport tempfile\nimport zipfile\n\n\ndef run_phykit_pis(fasta_path):\n    attempts = [\n        ['phykit', 'pis', str(fasta_path)],\n        ['phykit', 'parsimony_informative_sites', str(fasta_path)],\n    ]\n    errors = []\n    for cmd in attempts:\n        try:\n            run = subprocess.run(cmd, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n            return run.stdout.strip()\n        except Exception as exc:\n            detail = getattr(exc, 'stderr', '') or str(exc)\n            errors.append(' '.join(cmd) + ': ' + detail.replace('\\n', ' '))\n    raise RuntimeError('PhyKit PIS failed: ' + ' | '.join(errors))\n\n\ndef parse_pis_output(text):\n    nums = re.findall(r'[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?', text)\n    if len(nums) < 3:\n        raise ValueError('Cannot parse PhyKit PIS output: ' + repr(text))\n    return int(float(nums[0])), int(float(nums[1])), float(nums[2])\n\n\ndef process_archive(zip_path, group, metrics):\n    values = []\n    failed = []\n    with tempfile.TemporaryDirectory() as td:\n        td = pathlib.Path(td)\n        with zipfile.ZipFile(zip_path) as zf:\n            names = sorted(name for name in zf.namelist() if (not name.endswith('/')) and name.endswith('.mafft'))\n            for name in names:\n                target = td / pathlib.Path(name).name\n                target.write_bytes(zf.read(name))\n                try:\n                    pis, total, pct = parse_pis_output(run_phykit_pis(target))\n                    values.append(pct)\n                    metrics.write(f'{group}\\t{name}\\t{pis}\\t{total}\\t{pct:.15g}\\n')\n                except Exception as exc:\n                    failed.append((name, str(exc)))\n    return values, failed\n\n\ndef average_ranks(values):\n    order = sorted(range(len(values)), key=lambda i: values[i])\n    ranks = [0.0] * len(values)\n    i = 0\n    while i < len(order):\n        j = i + 1\n        while j < len(order) and values[order[j]] == values[order[i]]:\n            j += 1\n        avg = (i + 1 + j) / 2.0\n        for k in range(i, j):\n            ranks[order[k]] = avg\n        i = j\n    return ranks\n\n\ndef mann_whitney_u_first(a, b):\n    n1 = len(a)\n    ranks = average_ranks(list(a) + list(b))\n    r1 = sum(ranks[:n1])\n    return r1 - (n1 * (n1 + 1) / 2.0)\n\n\ndef fmt(x):\n    if abs(x - round(x)) < 1e-9:\n        return str(int(round(x)))\n    return f'{x:.15g}'\n\n\nanimals_path, fungi_path = sys.argv[1], sys.argv[2]\nwith open('metrics.tsv', 'w') as metrics:\n    metrics.write('group\\tfile\\tpis_sites\\ttotal_sites\\tpis_percent\\n')\n    animals, animals_failed = process_archive(animals_path, 'animals', metrics)\n    fungi, fungi_failed = process_archive(fungi_path, 'fungi', metrics)\n\nwith open('failed.tsv', 'w') as out:\n    out.write('group\\tfile\\terror\\n')\n    for group, failed in [('animals', animals_failed), ('fungi', fungi_failed)]:\n        for name, err in failed:\n            out.write(f'{group}\\t{name}\\t{err.replace(chr(9), \" \")}\\n')\n\nif animals_failed or fungi_failed:\n    raise RuntimeError(f'Failed files: {len(animals_failed)} animals, {len(fungi_failed)} fungi')\nif not animals or not fungi:\n    raise RuntimeError('No .mafft parsimony-informative-site percentages were computed for one or both groups')\n\nu1 = mann_whitney_u_first(animals, fungi)\nwith open('answer.txt', 'w') as out:\n    out.write(fmt(u1) + '\\n')\n\nwith open('summary.tsv', 'w') as out:\n    out.write('group\\tn\\tmin\\tmax\\tmean\\n')\n    for group, values in [('animals', animals), ('fungi', fungi)]:\n        out.write(f'{group}\\t{len(values)}\\t{min(values):.15g}\\t{max(values):.15g}\\t{(sum(values)/len(values)):.15g}\\n')\n    out.write(f'U1_animals_vs_fungi\\t{len(animals)},{len(fungi)}\\t{fmt(u1)}\\t\\t\\n')\nPYCODE\npython job.py \"/jetstream2/scratch/main/jobs/78548756/inputs/dataset_8b4b72ea-0eeb-4bac-8c9d-fe8981e98bc5.dat\" \"/jetstream2/scratch/main/jobs/78548756/inputs/dataset_178f523f-6705-4cca-b5c3-a22f134c02e6.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "animals_zip": {
+      "id": "f9cad7b01a4721358be8fcf566094873",
+      "src": "hda",
+      "uuid": "8b4b72ea-0eeb-4bac-8c9d-fe8981e98bc5"
+    },
+    "fungi_zip": {
+      "id": "f9cad7b01a472135d7de2451014abbdd",
+      "src": "hda",
+      "uuid": "178f523f-6705-4cca-b5c3-a22f134c02e6"
+    }
+  },
+  "outputs": {
+    "answer": {
+      "id": "f9cad7b01a472135f641d2d43bea7629",
+      "src": "hda",
+      "uuid": "51446522-49e4-422f-92d7-73b8fcfd445d"
+    },
+    "metrics": {
+      "id": "f9cad7b01a472135ad24c8a78a481677",
+      "src": "hda",
+      "uuid": "31a3dd2f-edba-41c8-b799-a357747603f5"
+    },
+    "summary": {
+      "id": "f9cad7b01a472135007e292be1a2ddea",
+      "src": "hda",
+      "uuid": "d35bb458-3bbc-4933-9d6d-a7f5726ab0f6"
+    },
+    "failed": {
+      "id": "f9cad7b01a472135c0733c4c87621e94",
+      "src": "hda",
+      "uuid": "b65fc013-9acd-4760-8be5-8ee41bff6445"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from pathlib import Path
+
+def fasta(data):
+    out=[]; h=None; s=[]
+    for line in data.decode().splitlines():
+        if line.startswith('>'):
+            if h is not None: out.append((h,''.join(s)))
+            h=line[1:]; s=[]
+        else:s.append(line.strip())
+    if h is not None:out.append((h,''.join(s)))
+    return out
+
+def pis(seqs, gm=True):
+  c=0
+  for j in range(len(seqs[0][1])):
+    col=[s[j] for _,s in seqs]
+    if gm: col=[x for x in col if x not in '-?X']
+    if sum(v>=2 for v in Counter(col).values())>=2:c+=1
+  return c
+
+def load(gm):
+  out={}
+  for group in ['animals','fungi']:
+    with ZipFile(Path('inputs')/f'scogs_{group}.zip') as z:
+      for name in z.namelist():
+        if name.endswith('.mafft'):out[group,name]=pis(fasta(z.read(name)),gm)
+  return out
+
+def mw(x,y):
+  vals=sorted(x+y); rank={}; i=0
+  while i<len(vals):
+    j=i+1
+    while j<len(vals) and vals[j]==vals[i]:j+=1
+    rank[vals[i]]=(i+1+j)/2;i=j
+  u=sum(rank[v] for v in x)-len(x)*(len(x)+1)/2
+  return u,len(x)*len(y)-u,min(u,len(x)*len(y)-u)
+for gm in [True,False]:
+  d=load(gm)
+  for scope in ['all','complete','common','common_complete']:
+    if scope=='all': x=[v for (g,n),v in d.items() if g=='animals']; y=[v for (g,n),v in d.items() if g=='fungi']
+    elif scope=='complete': x=[v for (g,n),v in d.items() if g=='animals' and len(fasta(ZipFile(Path('inputs')/'scogs_animals.zip').read(n)))==4] if False else []
+    # avoid re-opening in this compact block below
+  print('gm',gm)
+  # reload with n
+  dd={}
+  for group in ['animals','fungi']:
+   with ZipFile(Path('inputs')/f'scogs_{group}.zip') as z:
+    for name in z.namelist():
+     if name.endswith('.mafft'):
+      s=fasta(z.read(name)); dd[group,name]=(pis(s,gm),len(s))
+  scopes={
+   'all': ([(v,n) for (g,name),(v,n) in dd.items() if g=='animals'],[(v,n) for (g,name),(v,n) in dd.items() if g=='fungi']),
+   'complete': ([(v,n) for (g,name),(v,n) in dd.items() if g=='animals' and n==4],[(v,n) for (g,name),(v,n) in dd.items() if g=='fungi' and n==4]),
+   'common': ([(v,n) for (g,name),(v,n) in dd.items() if g=='animals'],[(dd['fungi',name][0],dd['fungi',name][1]) for (g,name) in dd if g=='animals' and ('fungi',name) in dd]),
+   'common_complete': ([(dd['animals',name][0],dd['animals',name][1]) for (g,name) in dd if g=='animals' and dd['animals',name][1]==4 and ('fungi',name) in dd and dd['fungi',name][1]==4],[(dd['fungi',name][0],dd['fungi',name][1]) for (g,name) in dd if g=='animals' and dd['animals',name][1]==4 and ('fungi',name) in dd and dd['fungi',name][1]==4]),
+  }
+  for sc,(xx,yy) in scopes.items():
+    u1,u2,um=mw([v for v,n in xx],[v for v,n in yy])
+    print(sc,len(xx),len(yy),'U1',u1,'U2',u2,'min',um)
+PY"

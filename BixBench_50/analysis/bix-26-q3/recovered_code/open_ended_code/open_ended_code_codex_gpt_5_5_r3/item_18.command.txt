@@ -1,0 +1,40 @@
+/bin/bash -lc "Rscript - <<'RS'
+# Extract foreground from DESeqResults without requiring DESeq2.
+x <- readRDS('inputs/res_GluFevsGluFePlus.rds')
+a <- attributes(x)
+df <- data.frame(gene=a"'$rownames, a$listData, check.names=FALSE)
+foreground <- df$gene[!is.na(df$padj) & df$padj < 0.05 & !is.na(df$log2FoldChange) & df$log2FoldChange > 1.5]
+result_genes <- df$gene
+
+# Fetch KEGG PA14 pathway links and names.
+links <- read.delim('"'https://rest.kegg.jp/link/pathway/pau', header=FALSE, stringsAsFactors=FALSE)
+names(links) <- c('gene','pathway')
+links"'$gene <- sub('"'"'^pau:'"', '', links"'$gene)
+links$pathway <- sub('"'"'^path:'"', '', links"'$pathway)
+path_names <- read.delim('"'https://rest.kegg.jp/list/pathway/pau', header=FALSE, stringsAsFactors=FALSE)
+names(path_names) <- c('pathway','description')
+
+# Use experiment-eligible genes that map to KEGG pathways as the ORA universe.
+universe <- intersect(result_genes, unique(links"'$gene))
+fg <- intersect(foreground, universe)
+N <- length(universe)
+n <- length(fg)
+
+by_path <- split(links$gene, links$pathway)
+rows <- lapply(names(by_path), function(pid) {
+  genes <- intersect(unique(by_path[[pid]]), universe)
+  k <- sum(fg %in% genes)
+  M <- length(genes)
+  p <- phyper(k - 1, M, N - M, n, lower.tail=FALSE)
+  data.frame(pathway=pid, M=M, Count=k, pvalue=p, geneID=paste(sort(intersect(fg, genes)), collapse='"'/'))
+})
+enrich <- do.call(rbind, rows)
+enrich"'$padj <- p.adjust(enrich$pvalue, method='"'BH')
+enrich <- merge(enrich, path_names, by='pathway', all.x=TRUE)
+enrich <- enrich[order(enrich"'$pvalue, enrich$pathway),]
+abc <- enrich[grep('"'"'^ABC transporters'"', enrich"'$description),]
+cat('"'foreground_total=', length(foreground), '\\n', sep='')
+cat('foreground_mapped=', n, '\\n', sep='')
+cat('universe_mapped=', N, '\\n', sep='')
+print(abc[,c('pathway','description','M','Count','pvalue','padj','geneID')], row.names=FALSE)
+RS"

@@ -1,0 +1,91 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, statistics, itertools, collections, os
+
+class Parser:
+    def __init__(self, s):
+        self.s=s.strip(); self.i=0; self.nodes=[]
+    def skip_ws(self):
+        while self.i < len(self.s) and self.s[self.i].isspace(): self.i += 1
+    def new_node(self, name=None):
+        self.nodes.append({'name': name, 'children': [], 'length': None})
+        return len(self.nodes)-1
+    def parse_label(self):
+        self.skip_ws(); start=self.i
+        if self.i < len(self.s) and self.s[self.i] in \"'\\\"\":
+            q=self.s[self.i]; self.i += 1; out=[]
+            while self.i < len(self.s):
+                c=self.s[self.i]; self.i += 1
+                if c == q:
+                    if self.i < len(self.s) and self.s[self.i] == q:
+                        out.append(q); self.i += 1; continue
+                    break
+                out.append(c)
+            return ''.join(out)
+        while self.i < len(self.s) and self.s[self.i] not in ':,();': self.i += 1
+        return self.s[start:self.i].strip() or None
+    def parse_length(self):
+        self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] == ':':
+            self.i += 1; self.skip_ws(); start=self.i
+            while self.i < len(self.s) and self.s[self.i] not in ',();': self.i += 1
+            return float(self.s[start:self.i].strip())
+        return None
+    def parse_subtree(self):
+        self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] == '(':
+            self.i += 1; idx=self.new_node()
+            while True:
+                child=self.parse_subtree(); self.nodes[idx]['children'].append(child); self.skip_ws()
+                if self.i < len(self.s) and self.s[self.i] == ',': self.i += 1; continue
+                if self.i < len(self.s) and self.s[self.i] == ')': self.i += 1; break
+                raise ValueError('bad Newick')
+            if self.i < len(self.s) and self.s[self.i] not in ':,();': self.nodes[idx]['name']=self.parse_label()
+            self.nodes[idx]['length']=self.parse_length(); return idx
+        name=self.parse_label()
+        if not name: raise ValueError('missing leaf')
+        idx=self.new_node(name); self.nodes[idx]['length']=self.parse_length(); return idx
+    def parse(self):
+        root=self.parse_subtree(); self.skip_ws()
+        if self.i < len(self.s) and self.s[self.i] == ';': self.i += 1
+        self.skip_ws()
+        if self.i "'!= len(self.s): raise ValueError('"'trailing Newick content')
+        return root,self.nodes
+
+def mean_patristic(s):
+    root,nodes=Parser(s).parse(); adj=[[] for _ in nodes]
+    for parent,node in enumerate(nodes):
+        for child in node['children']:
+            length=nodes[child]['length']
+            if length is None: raise ValueError('missing branch length')
+            adj[parent].append((child,length)); adj[child].append((parent,length))
+    leaves=[i for i,n in enumerate(nodes) if not n['children']]
+    if len(leaves) < 2: raise ValueError('too few leaves')
+    dists=[]
+    for a,b in itertools.combinations(leaves,2):
+        stack=[(a,-1,0.0)]
+        while stack:
+            u,p,d=stack.pop()
+            if u == b:
+                dists.append(d); break
+            for v,w in adj[u]:
+                if v "'!= p: stack.append((v,u,d+w))
+    return sum(dists)/len(dists)
+
+def median_mean(zpath):
+    vals=[]
+    with zipfile.ZipFile(zpath) as z:
+        for n in sorted(x for x in z.namelist() if x.endswith('"'.treefile')):
+            vals.append(mean_patristic(z.read(n).decode()))
+    return statistics.median(vals), len(vals)
+
+animal_med, animal_n = median_mean('inputs/scogs_animals.zip')
+fungi_med, fungi_n = median_mean('inputs/scogs_fungi.zip')
+ratio=fungi_med/animal_med
+print('animal_med', animal_med, 'animal_n', animal_n)
+print('fungi_med', fungi_med, 'fungi_n', fungi_n)
+print('ratio', ratio)
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w') as f:
+    f.write(f'{ratio:.15g}\\n')
+PY
+printf 'answer.txt: '; cat codex_output/answer.txt"

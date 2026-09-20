@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess, csv, io, textwrap
+s=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+out=io.StringIO()
+w=csv.writer(out, delimiter='\\t', lineterminator='\\n')
+w.writerow(['miRNA']+[s.cell_value(1,c) for c in range(1,s.ncols)])
+for r in range(2,s.nrows):
+    w.writerow([s.cell_value(r,0)]+[s.cell_value(r,c) for c in range(1,s.ncols)])
+tsv=out.getvalue()
+rscript = r'''
+d <- read.delim('stdin', check.names=FALSE)
+P <- grep('"'^P_'"', names(d))
+C <- grep('"'^C_'"', names(d))
+methods <- list(
+  welch=function(x,y) t.test(x,y, var.equal=FALSE)"'$p.value,
+  equal_var=function(x,y) t.test(x,y, var.equal=TRUE)$p.value,
+  wilcox=function(x,y) wilcox.test(x,y, exact=FALSE)$p.value
+)
+for (nm in names(methods)) {
+  p <- vapply(seq_len(nrow(d)), function(i) methods[[nm]](as.numeric(d[i,P]), as.numeric(d[i,C])), numeric(1))
+  bon <- p.adjust(p, method='"'bonferroni')
+  by <- p.adjust(p, method='BY')
+  cat(nm, 'n=', length(p), 'minp=', signif(min(p),4), 'bon_count=', sum(bon <= 0.05), 'by_count=', sum(by <= 0.05), '\\n')
+  cat('raw <= 0.05:', sum(p <= 0.05), 'BH:', sum(p.adjust(p, method='BH') <= 0.05), '\\n')
+}
+'''
+res=subprocess.run(['Rscript','-e',rscript], input=tsv, text=True, capture_output=True, check=False)
+print(res.stdout)
+if res.stderr: print('STDERR:', res.stderr)
+PY"
