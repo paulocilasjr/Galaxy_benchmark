@@ -1,0 +1,86 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile,re,statistics,math
+
+class Node:
+    __slots__=('children','length','label')
+    def __init__(self):
+        self.children=[]; self.length=None; self.label=''
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    i=0; n=len(s)
+    def parse_label_len(node):
+        nonlocal i
+        # label/support until :, ,, ), ;
+        start=i
+        while i<n and s[i] not in ':,()':
+            i+=1
+        node.label=s[start:i].strip()
+        if i<n and s[i]==':':
+            i+=1
+            start=i
+            while i<n and s[i] not in ',()':
+                i+=1
+            node.length=float(s[start:i])
+    def parse_sub():
+        nonlocal i
+        node=Node()
+        if i<n and s[i]=='(':
+            i+=1
+            while True:
+                node.children.append(parse_sub())
+                if i<n and s[i]==',':
+                    i+=1; continue
+                if i<n and s[i]==')':
+                    i+=1; break
+                raise ValueError(f'expected comma or ) at {i}: {s[i:i+20]}')
+            parse_label_len(node)
+        else:
+            parse_label_len(node)
+        return node
+    root=parse_sub()
+    if i"'!=n:
+        raise ValueError(f'"'trailing at {i}: {s[i:i+20]}')
+    return root
+
+def sums(root):
+    total=internal=0.0
+    leaves=0
+    def rec(node, is_root=False):
+        nonlocal total, internal, leaves
+        is_leaf=not node.children
+        if is_leaf: leaves+=1
+        if not is_root and node.length is not None:
+            total += node.length
+            if not is_leaf:
+                internal += node.length
+        for ch in node.children: rec(ch, False)
+    rec(root, True)
+    return leaves,total,internal
+
+num=r'[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?'
+pat_pct=re.compile(r'Sum of internal branch lengths:\\s*('+num+r')\\s*\\((["'^%]+)% of tree length'"\\)')
+for zname in ['scogs_animals.zip','scogs_fungi.zip']:
+    vals=[]; vals_iq=[]; diffs=[]; bad=[]; taxa_counts={}
+    with zipfile.ZipFile('/workspace/inputs/'+zname) as z:
+        for tree_name in sorted(x for x in z.namelist() if x.endswith('.treefile')):
+            root=parse_newick(z.read(tree_name).decode())
+            leaves,total,internal=sums(root)
+            val=internal/total if total else math.nan
+            vals.append(val); taxa_counts[leaves]=taxa_counts.get(leaves,0)+1
+            iq_name=tree_name[:-len('.treefile')]+'.iqtree'
+            txt=z.read(iq_name).decode(errors='replace')
+            mi=pat_pct.search(txt)
+            if mi:
+                iq=float(mi.group(2))/100
+                vals_iq.append(iq); diffs.append(abs(val-iq))
+                if abs(val-iq)>5e-6: bad.append((tree_name,leaves,val,iq,abs(val-iq)))
+    print('\\n',zname)
+    print('n',len(vals),'taxa_counts',taxa_counts)
+    print('median_treefile',statistics.median(vals))
+    print('median_iq_pct',statistics.median(vals_iq))
+    print('max_abs_diff_vs_iq_pct',max(diffs) if diffs else None,'bad>',len(bad))
+    print('min max zeros',min(vals),max(vals),sum(v==0 for v in vals))
+    print('sample_bad',bad[:3])
+PY"

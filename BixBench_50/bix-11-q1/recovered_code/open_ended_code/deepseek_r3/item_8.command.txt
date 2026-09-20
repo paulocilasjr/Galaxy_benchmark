@@ -1,0 +1,97 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, re, statistics, math, collections
+
+def parse_newick(s):
+    # returns root dict? Instead parse via recursive descent with length.
+    s=s.strip().rstrip(';')
+    pos=0
+    # tokenizer
+    tokens=[]
+    i=0
+    while i<len(s):
+        c=s[i]
+        if c in '(),:':
+            tokens.append(c); i+=1
+        elif c.isspace():
+            i+=1
+        else:
+            j=i
+            while j<len(s) and s[j] not in '(),: \\t\\n':
+                j+=1
+            tokens.append(s[i:j]); i=j
+    # recursive parser; returns (kind, children, label, length) or leaf
+    pos=0
+    def parse_node():
+        nonlocal pos
+        label=''
+        length=None
+        children=[]
+        if tokens[pos]=='(':
+            pos+=1
+            while True:
+                children.append(parse_node())
+                if pos < len(tokens) and tokens[pos]==',':
+                    pos+=1
+                else:
+                    break
+            if pos < len(tokens) and tokens[pos]==')':
+                pos+=1
+            else:
+                raise ValueError('missing )')
+            # internal label until : or , or ) or end
+            if pos < len(tokens) and tokens[pos] not in [':',',',')',';']:
+                label=tokens[pos]; pos+=1
+        else:
+            label=tokens[pos]; pos+=1
+        if pos < len(tokens) and tokens[pos]==':':
+            pos+=1
+            length=float(tokens[pos]); pos+=1
+        return {'label':label,'length':length,'children':children}
+    root=parse_node()
+    return root
+
+def compute_treeness(root):
+    total=0.0
+    internal=0.0
+    nleaf=0
+    # recursively accumulate edges: each child link length belongs to child node
+    def rec(node):
+        nonlocal total, internal, nleaf
+        is_leaf = not node['children']
+        if is_leaf:
+            nleaf += 1
+        if node is not root:
+            bl = node['length'] if node['length'] is not None else 0.0
+            total += bl
+            if not is_leaf:
+                internal += bl
+        for ch in node['children']:
+            rec(ch)
+    rec(root)
+    return internal/total if total>0 else 0.0, internal, total, nleaf
+
+for zname in ['scogs_animals.zip','scogs_fungi.zip']:
+    p=f'/workspace/inputs/{zname}'
+    vals=[]
+    bad=[]
+    with zipfile.ZipFile(p) as z:
+        treefiles=[n for n in z.namelist() if n.endswith('.treefile')]
+        print(zname,'treefiles',len(treefiles))
+        for n in treefiles:
+            s=z.read(n).decode()
+            try:
+                root=parse_newick(s)
+                t,internal,total,nleaf=compute_treeness(root)
+                vals.append(t)
+                if nleaf not in [4,5]:
+                    print('  odd leaves',nleaf,n, s[:80])
+                if not math.isfinite(t): bad.append(n)
+            except Exception as e:
+                bad.append((n,repr(e),s[:200]))
+    print('bad',len(bad), bad[:3])
+    print('median',statistics.median(vals),'mean',statistics.mean(vals),'min max',min(vals),max(vals),'n',len(vals))
+    print('quartiles', [round(x,6) for x in statistics.quantiles(vals, n=4)]) # quartiles if py3.8?
+    print('count zero',sum(v==0 for v in vals))
+    print('top', sorted(vals)[-10:])
+    print('bottom', sorted(vals)[:10])
+PY"

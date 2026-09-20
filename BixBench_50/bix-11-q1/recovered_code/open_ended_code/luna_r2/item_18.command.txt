@@ -1,0 +1,78 @@
+/bin/bash -lc "python - <<'PY'
+import re, statistics, zipfile
+
+class Node:
+    __slots__=('children','length')
+    def __init__(self,children=None,length=None): self.children=children or []; self.length=length
+
+def parse_newick(s):
+    i=0
+    def skip():
+        nonlocal i
+        while i<len(s) and s[i].isspace(): i+=1
+    def token(stop):
+        nonlocal i
+        start=i
+        while i<len(s) and s[i] not in stop: i+=1
+        return s[start:i].strip()
+    def subtree():
+        nonlocal i
+        skip()
+        if i<len(s) and s[i]=='(':
+            i+=1; children=[]
+            while True:
+                children.append(subtree()); skip()
+                if i<len(s) and s[i]==',': i+=1; continue
+                if i<len(s) and s[i]==')': i+=1; break
+                raise ValueError(f'bad at {i}: {s[i:i+20]"'!r}'"')
+            skip()
+            # optional node label
+            if i<len(s) and s[i] not in ':,();': token(':,();')
+            skip(); length=None
+            if i<len(s) and s[i]==':':
+                i+=1; length=float(token(',();'))
+            return Node(children,length)
+        else:
+            token(':,();')
+            skip(); length=None
+            if i<len(s) and s[i]==':':
+                i+=1; length=float(token(',();'))
+            return Node([],length)
+    root=subtree(); return root
+
+def metric(tree):
+    root=parse_newick(tree)
+    def rec(n,isroot=False):
+        total=0.0; internal=0.0
+        if not isroot and n.length is not None:
+            total += n.length
+            if n.children: internal += n.length
+        for c in n.children:
+            t,inn=rec(c); total+=t; internal+=inn
+        return total,internal
+    return rec(root,True)
+
+for group,path in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+  vals=[]
+  with zipfile.ZipFile(path) as z:
+    treefiles=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+    for n in treefiles:
+      total,internal=metric(z.read(n).decode())
+      vals.append((internal/total,n,total,internal))
+  vals.sort()
+  print(group,'n',len(vals),'median',statistics.median([x[0] for x in vals]))
+  mid=len(vals)//2
+  print('around median')
+  for x in vals[mid-4:mid+5]: print(x)
+  print('zero',sum(x[0]==0 for x in vals))
+# diff exact
+allv={}
+for group,path in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+  with zipfile.ZipFile(path) as z:
+    a=[]
+    for n in z.namelist():
+      if n.endswith('.treefile'):
+        t,inn=metric(z.read(n).decode()); a.append(inn/t)
+  allv[group]=statistics.median(a)
+print('diff fungi-animals',repr(allv['fungi']-allv['animals']))
+PY"

@@ -1,0 +1,132 @@
+/bin/bash -lc "python - <<'PY'
+import io, zipfile, statistics, collections, math
+
+class Node:
+    __slots__ = ('children','length','label')
+    def __init__(self, children=None, length=None, label=None):
+        self.children = children or []
+        self.length = length
+        self.label = label
+
+def parse_newick(s):
+    s = s.strip()
+    i = 0
+    n = len(s)
+    def skip_ws():
+        nonlocal i
+        while i < n and s[i].isspace():
+            i += 1
+    def read_label():
+        nonlocal i
+        skip_ws()
+        start = i
+        while i < n and s[i] not in '(),:;[]':
+            i += 1
+        return s[start:i].strip()
+    def read_comment():
+        nonlocal i
+        if i < n and s[i] == '[':
+            depth = 0
+            while i < n:
+                c = s[i]
+                i += 1
+                if c == '[': depth += 1
+                elif c == ']':
+                    depth -= 1
+                    if depth == 0: break
+    def read_length():
+        nonlocal i
+        skip_ws()
+        if i >= n or s[i] "'!= '"':':
+            return None
+        i += 1
+        skip_ws()
+        start = i
+        while i < n and s[i] not in ',();[]':
+            i += 1
+        val = s[start:i].strip()
+        return float(val) if val else None
+    def subtree():
+        nonlocal i
+        skip_ws()
+        if i < n and s[i] == '(':
+            i += 1
+            children = [subtree()]
+            skip_ws()
+            while i < n and s[i] == ',':
+                i += 1
+                children.append(subtree())
+                skip_ws()
+            if i >= n or s[i] "'!= '"')':
+                raise ValueError(f'unclosed group at {i}: {s[max(0,i-20):i+20]}')
+            i += 1
+            skip_ws()
+            label = read_label()
+            skip_ws()
+            while i < n and s[i] == '[':
+                read_comment(); skip_ws()
+            length = read_length()
+            skip_ws()
+            while i < n and s[i] == '[':
+                read_comment(); skip_ws()
+            return Node(children, length, label)
+        label = read_label()
+        skip_ws()
+        while i < n and s[i] == '[':
+            read_comment(); skip_ws()
+        length = read_length()
+        skip_ws()
+        while i < n and s[i] == '[':
+            read_comment(); skip_ws()
+        return Node([], length, label)
+    root = subtree()
+    return root
+
+def metrics(tree_text):
+    root = parse_newick(tree_text)
+    leaves = []
+    branches = []
+    def walk(node, isroot=False):
+        if not isroot:
+            branches.append((node.length, bool(node.children)))
+        if node.children:
+            for c in node.children: walk(c)
+        else:
+            leaves.append(node.label)
+    walk(root, True)
+    if any(x is None for x,_ in branches):
+        raise ValueError('missing branch length')
+    total = sum(x for x,_ in branches)
+    internal = sum(x for x,is_internal in branches if is_internal)
+    terminal = total-internal
+    return len(leaves), total, internal, terminal, internal/total if total else float('nan'), leaves
+
+for path in ('inputs/scogs_animals.zip','inputs/scogs_fungi.zip'):
+    vals=[]
+    taxa_counts=collections.Counter()
+    shapes=collections.Counter()
+    missing=[]
+    with zipfile.ZipFile(path) as z:
+        for name in z.namelist():
+            if not name.endswith('.treefile'): continue
+            txt=z.read(name).decode()
+            try:
+                n,total,internal,terminal,t,leaves=metrics(txt)
+            except Exception as e:
+                missing.append((name,str(e),txt[:200]))
+                continue
+            vals.append((name,t,n,total,internal,terminal,leaves,txt.strip()))
+            taxa_counts[n]+=1
+            shapes[tuple(sorted(leaves))]+=1
+    ts=sorted(v[1] for v in vals)
+    print('\\n',path)
+    print('trees',len(vals),'taxa_counts',dict(sorted(taxa_counts.items())),'errors',len(missing))
+    print('median',statistics.median(ts),'mean',statistics.mean(ts),'min',min(ts),'max',max(ts))
+    print('quartiles',statistics.quantiles(ts,n=4,method='inclusive'))
+    print('zeros',sum(v==0 for v in ts),'nan',sum(math.isnan(v) for v in ts))
+    print('first_sorted')
+    for row in sorted(vals,key=lambda x:x[1])[:5]: print(row[:6],row[7])
+    print('last_sorted')
+    for row in sorted(vals,key=lambda x:x[1])[-5:]: print(row[:6],row[7])
+    if missing: print('errors',missing[:3])
+PY"

@@ -1,0 +1,133 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile, statistics, math
+from collections import Counter
+
+class Node:
+    __slots__ = ('children','name','length')
+    def __init__(self, children=None, name='', length=None):
+        self.children = children or []
+        self.name = name
+        self.length = length
+
+class Parser:
+    def __init__(self, s):
+        self.s=s.strip()
+        self.i=0
+        self.n=len(self.s)
+    def peek(self):
+        return self.s[self.i] if self.i < self.n else ''
+    def consume(self, ch=None):
+        if ch is not None and self.peek()"'!=ch:
+            raise ValueError(f'"'expected {ch"'!r} at {self.i}, got {self.peek()!r}'"')
+        c=self.peek(); self.i+=1; return c
+    def parse(self):
+        node=self.parse_subtree()
+        if self.peek()==';': self.consume(';')
+        if self.i "'!= self.n:
+            rest=self.s[self.i:]
+            if rest.strip():
+                raise ValueError(f'"'trailing text at {self.i}: {rest[:20]"'!r}'"')
+        return node
+    def parse_subtree(self):
+        if self.peek()=='(':
+            self.consume('(')
+            children=[]
+            while True:
+                children.append(self.parse_subtree())
+                if self.peek()==',':
+                    self.consume(',')
+                    continue
+                if self.peek()==')':
+                    self.consume(')')
+                    break
+                raise ValueError(f'expected , or ) at {self.i}, got {self.peek()"'!r}'"')
+            name=self.parse_name()
+            length=self.parse_length()
+            return Node(children,name,length)
+        else:
+            name=self.parse_name()
+            length=self.parse_length()
+            return Node([],name,length)
+    def parse_name(self):
+        start=self.i
+        in_quote=False
+        while self.i < self.n:
+            c=self.s[self.i]
+            if c==\"'\":
+                in_quote=not in_quote
+                self.i+=1
+                continue
+            if not in_quote and c in ':,();':
+                break
+            self.i+=1
+        return self.s[start:self.i].strip()
+    def parse_length(self):
+        if self.peek()"'!='"':':
+            return None
+        self.consume(':')
+        start=self.i
+        while self.i < self.n and self.s[self.i] not in ',();':
+            self.i+=1
+        txt=self.s[start:self.i].strip()
+        if not txt:
+            return None
+        return float(txt)
+
+def metrics(newick):
+    root=Parser(newick).parse()
+    total=0.0
+    internal=0.0
+    leaves=0
+    internal_edges=0
+    missing=0
+    def rec(node, is_root=False):
+        nonlocal total, internal, leaves, internal_edges, missing
+        is_leaf=not node.children
+        if is_leaf:
+            leaves += 1
+        if not is_root:
+            if node.length is None:
+                missing += 1
+            else:
+                total += node.length
+                if not is_leaf:
+                    internal += node.length
+                    internal_edges += 1
+        for ch in node.children:
+            rec(ch, False)
+    rec(root, True)
+    if total <= 0:
+        return math.nan, leaves, internal_edges, total, internal, missing
+    return internal/total, leaves, internal_edges, total, internal, missing
+
+def collect(zname):
+    vals=[]; leaf_counts=Counter(); int_counts=Counter(); missing=0; examples=[]
+    with zipfile.ZipFile(zname) as z:
+        for n in sorted(z.namelist()):
+            if n.endswith('.treefile'):
+                txt=z.read(n).decode().strip()
+                v, leaves, ints, total, internal, miss=metrics(txt)
+                vals.append(v)
+                leaf_counts[leaves]+=1
+                int_counts[ints]+=1
+                missing += miss
+                if len(examples)<3:
+                    examples.append((n,v,leaves,ints,total,internal,txt))
+    return vals, leaf_counts, int_counts, missing, examples
+
+for label,z in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+    vals, leaves, ints, missing, examples=collect(z)
+    print(label)
+    print('n',len(vals),'median',statistics.median(vals),'min',min(vals),'max',max(vals),'mean',statistics.mean(vals))
+    print('leaf_counts',dict(sorted(leaves.items())),'internal_edges',dict(sorted(ints.items())),'missing_lengths',missing)
+    print('zero_count',sum(1 for v in vals if abs(v) < 1e-15))
+    print('examples')
+    for e in examples:
+        print(e[:6])
+    print()
+animals=collect('inputs/scogs_animals.zip')[0]
+fungi=collect('inputs/scogs_fungi.zip')[0]
+print('fungi_minus_animals', statistics.median(fungi)-statistics.median(animals))
+print('animals_minus_fungi', statistics.median(animals)-statistics.median(fungi))
+print('abs_difference', abs(statistics.median(fungi)-statistics.median(animals)))
+PY"
