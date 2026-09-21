@@ -32,14 +32,6 @@ def write_json(path: Path, value) -> None:
 
 
 def write_source_manifest(path: Path, value) -> None:
-    if path.exists():
-        old = path.read_bytes()
-        new = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode()
-        if old != new:
-            version = 1
-            while path.with_name(f"{path.stem}.v{version}{path.suffix}").exists():
-                version += 1
-            path.with_name(f"{path.stem}.v{version}{path.suffix}").write_bytes(old)
     write_json(path, value)
 
 
@@ -215,13 +207,6 @@ def collect_trace(client: Client, run: RunLink, output: Path, *, max_bytes: int 
                     else:
                         retained, redactions = redact_bytes(raw, destination.name)
                         destination.parent.mkdir(parents=True, exist_ok=True)
-                        if destination.exists() and destination.read_bytes() != retained:
-                            version = 1
-                            backup = destination.with_name(destination.name + f".orphan.v{version}")
-                            while backup.exists():
-                                version += 1
-                                backup = destination.with_name(destination.name + f".orphan.v{version}")
-                            backup.write_bytes(destination.read_bytes())
                         destination.write_bytes(retained)
                         item.update({"status": "retained", "local_path": str(destination.relative_to(output)),
                                      "original_sha256": digest(raw), "original_bytes": len(raw),
@@ -349,13 +334,6 @@ def collect_galaxy(client: Client, run: RunLink, output: Path, *, max_output_byt
                 continue
             kept, redactions = redact_bytes(data, d.get("name") or ".txt")
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.read_bytes() != kept:
-                version = 1
-                backup = path.with_name(path.name + f".orphan.v{version}")
-                while backup.exists():
-                    version += 1
-                    backup = path.with_name(path.name + f".orphan.v{version}")
-                backup.write_bytes(path.read_bytes())
             path.write_bytes(kept)
             result["outputs"].append({"hda_id": d["id"], "path": str(path.relative_to(output)),
                                       "source_url": url, "reported_size": d["file_size"],

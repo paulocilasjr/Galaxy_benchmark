@@ -77,12 +77,6 @@ def render(output: Path, evidence: dict) -> None:
               "### Results draft", "",
               f"We audited {len(runs)} workbook-listed runs for {task['task_id']}, retaining original agent traces, evaluator records, usage totals, and read-only Galaxy history snapshots where accessible. The original evaluator returned a numeric score for {len(scored)} runs. We kept those scores separate from saved Galaxy outputs and did not regrade answers. Distinct public Galaxy histories exposed {len(jobs)} analytical creating jobs, of which {len(failed_jobs)} had failed/error status. Within-model score and input-token comparisons were calculated only where both conditions supplied compatible original fields; they are descriptive ratios or differences for a single task. Replicate seeds, complete protocol coverage, stage-attributed tokens, and blinded readability outcomes were unavailable, limiting causal and benchmark-wide inference.", ""]
     report = output / "history_analysis.md"
-    if report.exists():
-        prior = report.read_bytes()
-        version = 1
-        while (output / f"history_analysis.v{version}.md").exists():
-            version += 1
-        (output / f"history_analysis.v{version}.md").write_bytes(prior)
     report.write_text("\n".join(lines))
     readme = [f"# {task['task_id']} retrospective audit", "", "Start with [history_analysis.md](history_analysis.md).",
               "The [evidence JSON](history_analysis_evidence.json) is validated against [Schema 2.0](history_analysis_evidence.schema.json).",

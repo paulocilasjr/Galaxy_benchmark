@@ -31,7 +31,7 @@ python3 analysis_execution/run.py runs.xlsx --task bix-6-q4 --prompt-hf-token
 python3 analysis_execution/run.py runs.xlsx --resume
 ```
 
-Without `--task`, all table rows are processed by benchmark/task. Defaults are `BixBench_50/analysis/<task>/`, `CompBio/analysis/<task>/`, and `IWC/analysis/<task>/`. Use `--output-root` to change the root when selecting a single benchmark. `--resume` is required for a rerun of an existing package; it retries partial/unavailable sources, preserves the previous report and evidence as versioned snapshots, and rebuilds the result from retained sources. For a preexisting task directory produced by another workflow, `--adopt-existing` first archives every file the pipeline would replace under `legacy_pre_analysis_execution/`; unrelated files stay in place. `--offline` rebuilds from preexisting source manifests without network access or the Galaxy credential gate.
+Without `--task`, all table rows are processed by benchmark/task. Defaults are `BixBench_50/analysis/<task>/`, `CompBio/analysis/<task>/`, and `IWC/analysis/<task>/`. Use `--output-root` to change the root when selecting a single benchmark. `--resume` is required for a rerun of an existing package; it retries partial/unavailable sources and replaces the canonical report and evidence from retained sources. For a preexisting task directory produced by another workflow, `--adopt-existing` first archives every file the pipeline would replace under `legacy_pre_analysis_execution/`; unrelated files stay in place. `--offline` rebuilds from preexisting source manifests without network access or the Galaxy credential gate.
 
 ## Output contract
 

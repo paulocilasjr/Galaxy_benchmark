@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from collect import Client, collect_galaxy, collect_trace, digest, write_json
+from collect import Client, collect_galaxy, collect_trace, digest, write_json, write_source_manifest
 from build import _recovery_candidates
 from run import main
 from workbook import RunLink, load_inventory
@@ -44,6 +44,14 @@ def xlsx(path: Path, rows, hyperlinks=None):
 
 
 class PipelineTest(unittest.TestCase):
+    def test_source_manifest_replacement_has_one_canonical_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = Path(temp) / "manifest.json"
+            write_source_manifest(manifest, {"status": "partial"})
+            write_source_manifest(manifest, {"status": "retrieved"})
+            self.assertEqual(json.loads(manifest.read_text())["status"], "retrieved")
+            self.assertEqual(list(Path(temp).iterdir()), [manifest])
+
     def test_recovery_candidate_requires_same_tool_and_input(self):
         failed = {"event_id": "failed", "event_type": "analysis", "execution_location": "galaxy_job", "native_job_id": "j1",
                   "timestamp": "2026-01-01T00:00:00Z", "status": "error", "tool": "datamash", "native_input_hda_ids": ["hda1"], "evidence_refs": ["src:jobs/j1.json"]}
@@ -207,6 +215,9 @@ class PipelineTest(unittest.TestCase):
             self.assertIn("1 distinct analytical creating jobs", (out / "history_analysis.md").read_text())
             self.assertTrue((out / "recovered_code/open_ended_code" / rows[1].run_id / "item_1.command.txt").exists())
             self.assertEqual((out / "legacy_pre_analysis_execution/history_analysis.md").read_text(), "legacy report\n")
+            self.assertEqual(main([str(book), "--output-root", str(outroot), "--offline", "--resume"]), 0)
+            self.assertEqual(list(out.glob("history_analysis.v*.md")), [])
+            self.assertEqual(list(out.glob("history_analysis_evidence.v*.json")), [])
 
 
 if __name__ == "__main__":

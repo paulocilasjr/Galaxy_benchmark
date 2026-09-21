@@ -38,7 +38,7 @@ def arguments(argv=None):
     p.add_argument("--hf-workers", type=int, default=8, help="Concurrent Hugging Face run collectors")
     p.add_argument("--galaxy-workers", type=int, default=4, help="Concurrent Galaxy history collectors")
     p.add_argument("--galaxy-rate", type=float, default=5.0, help="Maximum shared Galaxy API request rate per second")
-    p.add_argument("--resume", action="store_true", help="Use existing source manifests and preserve a versioned previous report")
+    p.add_argument("--resume", action="store_true", help="Use existing source manifests and replace the current report")
     p.add_argument("--adopt-existing", action="store_true", help="Preserve conflicting legacy task files before generating this audit in an existing task directory")
     p.add_argument("--offline", action="store_true", help="Build from source manifests already in each task directory")
     p.add_argument("--dry-run", action="store_true", help="Validate workbook and print inventory without creating files")
@@ -172,12 +172,6 @@ def main(argv=None) -> int:
                                                                 if (galaxy_root / hid / "manifest.json").exists() else {"status": "not_collected"}
                                                                 for hid in history_ids}})
         shutil.copyfile(HERE / "history_analysis_evidence.schema.json", output / "history_analysis_evidence.schema.json")
-        old_evidence = output / "history_analysis_evidence.json"
-        if old_evidence.exists():
-            version = 1
-            while (output / f"history_analysis_evidence.v{version}.json").exists():
-                version += 1
-            shutil.copyfile(old_evidence, output / f"history_analysis_evidence.v{version}.json")
         evidence = build_evidence(output, rows, REPO, workbook)
         validate(output)
         evidence = json.loads((output / "history_analysis_evidence.json").read_text())
