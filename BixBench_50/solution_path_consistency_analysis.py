@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replicate-level solution-route consistency for BixBench-50.
+"""Replicate-level solution-path consistency for BixBench-50.
 
 Auditor-derived analysis. Reads only the archived per-task evidence packages
 (analysis/<task>/history_analysis_evidence.json); executes no agent code, issues
@@ -9,7 +9,7 @@ Unit of analysis: a replicate cell = one (task, condition, model-harness
 configuration) with its three replicate-labelled runs. 50 tasks x 2 conditions
 x 5 configurations = 500 cells covering all 1,500 archived runs.
 
-Route fingerprint per run (auditor-defined, extraction rules below):
+Solution-path fingerprint per run (auditor-defined, extraction rules below):
   Galaxy           set of Galaxy tool identifiers recorded on `galaxy_job`
                    events, version-stripped, excluding `__DATA_FETCH__`
                    (upload/fetch is kept separate from analytical processing).
@@ -23,7 +23,7 @@ therefore instrument-confounded and are reported only to document that the two
 agreement measures disagree in direction. Comparisons BETWEEN configurations
 WITHIN a condition use the same instrument and are the interpretable contrast.
 
-Outputs route_consistency_results.json next to this script.
+Outputs solution_path_consistency_results.json next to this script.
 """
 
 import collections
@@ -310,7 +310,7 @@ def main():
         note="Auditor-derived measure. No agent code executed, no Galaxy API calls, no hidden references opened.",
     )
     summary["cells"] = cells
-    dest = os.path.join(HERE, "route_consistency_results.json")
+    dest = os.path.join(HERE, "solution_path_consistency_results.json")
     with open(dest, "w") as fh:
         json.dump(summary, fh, indent=2, sort_keys=False)
     print(f"evidence files: {len(EVIDENCE)}   runs: {len(runs)}   cells: {len(cells)}")
