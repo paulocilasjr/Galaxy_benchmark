@@ -4,19 +4,19 @@ We retrospectively examined 2,500 workbook-linked CompBioBench run records for 1
 
 ## Accuracy and output agreement by execution condition
 
-Per-task original evaluator scores are unavailable for all 2,500 records. The archived `evaluation.stdout.txt` files report submission-format validation, not scientific correctness. Additional source retrieval recovered 25 aggregate score labels: 15 official-labelled and 10 predicted (Table 1). Of the advertised vector hashes, 13 match retained bytes, 9 do not, and 3 have no corresponding downloaded vector. For every available vector, all parsed answers match the per-run submitted answers. This establishes content agreement with those files, but does not resolve disagreement with the advertised submission hash. Two Sol Galaxy entries change from predictions in `replicates.tsv` to official-labelled scores in the dated `paper_site_runs.json`; both versions are retained in the conflict ledger. The dated site metadata is displayed with explicit attribution, not treated as an independently verified leaderboard receipt. GPT-6 Astra has an archive-labelled 93/100 score for its single open-ended vector and no Galaxy counterpart. Task-level accuracy differences, all/some/none accepted counts, accuracy bootstrap intervals, outcome-versus-route associations and accepted results per token cannot be recovered from aggregate totals. No missing score is treated as failure, no predicted score substitutes for an official result, and no equivalence, non-inferiority or superiority claim follows from these records.
+Per-task original evaluator scores are unavailable for all 2,500 records. The archived `evaluation.stdout.txt` files report submission-format validation, not scientific correctness. Additional source retrieval recovered 25 aggregate score labels: 15 official-labelled and 10 predicted (Table 1). Of the advertised vector hashes, 13 match retained bytes, 9 do not, and 3 have no corresponding downloaded vector. For every available vector, all parsed answers match the per-run submitted answers. This establishes content agreement with those files, but does not resolve disagreement with the advertised submission hash. Two Sol Galaxy entries change from predictions in `replicates.tsv` to official-labelled scores in the dated `paper_site_runs.json`, with numerical revisions from 92 to 93/100 for r1 and from 92 to 91/100 for r3; both versions are retained in the conflict ledger and shown in Table 1. The dated site metadata is displayed with explicit attribution, not treated as an independently verified leaderboard receipt. GPT-6 Astra has an archive-labelled 93/100 score for its single open-ended vector and no Galaxy counterpart. Task-level accuracy differences, all/some/none accepted counts, accuracy bootstrap intervals, outcome-versus-route associations and accepted results per token cannot be recovered from aggregate totals. No missing score is treated as failure, no predicted score substitutes for an official result, and no equivalence, non-inferiority or superiority claim follows from these records.
 
 **Table 1. Source-reported answer-vector scores**
 
 | Configuration | Galaxy | Open-ended code |
 | --- | --- | --- |
-| GPT-5.5 (Codex) | r1: 84/100 (O); r2: 89/100 (O; hash unresolved); r3: 87/100 (P; hash unresolved) | r1: 87/100 (O); r2: 88/100 (O; hash unresolved); r3: 84/100 (O; hash unresolved) |
-| GPT-5.6 Sol (Codex) | r1: 93/100 (O); r2: 91/100 (P; hash unresolved); r3: 91/100 (O; hash unresolved) | r1: 88/100 (O); r2: 90/100 (O); r3: 95/100 (O) |
-| GPT-5.6 Luna (Codex) | r1: 86/100 (P; hash unresolved); r2: 84/100 (P; hash unresolved); r3: 85/100 (P; hash unresolved) | r1: 84/100 (O); r2: 86/100 (O); r3: 85/100 (P) |
-| DeepSeek V4 Pro 0813 (Codex) | r1: 83/100 (P; hash unresolved); r2: 87/100 (P); r3: 83/100 (P) | r1: 80/100 (P); r2: 87/100 (O; hash unresolved); r3: 86/100 (O; hash unresolved) |
+| GPT-5.5 (Codex) | r1: 84/100 (O); r2: 89/100 (O; hash mismatch); r3: 87/100 (P; hash mismatch) | r1: 87/100 (O); r2: 88/100 (O; hash mismatch); r3: 84/100 (O; hash mismatch) |
+| GPT-5.6 Sol (Codex) | r1: 93/100 (O; previously 92/100 P); r2: 91/100 (P; hash mismatch); r3: 91/100 (O; hash mismatch; previously 92/100 P) | r1: 88/100 (O); r2: 90/100 (O); r3: 95/100 (O) |
+| GPT-5.6 Luna (Codex) | r1: 86/100 (P; vector unavailable); r2: 84/100 (P; vector unavailable); r3: 85/100 (P; vector unavailable) | r1: 84/100 (O); r2: 86/100 (O); r3: 85/100 (P) |
+| DeepSeek V4 Pro 0813 (Codex) | r1: 83/100 (P; hash mismatch); r2: 87/100 (P); r3: 83/100 (P) | r1: 80/100 (P); r2: 87/100 (O; hash mismatch); r3: 86/100 (O; hash mismatch) |
 | GPT-6 Astra (Codex; unpaired) | Not represented | r1: 93/100 (O) |
 
-O = archive-labelled official leaderboard score; P = prediction. Labels are preserved, not independently regraded or promoted to item-level official outcomes. Each vector has 100 answers. Hash-unresolved entries are source claims with incomplete byte-level attribution; parsed answers agree wherever a vector was available. No pooled official comparison is calculated from this mixture.
+O = archive-labelled official leaderboard score; P = prediction. Labels are preserved, not independently regraded or promoted to item-level official outcomes. Scores refer to 100-answer vectors. Hash mismatch means retained vector bytes disagree with the advertised SHA-256 (9 entries); vector unavailable means no vector bytes were retrieved and zero answers were compared (3 Luna Galaxy entries). The other 13 hashes match. Parsed answers agree for all 22 available vectors. Previous Sol scores are from `replicates.tsv`; displayed scores are from the dated `paper_site_runs.json`. No pooled official comparison is calculated from this mixture.
 
 **Table 2. Task coverage and submitted-answer convergence**
 
@@ -25,7 +25,7 @@ O = archive-labelled official leaderboard score; P = prediction. Labels are pres
 | Galaxy | 100 | 1200 | 1.0 | 62 | Unavailable |
 | Open-ended code | 100 | 1200 | 1.0 | 58 | Unavailable |
 
-Four paired configurations only: 12 answers per task and environment. Answer identity uses archived text with outer whitespace stripped, without numeric rounding. It is not correctness or semantic agreement; BixBench six-significant-figure normalization is inappropriate for heterogeneous CompBio lists, identifiers and coordinates.
+Four paired configurations only: 12 answers per task and environment. Answer identity uses archived text with outer whitespace stripped, without numeric rounding. `run_summaries.answer_sha256` hashes raw answer-file bytes, whereas Tables 2-3 compare `outcome.submitted_answer`, already stripped during evidence construction; grouping by those hashes can therefore give different counts. It is not correctness or semantic agreement; BixBench six-significant-figure normalization is inappropriate for heterogeneous CompBio lists, identifiers and coordinates.
 
 **Table 3. Triplicate answer consistency, distinct from acceptance**
 
@@ -44,7 +44,7 @@ Each row contains 100 task cells. The BixBench all/some/none accepted analysis r
 
 ## Analysis execution, failures and recovery
 
-Detailed Galaxy contents were retained for 1198/1,200 runs; 2 histories have metadata only. Across the snapshots, 22,067 distinct creating jobs include 5,381 data-fetch jobs and 16,686 non-fetch jobs. The latter include 3,097 failed/error jobs (18.6%; Table 6). At least one failed non-fetch job appears in 702/1198 evaluable Galaxy runs. Nonzero shell exits appear in 882/1200 open-ended-code transcripts; a shell exit is a different unit from a Galaxy job and may represent a probe or search rather than a failed analysis. The retained records flag 213 candidate same-tool/input failure-to-success sequences across 107 Galaxy runs. They support investigation of recovery, not a comparative recovery benefit. The tool inventory combines installed tools with task-specific identifiers; custom identifiers alone cannot distinguish a standard domain tool from a user-defined wrapper. No run is certified Galaxy-only without an adjudicated event-level computation-location audit. Inherited input preparation, calls to external services, and local orchestration must be distinguished from substantive analysis. The full error/parameter records and candidate event IDs remain available in the numerical audit and task ledgers.
+Detailed Galaxy contents were retained for 1198/1,200 runs; 2 histories have metadata only. Across the snapshots, 22,067 distinct creating jobs include 5,381 data-fetch jobs and 16,686 non-fetch jobs. The latter include 3,097 failed/error jobs (18.6%; Table 6). At least one failed non-fetch job appears in 702/1198 evaluable Galaxy runs. At least one nonzero shell exit appears in 676/1188 available Galaxy-condition transcripts and 882/1200 open-ended-code transcripts. These are counts of runs with a recorded shell exit, not counts of failed Galaxy jobs; a shell exit may represent a probe or search rather than a failed analysis. The retained records flag 213 candidate same-tool/input failure-to-success sequences across 107 Galaxy runs. They support investigation of recovery, not a comparative recovery benefit. The tool inventory combines installed tools with task-specific identifiers; custom identifiers alone cannot distinguish a standard domain tool from a user-defined wrapper. No run is certified Galaxy-only without an adjudicated event-level computation-location audit. Inherited input preparation, calls to external services, and local orchestration must be distinguished from substantive analysis. The full error/parameter records and candidate event IDs remain available in the numerical audit and task ledgers.
 
 A concrete parameter correction is visible in `bedtools-chromhmm-q1`, DeepSeek Galaxy replicate 2. The column-making expression `round(c1/c5*100)` failed because both columns were strings. A later job on the same input used `round(float(c1)/float(c5)*100)`, reached `ok`, and reported that it computed the new column for all input lines. This supports an operational correction, without establishing correctness of the chosen biological denominator. A contradictory example shows why automated recovery counts need review: in `perturb-seq-align-q1`, DeepSeek Galaxy replicate 3, AnnData `chunk_X` failed with a sparse-matrix attribute error, while the later successful job requested `var` metadata. It used the same tool and input but performed a different operation, so success did not demonstrate recovery of the original objective. Both failed/later event pairs, exact parameters, timestamps and output excerpts are retained in `case_reviews` in the numerical audit.
 
@@ -65,20 +65,20 @@ A concrete parameter correction is visible in `bedtools-chromhmm-q1`, DeepSeek G
 | toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_grep_tool/9.5+galaxy3 | 198 |
 | toolshed.g2.bx.psu.edu/repos/goeckslab/gseapy_enrichr/gseapy_enrichr/0.1.0+galaxy2 | 192 |
 
-Deduplicated by Galaxy server and native job ID across all histories. Excludes __DATA_FETCH__; legacy upload1 is reported separately. Preparation jobs are included, so these are not counts of independent scientific analyses.
+Deduplicated by Galaxy server and native job ID across all histories. Excludes `__DATA_FETCH__`; includes 372 legacy `upload1` jobs as a table row. Preparation jobs are included, so these are not counts of independent scientific analyses.
 
 **Table 5. Task-specific execution examples**
 
-| Task | Domain | Distinct answers G / code | Recorded Galaxy operations (top 3) | Official item outcomes |
+| Task | Domain | Distinct answers G / code | Recorded Galaxy operations (top 3, including ties; counts) | Official item outcomes |
 | --- | --- | --- | --- | --- |
-| [1000G-retrieve-genotype-q1](analysis/1000G-retrieve-genotype-q1/history_analysis.md) | Population Genetics | 3 / 2 | toolshed.g2.bx.psu.edu/repos/iuc/bcftools_query/bcftools_query/1.24+galaxy0; upload1; toolshed.g2.bx.psu.edu/repos/iuc/bcftools_view/bcftools_view/1.24+galaxy0 | Unavailable |
-| [annotate-variant-regulatory-overlap-q1](analysis/annotate-variant-regulatory-overlap-q1/history_analysis.md) | Epigenomics | 2 / 2 | toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_intersectbed/2.31.1+galaxy0; ucsc_bigbedtobed; upload1 | Unavailable |
-| [perturb-seq-align-q1](analysis/perturb-seq-align-q1/history_analysis.md) | Single-cell | 1 / 1 | toolshed.g2.bx.psu.edu/repos/iuc/anndata_inspect/anndata_inspect/0.11.4+galaxy3; Grep1; toolshed.g2.bx.psu.edu/repos/ebi-gxa/scanpy_find_markers/scanpy_find_markers/1.9.3+galaxy0 | Unavailable |
-| [deg-simple-q1](analysis/deg-simple-q1/history_analysis.md) | Transcriptomics | 1 / 1 | sort1; toolshed.g2.bx.psu.edu/repos/iuc/featurecounts/featurecounts/2.1.1+galaxy1; toolshed.g2.bx.psu.edu/repos/iuc/hisat2/hisat2/2.2.3+galaxy0 | Unavailable |
-| [reverse-search-gwas-q1](analysis/reverse-search-gwas-q1/history_analysis.md) | Population Genetics | 10 / 7 | toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_grep_tool/9.5+galaxy3; toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_grep_tool/9.11+galaxy0; toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_head_tool/9.5+galaxy3 | Unavailable |
-| [sample-swap-atac-q1](analysis/sample-swap-atac-q1/history_analysis.md) | Single-cell | 2 / 1 | Summary_Statistics1; toolshed.g2.bx.psu.edu/repos/iuc/filter_tabular/filter_tabular/3.3.1; axolotl-atac-swap-diagnostic-v1 | Unavailable |
+| [1000G-retrieve-genotype-q1](analysis/1000G-retrieve-genotype-q1/history_analysis.md) | Population Genetics | 3 / 2 | toolshed.g2.bx.psu.edu/repos/iuc/bcftools_query/bcftools_query/1.24+galaxy0 (7); toolshed.g2.bx.psu.edu/repos/iuc/bcftools_view/bcftools_view/1.24+galaxy0 (4); upload1 (4) | Unavailable |
+| [annotate-variant-regulatory-overlap-q1](analysis/annotate-variant-regulatory-overlap-q1/history_analysis.md) | Epigenomics | 2 / 2 | toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_intersectbed/2.31.1+galaxy0 (13); ucsc_bigbedtobed (5); upload1 (2) | Unavailable |
+| [perturb-seq-align-q1](analysis/perturb-seq-align-q1/history_analysis.md) | Single-cell | 1 / 1 | toolshed.g2.bx.psu.edu/repos/iuc/anndata_inspect/anndata_inspect/0.11.4+galaxy3 (76); Grep1 (12); toolshed.g2.bx.psu.edu/repos/ebi-gxa/scanpy_find_markers/scanpy_find_markers/1.9.3+galaxy0 (11) | Unavailable |
+| [deg-simple-q1](analysis/deg-simple-q1/history_analysis.md) | Transcriptomics | 1 / 1 | sort1 (21); toolshed.g2.bx.psu.edu/repos/iuc/featurecounts/featurecounts/2.1.1+galaxy1 (20); toolshed.g2.bx.psu.edu/repos/iuc/hisat2/hisat2/2.2.3+galaxy0 (19) | Unavailable |
+| [reverse-search-gwas-q1](analysis/reverse-search-gwas-q1/history_analysis.md) | Population Genetics | 10 / 7 | toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_grep_tool/9.5+galaxy3 (34); toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_grep_tool/9.11+galaxy0 (30); toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_head_tool/9.5+galaxy3 (20); toolshed.g2.bx.psu.edu/repos/bgruening/text_processing/tp_sort_header_tool/9.5+galaxy3 (20) | Unavailable |
+| [sample-swap-atac-q1](analysis/sample-swap-atac-q1/history_analysis.md) | Single-cell | 2 / 1 | Summary_Statistics1 (19); Cut1 (4); axolotl-atac-swap-diagnostic-v1 (4); toolshed.g2.bx.psu.edu/repos/iuc/filter_tabular/filter_tabular/3.3.1 (4) | Unavailable |
 
-Illustrative tasks selected by domain and evidence availability, not by inferred success. Tool presence and completed jobs do not demonstrate an accepted final answer. Complete tool IDs, parameters, failures and submitted answers are linked in each task package.
+Illustrative tasks selected by domain and evidence availability, not by inferred success. Counts are recorded analysis-type Galaxy job events across the 12 paired-configuration runs for each task. All tools tied at the third-entry count are included, ordered alphabetically within ties. Tool presence and completed jobs do not demonstrate an accepted final answer. Complete tool IDs, parameters, failures and submitted answers are linked in each task package.
 
 **Table 6. Execution availability, states and operational recovery candidates**
 
@@ -115,7 +115,7 @@ Different submitted answers need not differ scientifically or in evaluation. Agg
 
 ## Solution-path variability across tasks and configurations
 
-Among 390 evaluable Galaxy triplicate cells, 6 had identical recorded toolsets (1.5%); mean pairwise Jaccard agreement was 0.151. The corresponding open-ended-code counts were 7/382 (1.8%) and 0.583 (Table 9). Galaxy fingerprints come from structured version-stripped tool identifiers, while code fingerprints come from vocabulary matches in commands. These instruments differ in resolution and visibility, precluding a direct ranking of scientific solution consistency between environments. The closed vocabulary is intentionally unchanged from BixBench for side-by-side evaluation, but can omit CompBio-specific software. Tables 8-10 therefore describe observed indicators and configuration differences within an environment, not adjudicated biological methods. Submitted-answer consistency is reported independently in Tables 2-3. Without item-level scores, convergent answers cannot be called correct, and divergent paths cannot be counted as valid alternative solutions. No independent difficulty strata or controlled prompt-version comparison were available.
+Among 390 evaluable Galaxy triplicate cells, 6 had identical recorded toolsets (1.5%); mean pairwise Jaccard agreement was 0.151. The corresponding open-ended-code counts were 7/382 (1.8%) and 0.583 (Table 9). Galaxy fingerprints come from structured version-stripped tool identifiers, while code fingerprints come from vocabulary matches in commands. These instruments differ in resolution and visibility, precluding a direct ranking of scientific solution consistency between environments. The closed vocabulary is intentionally unchanged from BixBench for side-by-side evaluation, but can omit CompBio-specific software. Tables 8-10 therefore describe observed indicators and configuration differences within an environment, not adjudicated biological methods. Task mean agreement was weakly correlated across environments (Spearman rho = -0.105, n = 97 tasks; Table 10). These indicators show little cross-environment correspondence in task rankings; they do not establish that task identity has no effect on path variability. Submitted-answer consistency is reported independently in Tables 2-3. Without item-level scores, convergent answers cannot be called correct, and divergent paths cannot be counted as valid alternative solutions. No independent difficulty strata or controlled prompt-version comparison were available.
 
 **Table 8. Selected CompBio tool and library indicators**
 
@@ -147,7 +147,7 @@ Non-exclusive numbers of runs out of 300 per row. Galaxy indicators are substrin
 | Open-ended code | DeepSeek V4 Pro 0813 (Codex) | 2 | 7 | 88 | 3 | 2.1 | 0.587 |
 | Open-ended code | All configurations | 7 | 49 | 326 | 18 | 1.8 | 0.583 |
 
-Same fingerprint vocabulary and normalization as BixBench. Primary estimates require three observable nonempty fingerprints. Empty or missing records are not agreement. The numerical output also records the legacy BixBench inclusion-rule sensitivity. Astra has only one replicate and its 100 cells are explicitly excluded. Fingerprints ignore order and most parameters, so agreement is not workflow equivalence; magnitudes across environments use different instruments.
+Same fingerprint vocabulary and normalization as BixBench. Jaccard is the number of shared fingerprint elements divided by the number in their union; Mean Jaccard averages the three replicate-pair similarities per cell, then averages across eligible cells. Primary estimates require three observable nonempty fingerprints. Empty or missing records are not agreement. The numerical output also records the legacy BixBench inclusion-rule sensitivity. Astra has only one replicate and its 100 cells are explicitly excluded. Fingerprints ignore order and most parameters, so agreement is not workflow equivalence; magnitudes across environments use different instruments.
 
 **Table 10. Descriptive associations with path variability**
 
@@ -162,7 +162,7 @@ Same fingerprint vocabulary and normalization as BixBench. Primary estimates req
 | Cells without a recorded failed Galaxy job | 0.383 (n=53) | Not applicable |
 | Association with answer acceptance | Not assessable | Not assessable |
 
-Cells share tasks and are not independent observations. Task difficulty is not inferred from failures or token use. Fingerprint-size-stratified failure associations and cross-condition task correlation are retained in the JSON; none establishes causality.
+Across the 97 tasks with an evaluable task mean in both environments, Spearman rho between task mean Jaccard values was -0.105. Task means average eligible configuration cells; the contributing configurations can differ between environments. The two failure-group rows report mean Jaccard, not correlations. Cells share tasks and are not independent observations. Task difficulty is not inferred from failures or token use. Fingerprint-size-stratified failure associations are retained in the JSON; none establishes causality.
 
 ## Token cost, provenance and human readability
 
@@ -178,23 +178,23 @@ Provider-reported primary-turn usage was recovered for 2486/2,500 runs. Complete
 | DeepSeek V4 Pro 0813 (Codex) | 99 | 3.53 | 1.58-8.36 |
 | All paired configurations | 386 | 4.42 | 1.91-10.66 |
 
-Each ratio divides the median of three Galaxy input totals by the median of three open-ended-code totals for the same task and supplied configuration. All six totals must be available; excluded pairs are listed in the audit. This is a median of task/configuration ratios, not a ratio of pooled totals or matched-seed runs. Cached input is already included and is not added again; output and reasoning fields remain separate.
+Each ratio divides the median of three Galaxy input totals by the median of three open-ended-code totals for the same task and supplied configuration. IQR columns report the first and third quartiles (Q1-Q3), rather than their difference. All six totals must be available; excluded pairs are listed in the audit. This is a median of task/configuration ratios, not a ratio of pooled totals or matched-seed runs. Cached input is already included and is not added again; output and reasoning fields remain separate.
 
 **Supplementary Table S1. Absolute provider-token distributions**
 
 | Configuration | Environment | Usage coverage | Median input | Input IQR | Median output |
 | --- | --- | --- | --- | --- | --- |
-| GPT-5.5 (Codex) | Galaxy | 297/300 | 1734835 | 629722-3895084 | 14727 |
-| GPT-5.5 (Codex) | Open-ended code | 300/300 | 491109 | 152662-1487255 | 8538 |
-| GPT-5.6 Sol (Codex) | Galaxy | 300/300 | 3748258 | 1438300-10355796 | 13832 |
-| GPT-5.6 Sol (Codex) | Open-ended code | 300/300 | 530535 | 174903-1844343 | 6066 |
-| GPT-5.6 Luna (Codex) | Galaxy | 290/300 | 10238154 | 3805712-20045946 | 36414 |
-| GPT-5.6 Luna (Codex) | Open-ended code | 300/300 | 1448621 | 294213-6572375 | 15140 |
-| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 300/300 | 8478973 | 3579615-20014537 | 41476 |
-| DeepSeek V4 Pro 0813 (Codex) | Open-ended code | 299/300 | 2407919 | 515198-8254517 | 24543 |
-| GPT-6 Astra (Codex; unpaired) | Open-ended code | 100/100 | 314244 | 100895-691405 | 2788 |
+| GPT-5.5 (Codex) | Galaxy | 297/300 | 1734835.0 | 629722.00-3895084.00 | 14727.0 |
+| GPT-5.5 (Codex) | Open-ended code | 300/300 | 491109.0 | 152662.25-1487255.25 | 8538.0 |
+| GPT-5.6 Sol (Codex) | Galaxy | 300/300 | 3748257.5 | 1438300.00-10355795.75 | 13832.5 |
+| GPT-5.6 Sol (Codex) | Open-ended code | 300/300 | 530535.0 | 174902.75-1844343.25 | 6066.5 |
+| GPT-5.6 Luna (Codex) | Galaxy | 290/300 | 10238154.5 | 3805712.50-20045945.50 | 36414.5 |
+| GPT-5.6 Luna (Codex) | Open-ended code | 300/300 | 1448621.0 | 294212.75-6572374.75 | 15140.0 |
+| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 300/300 | 8478973.0 | 3579614.75-20014536.75 | 41476.5 |
+| DeepSeek V4 Pro 0813 (Codex) | Open-ended code | 299/300 | 2407919.0 | 515198.50-8254517.00 | 24543.0 |
+| GPT-6 Astra (Codex; unpaired) | Open-ended code | 100/100 | 314244.5 | 100895.00-691405.00 | 2788.0 |
 
-All observable final selected runs, including those with operational errors. Missing usage is excluded explicitly, never zero. The unpaired Astra population is separate. Correct-only and full multi-campaign costs are unavailable.
+All observable final selected runs, including those with operational errors. Medians retain one decimal place and linearly interpolated quartiles retain two, preserving fractional summary values from integer token counts. Input IQR reports Q1-Q3. Missing usage is excluded explicitly, never zero. The unpaired Astra population is separate. Correct-only and full multi-campaign costs are unavailable.
 
 ## Methods, provenance and limitations
 
@@ -202,7 +202,7 @@ The workbook defines the observed inventory, not an independent expected-run pro
 
 Prior task reports and evidence are retained exactly under `analysis/<task>/versions/pre_compbio_synthesis/`. The existing schema and full source hash/reference checks validate the updated packages. The aggregate JSON references all 100 evidence hashes, included run IDs, finding IDs, source files and software hashes. Initial trace/history collection did not verify TLS certificates; the supplemental metadata fetch verified the certificate chain and hostname with strict CA-extension checking disabled for the host proxy. Neither byte hashes nor successful schema validation resolve score-source disagreements.
 
-The metadata-only Galaxy histories for `reverse-search-gwas-q1` contain 424 and 799 elements. Their state summaries report 394 and 616 `ok` elements, respectively, leaving 213 elements outside those totals. These are dataset-state counts, not successful jobs or answers; detailed contents remain excluded under the collection limit. A capped history is not a failed experiment.
+For `reverse-search-gwas-q1`, the [424-element snapshot](analysis/reverse-search-gwas-q1/source_snapshots/galaxy/bbd44e69cb8906b5201e75f3364aad9c/history.json) lists 394 `ok` and 21 `error` elements in `state_ids`, leaving 9 elements unaccounted for by those state-ID lists. For `reverse-search-gwas-q1`, the [799-element snapshot](analysis/reverse-search-gwas-q1/source_snapshots/galaxy/bbd44e69cb8906b5a8a6f27aa8b4f67a/history.json) lists 616 `ok` and 175 `error` elements in `state_ids`, leaving 8 elements unaccounted for by those state-ID lists. Together these metadata-only histories record 196 error-state elements and 17 elements without a listed state ID. The snapshots' `state_details` fields report 0 errors in total, contradicting their `state_ids`; both representations and their discrepancy are retained in the audit. These are dataset-state observations, not deduplicated creating-job counts or answer outcomes, and are not added to Table 6 job totals. Detailed contents remain excluded under the collection limit. Capping does not establish experiment failure, but it does not erase the recorded error states.
 
 Exact per-task official evaluator outputs, versioned scoring definitions and submission receipts matching advertised vector hashes are needed for BixBench-equivalent accuracy, reliability and outcome-versus-route tables. Missing primary traces/usage, independent campaign-selection records, and event-level location/recovery adjudication are needed to quantify complete computational cost and exclusively Galaxy-derived solutions. A blinded review study is required for readability claims. These missing results are explicitly unavailable rather than replaced by plausible answers.
 

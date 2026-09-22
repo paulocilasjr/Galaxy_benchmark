@@ -63,6 +63,30 @@ def fmt(value, digits=2):
     return "Unavailable" if value is None else f"{value:.{digits}f}"
 
 
+def history_state_summary(history):
+    state_ids = history.get("state_ids")
+    counts = {state: len(ids) for state, ids in state_ids.items()} if state_ids is not None else None
+    unique_ids = {item for ids in state_ids.values() for item in ids} if state_ids is not None else None
+    details = history.get("state_details") or {}
+    return {
+        "state_id_counts": counts,
+        "elements_without_state_id": history["count"] - len(unique_ids)
+        if history.get("count") is not None and unique_ids is not None else None,
+        "state_count_disagreements": {
+            state: {"state_details": details[state], "state_ids_count": count}
+            for state, count in (counts or {}).items() if state in details and details[state] != count
+        },
+    }
+
+
+def top_tools_with_ties(counts, limit=3):
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    if not ranked:
+        return []
+    cutoff = ranked[min(limit, len(ranked)) - 1][1]
+    return [(tool, count) for tool, count in ranked if count >= cutoff]
+
+
 def build(validate_packages=False):
     inventory = load_inventory(BASE / "compbiobench_execution_condition_links.xlsx")
     expected = {(x.task, x.run_id): x for x in inventory}
@@ -99,6 +123,7 @@ def build(validate_packages=False):
             if s["access_status"] == "history_metadata_only":
                 h = read(p.parent / s["local_snapshot"] / "history.json")
                 capped.append({"task": task, "source_id": s["source_id"], "count": h.get("count"), "states": h.get("state_details"),
+                               **history_state_summary(h),
                                "path": str((p.parent / s["local_snapshot"] / "history.json").relative_to(BASE))})
         by_cond = {c: [r for r in e["runs"] if r["condition"] == c and paths.model(r) in MODELS] for c in CONDITIONS}
         tasks.append({"task": task, "domain": e["task"].get("domain"), "prompt": e["task"]["prompt"],
@@ -247,23 +272,43 @@ def write_reports(a):
            "the supplied campaign metadata assembles final vectors from initial, continuation and recovery campaigns. "
            "These are final archived selections, not measured first-attempt success rates. Runtime metadata, prompt hashes and source roots are retained per run. "
            "Submitted answers, original evaluator outcomes, operational states and auditor interpretations remain distinct.")
+    n_off=sum(s['score_type']=='official_labelled' for s in score); n_pred=len(score)-n_off
+    n_hash=sum(s['hash_matches'] is True for s in score); bad_hash=sum(s['hash_matches'] is False for s in score); absent=sum(s['hash_matches'] is None for s in score)
+    conflicts_by_campaign = {s['campaign']: s for s in a['score_conflicts']}
     rows=[]
     for m in MODELS+['codex_gpt_6_astra']:
         cells=[]
         for c in CONDITIONS:
             sub=[s for s in score if s['model']==m and s['condition']==c]
-            cells.append('; '.join(f"{s['replicate']}: {s['score']}/100 ({'O' if s['score_type']=='official_labelled' else 'P'}{'' if s['hash_matches'] is True else '; hash unresolved'})" for s in sub) or 'Not represented')
+            entries=[]
+            for s in sub:
+                annotations=['O' if s['score_type']=='official_labelled' else 'P']
+                if s['hash_matches'] is False:
+                    annotations.append('hash mismatch')
+                elif s['hash_matches'] is None:
+                    annotations.append('vector unavailable')
+                prior=conflicts_by_campaign.get(s.get('campaign_id'))
+                if prior:
+                    prior_type='O' if 'official' in prior['older_type'] else 'P'
+                    annotations.append(f"previously {prior['older_score']}/100 {prior_type}")
+                entries.append(f"{s['replicate']}: {s['score']}/100 ({'; '.join(annotations)})")
+            cells.append('; '.join(entries) or 'Not represented')
         rows.append([LABEL[m],*cells])
     tables={1:table('Table 1. Source-reported answer-vector scores', ['Configuration','Galaxy','Open-ended code'],rows,
-        'O = archive-labelled official leaderboard score; P = prediction. Labels are preserved, not independently regraded or promoted to item-level official outcomes. Each vector has 100 answers. Hash-unresolved entries are source claims with incomplete byte-level attribution; parsed answers agree wherever a vector was available. No pooled official comparison is calculated from this mixture.')}
-    n_off=sum(s['score_type']=='official_labelled' for s in score); n_pred=len(score)-n_off
-    n_hash=sum(s['hash_matches'] is True for s in score); bad_hash=sum(s['hash_matches'] is False for s in score); absent=sum(s['hash_matches'] is None for s in score)
+        'O = archive-labelled official leaderboard score; P = prediction. Labels are preserved, not independently regraded or promoted to item-level official outcomes. Scores refer to 100-answer vectors. '
+        f'Hash mismatch means retained vector bytes disagree with the advertised SHA-256 ({bad_hash} entries); vector unavailable means no vector bytes were retrieved and zero answers were compared ({absent} Luna Galaxy entries). '
+        f'The other {n_hash} hashes match. Parsed answers agree for all {len(score)-absent} available vectors. '
+        'Previous Sol scores are from `replicates.tsv`; displayed scores are from the dated `paper_site_runs.json`. No pooled official comparison is calculated from this mixture.')}
+    sol_revisions=' and '.join(
+        f"from {conflicts_by_campaign[s['campaign_id']]['older_score']} to {s['score']}/100 for {s['replicate']}"
+        for s in score if s['model']=='codex_gpt_5_6_sol' and s['condition']=='galaxy' and s.get('campaign_id') in conflicts_by_campaign)
     accuracy=(f"Per-task original evaluator scores are unavailable for all 2,500 records. The archived `evaluation.stdout.txt` files report submission-format validation, "
               f"not scientific correctness. Additional source retrieval recovered 25 aggregate score labels: {n_off} official-labelled and {n_pred} predicted (Table 1). "
               f"Of the advertised vector hashes, {n_hash} match retained bytes, {bad_hash} do not, and {absent} have no corresponding downloaded vector. "
               "For every available vector, all parsed answers match the per-run submitted answers. This establishes content agreement with those files, "
               "but does not resolve disagreement with the advertised submission hash. Two Sol Galaxy entries change from predictions in `replicates.tsv` "
-              "to official-labelled scores in the dated `paper_site_runs.json`; both versions are retained in the conflict ledger. "
+              f"to official-labelled scores in the dated `paper_site_runs.json`, with numerical revisions {sol_revisions}; "
+              "both versions are retained in the conflict ledger and shown in Table 1. "
               "The dated site metadata is displayed with explicit attribution, not treated as an independently verified leaderboard receipt. "
               "GPT-6 Astra has an archive-labelled 93/100 score for its single open-ended vector and no Galaxy counterpart. "
               "Task-level accuracy differences, all/some/none accepted counts, accuracy bootstrap intervals, outcome-versus-route associations and accepted results per token "
@@ -274,17 +319,17 @@ def write_reports(a):
         counts=[len(t['answers'][c]) for t in a['tasks']]
         trows.append([c,100,1200,fmt(statistics.median(counts),1),sum(n==1 for n in counts),'Unavailable'])
     tables[2]=table('Table 2. Task coverage and submitted-answer convergence',['Environment','Tasks','Runs','Median distinct answers/task','Tasks with one answer','Tasks with accepted answers'],trows,
-        'Four paired configurations only: 12 answers per task and environment. Answer identity uses archived text with outer whitespace stripped, without numeric rounding. It is not correctness or semantic agreement; BixBench six-significant-figure normalization is inappropriate for heterogeneous CompBio lists, identifiers and coordinates.')
+        'Four paired configurations only: 12 answers per task and environment. Answer identity uses archived text with outer whitespace stripped, without numeric rounding. `run_summaries.answer_sha256` hashes raw answer-file bytes, whereas Tables 2-3 compare `outcome.submitted_answer`, already stripped during evidence construction; grouping by those hashes can therefore give different counts. It is not correctness or semantic agreement; BixBench six-significant-figure normalization is inappropriate for heterogeneous CompBio lists, identifiers and coordinates.')
     tables[3]=table('Table 3. Triplicate answer consistency, distinct from acceptance',['Environment','Configuration','One distinct answer','Two','Three','Scored triplicate cells'],[
         [c,LABEL[m],*[sum(x['distinct_submitted_answers']==n for x in sp['cells'] if x['condition']==c and x['model']==m) for n in (1,2,3)],0]
         for c in CONDITIONS for m in MODELS], 'Each row contains 100 task cells. The BixBench all/some/none accepted analysis remains unavailable; these counts describe answer text only.')
     tables[4]=table('Table 4. Most frequent retained Galaxy creating-job tool IDs',['Tool ID (recorded version)','Distinct jobs'],list(ex['tools'].items())[:12],
-        'Deduplicated by Galaxy server and native job ID across all histories. Excludes __DATA_FETCH__; legacy upload1 is reported separately. Preparation jobs are included, so these are not counts of independent scientific analyses.')
+        'Deduplicated by Galaxy server and native job ID across all histories. Excludes `__DATA_FETCH__`; includes 372 legacy `upload1` jobs as a table row. Preparation jobs are included, so these are not counts of independent scientific analyses.')
     case_names=['1000G-retrieve-genotype-q1','annotate-variant-regulatory-overlap-q1','perturb-seq-align-q1','deg-simple-q1','reverse-search-gwas-q1','sample-swap-atac-q1']
-    tables[5]=table('Table 5. Task-specific execution examples',['Task','Domain','Distinct answers G / code','Recorded Galaxy operations (top 3)','Official item outcomes'],[
-        [f"[{t['task']}](analysis/{t['task']}/history_analysis.md)",t['domain'],f"{len(t['answers']['galaxy'])} / {len(t['answers']['open_ended_code'])}",'; '.join(k for k,v in Counter(t['tools']).most_common(3)),'Unavailable']
+    tables[5]=table('Table 5. Task-specific execution examples',['Task','Domain','Distinct answers G / code','Recorded Galaxy operations (top 3, including ties; counts)','Official item outcomes'],[
+        [f"[{t['task']}](analysis/{t['task']}/history_analysis.md)",t['domain'],f"{len(t['answers']['galaxy'])} / {len(t['answers']['open_ended_code'])}",'; '.join(f'{k} ({v})' for k,v in top_tools_with_ties(t['tools'])),'Unavailable']
         for name in case_names for t in a['tasks'] if t['task']==name],
-        'Illustrative tasks selected by domain and evidence availability, not by inferred success. Tool presence and completed jobs do not demonstrate an accepted final answer. Complete tool IDs, parameters, failures and submitted answers are linked in each task package.')
+        'Illustrative tasks selected by domain and evidence availability, not by inferred success. Counts are recorded analysis-type Galaxy job events across the 12 paired-configuration runs for each task. All tools tied at the third-entry count are included, ordered alphabetically within ties. Tool presence and completed jobs do not demonstrate an accepted final answer. Complete tool IDs, parameters, failures and submitted answers are linked in each task package.')
     state_rows=[['Unique linked Galaxy histories',ex['unique_histories']],['Galaxy runs with detailed contents',cov['galaxy']['history_status'].get('retrieved',0)],
                 ['Metadata-only histories',len(ex['capped_histories'])],['All distinct creating jobs',ex['all_creating_jobs']],['Data-fetch jobs',ex['data_fetch_jobs']],
                 ['Legacy upload1 jobs within non-fetch category',ex['legacy_upload_jobs']],['Non-fetch creating jobs',ex['nonfetch_jobs']]]
@@ -297,8 +342,9 @@ def write_reports(a):
                f"{ex['data_fetch_jobs']:,} data-fetch jobs and {ex['nonfetch_jobs']:,} non-fetch jobs. The latter include {errors:,} failed/error jobs "
                f"({100*errors/ex['nonfetch_jobs']:.1f}%; Table 6). "
                f"At least one failed non-fetch job appears in {cov['galaxy']['runs_with_job_failure']}/{cov['galaxy']['job_failure_coverage']} evaluable Galaxy runs. "
-               f"Nonzero shell exits appear in {cov['open_ended_code']['runs_with_nonzero_shell']}/{cov['open_ended_code']['transcripts']} open-ended-code transcripts; "
-               "a shell exit is a different unit from a Galaxy job and may represent a probe or search rather than a failed analysis. "
+               f"At least one nonzero shell exit appears in {cov['galaxy']['runs_with_nonzero_shell']}/{cov['galaxy']['transcripts']} available Galaxy-condition transcripts "
+               f"and {cov['open_ended_code']['runs_with_nonzero_shell']}/{cov['open_ended_code']['transcripts']} open-ended-code transcripts. "
+               "These are counts of runs with a recorded shell exit, not counts of failed Galaxy jobs; a shell exit may represent a probe or search rather than a failed analysis. "
                f"The retained records flag {len(ex['recovery_candidates'])} candidate same-tool/input failure-to-success sequences across {ex['recovery_runs']} Galaxy runs. "
                "They support investigation of recovery, not a comparative recovery benefit. The tool inventory combines installed tools with task-specific identifiers; "
                "custom identifiers alone cannot distinguish a standard domain tool from a user-defined wrapper. No run is certified Galaxy-only without an adjudicated "
@@ -328,7 +374,7 @@ def write_reports(a):
         'Non-exclusive numbers of runs out of 300 per row. Galaxy indicators are substring matches on structured job tool IDs; open-ended-code indicators use the unchanged BixBench closed command vocabulary. Absence of an indicator is not absence of the scientific method. Custom wrappers may conceal library use, and missing/empty fingerprints are excluded from primary agreement estimates.')
     tables[9]=table('Table 9. Triplicate solution-path agreement',['Environment','Configuration','Identical','Two identical','All distinct','Not evaluable','Identical %','Mean Jaccard'],[
         [r['condition'],LABEL.get(r['model'],'All configurations'),r.get('identical',0),r.get('two_of_three',0),r.get('all_distinct',0),r.get('not_evaluable',0),fmt(r['pct_identical'],1),fmt(r['mean_jaccard'],3)] for r in sp['by_condition_and_model']],
-        'Same fingerprint vocabulary and normalization as BixBench. Primary estimates require three observable nonempty fingerprints. Empty or missing records are not agreement. The numerical output also records the legacy BixBench inclusion-rule sensitivity. Astra has only one replicate and its 100 cells are explicitly excluded. Fingerprints ignore order and most parameters, so agreement is not workflow equivalence; magnitudes across environments use different instruments.')
+        'Same fingerprint vocabulary and normalization as BixBench. Jaccard is the number of shared fingerprint elements divided by the number in their union; Mean Jaccard averages the three replicate-pair similarities per cell, then averages across eligible cells. Primary estimates require three observable nonempty fingerprints. Empty or missing records are not agreement. The numerical output also records the legacy BixBench inclusion-rule sensitivity. Astra has only one replicate and its 100 cells are explicitly excluded. Fingerprints ignore order and most parameters, so agreement is not workflow equivalence; magnitudes across environments use different instruments.')
     driver_rows=[]
     for key,label in [('task_mean_sd','Task mean Jaccard standard deviation'),('configuration_mean_sd','Configuration mean Jaccard standard deviation')]:
         driver_rows.append([label,*[fmt(sp['drivers'][c][key],3) for c in CONDITIONS]])
@@ -338,8 +384,10 @@ def write_reports(a):
         v=sp['drivers']['galaxy']['failure_groups'][flag]
         driver_rows.append([label,f"{fmt(v['mean_jaccard'],3)} (n={v['n']})",'Not applicable'])
     driver_rows.append(['Association with answer acceptance','Not assessable','Not assessable'])
+    cross=sp['cross_condition_task_correlation']
     tables[10]=table('Table 10. Descriptive associations with path variability',['Measure','Galaxy','Open-ended code'],driver_rows,
-        'Cells share tasks and are not independent observations. Task difficulty is not inferred from failures or token use. Fingerprint-size-stratified failure associations and cross-condition task correlation are retained in the JSON; none establishes causality.')
+        f"Across the {cross['n']} tasks with an evaluable task mean in both environments, Spearman rho between task mean Jaccard values was {fmt(cross['spearman_rho'],3)}. "
+        'Task means average eligible configuration cells; the contributing configurations can differ between environments. The two failure-group rows report mean Jaccard, not correlations. Cells share tasks and are not independent observations. Task difficulty is not inferred from failures or token use. Fingerprint-size-stratified failure associations are retained in the JSON; none establishes causality.')
     g=next(r for r in sp['by_condition_and_model'] if r['condition']=='galaxy' and r['model']=='ALL')
     o=next(r for r in sp['by_condition_and_model'] if r['condition']=='open_ended_code' and r['model']=='ALL')
     variability=(f"Among {g['evaluable_cells']} evaluable Galaxy triplicate cells, {g.get('identical',0)} had identical recorded toolsets "
@@ -350,12 +398,14 @@ def write_reports(a):
                  "These instruments differ in resolution and visibility, precluding a direct ranking of scientific solution consistency between environments. "
                  "The closed vocabulary is intentionally unchanged from BixBench for side-by-side evaluation, but can omit CompBio-specific software. "
                  "Tables 8-10 therefore describe observed indicators and configuration differences within an environment, not adjudicated biological methods. "
+                 f"Task mean agreement was weakly correlated across environments (Spearman rho = {fmt(cross['spearman_rho'],3)}, n = {cross['n']} tasks; Table 10). "
+                 "These indicators show little cross-environment correspondence in task rankings; they do not establish that task identity has no effect on path variability. "
                  "Submitted-answer consistency is reported independently in Tables 2-3. Without item-level scores, convergent answers cannot be called correct, "
                  "and divergent paths cannot be counted as valid alternative solutions. No independent difficulty strata or controlled prompt-version comparison were available.")
     rows=[[LABEL[m],tok['by_model'][m]['n'],fmt(tok['by_model'][m]['median']),f"{fmt(tok['by_model'][m]['q1'])}-{fmt(tok['by_model'][m]['q3'])}"] for m in MODELS]
     rows.append(['All paired configurations',tok['pooled']['n'],fmt(tok['pooled']['median']),f"{fmt(tok['pooled']['q1'])}-{fmt(tok['pooled']['q3'])}"])
     tables[11]=table('Table 11. Galaxy/open-ended-code input-token ratios',['Configuration','Eligible task comparisons','Median ratio','IQR'],rows,
-        'Each ratio divides the median of three Galaxy input totals by the median of three open-ended-code totals for the same task and supplied configuration. All six totals must be available; excluded pairs are listed in the audit. This is a median of task/configuration ratios, not a ratio of pooled totals or matched-seed runs. Cached input is already included and is not added again; output and reasoning fields remain separate.')
+        'Each ratio divides the median of three Galaxy input totals by the median of three open-ended-code totals for the same task and supplied configuration. IQR columns report the first and third quartiles (Q1-Q3), rather than their difference. All six totals must be available; excluded pairs are listed in the audit. This is a median of task/configuration ratios, not a ratio of pooled totals or matched-seed runs. Cached input is already included and is not added again; output and reasoning fields remain separate.')
     lo,hi=tok['bootstrap']['percentile95']
     cost=(f"Provider-reported primary-turn usage was recovered for {usage}/2,500 runs. Complete usage in both environments permitted "
           f"{tok['pooled']['n']}/400 task-by-configuration comparisons. Their median Galaxy/open-ended-code input-token ratio was "
@@ -370,11 +420,26 @@ def write_reports(a):
           "Dollar costs, review time, reconstruction errors and reviewer agreement were not measured. Structured histories and command traces support inspection; "
           "they do not demonstrate faster review or that provenance benefits outweigh token cost.")
     dist_rows=[[LABEL[d['model']],d['condition'],f"{d['input_tokens']['n']}/{d['listed_runs']}",
-                fmt(d['input_tokens']['median'],0),f"{fmt(d['input_tokens']['q1'],0)}-{fmt(d['input_tokens']['q3'],0)}",
-                fmt(d['output_tokens']['median'],0)] for d in a['token_distributions']]
+                fmt(d['input_tokens']['median'],1),f"{fmt(d['input_tokens']['q1'])}-{fmt(d['input_tokens']['q3'])}",
+                fmt(d['output_tokens']['median'],1)] for d in a['token_distributions']]
     distribution_table=table('Supplementary Table S1. Absolute provider-token distributions',
                             ['Configuration','Environment','Usage coverage','Median input','Input IQR','Median output'],dist_rows,
-                            'All observable final selected runs, including those with operational errors. Missing usage is excluded explicitly, never zero. The unpaired Astra population is separate. Correct-only and full multi-campaign costs are unavailable.')
+                            'All observable final selected runs, including those with operational errors. Medians retain one decimal place and linearly interpolated quartiles retain two, preserving fractional summary values from integer token counts. Input IQR reports Q1-Q3. Missing usage is excluded explicitly, never zero. The unpaired Astra population is separate. Correct-only and full multi-campaign costs are unavailable.')
+    capped_descriptions=[]
+    for h in ex['capped_histories']:
+        counts=h['state_id_counts']
+        capped_descriptions.append(
+            f"For `{h['task']}`, the [{h['count']}-element snapshot]({h['path']}) lists "
+            f"{counts['ok']} `ok` and {counts['error']} `error` elements in `state_ids`, "
+            f"leaving {h['elements_without_state_id']} elements unaccounted for by those state-ID lists.")
+    capped_errors=sum(h['state_id_counts']['error'] for h in ex['capped_histories'])
+    capped_unaccounted=sum(h['elements_without_state_id'] for h in ex['capped_histories'])
+    capped_detail_errors=sum(h['states']['error'] for h in ex['capped_histories'])
+    capped_note=(' '.join(capped_descriptions) +
+                 f" Together these metadata-only histories record {capped_errors} error-state elements and {capped_unaccounted} elements without a listed state ID. "
+                 f"The snapshots' `state_details` fields report {capped_detail_errors} errors in total, contradicting their `state_ids`; both representations and their discrepancy are retained in the audit. "
+                 "These are dataset-state observations, not deduplicated creating-job counts or answer outcomes, and are not added to Table 6 job totals. "
+                 "Detailed contents remain excluded under the collection limit. Capping does not establish experiment failure, but it does not erase the recorded error states.\n\n")
     methods=("## Methods, provenance and limitations\n\n"
              "The workbook defines the observed inventory, not an independent expected-run protocol. Matching uses task and supplied configuration; "
              "condition-specific prompt additions, runtime reasoning settings and campaign roots remain visible confounders. No individual replicate is paired by seed. "
@@ -387,9 +452,7 @@ def write_reports(a):
              "included run IDs, finding IDs, source files and software hashes. Initial trace/history collection did not verify TLS certificates; "
              "the supplemental metadata fetch verified the certificate chain and hostname with strict CA-extension checking disabled for the host proxy. "
              "Neither byte hashes nor successful schema validation resolve score-source disagreements.\n\n"
-             "The metadata-only Galaxy histories for `reverse-search-gwas-q1` contain 424 and 799 elements. Their state summaries report 394 and 616 `ok` "
-             "elements, respectively, leaving 213 elements outside those totals. These are dataset-state counts, not successful jobs or answers; detailed contents "
-             "remain excluded under the collection limit. A capped history is not a failed experiment.\n\n"
+             f"{capped_note}"
              "Exact per-task official evaluator outputs, versioned scoring definitions and submission receipts matching advertised vector hashes are needed for "
              "BixBench-equivalent accuracy, reliability and outcome-versus-route tables. Missing primary traces/usage, independent campaign-selection records, "
              "and event-level location/recovery adjudication are needed to quantify complete computational cost and exclusively Galaxy-derived solutions. "
