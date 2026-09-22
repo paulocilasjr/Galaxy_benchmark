@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request, h5py, numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+# load reference genes from remote, no local files written
+ref=[]
+for line in urllib.request.urlopen('https://raw.githubusercontent.com/Genentech/pascient/main/data/ref_genes_covid.csv', timeout=20).read().decode().splitlines():
+    parts=line.split(',')
+    if len(parts)>=2: ref.append(parts[1])
+with h5py.File('covid.patients.q1.h5ad','r') as f:
+    cats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/donor_id/categories'][:]]
+    codes=f['obs/donor_id/codes'][:].astype(np.int16)
+    gcats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['var/feature_name/categories'][:]]
+    gcodes=f['var/feature_name/codes'][:]; idxraw=f['var/_index'][:]
+    genes=np.array([gcats[c] if c>=0 else (idx.decode() if isinstance(idx,bytes) else str(idx)) for c,idx in zip(gcodes, idxraw)])
+    gi={g:i for i,g in enumerate(genes)}
+    sel_names=[g for g in ref if g in gi]
+    sel=np.array([gi[g] for g in sel_names], dtype=np.int32)
+    n,ng=f['X'].attrs['shape']; nd=len(cats)
+    sums=np.zeros((nd,len(sel))); cells=np.bincount(codes,minlength=nd).astype(float)
+    indptr=f['X/indptr'][:]; data=f['X/data']; indices=f['X/indices']
+    for start in range(0,n,10000):
+        end=min(n,start+10000); st=int(indptr[start]); en=int(indptr[end])
+        ip=indptr[start:end+1].astype(np.int64)-st
+        X=csr_matrix((data[st:en],indices[st:en],ip),shape=(end-start,ng))
+        cc=codes[start:end]
+        D=csr_matrix((np.ones(end-start),(np.arange(end-start),cc)),shape=(end-start,nd))
+        sums += (D.T @ X[:,sel]).toarray()
+    logcpm=np.log1p(sums/sums.sum(axis=1)[:,None]*1e6)
+    X=StandardScaler().fit_transform(logcpm)
+    pcs=PCA(n_components=5,random_state=2).fit_transform(X)
+    print('ref genes matched',len(sel_names))
+    for k in [2,3]:
+      labels=KMeans(n_clusters=k,random_state=2,n_init=100).fit_predict(pcs)
+      print('k',k)
+      for lab in range(k): print(lab, sorted(int(c.replace('donor','')) for i,c in enumerate(cats) if labels[i]==lab))
+    print('PCs')
+    for i,c in enumerate(cats): print(c, f'{pcs[i,0]:.2f}', f'{pcs[i,1]:.2f}')
+PY"

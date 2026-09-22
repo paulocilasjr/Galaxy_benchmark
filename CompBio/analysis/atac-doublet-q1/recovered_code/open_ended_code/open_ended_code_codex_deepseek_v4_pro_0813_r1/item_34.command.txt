@@ -1,0 +1,73 @@
+/bin/bash -lc "cat > amulet_overlap.py <<'PY'
+import gzip, sys, time, collections, json
+fn='atac.doublet.q1.bed.gz'
+exclude={'chrM','chrX','chrY','M','X','Y'}
+max_w=1000
+# stats per barcode
+bcs=[]; first=set()
+counts=collections.Counter()
+uniq_counts=collections.Counter()
+nAbove2=collections.Counter()
+chrom_bc_data=collections.defaultdict(lambda: collections.defaultdict(list))
+
+def process_chrom(chr, d):
+    # d: bc -> list of (start,end)
+    for bc, ints in d.items():
+        events=collections.defaultdict(int)
+        for s,e in ints:
+            events[s]+=1
+            events[e]-=1
+        cov=0; regions=0
+        for pos in sorted(events):
+            old=cov
+            cov += events[pos]
+            if old<3 and cov>=3:
+                regions += 1
+        nAbove2[bc]+=regions
+
+last_chr=None
+t0=time.time()
+n=0
+with gzip.open(fn,'rt') as f:
+    for line in f:
+        p=line.split()
+        ch=p[0]; s=int(p[1]); e=int(p[2]); bc=p[3]
+        n+=1
+        if ch "'!= last_chr:
+            if last_chr is not None:
+                if last_chr not in exclude:
+                    process_chrom(last_chr, chrom_bc_data[last_chr])
+                del chrom_bc_data[last_chr]
+            last_chr=ch
+        if ch in exclude: continue
+        if e-s > max_w: continue
+        if bc not in first:
+            first.add(bc); bcs.append(bc)
+        counts[bc]+=1
+        uniq_counts[bc]+=1
+        chrom_bc_data[ch][bc].append((s,e))
+        if n%1000000==0:
+            print('"'read',n,'mem bcs groups',sum(len(v) for c in chrom_bc_data.values() for v in c.values()), file=sys.stderr)
+if last_chr is not None and last_chr not in exclude:
+    process_chrom(last_chr, chrom_bc_data[last_chr])
+print('done',n,'time',time.time()-t0,file=sys.stderr)
+# output all
+rows=[]
+for bc in bcs:
+    rows.append((bc, counts[bc], uniq_counts[bc], nAbove2[bc]))
+rows.sort(key=lambda x:x[3], reverse=True)
+with open('amulet_stats.tsv','w') as out:
+    out.write('barcode\\tnFrags\\tuniqFrags\\tnAbove2\\n')
+    for r in rows:
+        out.write('\\t'.join(map(str,r))+'\\n')
+# summary
+import statistics
+vals=[r[3] for r in rows]
+print('n barcodes',len(rows),'nAbove2 min max mean median',min(vals),max(vals),statistics.mean(vals),statistics.median(vals))
+for q in [.5,.9,.95,.99,.995,.999,1]:
+    idx=min(len(vals)-1,int(q*(len(vals)-1)))
+    print('q',q,vals[idx])
+print('top 40:')
+for r in rows[:40]: print(r)
+PY
+time python3 amulet_overlap.py"

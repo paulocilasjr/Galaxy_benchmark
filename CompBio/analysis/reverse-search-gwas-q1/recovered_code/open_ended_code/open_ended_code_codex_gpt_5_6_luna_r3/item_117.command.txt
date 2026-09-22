@@ -1,0 +1,61 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,struct,zlib,gzip,io,re,json
+
+def get(u,a,b):
+ req=urllib.request.Request(u,headers={'User-Agent':'curl/8.0','Range':f'bytes={a}-{b}'})
+ x=urllib.request.urlopen(req,timeout=300); return x.read()
+
+def central(u,size):
+ tail=get(u,size-200000,size-1)
+ i=tail.rfind(b'PK\\x06\\x06'); vals=struct.unpack_from('<4sQ2H2I4Q',tail,i)
+ _,_,_,_,_,_,entries,_,cdsize,cdoff=vals
+ b=get(u,cdoff,cdoff+cdsize-1)
+ out={}; p=0
+ while p<len(b):
+  vals=struct.unpack_from('<4s6H3I5H2I',b,p)
+  sig,vermade,verneed,flag,comp,mt,md,crc,csize,usize,nlen,xlen,clen,disk,ia,ea,loff=vals
+  name=b[p+46:p+46+nlen].decode('utf8','replace'); extra=b[p+46+nlen:p+46+nlen+xlen]
+  if loff==0xffffffff or csize==0xffffffff or usize==0xffffffff:
+   q=0; fields=[]
+   while q+4<=len(extra):
+    eid,elen=struct.unpack_from('<HH',extra,q); d=extra[q+4:q+4+elen]; q+=4+elen
+    if eid==1:
+     z=0
+     if usize==0xffffffff: usize=struct.unpack_from('<Q',d,z)[0]; z+=8
+     if csize==0xffffffff: csize=struct.unpack_from('<Q',d,z)[0]; z+=8
+     if loff==0xffffffff: loff=struct.unpack_from('<Q',d,z)[0]; z+=8
+  out[name]=(loff,csize,usize,flag,comp)
+  p+=46+nlen+xlen+clen
+ return out
+
+def first_lines(u,size,name,need=3_000_000):
+ d=central(u,size)[name]; loff,csize,usize,flag,comp=d
+ lfh=get(u,loff,29); vals=struct.unpack('<4s5H3I2H',lfh)
+ nlen,xlen=vals[-2:]; data_start=loff+30+nlen+xlen
+ b=get(u,data_start,data_start+min(csize,need)-1)
+ dec=zlib.decompressobj(-15); out=dec.decompress(b)
+ return out, d, data_start
+# local q1 first 10 lines
+q1=[]
+with gzip.open('reverse.search.gwas.q1.tsv.gz','rt') as f:
+ h=f.readline().strip().split('\\t')
+ for _ in range(1000): q1.append(f.readline().strip().split('\\t'))
+print('local h',h,'first',q1[:4])
+# old/new archive first lines for all traits
+for label,u,size,name in [
+ ('oldafr','https://zenodo.org/api/records/11111186/files/afr47041.zip/content',6011347563,'afr47041/ss_afr47041_1.tsv'),
+ ('newafr','https://zenodo.org/api/records/17370173/files/afr47041.zip/content',5769815245,'afr47041/ss_afr47041_1.tsv')]:
+ print('\\n',label)
+ try:
+  out,d,ds=first_lines(u,size,name)
+  print('member',d,'data_start',ds,'decomp',len(out),out[:500].decode('utf8','replace'))
+  lines=out.decode('utf8','replace').splitlines()
+  ah=lines[0].split('\\t'); print('archive h',len(ah),ah)
+  for l in lines[1:4]:print(l[:500])
+  # map first local IDs to archive rows and report P columns
+  amap={x.split('\\t')[2]:x.split('\\t') for x in lines[1:] if len(x.split('\\t'))>=3}
+  for row in q1[:5]:
+   id=row[2]; a=amap.get(id)
+   print('match',id,'local',row[-1],'archive',a[-1] if a else None,'fields',len(a) if a else None)
+ except Exception as e:print(type(e).__name__,e)
+PY"

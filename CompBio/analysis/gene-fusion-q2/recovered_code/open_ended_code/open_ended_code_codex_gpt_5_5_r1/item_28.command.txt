@@ -1,0 +1,54 @@
+/bin/bash -lc "cat > scripts/extract_candidate_reads.py <<'PY'
+from collections import defaultdict
+# Build window assignments as before, then output reads supporting selected pairs.
+hits=defaultdict(list)
+with open('results/windows35_to_gencode.paf') as f:
+    for line in f:
+        fields=line.rstrip('\\n').split('\\t')
+        q=fields[0]; strand=fields[4]; t=fields[5]
+        matches=int(fields[9]); blen=int(fields[10]); qs=int(fields[2]); qe=int(fields[3])
+        if blen<28 or matches<28 or matches/blen<0.90: continue
+        gene=t.split('|')[5]
+        hits[q].append((matches, qe-qs, gene, strand))
+assign={}
+for q,hs in hits.items():
+    best=max((h[0],h[1]) for h in hs)
+    top=[h for h in hs if (h[0],h[1])==best]
+    genes={h[2] for h in top}; strands={h[3] for h in top}
+    if len(genes)==1 and len(strands)==1:
+        assign[q]=(next(iter(genes)), next(iter(strands)))
+byread=defaultdict(dict)
+for q,(g,s) in assign.items():
+    rid,pos=q.rsplit('|',1); byread[rid][int(pos)]=(g,s)
+want={('MYC','SP1'),('SP1','CATSPER4'),('SP1','ZIC2')}
+support=defaultdict(set)
+for rid,d in byread.items():
+    blocks=[]
+    for pos,(g,s) in sorted(d.items()):
+        if not blocks or blocks[-1][1]"'!=g or blocks[-1][2]!=s:
+            blocks.append((pos,g,s))
+    for a,b in zip(blocks,blocks[1:]):
+        _,g1,s1=a; _,g2,s2=b
+        if g1==g2 or s1!=s2: continue
+        p=(g1,g2) if s1=='"'+' else (g2,g1)
+        if p in want:
+            support[p].add(rid)
+for p in sorted(want):
+    print(p, len(support[p]))
+    print(' '.join(sorted(support[p], key=lambda x:int(x.split('_')[1]))[:50]))
+# write fasta/fastq for any candidate reads
+ids=set().union(*support.values())
+import gzip
+with gzip.open('gene.fusion.q2.fq.gz','rt') as f, open('results/candidate_reads.fa','w') as outfa, open('results/candidate_reads.fq','w') as outfq:
+    while True:
+        name=f.readline().rstrip('\\n')
+        if not name: break
+        seq=f.readline().rstrip('\\n'); plus=f.readline().rstrip('\\n'); qual=f.readline().rstrip('\\n')
+        rid=name[1:].split()[0]
+        if rid in ids:
+            outfa.write(f'>{rid}\\n{seq}\\n')
+            outfq.write(f'{name}\\n{seq}\\n{plus}\\n{qual}\\n')
+PY
+python3 scripts/extract_candidate_reads.py > results/candidate_support.txt
+cat results/candidate_support.txt
+wc -l results/candidate_reads.fa"

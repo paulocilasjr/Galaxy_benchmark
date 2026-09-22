@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import sys, inspect, math
+if not hasattr(inspect, 'ArgSpec'):
+    inspect.ArgSpec = inspect.FullArgSpec
+sys.path.insert(0, '/opt/miniconda3/envs/benchmark_codex_118a87824e4141b58e90/lib/python3.11/site-packages')
+import snappy
+from tensorflow_checkpoint_reader import bundle_reader, errors, tensor_shape, env, table, core
+
+def read_block(file, handle):
+    n=handle.size; status, contents=file.read(handle.offset,n+table.kBlockTrailerSize)
+    if not status.ok(): raise RuntimeError(status)
+    raw=contents.slice()
+    if len(raw)"'!=n+table.kBlockTrailerSize: raise errors.DataLoss('"'truncated')
+    comp=raw[n]; data=raw[:n]
+    if comp==table.CompressionType.kNoCompression.value: out=bytes(data)
+    elif comp==table.CompressionType.kSnappyCompression.value: out=snappy.decompress(bytes(data))
+    else: raise NotImplementedError
+    res=table.BlockContents(); res.data=core.StringPiece(out); res.cacheable=False; res.heap_allocated=False
+    return res
+table.read_block=read_block
+class Dummy:
+    def __init__(self, shape): self.shape=shape
+def fake_get_numpy(self,entry):
+    shape=tensor_shape.TensorShape.from_proto(entry.shape).to_list()
+    return errors.Status.OK(), Dummy(tuple(shape))
+bundle_reader.BundleReader.get_numpy=fake_get_numpy
+r=bundle_reader.BundleReader(env.Env.default(),'variables/variables')
+trainable=0; nontrainable=0; categories={}
+for k,val in r._tensors:
+    name=k.decode(); shape=val.shape; prod=1
+    for s in shape: prod*=s
+    if any(x in name for x in ['_CHECKPOINTABLE_OBJECT_GRAPH','save_counter','/moving_mean/','/moving_variance/']):
+        cat='non_trainable'
+    else:
+        cat='trainable'
+    categories.setdefault(cat,0); categories[cat]+=prod
+    if cat=='trainable':
+        # subcat
+        if '/_stem/' in name: sub='stem'
+        elif '/_downres/' in name: sub='tower'
+        elif '/_transformer/' in name: sub='transformer'
+        elif '/_final_pointwise/' in name: sub='final'
+        elif '/_heads/human/' in name: sub='human_head'
+        elif '/_heads/mouse/' in name: sub='mouse_head'
+        else: sub='other'
+        categories.setdefault(sub,0); categories[sub]+=prod
+print('categories', categories)
+print('trainable total', categories.get('trainable'))
+print('human head', categories.get('human_head'), 'mouse head', categories.get('mouse_head'))
+print('trunk (trainable excluding heads)', categories.get('trainable',0)-categories.get('human_head',0)-categories.get('mouse_head',0))
+PY"

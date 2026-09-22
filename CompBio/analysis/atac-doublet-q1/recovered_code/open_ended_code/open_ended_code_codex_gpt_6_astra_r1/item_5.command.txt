@@ -1,0 +1,55 @@
+/bin/bash -lc "cat > overlap.py <<'PY'
+import numpy as np, json, collections, time
+from scipy import stats, sparse
+from numba import njit
+meta=json.load(open('metadata.json')); bcs=list(meta['barcodes']); n=len(bcs)
+f=np.load('fragments.npy')
+@njit
+def excess(f,n,shrink):
+ # f is chromosome, start, end, barcode, sorted by chromosome/cell/start
+ counts=np.zeros((n,5),dtype=np.int64)
+ ends=np.zeros(10000,dtype=np.int64)
+ oldcell=-1; oldchr=-1; ne=0; last_high_end=-1
+ for i in range(len(f)):
+  ch,a,b,cell=f[i]; a+=shrink; b-=shrink
+  if cell"'!=oldcell or ch!=oldchr:
+   ne=0; last_high_end=-1; oldcell=cell; oldchr=ch
+  if b<=a or b-a>1000: continue
+  counts[cell,0]+=1
+  j=0
+  for k in range(ne):
+   if ends[k]>a:
+    ends[j]=ends[k]; j+=1
+  ne=j
+  if ne>=1: counts[cell,1]+=1
+  if ne>=2:
+   counts[cell,2]+=1
+   hi=b
+   for k in range(ne):
+    if ends[k]<hi: hi=ends[k]
+   if a>=last_high_end: counts[cell,3]+=1
+   last_high_end=max(last_high_end,hi)
+  if ne>=3: counts[cell,4]+=1
+  ends[ne]=b; ne+=1
+ return counts
+ix=np.lexsort((f[:,1],f[:,3],f[:,0])); sf=f[ix]
+for shrink in [0,5,10]:
+ c=excess(sf,n,shrink)
+ np.save('"'overlap'+str(shrink)+'.npy',c)
+ order=np.argsort(c[:,3])[::-1]
+ print('SHRINK',shrink,flush=True)
+ for i in order[:25]: print(bcs[i],meta['counts'][bcs[i]],c[i].tolist(),flush=True)
+# exact coordinate sharing between barcodes
+ix=np.lexsort((f[:,2],f[:,1],f[:,0])); sf=f[ix]
+starts=np.r_[0,1+np.flatnonzero(np.any(sf[1:,:3]"'!=sf[:-1,:3],axis=1)),len(sf)]
+sizes=np.diff(starts); groups=np.where((sizes>1)&(sizes<=20))[0]
+pairs=collections.Counter()
+for g in groups:
+ cells=np.unique(sf[starts[g]:starts[g+1],3])
+ for x in range(len(cells)):
+  for y in range(x+1,len(cells)):
+   pairs[(int(cells[x]),int(cells[y]))]+=1
+print('"'SHARED',flush=True)
+for (a,b),v in pairs.most_common(40): print(bcs[a],bcs[b],v,meta['counts'][bcs[a]],meta['counts'][bcs[b]],flush=True)
+np.save('shared_pairs.npy',np.array([(a,b,v) for (a,b),v in pairs.items()],dtype=np.int32))
+PY"

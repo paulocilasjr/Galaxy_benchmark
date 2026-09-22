@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, pysam
+fasta=pysam.FastaFile('hg38.fa')
+data=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+ for line in f:
+  p=line.rstrip().split('\\t');data.append((p[0],int(p[1]),int(p[2])))
+print('N',len(data))
+
+def extract(ch,c,flank=45):
+ lo=c-flank;hi=c+flank+1
+ if lo<0:return None
+ try:s=fasta.fetch(ch,lo,hi).upper()
+ except:return None
+ return s if len(s)==2*flank+1 else None
+
+def best(pos_type,dmin=-12,dmax=12):
+ D=dmax-dmin+1; counts=[[[0]*4 for _ in range(21)] for __ in range(D)]
+ for ch,s,e in data:
+  c=s if pos_type=='start' else e
+  seq=extract(ch,c)
+  if seq is None:continue
+  ci=45; bd={'A':0,'C':1,'G':2,'T':3}
+  for di,d in enumerate(range(dmin,dmax+1)):
+   center=ci-d;lo=center-10;hi=lo+21
+   if lo<0 or hi>len(seq):continue
+   for j,b in enumerate(seq[lo:hi]):
+    if b in bd: counts[di][j][bd[b]]+=1
+ total=[0]*4
+ for dm in counts:
+  for pos in dm:
+   for i in range(4):total[i]+=pos[i]
+ N=sum(total); bg=[(x+1)/(N+4) for x in total]
+ vals=[]
+ for di,d in enumerate(range(dmin,dmax+1)):
+  kl=0
+  for pos in counts[di]:
+   n=sum(pos)
+   if n==0:continue
+   for i in range(4):
+    p=pos[i]/n
+    if p>0:kl+=p*math.log(p/bg[i])
+  vals.append((d,kl))
+ return vals
+for pos in ['start','end']:
+ vals=best(pos)
+ print(pos,'top')
+ for v in sorted(vals,key=lambda x:x[1],reverse=True)[:12]:print(v)
+PY"

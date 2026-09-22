@@ -1,0 +1,53 @@
+/bin/bash -lc "cat > map_snps.py <<'PY'
+import pandas as pd, requests, time, json
+from pyliftover import LiftOver
+from concurrent.futures import ThreadPoolExecutor, as_completed
+s=pd.read_csv('retina.score.snps.q1.tsv',sep='\\t')
+lo=LiftOver('hg19ToHg38.over.chain.gz')
+comp=str.maketrans('ACGT','TGCA')
+def revcomp(seq): return seq.translate(comp)[::-1]
+def get_base(chrom,p1): # p1 1-based, returns uppercase
+    r=requests.get('https://api.genome.ucsc.edu/getData/sequence',
+                   params={'genome':'hg38','chrom':chrom,'start':p1-1,'end':p1},timeout=30)
+    if r.status_code"'!=200: return f'"'ERR{r.status_code}'
+    return r.json().get('dna','ERR').upper()
+rows=[]
+for i,row in s.iterrows():
+    B=int(row['start']) # 0-based hg19 coordinate
+    res=lo.convert_coordinate(row['chr'],B)
+    if not res:
+        rows.append({'idx':i,'chr':row['chr'],'start':row['start'],'ref':row['ref'],'alt':row['alt'],'label':row['label'],
+                     'hg38_chr':None,'hg38_pos1':None,'strand':None,'score':None,'target_base':None,'nmap':0})
+        continue
+    # choose best; keep list len
+    maps=[]
+    for r in res:
+        maps.append((r[0], r[1]+1, r[2], r[3]))
+    ch,p1,strand,score=maps[0]
+    # fetch target base with retry
+    tb=None
+    for attempt in range(3):
+        try:
+            tb=get_base(ch,p1)
+            if not tb.startswith('ERR'): break
+        except Exception as e: tb=f'ERR{e}'
+        time.sleep(0.5)
+    rows.append({'idx':i,'chr':row['chr'],'start':row['start'],'ref':row['ref'],'alt':row['alt'],'label':row['label'],
+                 'hg38_chr':ch,'hg38_pos1':p1,'strand':strand,'score':score,'target_base':tb,'nmap':len(maps),
+                 'maps':maps})
+df=pd.DataFrame(rows)
+df.to_pickle('mapped_snps.pkl')
+print('mapped',df.hg38_chr.notna().sum(),'failed',df.hg38_chr.isna().sum())
+print('multiple maps',df.nmap.value_counts().to_dict())
+print('strand counts',df.strand.value_counts(dropna=False).to_dict())
+# check direct match / revcomp for target ref and alt
+for orient in ['ref','alt','rc_ref','rc_alt']:
+    if orient=='ref': val=df.ref
+    elif orient=='alt': val=df.alt
+    elif orient=='rc_ref': val=df.ref.map(revcomp)
+    else: val=df.alt.map(revcomp)
+    df['_v']=val
+    print(orient, (df.target_base==df._v).sum())
+print(df[['idx','chr','start','ref','alt','hg38_chr','hg38_pos1','strand','target_base','nmap']].head(30).to_string())
+PY
+python map_snps.py"

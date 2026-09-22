@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+import collections, gzip, numpy as np
+D={};n=None;ss=[]
+for line in Path('read.proportions.q1.fa').read_text().splitlines():
+ if line.startswith('>'):
+  if n:D[n]=''.join(ss)
+  n=line[1:].split()[0];ss=[]
+ else:ss.append(line.strip())
+D[n]=''.join(ss);N=list(D);L=3000;rl=36;T=L-rl+1
+tr=str.maketrans('ACGTN','TGCAN');rc=lambda s:s.translate(tr)[::-1]
+sets={}
+for j,nm in enumerate(N):
+ for p in range(T):
+  q=D[nm][p:p+rl]
+  sets.setdefault(q,set()).add(j);sets.setdefault(rc(q),set()).add(j)
+A=collections.Counter()
+for j,nm in enumerate(N):
+ for p in range(T):A[(j,tuple(sorted(sets[D[nm][p:p+rl]])))]+=1
+cats=sorted({S for j,S in A},key=lambda S:(len(S),S))
+print('A counts by source:')
+print('cat',' '.join(N))
+for S in cats: print(''.join(str(x+1) for x in S),*[A[(j,S)] for j in range(4)])
+# observed exact counts
+obs=collections.Counter();
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while h:=f.readline():
+  q=f.readline().strip();f.readline();f.readline()
+  S=tuple(j for j,nm in enumerate(N) if q in D[nm] or rc(q) in D[nm]);obs[S]+=1
+print('obs total',sum(obs.values()),'no',obs[()])
+# solve expected obs_c = n*f * sum pi_j A[j,c]/T. Let theta_j = f*pi_j, obs/n = A.T/T theta. least squares nonnegative
+M=np.array([[A[(j,S)]/T for j in range(4)] for S in cats])
+y=np.array([obs[S]/40000 for S in cats])
+# unconstrained least squares then scipy optimize if available
+th=np.linalg.lstsq(M,y,rcond=None)[0]
+print('lstsq theta=f*pi',th,'f',sum(th),'pi',th/sum(th),'pred exact',M@th)
+try:
+ from scipy.optimize import nnls, minimize
+ th2=nnls(M,y)[0];print('nnls',th2,'f',sum(th2),'pi',th2/sum(th2))
+ # Poisson/multinomial likelihood exact categories plus no exact as 1 - sum exact; p= M th
+ def fun(z):
+  # softmax pi, logistic f
+  ex=np.exp(z-z.max()); pi=ex/ex.sum(); f=1/(1+np.exp(-z[4]));
+  p=f*(M@pi); pn=max(1-p.sum(),1e-300)
+  return -(sum(obs[S]*np.log(max(p[i],1e-300)) for i,S in enumerate(cats))+obs[()]*np.log(pn))
+ for init in [np.r_[np.zeros(4),0],np.r_[np.log([.35,.25,.25,.15]),0],np.r_[np.log([.5,.2,.2,.1]),-0.3]]:
+  o=minimize(fun,init,method='BFGS');z=o.x; pi=np.exp(z[:4]-z[:4].max());pi/=pi.sum();f=1/(1+np.exp(-z[4]));print('mle',o.fun,o.success,pi,f)
+except Exception as e:print('scipy err',e)
+PY"

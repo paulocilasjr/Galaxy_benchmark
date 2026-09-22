@@ -1,0 +1,21 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip,numpy as np
+bmap={};bcs=[];tot=[];lh=[];cc=[]
+chroms=['chr'+str(i) for i in range(1,23)]+['chrX','chrY']; cmap={x:i for i,x in enumerate(chroms)}
+with gzip.open('atac.doublet.q1.bed.gz','rt') as f:
+ for l in f:
+  a=l.rstrip().split('\\t');bc=a[3]
+  if bc not in bmap:bmap[bc]=len(bcs);bcs.append(bc);tot.append(0);lh.append([0]*101);cc.append([0]*25)
+  i=bmap[bc];tot[i]+=1;le=int(a[2])-int(a[1]);lh[i][min(le//20,100)]+=1;cc[i][cmap[a[0]]]+=1
+X=np.concatenate([np.array(lh)/np.array(tot)[:,None],np.array(cc)/np.array(tot)[:,None]],1)
+# robust standardize; distances to nearest neighbors in metric
+med=np.median(X,0);mad=np.median(abs(X-med),0);Z=(X-med)/np.maximum(1.4826*mad,1e-5)
+# PCA / whiten? distance robust, top outliers
+D=np.sum(Z**2,1)
+print('features q',np.quantile(D,[0,.5,.9,.95,.99,1]),flush=True)
+for i in np.argsort(D)[-50:][::-1]:print(bcs[i],tot[i],round(float(D[i]),1),'chrY',cc[i][23],'len0',lh[i][0], 'len peaks',np.argmax(lh[i]),flush=True)
+# leave out dimensions with low variation perhaps print top coordinate
+print('top individual z')
+for j in np.argsort(np.max(abs(Z),0))[-20:][::-1]:
+ i=np.argmax(abs(Z[:,j])); print(j, bcs[i],round(float(Z[i,j]),2),X[i,j])
+PY"

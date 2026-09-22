@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering, SpectralClustering, DBSCAN
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import silhouette_score
+
+# load/construct features similar codex but use our cell type props and expression scores from cell_scores/pseudobulk
+D=np.load('cell_scores.npz',allow_pickle=True); cats=D['cats']; df={}
+for k in D.keys():
+ if k"'!='"'cats': df[k]=D[k]
+df=pd.DataFrame(df,index=cats)
+for k in ['type_CD14_Mono','type_CD16_Mono','type_T','type_NK','type_B','type_Plasma','type_cDC','type_pDC','type_Platelet','type_RBC']:
+ df[k+'_prop']=df[k]/df['total_cells']
+df['ISG']=df['ISG_all_sum']/df['total_cells']
+# pseudobulk marker features from previous script maybe compute quickly using saved pseudobulk and symbols
+Dp=np.load('pseudobulk_raw.npz',allow_pickle=True); sums=Dp['sums']; totals=Dp['totals']; cpm=sums/totals[:,None]*1e6; logcpm=np.log1p(cpm)
+import anndata as ad
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r'); symbols=np.asarray(A.var['feature_name'].astype(str)); sym_to_idx={s:i for i,s in enumerate(symbols)}
+sets={'ISG':['IFI27','IFIT1','IFIT2','IFIT3','ISG15','MX1','OAS1','OAS3','RSAD2','IFI44L','IFI6'],
+      'Inflam':['S100A8','S100A9','S100A12','IL1B','FCN1','VCAN','LST1','CCL3','CCL4'],
+      'cDC':['FCER1A','CLEC10A','CD1C','HLA-DRA','CST3'],
+      'pDC':['LILRA4','CLEC4C','IL3RA','TCF4'],
+      'NaiveT':['CCR7','LEF1','TCF7','IL7R','LTB'],
+      'Cyto':['NKG7','GNLY','GZMB','PRF1','KLRD1'],
+      'Plasma':['MZB1','JCHAIN','XBP1']}
+for name,genes in sets.items():
+ inds=[sym_to_idx[g] for g in genes if g in sym_to_idx]
+ df[name]=logcpm[:,inds].mean(axis=1)
+feats=['ISG','Inflam','cDC','pDC','NaiveT','Cyto','Plasma','type_T_prop','type_NK_prop','type_B_prop','type_Plasma_prop','type_CD14_Mono_prop','type_CD16_Mono_prop']
+X=StandardScaler().fit_transform(df[feats])
+print('silhouette k2',silhouette_score(X,KMeans(n_clusters=2,random_state=0,n_init=20).fit_predict(X)))
+# kmeans consensus
+labels=[]
+for seed in range(50):
+ km=KMeans(n_clusters=2,random_state=seed,n_init=20).fit(X).labels_
+ # align to seed0? Use cluster with smallest mean ISG as healthy label 1
+ if df['ISG'][km==0].mean() < df['ISG'][km==1].mean():
+  y=(km==0).astype(int)
+ else:
+  y=(km==1).astype(int)
+ labels.append(y)
+cons=np.mean(labels,axis=0)
+print('kmeans consensus healthy probability')
+print(pd.Series(cons,index=[int(c[5:]) for c in cats]).sort_values(ascending=False).round(3).to_string())
+print('always healthy',[int(cats[i][5:]) for i in range(len(cats)) if cons[i]==1])
+# agg variants
+for link in ['ward','average','complete','single']:
+ try:
+  if link=='ward': agg=AgglomerativeClustering(n_clusters=2,linkage=link).fit(X)
+  else: agg=AgglomerativeClustering(n_clusters=2,linkage=link,metric='euclidean').fit(X)
+  lab=agg.labels_
+  if df['ISG'][lab==0].mean() < df['ISG'][lab==1].mean(): y=(lab==0).astype(int)
+  else: y=(lab==1).astype(int)
+  print(link,[int(cats[i][5:]) for i in range(len(cats)) if y[i]==1])
+ except Exception as e: print(link,e)
+# spectral
+sp=SpectralClustering(n_clusters=2,random_state=0,affinity='nearest_neighbors',n_neighbors=5).fit(X)
+lab=sp.labels_
+if df['ISG'][lab==0].mean() < df['ISG'][lab==1].mean(): y=(lab==0).astype(int)
+else: y=(lab==1).astype(int)
+print('spectral',[int(cats[i][5:]) for i in range(len(cats)) if y[i]==1])
+PY"

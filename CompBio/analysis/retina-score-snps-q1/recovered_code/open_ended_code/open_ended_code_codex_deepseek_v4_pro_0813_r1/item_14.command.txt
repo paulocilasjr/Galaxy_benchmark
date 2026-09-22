@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import requests, struct, io, zipfile
+url='https://zenodo.org/api/records/6330053/files/retina_models.zip/content'
+filelen=4172833344
+# need central dir offset/size from EOCD. Fetch last 200KB (we already know)
+headers={'Range':f'bytes={filelen-200000}-{filelen-1}'}
+b=requests.get(url,headers=headers,timeout=60).content
+idx=b.rfind(b'PK\\x05\\x06')
+_,_,_,_,_,cd_size,cd_offset,_=struct.unpack('<4s4H2LH', b[idx:idx+22])
+print(cd_size, cd_offset, idx, b.rfind(b'PK\\x01\\x02'))
+# fetch cd exactly
+r=requests.get(url,headers={'Range':f'bytes={cd_offset}-{cd_offset+cd_size-1}'},timeout=60)
+print(r.status_code,len(r.content),r.content[:4],r.content[-4:])
+open('central_dir.bin','wb').write(r.content)
+# parse names
+class Fake:
+    pass
+# parse central directory manually
+pos=0
+entries=[]
+while pos+46 <= len(r.content):
+    sig=struct.unpack('<I',r.content[pos:pos+4])[0]
+    if sig "'!= 0x02014b50:
+        print('"'bad sig at',pos,hex(sig)); break
+    vals=struct.unpack('<4s6H3L5H2L',r.content[pos:pos+46])
+    comp,method,mtime,mdate,crc,csize,usize,fnlen,extralen,commentlen,disk,intattr,extattr,lho=vals[1:]
+    name=r.content[pos+46:pos+46+fnlen].decode('utf8','replace')
+    entries.append((name,csize,usize,lho))
+    pos += 46+fnlen+extralen+commentlen
+print('entries',len(entries))
+for e in entries:
+    print(e[0],e[1],e[2],e[3])
+PY"

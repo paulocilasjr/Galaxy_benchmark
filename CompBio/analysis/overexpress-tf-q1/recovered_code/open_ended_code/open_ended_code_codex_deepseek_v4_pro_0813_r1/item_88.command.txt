@@ -1,0 +1,52 @@
+/bin/bash -lc "cat > scan_peak_motifs_opt2.py <<'PY'
+import os, glob, time
+import MOODS.parsers, MOODS.tools, MOODS.scan
+
+def read_fasta(path):
+    seqs=[]; name=None; parts=[]
+    with open(path) as f:
+        for line in f:
+            if line.startswith('>'):
+                if name is not None: seqs.append((name,''.join(parts).upper()))
+                name=line[1:].strip(); parts=[]
+            else:
+                parts.append(line.strip())
+        if name is not None: seqs.append((name,''.join(parts).upper()))
+    return seqs
+
+pfiles=sorted(glob.glob('motif_pfms/*.pfm'))
+bg=MOODS.tools.flat_bg(4); pseudocount=1.0; p_lo=1e-4; p_hi=1e-5
+models=[]; mat_list=[]; th_lo_list=[]; th_hi_list=[]
+for pf in pfiles:
+    name=os.path.basename(pf)[:-4]
+    lo=MOODS.parsers.pfm_to_log_odds(pf,bg,pseudocount)
+    rc=MOODS.tools.reverse_complement(lo)
+    th_lo=MOODS.tools.threshold_from_p(lo,bg,p_lo)
+    th_hi=MOODS.tools.threshold_from_p(lo,bg,p_hi)
+    models.append((name,th_lo,th_hi))
+    mat_list += [lo,rc]
+    th_lo_list += [th_lo,th_lo]
+    th_hi_list += [th_hi,th_hi]
+
+sets=['cond1','common','cond2']
+for s in sets:
+    seqs=read_fasta(f'macs/bdgdiff/{s}.fa')
+    out=open(f'macs/bdgdiff/{s}.motif_scan.tsv','w')
+    out.write('set\\tpeak\\tlength\\t'+'\\t'.join([f'{n}_p1e-4' for n,_,_ in models]+[f'{n}_p1e-5' for n,_,_ in models])+'\\n')
+    t0=time.time()
+    for i,(name,seq) in enumerate(seqs):
+        if not seq: continue
+        res=MOODS.scan.scan_dna(seq,mat_list,bg,th_lo_list,1)
+        vals4=[]; vals5=[]
+        for j in range(len(models)):
+            fw=res[2*j]; rv=res[2*j+1]
+            n4=len(fw)+len(rv)
+            n5=sum(1 for m in fw if m.score>=th_hi_list[2*j]) + sum(1 for m in rv if m.score>=th_hi_list[2*j+1])
+            vals4.append(n4); vals5.append(n5)
+        vals=vals4+vals5
+        out.write(s+'\\t'+name+'\\t'+str(len(seq))+'\\t'+'\\t'.join(str(v) for v in vals)+'\\n')
+        if (i+1)%5000==0:
+            print(s,i+1,'/',len(seqs),'elapsed',round(time.time()-t0,1),flush=True)
+    out.close(); print(s,'done',len(seqs),'elapsed',round(time.time()-t0,1))
+PY
+python3 scan_peak_motifs_opt2.py"

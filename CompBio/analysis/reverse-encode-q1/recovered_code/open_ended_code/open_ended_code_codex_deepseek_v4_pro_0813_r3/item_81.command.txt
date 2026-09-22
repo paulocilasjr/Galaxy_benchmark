@@ -1,0 +1,60 @@
+/bin/bash -c "cat > score_bigwigs_v2.py <<'PY'
+import json, pyBigWig, math, concurrent.futures, time, sys, socket, os
+socket.setdefaulttimeout(15)
+# Track chr10 10kb bins
+track=[]
+with open('track.tsv') as f:
+    for line in f:
+        c,s,e,v=line.split()
+        if c=='chr10': track.append(float(v))
+NB=len(track)
+meanv=sum(track)/NB
+sdv=math.sqrt(sum((x-meanv)**2 for x in track)/NB)
+def rank(a):
+    order=sorted(range(len(a)), key=lambda i:a[i]); r=[0]*len(a)
+    for rank,i in enumerate(order): r[i]=rank
+    return r
+tr=rank(track)
+
+def score(item):
+    try:
+        bw=pyBigWig.open(item['cloud_metadata']['url'])
+        st=bw.stats('chr10',0,bw.chroms('chr10'),type='mean',nBins=NB)
+        st=[0.0 if x is None else x for x in st]
+        means=sum(st)/NB
+        sds=math.sqrt(sum((x-means)**2 for x in st)/NB)
+        if sds==0: pear=0.0
+        else:
+            cov=sum((a-meanv)*(b-means) for a,b in zip(track,st))/NB
+            pear=cov/(sdv*sds)
+        sr=rank(st); mtr=sum(tr)/NB; msr=sum(sr)/NB
+        sdtr=math.sqrt(sum((x-mtr)**2 for x in tr)/NB); sdsr=math.sqrt(sum((x-msr)**2 for x in sr)/NB)
+        spear=sum((x-mtr)*(y-msr) for x,y in zip(tr,sr))/(sdtr*sdsr) if sdtr and sdsr else 0.0
+        return (item,pear,spear,None)
+    except Exception as e:
+        return (item,None,None,repr(e))
+
+if __name__=='__main__':
+    data=json.load(open('dnase_v1_bigwigs.json'))['@graph']
+    cand=[x for x in data if (x.get('analysis_step_version') or {}).get('name')=='dnase-peak-calling-step-v-1-0']
+    if len(sys.argv)>1: cand=cand[:int(sys.argv[1])]
+    print('scoring',len(cand),'NB',NB,flush=True)
+    t=time.time(); results=[]; done=0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+        futs={ex.submit(score,x):x for x in cand}
+        for fut in concurrent.futures.as_completed(futs):
+            try:
+                r=fut.result(timeout=25)
+            except Exception as e:
+                item=futs[fut]; r=(item,None,None,'timeout')
+            results.append(r); done+=1
+            if done%100==0: print('done',done,'elapsed',round(time.time()-t,1),flush=True)
+    good=[r for r in results if r[1] is not None]
+    good.sort(key=lambda r:r[2] if r[2] is not None else -999, reverse=True)
+    print('good',len(good),'bad',len(results)-len(good))
+    for r in good[:50]:
+        item,pear,spear,e=r
+        print(item['dataset'], item['accession'], item.get('biological_replicates'), item.get('technical_replicates'), round(pear,3), round(spear,3))
+    json.dump([{'dataset':r[0]['dataset'],'accession':r[0]['accession'],'pear':r[1],'spear':r[2],'error':r[3]} for r in results], open('scores_v2.json','w'))
+PY
+python3 score_bigwigs_v2.py 50"

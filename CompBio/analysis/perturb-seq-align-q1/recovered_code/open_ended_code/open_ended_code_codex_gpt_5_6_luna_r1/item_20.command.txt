@@ -1,0 +1,65 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, numpy as np, gc
+from scipy import sparse
+from scipy.stats import rankdata
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+
+def aggregate(f):
+ print('loading',f,flush=True)
+ with h5py.File(root+'/'+f,'r') as h:
+  g=h['X']; x=sparse.csc_matrix((g['data'][()],g['indices'][()],g['indptr'][()]),shape=tuple(g.attrs['shape']))
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var']['_index'][()]],object)
+  cats=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][()]]
+  gids=np.asarray([cats[z] for z in h['obs/guide/codes'][()]],object)
+ groups=np.unique(gids)
+ codes=np.searchsorted(groups,gids)
+ M=np.zeros((len(gids),len(groups)),dtype=np.int8); M[np.arange(len(gids)),codes]=1
+ lib=np.asarray(x.sum(axis=1)).ravel().astype(float)
+ sums=np.asarray(x.T.dot(M)) # genes x groups
+ print('aggregated',x.shape,'groups',len(groups),flush=True)
+ del x,M; gc.collect()
+ den=np.bincount(codes,weights=lib)
+ norm=sums/den[None,:]*1e6
+ nt=np.flatnonzero(np.char.startswith(groups.astype(str),'NT-'))
+ ctrl=(sums[:,nt].sum(axis=1)/(den[nt].sum())*1e6)
+ pert=[i for i,g in enumerate(groups) if not str(g).startswith('NT-')]
+ lfc=np.log2((norm[:,pert].T+0.1)/(ctrl+0.1)) # pert x genes
+ pgroups=groups[pert]
+ return genes,pgroups,lfc,ctrl,norm[:,pert].T
+rg,RLG,RL,RC,RN=aggregate('perturb.seq.align.q1.ref.h5ad')
+qg,QG,QL,QC,QN=aggregate('perturb.seq.align.q1.query.h5ad')
+rg=np.array(RLG); qg=np.array(QG)
+qset=set(qg.tolist()); common=[g for g in rg if g in qset]
+rmap={g:i for i,g in enumerate(rg)}; qmap={g:i for i,g in enumerate(qg)}
+ridx=np.array([rmap[g] for g in common]); qidxa=np.array([qmap[g] for g in common])
+print('common genes',len(common),flush=True)
+
+def corrmat(A,B,ix):
+ a=A[:,ix].astype(float); b=B[:,ix].astype(float)
+ a-=a.mean(1,keepdims=True); b-=b.mean(1,keepdims=True)
+ a/=np.linalg.norm(a,axis=1,keepdims=True)+1e-12; b/=np.linalg.norm(b,axis=1,keepdims=True)+1e-12
+ return b@a.T
+
+def rankcorr(A,B,ix):
+ a=np.apply_along_axis(rankdata,1,A[:,ix]); b=np.apply_along_axis(rankdata,1,B[:,ix])
+ a-=a.mean(1,keepdims=True); b-=b.mean(1,keepdims=True)
+ a/=np.linalg.norm(a,axis=1,keepdims=True)+1e-12; b/=np.linalg.norm(b,axis=1,keepdims=True)+1e-12
+ return b@a.T
+A=RL[:,ridx]; B=QL[:,qidxa]
+allvar=np.var(np.vstack([A,B]),axis=0)
+for ng in [100,300,1000,3000,6000,10000,len(common)]:
+ ix=np.argsort(allvar)[-ng:]
+ sim=corrmat(A,B,ix)
+ print('\\nPSEUDOBULK Pearson var top',ng)
+ for target in ['PABPC1','NUDT21','LEO1']:
+  ref=[i for i,g in enumerate(rg) if g.startswith(target+'-')][0]
+  best=np.argsort(sim[:,ref])[::-1][:10]
+  print(rg[ref],[(str(qg[i]),round(float(sim[i,ref]),3)) for i in best])
+for desc,ix in [('var3000',np.argsort(allvar)[-3000:]),('all',np.arange(len(common)))]:
+ for name,sim in [('pearson',corrmat(A,B,ix)),('spearman',rankcorr(A,B,ix))]:
+  print('\\n',desc,name)
+  for target in ['PABPC1','NUDT21','LEO1']:
+   ref=[i for i,g in enumerate(rg) if g.startswith(target+'-')][0]
+   best=np.argsort(sim[:,ref])[::-1][:15]
+   print(rg[ref],[(str(qg[i]),round(float(sim[i,ref]),3)) for i in best])
+PY"

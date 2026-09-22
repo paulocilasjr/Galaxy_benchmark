@@ -1,0 +1,43 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import json, requests, sys, subprocess, csv, io
+# build candidate list via bcftools
+cmd = \"bcftools view -v snps q1.raw.vcf -Ou | bcftools query -f '%CHROM\\\\t%POS\\\\t%REF\\\\t%ALT\\\\t%QUAL[\\\\t%DP\\\\t%AD\\\\t%GT]\\\\n'\"
+out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+variants=[]
+for line in out.splitlines():
+    f=line.split('\\t')
+    if len(f)<8: continue
+    chrom,pos,ref,alt,qual,dp,ad,gt=f[:8]
+    dp=int(dp); adp=ad.split(',')
+    af=int(adp[-1])/dp if dp else 0
+    # include SNVs high confidence homo alt, or all high-quality SNVs
+    if gt=='1/1' and dp>=8 and af>=0.8:
+        variants.append((chrom,pos,ref,alt,qual,dp,ad,gt,af))
+    # also include heterozygous stop maybe? no
+print('candidates',len(variants), file=sys.stderr)
+# POST in batches of 200
+headers={'Content-Type':'application/json','Accept':'application/json'}
+records=[]
+for i in range(0,len(variants),200):
+    chunk=variants[i:i+200]
+    varlist=[f\"{c} {p} . {r} {a} . . .\" for c,p,r,a,_,_,_,_,_ in chunk]
+    r=requests.post('https://rest.ensembl.org/vep/homo_sapiens/region?canonical=1&mane=1&hgvs=1&numbers=1&LOEUF=1&LoF=1&pick=1', headers=headers, data=json.dumps({'variants':varlist}), timeout=120)
+    print('batch',i//200,r.status_code, file=sys.stderr)
+    if r.status_code==200:
+        records.extend(r.json())
+    else:
+        print(r.text[:500], file=sys.stderr)
+        break
+# write full json
+json.dump(records, open('vep_candidates.json','w'))
+# summarize consequences
+for rec in records:
+    tc=rec.get('transcript_consequences',[])
+    if not tc:
+        continue
+    t=tc[0]
+    cons=t.get('consequence_terms',[])
+    gene=t.get('gene_symbol') or rec.get('gene_symbol') or ''
+    print(rec.get('input'), cons, gene, t.get('amino_acids'), t.get('codons'), t.get('protein_start'), t.get('protein_end'), t.get('transcript_id'), t.get('biotype'), t.get('canonical'), t.get('mane_select'), t.get('loeuf'))
+PY
+python3 [REDACTED LOCAL PATH]"

@@ -1,0 +1,53 @@
+/bin/bash -lc "cat > extract_profiles2.R <<'EOF'
+suppressMessages({library(Seurat); library(Matrix)})
+con <- pipe('gzip -dc CPA_K562.Rds.gz | gzip -dc','rb')
+obj <- readRDS(con)
+close(con)
+rna <- obj@assays"'$RNA
+cm <- slot(rna@cells, '"'.Data')
+fm <- slot(rna@features, '.Data')
+meta <- obj@meta.data
+targets <- as.character(meta[['target_gene']])
+guides <- as.character(meta[['guide']])
+feature_names <- rownames(fm)
+cell_names <- rownames(cm)
+nlayers <- length(rna@layers)
+ut <- names(table(targets))
+ug <- names(table(guides))
+# accumulators dense numeric vectors, one per feature
+target_sum <- matrix(0, nrow=length(feature_names), ncol=length(ut), dimnames=list(feature_names, ut))
+target_n <- setNames(numeric(length(ut)), ut)
+guide_sum <- matrix(0, nrow=length(feature_names), ncol=length(ug), dimnames=list(feature_names, ug))
+guide_n <- setNames(numeric(length(ug)), ug)
+for (k in seq_len(nlayers)) {
+  cat('layer', k, '\\n')
+  L <- rna@layers[[k]]
+  f_idx <- which(fm[,k])
+  c_idx <- which(cm[,k])
+  if (ncol(L) "'!= length(c_idx) || nrow(L) != length(f_idx)) stop('"'dim mismatch')
+  lib <- Matrix::colSums(L)
+  lib[lib == 0] <- 1
+  ln <- log1p(L %*% Diagonal(x = 1e6/lib))
+  lt <- targets[c_idx]
+  lg <- guides[c_idx]
+  for (tg in ut) {
+    idx <- which(lt == tg)
+    if (length(idx) == 0) next
+    target_sum[, tg] <- target_sum[, tg] + Matrix::rowSums(ln[, idx, drop=FALSE])
+    target_n[tg] <- target_n[tg] + length(idx)
+  }
+  for (g in ug) {
+    idx <- which(lg == g)
+    if (length(idx) == 0) next
+    guide_sum[, g] <- guide_sum[, g] + Matrix::rowSums(ln[, idx, drop=FALSE])
+    guide_n[g] <- guide_n[g] + length(idx)
+  }
+  rm(ln, L); gc()
+}
+target_profiles <- sweep(target_sum, 2, target_n, '/')
+guide_profiles <- sweep(guide_sum, 2, guide_n, '/')
+saveRDS(target_profiles, 'k562_target_profiles.rds')
+saveRDS(guide_profiles, 'k562_guide_profiles.rds')
+cat('saved target dims', dim(target_profiles), 'guide dims', dim(guide_profiles), '\\n')
+EOF
+Rscript extract_profiles2.R > extract_profiles2.out 2>&1"

@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+# load metadata and challenge matrix
+ann=pd.read_csv('GSE255742_annotations.tsv.gz',sep='\\t')
+# cell types in challenge: merge split labels; omit DiMes, HyTh
+merge={'epidermis_1':'epidermis','epidermis_2':'epidermis','neural_like1':'neural_like','neural_like2':'neural_like','epidermal_neural1':'epidermal_neural','epidermal_neural2':'epidermal_neural'}
+ann['grp']=ann.cell_type.replace(merge)
+# use only cells in desired groups, maintain count matrix header order
+wanted=['endoderm','endostyle_csg','epidermal_neural','epidermis','mesodermal_notochord','muscular_somites','neural','neural_like','putative_neuro_endo','somite','tailbud','tailbud_neural']
+ctmap=dict(zip(ann.cell,ann.grp))
+# read header to establish cell order; small read
+head=pd.read_csv('GSE255742_counts.tsv.gz',sep='\\t',nrows=0)
+cells=head.columns.tolist()
+groups=np.array([ctmap.get(c,'') for c in cells])
+print('cells',len(cells),'desired',[(g,int((groups==g).sum())) for g in wanted])
+# chunk aggregation
+out=[]; t=time.time(); nrows=0
+for k,ch in enumerate(pd.read_csv('GSE255742_counts.tsv.gz',sep='\\t',index_col=0,chunksize=500)):
+    a=ch.to_numpy(dtype=np.float64,copy=False)
+    vals=np.column_stack([a[:,groups==g].sum(axis=1) for g in wanted])
+    out.append(vals); nrows+=len(ch)
+    if (k+1)%10==0: print('chunk',k+1,'rows',nrows,'sec',round(time.time()-t,1),flush=True)
+agg=np.vstack(out); genes=pd.concat([ch.index for ch in []]) if False else None
+# Need indexes: rerun? collected index in loop
+# Oops preserve index separately above; handled below via new processing not possible; use row order and read all index cheaply
+idx=pd.read_csv('GSE255742_counts.tsv.gz',sep='\\t',usecols=[0],skiprows=1,header=None,names=['gene'])['gene'].to_numpy()
+print('agg shape',agg.shape,'idx',len(idx),'time',time.time()-t)
+# normalize CPM (raw source)
+sums=agg.sum(axis=0); cpm=agg/sums*1e6
+x=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+lookup={g:i for i,g in enumerate(idx)}
+common=[g for g in x.index if g in lookup]
+ix=np.array([lookup[g] for g in common]); a=x.loc[common,wanted].to_numpy()
+# compare challenge to ref correlations, and all permutations best assignment
+from scipy.stats import spearmanr
+for transname,aa,bb in [('rawCPM',a,cpm[ix]),('log',np.log1p(a),np.log1p(cpm[ix])),('rank',a.argsort(0).argsort(0),cpm[ix].argsort(0).argsort(0))]:
+ cor=np.corrcoef(aa.T,bb.T)[:12,12:]
+ print('\\n',transname,'corr observed label vs ref')
+ print(pd.DataFrame(cor,index=wanted,columns=wanted).round(3).to_string())
+ best=cor.argmax(axis=1)
+ print('best',[(wanted[i],wanted[j],round(cor[i,j],3)) for i,j in enumerate(best)])
+ # best one-to-one assignment
+ from scipy.optimize import linear_sum_assignment
+ ri,cj=linear_sum_assignment(-cor)
+ print('assign',[(wanted[i],wanted[j],round(cor[i,j],3)) for i,j in zip(ri,cj)],'sum',cor[ri,cj].sum())
+PY"

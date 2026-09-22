@@ -1,0 +1,55 @@
+/bin/bash -lc "cat > build_rna_sigs.py <<'PY'
+import gzip, glob, os, re, numpy as np, collections
+# Parse RNA featurecount files for neotenic only
+files=glob.glob('rna/GSM*neotenic*featurecounts.txt.gz')
+tissue_files=collections.defaultdict(list)
+for f in files:
+    base=os.path.basename(f)
+    m=re.match(r'GSM\\d+_B\\d+_neotenic_(.+)_featurecounts\\.txt\\.gz',base)
+    if m:
+        tissue=m.group(1).replace('_',' ')
+        tissue_files[tissue].append(f)
+# tissue canonical mapping
+canon={'Cloacal chamber':'Cloaca','Fore limb':'Limb','Hind limb':'Limb'}
+tissues=[]
+for t in sorted(tissue_files):
+    c=canon.get(t,t)
+    if c not in tissues: tissues.append(c)
+print('RNA tissues',tissues)
+# Read all counts, sum batches per tissue and duplicate for limb? combine fore/hind average?
+# Store counts per file keyed by canonical; combine sum for all files in canonical group
+counts=collections.defaultdict(dict); genes_order=None
+for t,files in tissue_files.items():
+    c=canon.get(t,t)
+    for f in files:
+        with gzip.open(f,'rt') as fh:
+            for line in fh:
+                if line.startswith('#'): continue
+                parts=line.rstrip('\\n').split('\\t')
+                if len(parts)<7: continue
+                if parts[0]=='Geneid': continue
+                geneid=parts[0]
+                sym=geneid.split('_')[-1].upper()
+                count=int(parts[6])
+                counts[c][sym]=counts[c].get(sym,0)+count
+# For Limb, if both fore/hind present sum
+allgenes=sorted(set(g for c in counts.values() for g in c))
+print('genes',len(allgenes))
+T=tissues
+M=np.zeros((len(T),len(allgenes)),dtype=np.float64)
+gidx={g:i for i,g in enumerate(allgenes)}
+for ti,t in enumerate(T):
+    for g,v in counts[t].items(): M[ti,gidx[g]]=v
+# CPM and log
+lib=M.sum(axis=1,keepdims=True)
+cpM=M/lib*1e6
+L=np.log2(cpM+1)
+mu=L.mean(axis=0,keepdims=True); sd=L.std(axis=0,keepdims=True)+1e-9
+Z=(L-mu)/sd
+np.savez_compressed('rna_matrix.npz', L=L, Z=Z, genes=np.array(allgenes,dtype=str), tissues=np.array(T,dtype=str))
+print('saved',L.shape)
+for ti,t in enumerate(T):
+ top=np.argsort(Z[ti])[::-1][:50]
+ print(t, [allgenes[i] for i in top[:20]])
+PY
+python3 build_rna_sigs.py"

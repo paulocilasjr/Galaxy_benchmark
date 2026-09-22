@@ -1,0 +1,35 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, snapatac2 as snap
+# get snap common top (manually recompute)
+configs={}
+for b in [500,1000,5000,10000]:
+    if b==500:
+        adata=snap.read('atac.snap.h5ad'); names=np.array(adata.obs_names); s=np.array(adata.obs['doublet_score'])
+    else:
+        adata=snap.read(f'atac.snap.bin{b}.h5ad'); names=np.array(adata.obs_names); s=np.array(adata.obs['doublet_score'])
+    top=set(names[np.argsort(-s)[:50]]); configs[b]=top
+ap=snap.read('atac_peaks_scrub.h5ad'); names=np.array(ap.obs_names); s=np.array(ap.obs['doublet_score']); configs['peak']=set(names[np.argsort(-s)[:50]])
+snap_common=set.intersection(*configs.values())
+# load scrublet all-seed predicted sets
+for tag in ['peak','tile']:
+ sets=[]
+ for seed in range(3):
+  d=np.loadtxt(f'scrub_{tag}_seed{seed}.txt',dtype=str)
+  sets.append(set(d[d[:,2].astype(int)==1,0]))
+ configs[tag+'_all']=sets[0]&sets[1]&sets[2]
+# candidates in snap_common and predicted by at least one of peak_all/tile_all or both
+peak_all=configs['peak_all']; tile_all=configs['tile_all']
+# entropy
+at=snap.read('atac.snap.h5ad'); names_at=np.array(at.obs_names); leiden_raw=np.array(at.obs['leiden']); uniq,leiden=np.unique(leiden_raw,return_inverse=True); D=at.obsp['distances'].tocsr()
+def entropy(b):
+ j=np.where(names_at==b)[0][0]; inds=D.indices[D.indptr[j]:D.indptr[j+1]]; labs=leiden[inds]; counts=np.bincount(labs,minlength=len(uniq)); p=counts/counts.sum(); return -(p[p>0]*np.log(p[p>0])).sum()
+for b in snap_common:
+ flags=(b in peak_all, b in tile_all, b in peak_all or b in tile_all)
+ if flags[2]:
+  print(b, 'peak_all',flags[0],'tile_all',flags[1],'entropy',round(entropy(b),3))
+print('total snap_common',len(snap_common))
+# Also cells predicted by both all-seed lists regardless of snap_common
+both=peak_all&tile_all
+print('both_all',len(both),both)
+for b in both: print('both',b,'entropy',round(entropy(b),3),'snap_common',b in snap_common)
+PY"

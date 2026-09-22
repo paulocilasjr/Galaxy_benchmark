@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, collections, numpy as np
+# Load chr1 fragments, respecting BED half-open endpoint convention for now
+s=[]; e=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+ for line in f:
+  a=line.split('\\t')
+  if a[0]=='chr1': s.append(int(a[1])); e.append(int(a[2]))
+s=np.array(s); e=np.array(e)
+# NCBI RefSeq TSS, unique positions on chr1
+T=set()
+with gzip.open('ncbiRefSeq.txt.gz','rt') as f:
+ for line in f:
+  a=line.rstrip('\\n').split('\\t')
+  if len(a)<5 or a[2]"'!='"'chr1': continue
+  strand=a[3]; T.add(int(a[4]) if strand=='+' else int(a[5]))
+t=np.array(sorted(T))
+print('frags',len(s),'unique TSS',len(t))
+# aggregate hist relative positions around TSS using sorted endpoint arrays
+# use searchsorted and loop tss, do np.bincount for candidates
+for win in [50,100,200,500]:
+ print('window',win)
+ rows=[]
+ rel=np.arange(-win,win+1)
+ for sh5 in range(-10,11):
+  # sum starts with shift 5 only
+  h=np.zeros(2*win+1,dtype=np.int64)
+  for p in t:
+   x=s+sh5-p
+   q=x[(x>=-win)&(x<=win)]
+   h += np.bincount(q+win,minlength=2*win+1)
+  # use central +-5 against +/- flanks maybe
+  central=h[win-5:win+6].sum(); flank=h[:max(1,win//2)].sum()+h[min(2*win+1,win+win//2+1):].sum()
+  rows.append((central, h[win], sh5, h.max(), h.argmax()-win, h.sum()))
+ print('start by central', sorted(rows,reverse=True)[:8])
+ rows=[]
+ for sh3 in range(-10,11):
+  h=np.zeros(2*win+1,dtype=np.int64)
+  for p in t:
+   x=e+sh3-p
+   q=x[(x>=-win)&(x<=win)]
+   h += np.bincount(q+win,minlength=2*win+1)
+  rows.append((h[win-5:win+6].sum(), h[win], sh3,h.max(),h.argmax()-win,h.sum()))
+ print('end by central',sorted(rows,reverse=True)[:8])
+PY"

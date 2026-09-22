@@ -1,0 +1,57 @@
+/bin/bash -c "cd tf_protos && python - <<'PY'
+import sys, struct, snappy
+sys.path.insert(0,'.')
+import tensor_bundle_pb2 as tb
+
+data=open('../enformer_saved/variables/variables.index','rb').read(); footer=data[-48:]
+def rv(buf,pos):
+ s=0;r=0
+ while True:
+  b=buf[pos];pos+=1;r|=(b&127)<<s
+  if not b&128:return r,pos
+  s+=7
+pos=0; _,pos=rv(footer,pos); _,pos=rv(footer,pos); idx_off,pos=rv(footer,pos); idx_size,pos=rv(footer,pos)
+def parse_block(c):
+ nr=struct.unpack('<I',c[-4:])[0]; rb=len(c)-4-4*nr; pos=0; prev=b''; out=[]
+ while pos<rb:
+  sh,pos=rv(c,pos); ns,pos=rv(c,pos); vl,pos=rv(c,pos)
+  k=prev[:sh]+c[pos:pos+ns]; pos+=ns; v=c[pos:pos+vl]; pos+=vl; prev=k; out.append((k,v))
+ return out
+idx=parse_block(data[idx_off:idx_off+idx_size]); bh=idx[0][1]; p=0; off,p=rv(bh,p); size,p=rv(bh,p)
+stored=data[off:off+size]; tr=data[off+size:off+size+5]; content=snappy.decompress(stored) if tr[0]==1 else stored
+entries=parse_block(content)
+def numel(sh):
+ n=1
+ for d in sh.dim:n*=d.size
+ return n
+def trainable(name):
+ return not (name.startswith('_CHECKPOINTABLE_OBJECT_GRAPH') or name.startswith('save_counter') or '/moving_mean/' in name or '/moving_variance/' in name)
+groups={}
+counts={}
+for key,val in entries:
+ name=key.decode(); 
+ if not name or not trainable(name): continue
+ be=tb.BundleEntryProto(); be.ParseFromString(val); n=numel(be.shape)
+ if name.startswith('model/_stem/'): g='stem'
+ elif name.startswith('model/_downres/'): g='conv_tower'
+ elif name.startswith('model/_transformer/'): g='transformer'
+ elif name.startswith('model/_final_pointwise/'): g='final_pointwise'
+ elif name.startswith('model/_heads/'): g='heads'
+ else: g='other'; print('UNK',name,n)
+ groups[g]=groups.get(g,0)+n; counts[g]=counts.get(g,0)+1
+print(groups)
+print(counts)
+print('total',sum(groups.values()))
+# print stem entries
+for key,val in entries:
+ name=key.decode();
+ if not trainable(name) or not name.startswith('model/_stem/'): continue
+ be=tb.BundleEntryProto(); be.ParseFromString(val); n=numel(be.shape)
+ print(n, name)
+# heads entries
+for key,val in entries:
+ name=key.decode();
+ if not trainable(name) or not name.startswith('model/_heads/'): continue
+ be=tb.BundleEntryProto(); be.ParseFromString(val); n=numel(be.shape)
+ print(n, name)
+PY"

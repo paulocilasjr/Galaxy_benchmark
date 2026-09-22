@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b519c57603201eccf8",
+  "history_id": "bbd44e69cb8906b5f662138ef2d3f2d4",
+  "tool_id": "lung_h5ad_obs_diag_1786769536",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-15T04:52:23.940189",
+  "update_time": "2026-08-15T04:52:55.061706",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > diag.py <<'PYCODE'\nimport sys, json\nfrom collections import Counter\nimport h5py\npath=sys.argv[1]\nout=sys.argv[2]\npatients={'Patient_005','Patient_006','Patient_007','Patient_018','Patient_040'}\n\ndef decode(x):\n    if isinstance(x, bytes):\n        return x.decode('utf-8', 'replace')\n    return str(x)\n\ndef read_col(obs, name):\n    obj=obs[name]\n    if isinstance(obj, h5py.Dataset):\n        return [decode(x) for x in obj[()]]\n    if isinstance(obj, h5py.Group):\n        keys=set(obj.keys())\n        if {'codes','categories'} <= keys:\n            codes=obj['codes'][()]\n            cats=[decode(x) for x in obj['categories'][()]]\n            vals=[]\n            for c in codes:\n                ci=int(c)\n                vals.append(None if ci < 0 else cats[ci])\n            return vals\n        if {'values'} <= keys:\n            return [decode(x) for x in obj['values'][()]]\n    raise ValueError('unsupported column '+name+' type '+str(type(obj)))\n\nwith h5py.File(path,'r') as f:\n    obs=f['obs']\n    colnames=[]\n    if '_index' in obs:\n        n=len(obs['_index'])\n    else:\n        first=next(iter(obs.keys()))\n        n=len(read_col(obs, first))\n    for k in obs.keys():\n        if k == '_index':\n            continue\n        try:\n            vals=read_col(obs,k)\n            if len(vals)==n:\n                colnames.append(k)\n        except Exception:\n            pass\n    summary=[]\n    for k in colnames:\n        vals=read_col(obs,k)\n        uniq=Counter(v for v in vals if v is not None)\n        low=[str(x).lower() for x in uniq.keys()]\n        interesting = any(term in k.lower() for term in ['patient','sample','tumor','type','cell','immune','malig','subtype','hist']) or any(term in ' '.join(low[:200]) for term in ['patient_005','patient_006','patient_007','patient_018','patient_040','lusc','luad','dendritic','malignant','basal','immune'])\n        if interesting:\n            summary.append({'column':k,'n_unique':len(uniq),'top':uniq.most_common(30)})\n    # candidate per-patient cross tabs for columns likely sample/patient and cell type\n    vals_by_col={k:read_col(obs,k) for k in colnames}\n    sample_cols=[k for k,v in vals_by_col.items() if patients & set(v)]\n    cell_cols=[k for k,v in vals_by_col.items() if any('dendritic' in str(x).lower() or 'basal' in str(x).lower() or 'malignant' in str(x).lower() for x in set(v))]\n    tumor_cols=[k for k,v in vals_by_col.items() if {'LUSC','LUAD'} & set(v)]\n    with open(out,'w') as fh:\n        fh.write('n_obs\\t%d\\n' % n)\n        fh.write('sample_cols\\t%s\\n' % ','.join(sample_cols))\n        fh.write('cell_cols\\t%s\\n' % ','.join(cell_cols))\n        fh.write('tumor_cols\\t%s\\n' % ','.join(tumor_cols))\n        fh.write('interesting_columns_json\\t%s\\n' % json.dumps(summary, sort_keys=True))\n        for sc in sample_cols:\n          for tc in tumor_cols:\n            pairs=Counter(zip(vals_by_col[sc], vals_by_col[tc]))\n            rows=[(a,b,c) for (a,b),c in pairs.items() if a in patients]\n            fh.write('sample_tumor\\t%s\\t%s\\t%s\\n' % (sc,tc,json.dumps(rows, sort_keys=True)))\n        for sc in sample_cols:\n          for cc in cell_cols:\n            ct=Counter((s,c) for s,c in zip(vals_by_col[sc], vals_by_col[cc]) if s in patients)\n            rows=[(s,c,nc) for (s,c),nc in ct.items() if 'dendritic' in str(c).lower() or 'basal' in str(c).lower() or 'malignant' in str(c).lower()]\n            fh.write('sample_cell\\t%s\\t%s\\t%s\\n' % (sc,cc,json.dumps(rows, sort_keys=True)))\nPYCODE\npython diag.py /jetstream2/scratch/main/jobs/79147675/inputs/dataset_c95cbee0-c584-452a-a7a2-728184049fe0.dat diagnostic.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "h5ad": {
+      "id": "f9cad7b01a47213517e10d7c71faa2a8",
+      "src": "hda",
+      "uuid": "c95cbee0-c584-452a-a7a2-728184049fe0"
+    }
+  },
+  "outputs": {
+    "diagnostic": {
+      "id": "f9cad7b01a4721352ecffef64fc2c745",
+      "src": "hda",
+      "uuid": "32d1cf9f-6398-4ef8-bb64-535256af15f4"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+from pathlib import Path
+p=Path('extracted')
+features=pd.read_csv(p/'filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+barcodes=pd.read_csv(p/'filtered_feature_bc_matrix/barcodes.tsv.gz',header=None,names=['barcode'])
+calls=pd.read_csv(p/'protospacer_calls_per_cell.csv')
+ref=pd.read_csv(p/'feature_reference.csv')
+X=mmread(p/'filtered_feature_bc_matrix/matrix.mtx.gz').tocsr()
+print('X',X.shape,'nnz',X.nnz,'dtype',X.dtype)
+print('features',len(features),'barcodes',len(barcodes),'calls',len(calls),'ref',len(ref))
+print('barcode alignment',np.array_equal(barcodes.barcode.values,calls.cell_barcode.values))
+print('calls cols',calls.columns.tolist())
+print('num_features unique',calls.num_features.value_counts().sort_index().to_dict())
+# map
+m=ref.set_index('id').target_gene_name.to_dict()
+calls['target']=calls.feature_call.map(m)
+# panel first 20
+panel=features.name.iloc[:20].tolist()
+ix=np.arange(20)
+counts=np.asarray(X.sum(axis=0)).ravel()
+# log normalized counts per 10k, panel score log1p normalized individual genes, sum (equal normalized genes)
+lib=counts
+norm=X.multiply(1e4/np.maximum(lib,1))
+lognorm=norm.copy(); lognorm.data=np.log1p(lognorm.data)
+panel_score=np.asarray(lognorm[ix].mean(axis=0)).ravel()
+# log counts of panel? mean log normalized
+# raw panel total normalized
+panel_total=np.asarray(norm[ix].sum(axis=0)).ravel()
+# all guides
+out=[]
+for gid,g in calls.groupby('feature_call',sort=False):
+ idx=g.index.to_numpy()
+ out.append([gid,m.get(gid),len(idx),lib[idx].mean(),np.median(lib[idx]),panel_score[idx].mean(),np.median(panel_score[idx]),panel_total[idx].mean(),np.mean(panel_score[idx]>0)])
+out=pd.DataFrame(out,columns=['guide','target','n','lib_mean','lib_med','score_mean','score_med','panel_norm_mean','score_detect_frac'])
+print(out.to_string(index=False,float_format=lambda x:f'{x:.4f}'))
+print('panel',panel)
+print('control score mean',out.loc[out.target=='Non-Targeting','score_mean'].agg(['mean','std','min','max']).to_dict())
+PY"

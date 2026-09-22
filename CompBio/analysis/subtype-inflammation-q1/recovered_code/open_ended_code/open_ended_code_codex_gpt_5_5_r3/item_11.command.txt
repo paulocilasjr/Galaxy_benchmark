@@ -1,0 +1,90 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:
+    next(f)
+    genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+idx={g:i for i,g in enumerate(genes)}
+cell_markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','GJA1'],
+'microglial cell':['P2RY12','TMEM119','CX3CR1','AIF1','C1QA','C1QB','C1QC','ITGAM'],
+'RPE cell':['RPE65','BEST1','PMEL','TYR','MITF','RDH5','LRAT'],
+'cone cell':['OPN1LW','OPN1MW','OPN1SW','GNAT2','ARR3','PDE6H','GNGT2'],
+'rod cell':['RHO','NRL','GNAT1','PDE6A','PDE6B','SAG','CNGA1','RCVRN'],
+'horizontal cell':['ONECUT1','ONECUT2','LHX1','CALB1','PROX1'],
+'bipolar cell':['VSX2','GRM6','TRPM1','PRKCA','CABP5','OTX2'],
+'RGC':['RBPMS','THY1','SNCG','NEFL','NEFM','POU4F1'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','CD2','CD7'],
+'macrophage':['CD68','CD14','LYZ','FCGR3A','MSR1','MRC1','LST1'],
+'Schwann cell':['MPZ','MBP','SOX10','PLP1','S100B','PMP22'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','NOTCH3','ACTA2'],
+'B cell':['MS4A1','CD79A','CD79B','CD74','BANK1','CD19'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','VIM','CLU','CA2','APOE'],
+'endothelial cell':['PECAM1','VWF','CLDN5','KDR','FLT1','ESAM'],
+}
+sets={
+'interferon':['ISG15','IFI6','IFI27','IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','OASL','STAT1','IRF7','RSAD2','XAF1','DDX58','IFIH1'],
+'chemokine':['CXCL10','CXCL9','CCL2','CCL3','CCL4','CCL5','CXCL8'],
+'mhc':['HLA-DRA','HLA-DRB1','HLA-DPA1','HLA-DPB1','HLA-A','HLA-B','HLA-C','B2M'],
+'nfkb':['TNF','IL1B','NFKBIA','NFKBIZ','JUNB','FOS','SOCS3'],
+}
+all_infl=sorted(set(sum(sets.values(),[])))
+all_mark=sorted(set(sum(cell_markers.values(),[])))
+needed=sorted(set(all_infl+all_mark))
+present=[g for g in needed if g in idx]
+pidx={g:i for i,g in enumerate(present)}
+cts=list(cell_markers)
+labels_by_eye=[]; data=[]; totals=[]
+for eye,path in enumerate(['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz'],1):
+    X=mmread(path).tocsr()
+    total=np.asarray(X.sum(axis=0)).ravel()
+    sub=X[[idx[g] for g in present],:].tocsc()
+    vals=sub.toarray().astype(float)
+    log=np.log1p(vals/total[None,:]*1e4)
+    marker_scores=[]
+    for ct in cts:
+        inds=[pidx[g] for g in cell_markers[ct] if g in pidx]
+        marker_scores.append(log[inds].mean(0))
+    marker_scores=np.vstack(marker_scores)
+    lab_idx=marker_scores.argmax(0)
+    labels=np.array(cts)[lab_idx]
+    labels_by_eye.append(labels)
+    data.append((X,total,vals,log))
+
+# compute per ct eye1-eye2 delta of mean log score for each inflammation set; only ct n>=20 each
+print('ct n1 n2 delta_all delta_ifn delta_chem delta_mhc top_up_genes')
+for ct in cts:
+    mask1=labels_by_eye[0]==ct; mask2=labels_by_eye[1]==ct
+    if mask1.sum()<20 or mask2.sum()<20: continue
+    row=[ct, str(mask1.sum()), str(mask2.sum())]
+    deltas=[]
+    for name,gs in [('all',all_infl),('ifn',sets['interferon']),('chem',sets['chemokine']),('mhc',sets['mhc'])]:
+        inds=[pidx[g] for g in gs if g in pidx]
+        d=data[0][3][inds][:,mask1].mean() - data[1][3][inds][:,mask2].mean()
+        deltas.append(d)
+    # pseudobulk logFC for inflam genes in ct, using sums normalized by total UMIs in selected cells
+    X1,t1,_,_=data[0]; X2,t2,_,_=data[1]
+    tot1=t1[mask1].sum(); tot2=t2[mask2].sum()
+    lfc=[]
+    for g in all_infl:
+        if g not in idx: continue
+        c1=np.asarray(X1[idx[g],mask1].sum()).item(); c2=np.asarray(X2[idx[g],mask2].sum()).item()
+        e1=(c1+0.5)/(tot1+1)*1e6; e2=(c2+0.5)/(tot2+1)*1e6
+        lfc.append((np.log2(e1/e2),g,c1,c2))
+    top=', '.join(f'{g}:{lf:.1f}' for lf,g,c1,c2 in sorted(lfc, reverse=True)[:5])
+    print(f'{ct:18s} {mask1.sum():4d} {mask2.sum():4d} ' + ' '.join(f'{d:+.4f}' for d in deltas) + ' ' + top)
+
+# Explicit Muller inflammatory genes eye1 vs eye2
+ct='muller glia cell'
+mask1=labels_by_eye[0]==ct; mask2=labels_by_eye[1]==ct
+X1,t1,_,log1=data[0]; X2,t2,_,log2=data[1]
+print('\\nMuller marker means eye1/eye2')
+for g in cell_markers[ct]+sets['interferon'][:8]+sets['chemokine'][:4]+sets['mhc'][:4]:
+    if g not in idx: continue
+    c1=np.asarray(X1[idx[g],mask1].sum()).item(); c2=np.asarray(X2[idx[g],mask2].sum()).item()
+    e1=(c1+0.5)/(t1[mask1].sum()+1)*1e6; e2=(c2+0.5)/(t2[mask2].sum()+1)*1e6
+    print(f'{g:10s} cpm1 {e1:8.2f} cpm2 {e2:8.2f} log2fc {np.log2(e1/e2):+.2f}')
+PY"

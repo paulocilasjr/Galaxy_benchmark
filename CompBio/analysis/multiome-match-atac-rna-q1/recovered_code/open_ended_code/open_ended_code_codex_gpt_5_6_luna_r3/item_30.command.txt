@@ -1,0 +1,88 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,itertools,numpy as np
+
+def load_matrix(fn):
+ with gzip.open(fn,'rt') as h:
+  h.readline(); labels=[]; vals=[]
+  for l in h:
+   f=l.rstrip('\\n').split('\\t'); labels.append(f[0]); vals.append(f[1:])
+ return np.array(labels),np.array(vals,dtype=np.float64)
+rn,R=load_matrix('multiome.match.atac.rna.q1.rna.tsv.gz')
+an,A=load_matrix('multiome.match.atac.rna.q1.atac.tsv.gz')
+# GENCODE v27 gene coordinates
+coords={}
+with gzip.open('gencode.v27.annotation.gtf.gz','rt') as h:
+ for l in h:
+  if l[0]=='#': continue
+  f=l.rstrip('\\n').split('\\t')
+  if f[2]"'!='"'gene': continue
+  m=re.search(r'gene_name \"(["'^"]+)"'"',f[8])
+  if m and m.group(1) not in coords:
+   coords[m.group(1)]=(f[0],int(f[3]),int(f[4]),f[6])
+# bins
+bmap={}
+for k,s in enumerate(an):
+ c,st,en=s.rsplit('_',2); bmap[(c,int(st))]=k
+# get exact map and windows; gene body uses all bins intersecting body
+mapped={}
+for mode in ['prom0','prom5k','prom10k','prom25k','body','gene10k']:
+ pairs=[]; nbin=0
+ for gi,g in enumerate(rn):
+  if g not in coords: continue
+  c,st,en,strand=coords[g]; tss=st if strand=='+' else en
+  if mode.startswith('prom'):
+   w=int(mode[4:-1] or 0)
+   lo=max(1,tss-w); hi=tss+w+1
+  elif mode=='body': lo,hi=st,en+1
+  else: lo,hi=st,en+1
+  # bins have starts multiples of 10000; account 1-based GTF
+  bs=(max(0,lo-1)//10000)*10000
+  be=((hi-1)//10000)*10000
+  inds=[]
+  for b in range(bs,be+10000,10000):
+   k=bmap.get((c,b))
+   if k is not None and b < hi and b+10000 >= lo: inds.append(k)
+  if inds:
+   pairs.append((gi,inds)); nbin+=len(inds)
+ print(mode,'genes',len(pairs),'bins',nbin,flush=True)
+ mapped[mode]=pairs
+perms=np.array(list(itertools.permutations(range(8))),dtype=np.int8)
+
+def best_from_M(M):
+ scores=np.array([sum(M[i,p[i]] for i in range(8)) for p in perms])
+ ii=np.argsort(-scores)[:5]
+ return [(round(float(scores[k]),6),tuple(perms[k])) for k in ii]
+
+def rowscore(X,Y,kind):
+ if kind=='raw': x,y=X,Y
+ elif kind=='log': x,y=np.log1p(X),np.log1p(Y)
+ elif kind=='sqrt': x,y=np.sqrt(X),np.sqrt(Y)
+ elif kind=='binary': x,y=(X>0).astype(float),(Y>0).astype(float)
+ # featurewise across populations Pearson: center and row z
+ x=x-x.mean(1,keepdims=True); y=y-y.mean(1,keepdims=True)
+ sx=np.sqrt((x*x).sum(1,keepdims=True)); sy=np.sqrt((y*y).sum(1,keepdims=True))
+ x=np.divide(x,sx,out=np.zeros_like(x),where=sx>1e-12); y=np.divide(y,sy,out=np.zeros_like(y),where=sy>1e-12)
+ return x.T@y
+
+def colscore(X,Y,kind):
+ if kind=='raw': x,y=X,Y
+ elif kind=='log': x,y=np.log1p(X),np.log1p(Y)
+ elif kind=='sqrt': x,y=np.sqrt(X),np.sqrt(Y)
+ elif kind=='binary': x,y=(X>0).astype(float),(Y>0).astype(float)
+ x=x-x.mean(0,keepdims=True); y=y-y.mean(0,keepdims=True)
+ return (x.T@y)/np.sqrt((x*x).sum(0)[:,None]*(y*y).sum(0)[None,:])
+# build pairs arrays with mean over bins for each gene
+for mode,pairs in mapped.items():
+ if mode=='body':
+  # sum/mean over bins per gene, but normalize by count; maybe many duplicates
+  X=np.empty((len(pairs),8)); Y=np.empty_like(X)
+  for q,(gi,inds) in enumerate(pairs): X[q]=R[gi]; Y[q]=A[inds].mean(0)
+ else:
+  X=np.array([R[gi] for gi,inds in pairs]); Y=np.array([A[inds].mean(0) for gi,inds in pairs])
+ print('\\nMODE',mode,'shape',X.shape,flush=True)
+ for kind in ['raw','log','sqrt','binary']:
+  M=rowscore(X,Y,kind)
+  print(' row',kind,'best',best_from_M(M),'M',np.round(M,2).tolist(),flush=True)
+  C=colscore(X,Y,kind)
+  print(' col',kind,'best',best_from_M(C),'C',np.round(C,3).tolist(),flush=True)
+PY"

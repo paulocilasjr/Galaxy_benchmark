@@ -1,0 +1,63 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py,numpy as np,scipy.sparse as sp
+from scipy.optimize import linear_sum_assignment
+
+def load(f):
+ with h5py.File(f,'r') as h:
+  X=sp.csr_matrix((h['X/data'][:],h['X/indices'][:],h['X/indptr'][:]),shape=(len(h['var/_index']),len(h['obs/_index']))).T.tocsr()
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+  targets=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/target_gene/categories'][:]]) if 'obs/target_gene/categories' in h else None
+  tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+ return X,guides,codes,genes,targets,tcodes
+Xr,gr,cr,gr_genes,tr,tcr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,gq_genes,tq,tcq=load('perturb.seq.align.q1.query.h5ad')
+common,ri,qi=np.intersect1d(gr_genes,gq_genes,return_indices=True)
+Xr=Xr[:,ri]; Xq=Xq[:,qi]
+def norm_log(X):
+ s=np.asarray(X.sum(1)).ravel().astype(float); s[s==0]=1
+ return np.log1p(X.multiply(1/s[:,None]*1e6).tocsr()).toarray()
+Lr=norm_log(Xr);Lq=norm_log(Xq)
+ur=np.array([Lr[cr==i].mean(0) for i in range(len(gr))])
+uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntr=[i for i,g in enumerate(gr) if g.startswith('NT-')];ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]
+Er=ur-ur[ntr].mean(0); Eq=uq-uq[ntq].mean(0)
+guide2target={}
+for i,g in enumerate(gr):
+ if g.startswith('NT-'): continue
+ vals,counts=np.unique(tr[tcr[cr==i]],return_counts=True)
+ guide2target[g]=vals[np.argmax(counts)]
+pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')];pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+# Try multiple gene selection and cost metrics
+for method in ['mean1000','effectvar1000','effectvar2000','all']:
+ if method=='mean1000': top=np.argsort((ur.mean(0)+uq.mean(0))/2)[::-1][:1000]
+ elif method=='effectvar1000': top=np.argsort(Er[pr].var(0)+Eq[pq].var(0))[::-1][:1000]
+ elif method=='effectvar2000': top=np.argsort(Er[pr].var(0)+Eq[pq].var(0))[::-1][:2000]
+ else: top=np.arange(len(common))
+ A=Eq[pq][:,top]; B=Er[pr][:,top]
+ # scale per gene across guides maybe standardize columns
+ Am=A.mean(0);As=A.std(0)+1e-8; Bm=B.mean(0);Bs=B.std(0)+1e-8
+ # not center rows for cosine? We'll try correlation and cosine cost
+ for metric in ['corr','cos','euclidean']:
+  if metric=='corr':
+   Ac=A-A.mean(1,keepdims=True); Bc=B-B.mean(1,keepdims=True)
+   denom=np.sqrt((Ac*Ac).sum(1,keepdims=True))@np.sqrt((Bc*Bc).sum(1,keepdims=True)).T+1e-12
+   C=Ac@Bc.T/denom
+  elif metric=='cos':
+   An=A/np.sqrt((A*A).sum(1,keepdims=True)+1e-12); Bn=B/np.sqrt((B*B).sum(1,keepdims=True)+1e-12)
+   C=An@Bn.T
+  else:
+   # standardize columns then euclidean, convert to -dist
+   Az=(A-Am)/As; Bz=(B-Bm)/Bs
+   D=((Az[:,None,:]-Bz[None,:,:])**2).sum(2)
+   C=-D
+  r,c=linear_sum_assignment(-C)
+  print('\\n',method,metric,'objective',sum(C[r,c]))
+  for target in ['PABPC1','NUDT21','LEO1']:
+   refidx=[ri for ri in pr if guide2target[gr[ri]]==target][0]; j=pr.index(refidx)
+   qi_idx=np.where(c==j)[0][0]
+   print(target,gr[refidx],'->',gq[pq[qi_idx]],'cost',C[qi_idx,j])
+  # print full assignment sorted by query
+  for ii,jj in zip(r,c): print(gq[pq[ii]],'->',gr[pr[jj]],guide2target[gr[pr[jj]]],round(C[ii,jj],3))
+PY"

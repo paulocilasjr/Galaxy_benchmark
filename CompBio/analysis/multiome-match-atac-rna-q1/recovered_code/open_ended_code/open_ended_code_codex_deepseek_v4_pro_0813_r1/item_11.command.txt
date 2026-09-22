@@ -1,0 +1,93 @@
+/bin/bash -lc "cat > match_ga.py <<'PY'
+import gzip, re, bisect, numpy as np, pandas as pd
+from scipy.stats import spearmanr
+from scipy.optimize import linear_sum_assignment
+import time
+
+rna = pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz', sep='\\t', index_col=0, compression='gzip')
+atac = pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz', sep='\\t', index_col=0, compression='gzip')
+print('loaded', rna.shape, atac.shape, flush=True)
+
+# parse gene info
+gi=pd.read_csv('gene_info.tsv',sep='\\t',names=['gene','chrom','start','end','strand'])
+# keep matching rna rows
+gi=gi[gi.gene.isin(rna.index)].copy()
+gi['tss']=np.where(gi.strand=='-', gi.end, gi.start)
+# sort
+gi=gi.sort_values(['chrom','tss']).reset_index(drop=True)
+print('genes',len(gi), flush=True)
+
+# parse atac coords
+names=atac.index.to_numpy()
+parts=np.array([x.split('_') for x in names])
+chroms=parts[:,0]
+starts=parts[:,1].astype(int)
+ends=parts[:,2].astype(int)
+print('unique chroms',np.unique(chroms)[:10], len(np.unique(chroms)), flush=True)
+# organize indices by chrom
+chrom_idx={}
+for c in np.unique(chroms):
+    mask=chroms==c
+    idx=np.where(mask)[0]
+    order=idx[np.argsort(starts[idx])]
+    chrom_idx[c]=(starts[order], ends[order], order)
+print('chrom dict done', flush=True)
+
+def gene_activity(window=100000, use_log_atac=True):
+    # returns matrix genes x 8
+    atac_vals=atac.to_numpy()
+    if use_log_atac:
+        av=np.log1p(atac_vals)
+    else:
+        av=atac_vals
+    rows=[]
+    genes=[]
+    for row in gi.itertuples(index=False):
+        c=row.chrom
+        if c not in chrom_idx: 
+            genes.append(row.gene); rows.append(np.zeros(8)); continue
+        st_arr,en_arr,order=chrom_idx[c]
+        tss=row.tss
+        lo=bisect.bisect_left(st_arr, tss-window) # first start >= lower
+        hi=bisect.bisect_right(st_arr, tss+window) # first start > upper
+        # Could include bins whose start before lo but end > lower? bins fixed non-overlap maybe if start < lower then end<=lower+10000; for exact window we can include with en_arr > tss-window.
+        # use en_arr in slice lo:hi enough? because st within window => overlap; but a bin starting before lower might still overlap if end>lower. For contiguous bins, the bin before lo has end <= tss-window if lo defined? Let's include lo_adj
+        lo2=bisect.bisect_right(en_arr, tss-window)  # last end <= lower? bins before with end> lower overlap
+        lo=max(0,min(lo,lo2))
+        if lo>0:
+            # include previous bin if en_arr[lo-1]>tss-window
+            lo=lo-1
+        hi2=bisect.bisect_right(st_arr, tss+window)
+        hi=max(hi,hi2)
+        # ensure indexes
+        lo=max(0,lo); hi=min(len(st_arr),hi)
+        if hi<=lo:
+            rows.append(np.zeros(8)); genes.append(row.gene); continue
+        sel=order[lo:hi]
+        vals=av[sel].sum(axis=0)
+        rows.append(vals)
+        genes.append(row.gene)
+    G=pd.DataFrame(np.vstack(rows), index=genes)
+    return G
+
+for window in [20000,50000,100000,200000,500000]:
+    for transform in [True,False]:
+        t=time.time()
+        G=gene_activity(window, transform)
+        common=G.index.intersection(rna.index)
+        R=rna.loc[common].to_numpy()
+        Gc=G.loc[common].to_numpy()
+        # filter rows where either all zero
+        mask=(R.sum(axis=1)>0)&(Gc.sum(axis=1)>0)
+        R2=np.log1p(R[mask])
+        G2=Gc[mask]
+        # pearson corr matrix
+        C=np.corrcoef(R2.T,G2.T)[:8,8:]
+        # spearman maybe
+        print('window',window,'transform',transform,'genes common/used',len(common),mask.sum(),'time',time.time()-t, flush=True)
+        print(C.round(3))
+        # assignment maximizing sum
+        row_ind,col_ind=linear_sum_assignment(-C)
+        print('argmax rows', np.argmax(C,axis=1), 'argmax cols',np.argmax(C,axis=0), 'hung',col_ind, flush=True)
+PY
+python3 match_ga.py"

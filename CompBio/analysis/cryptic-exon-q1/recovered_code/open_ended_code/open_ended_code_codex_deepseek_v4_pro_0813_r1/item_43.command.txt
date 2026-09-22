@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, re, collections
+# Build known introns per gene from GTF
+known=collections.defaultdict(set)
+exons=collections.defaultdict(lambda: collections.defaultdict(list))
+gene_name_by_tx={}
+for line in open('gencode.v47.annotation.gtf'):
+    if line.startswith('#'): continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<9 or f[2]"'!='"'exon': continue
+    attrs=dict(re.findall(r'(\\S+?) \"(["'^"]*)"'"', f[8]))
+    tx=attrs.get('transcript_id',''); gn=attrs.get('gene_name','')
+    gene_name_by_tx[tx]=gn
+    exons[gn][tx].append((int(f[3]), int(f[4])))
+for gn, txs in exons.items():
+    for tx, es in txs.items():
+        es=sorted(es)
+        for (s1,e1),(s2,e2) in zip(es,es[1:]):
+            if s2>e1+1:
+                known[gn].add((e1+1,s2-1))
+# parse sam
+obs=collections.defaultdict(list)
+for line in subprocess.Popen(['samtools','view','-F','4','cand_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6: continue
+    flag=int(f[1]); rname=f[2]; pos=int(f[3]); cigar=f[5]
+    if flag & 0x900: # secondary/supp
+        continue
+    mapq=int(f[4])
+    if mapq<10: continue
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"', rname)
+    if not m: continue
+    gene,chrom,ref_start,ref_end=m.group(1),m.group(2),int(m.group(3)),int(m.group(4))
+    # parse cigar
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])', cigar)
+    refpos=pos
+    left=0
+    for n,op in ops:
+        n=int(n)
+        if op in 'MDN=X': pass
+        if op=='N':
+            intron_start=ref_start+left  # 1-based? left consumed bases before N; first intron base = start+left
+            intron_end=ref_start+left+n-1
+            obs[gene].append((intron_start,intron_end,n,mapq))
+            left += n
+        elif op in 'M=D=X': left += n
+        elif op=='S' or op=='I': pass
+        elif op=='H': pass
+        elif op=='P': pass
+# summarize genes with novel introns count (unique intervals)
+print('Gene\\tobs_junctions\\tnovel_unique\\tnovel_total_reads\\texamples')
+for gene in sorted(obs, key=lambda g: len(set((a,b) for a,b,n,q in obs[g])-known.get(g,set())), reverse=True)[:80]:
+    allj=[(a,b) for a,b,n,q in obs[gene]]
+    novel=[j for j in allj if j not in known.get(gene,set())]
+    uniq=sorted(set(novel))
+    if not uniq: continue
+    # count reads per novel j
+    cnt=collections.Counter(novel)
+    print(f'{gene}\\t{len(set(allj))}\\t{len(uniq)}\\t{len(novel)}\\t' + '; '.join(f'{a}-{b}({cnt[(a,b)]})' for a,b in uniq[:10]))
+PY"

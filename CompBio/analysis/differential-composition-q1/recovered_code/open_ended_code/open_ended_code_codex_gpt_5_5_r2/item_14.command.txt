@@ -1,0 +1,71 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+from collections import defaultdict
+np.random.seed(0)
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ f.readline(); genes=[l.rstrip('\\n').split('\\t')[1] for l in f]
+sym=defaultdict(list)
+for i,g in enumerate(genes): sym[g.upper()].append(i)
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','SOX9'],
+'microglial cell':['P2RY12','CX3CR1','C1QA','C1QB','C1QC','AIF1','TYROBP','CSF1R'],
+'RPE cell':['RPE65','BEST1','PMEL','TYR','MITF','RDH5','LRAT','TTR'],
+'cone cell':['OPN1LW','OPN1MW','OPN1SW','GNAT2','ARR3','PDE6H','PDE6C','CNGA3'],
+'rod cell':['RHO','NRL','GNAT1','PDE6A','PDE6B','SAG','GNGT1','NR2E3'],
+'horizontal cell':['PROX1','ONECUT1','ONECUT2','LHX1','CALB1','CALB2','TFAP2A','TFAP2B'],
+'bipolar cell':['VSX2','GRM6','TRPM1','PKD2L1','CABP5','PRKCA','PCP2'],
+'RGC':['RBPMS','POU4F1','POU4F2','SNCG','THY1','NEFL','NEFM'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','TRBC1','TRBC2','IL7R','LCK','CD2'],
+'macrophage':['CD68','LYZ','CD14','FCGR3A','FCGR1A','LST1','S100A8','S100A9'],
+'Schwann cell':['MPZ','SOX10','PLP1','MBP','PMP22','S100B','ERBB3','NGFR'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','ACTA2','NOTCH3','MYH11','TAGLN'],
+'B cell':['MS4A1','CD79A','CD79B','CD19','CD74','BANK1','CD37','IGHM'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA','FBLN1','C7','DPT'],
+'endothelial cell':['PECAM1','VWF','KDR','CLDN5','FLT1','RAMP2','EMCN','ESAM','CDH5'],
+'muller glia cell':['RLBP1','GLUL','VIM','SLC1A3','SLC1A2','APOE','CLU','CRYAB','AQP4','SOX9']}
+idxs={ct:sorted(set(i for m in ms for i in sym.get(m.upper(),[]))) for ct,ms in markers.items()}
+X1=mmread('differential.composition.q1.1.mtx.gz').tocsc().astype(np.float32)
+X2=mmread('differential.composition.q1.2.mtx.gz').tocsc().astype(np.float32)
+X=sparse.hstack([X1,X2], format='csc').T.tocsr()
+batch=np.array([0]*X1.shape[1]+[1]*X2.shape[1])
+lib=np.asarray(X.sum(axis=1)).ravel()
+Xn=X.copy().astype(np.float32); rows=np.repeat(np.arange(Xn.shape[0]), np.diff(Xn.indptr)); Xn.data=np.log1p(Xn.data*10000/lib[rows])
+mean=np.asarray(Xn.mean(axis=0)).ravel()
+# bins by mean
+valid=np.where(mean>0)[0]; order=valid[np.argsort(mean[valid])]
+bins=np.array_split(order, 25)
+gene_bin={g:b for b,arr in enumerate(bins) for g in arr}
+marker_union=set(i for arr in idxs.values() for i in arr)
+cts=list(markers)
+S=[]
+for ct,idx in idxs.items():
+    ctrl=[]
+    for i in idx:
+        b=gene_bin.get(i)
+        if b is None: continue
+        pool=[j for j in bins[b] if j not in marker_union]
+        if len(pool)>50:
+            # deterministic choose evenly after hash-ish shuffle
+            rng=np.random.default_rng(i)
+            ctrl.extend(rng.choice(pool,50,replace=False).tolist())
+        else: ctrl.extend(pool)
+    marker_score=np.asarray(Xn[:,idx].mean(axis=1)).ravel()
+    ctrl_score=np.asarray(Xn[:,ctrl].mean(axis=1)).ravel() if ctrl else 0
+    S.append(marker_score-ctrl_score)
+S=np.vstack(S).T
+# print top assignment and positive counts per thresholds
+for thr in [-0.1,0,0.1,0.2,0.4,0.8]:
+    top=S.argmax(axis=1); mx=S.max(axis=1); print('\\nthr',thr)
+    for b,lab in [(0,'1'),(1,'2')]:
+        counts=np.bincount(top[(batch==b)&(mx>thr)], minlength=len(cts))
+        print('sample',lab,'assigned',counts.sum())
+        for ct,c in sorted(zip(cts,counts), key=lambda x:-x[1]):
+            if c>0: print(f'  {ct}: {c} {c/((batch==b).sum()):.3f}')
+# for each CT top n by score threshold percentile maybe
+print('\\nscore quantile counts >0.2 and >0.5')
+for i,ct in enumerate(cts):
+    a=S[batch==0,i]; b=S[batch==1,i]
+    print(f'{ct:18s} mean {a.mean():.3f}/{b.mean():.3f} q99 {np.quantile(a,.99):.2f}/{np.quantile(b,.99):.2f} >.2 {(a>.2).sum()}/{(b>.2).sum()} >.5 {(a>.5).sum()}/{(b>.5).sum()} >1 {(a>1).sum()}/{(b>1).sum()}')
+PY"

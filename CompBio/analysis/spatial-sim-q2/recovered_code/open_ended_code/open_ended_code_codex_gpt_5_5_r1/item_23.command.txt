@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0); sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+features=pd.read_csv('features.tsv.gz', sep='\\t', header=None); barcodes=pd.read_csv('barcodes.tsv.gz', sep='\\t', header=None)[0].tolist(); pos=pd.read_csv('tissue_positions.csv').set_index('barcode').loc[barcodes]
+Y=mmread('matrix.mtx.gz').tocsc().T.toarray().astype(float); sc=sc[features[1].tolist()]
+ctypes=sorted(meta.cell_type.unique()); ref=np.vstack([sc.loc[meta.cell_type.eq(ct)].mean(0).values for ct in ctypes]).T
+coef=pd.DataFrame([nnls(ref,y)[0] for y in Y], index=barcodes, columns=ctypes)
+coords=pos[['pxl_row_in_fullres','pxl_col_in_fullres']].astype(float).values
+for thr in [0.1,0.5,1.0]:
+  tc=(coef.Tumor_Core>=thr).values
+  dist=cdist(coords, coords[tc]).min(1)
+  eligible=~tc
+  print('thr',thr,'tc',tc.sum(),'eligible',eligible.sum())
+  rows=[]
+  for ct in ctypes:
+    if ct=='Tumor_Core': continue
+    m=(coef[ct]>=thr).values & eligible
+    bg=eligible & ~m
+    p=mannwhitneyu(dist[m],dist[bg],alternative='less').pvalue
+    rows.append((ct,m.sum(),dist[m].mean(),np.median(dist[m]),dist[bg].mean(),p))
+  adj=multipletests([r[-1] for r in rows], method='fdr_bh')[1]
+  for r,a in zip(rows,adj): print(r,'FDR',a)
+PY"

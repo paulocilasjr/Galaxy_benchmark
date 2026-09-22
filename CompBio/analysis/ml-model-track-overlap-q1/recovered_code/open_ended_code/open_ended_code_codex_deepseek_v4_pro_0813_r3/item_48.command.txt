@@ -1,0 +1,61 @@
+/bin/bash -lc "cat > fetch_sei_cistrome2.py <<'PY'
+import requests, json, time, sys, os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+req=[]
+for l in open('sei-framework/model/target.names'):
+    p=[x.strip() for x in l.rstrip('\\n').split('|')]
+    if len(p)>=3 and p[2].startswith('ID:'):
+        req.append(p[2][3:])
+ids=list(dict.fromkeys(req))
+chunks=[ids[i:i+50] for i in range(0,len(ids),50)]
+print('chunks',len(chunks),'ids',len(ids),flush=True)
+
+def fetch(chunk):
+    params={'ids':','.join(chunk),'fields':'series','limit':50}
+    last=None
+    for attempt in range(8):
+        try:
+            r=requests.get('https://db3.cistrome.org/cistrome/samples',params=params,timeout=60)
+            if r.status_code==200:
+                data=r.json()
+                return data.get('samples',[])
+            last=(r.status_code,r.text[:300])
+            if r.status_code==429:
+                time.sleep(5*(attempt+1))
+            else:
+                time.sleep(1)
+        except Exception as e:
+            last=repr(e)
+            time.sleep(2)
+    print('FAILED chunk first',chunk[0],last,file=sys.stderr,flush=True)
+    return []
+
+results=[None]*len(chunks)
+# use 6 threads to be gentle
+with ThreadPoolExecutor(max_workers=6) as ex:
+    futs={ex.submit(fetch,c):i for i,c in enumerate(chunks)}
+    for fut in as_completed(futs):
+        i=futs[fut]
+        try:
+            results[i]=fut.result()
+        except Exception as e:
+            print('future',i,e,file=sys.stderr)
+            results[i]=[]
+
+# dedupe
+allmeta={}
+for chunk,samples in zip(chunks,results):
+    for s in samples:
+        sid=str(s.get('id'))
+        if sid in allmeta: continue
+        gse=[]
+        for ser in s.get('series',[]) or []:
+            if ser.get('external_id'): gse.append(ser['external_id'])
+        allmeta[sid]={'id':sid,'external_id':s.get('external_id'),'external_id_type':s.get('external_id_type'),'series':','.join(gse),'title':s.get('title')}
+json.dump(allmeta,open('sei_cistrome_meta.json','w'))
+present=set(allmeta)
+missing=[i for i in ids if i not in present]
+print('saved',len(allmeta),'missing',len(missing),'firstmissing',missing[:20],flush=True)
+PY
+python3 fetch_sei_cistrome2.py"

@@ -1,0 +1,88 @@
+/bin/bash -lc "python - <<'PY'
+# Reuse concise: compute gene body activity and cross-gene correlation, assignment, per-gene rank assignment, exhaustive maybe
+import gzip,csv,re,numpy as np
+from collections import defaultdict
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+
+# Build genes as before quickly
+gene_list=defaultdict(list)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        m=re.search(r'gene_name \"(["'^"]+)"'"',p[8])
+        if not m: continue
+        b=re.search(r'gene_biotype \"(["'^"]+)"'"',p[8])
+        gene_list[m.group(1)].append((p[0],int(p[3]),int(p[4]),p[6],b.group(1) if b else ''))
+def choose(ents):
+    pc=[e for e in ents if e[4]=='protein_coding']
+    return max(pc if pc else ents,key=lambda e:e[2]-e[1])
+genes={}
+for gn,ents in gene_list.items():
+    c,s,e,strand,bt=choose(ents)
+    if not c.startswith('chr'): c='chr'+c
+    tss=s if strand=='+' else e
+    genes[gn]=(c,s,e,strand,tss)
+
+# atac arrays per chr
+chr_starts=defaultdict(list); chr_vals=defaultdict(list)
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        c,s,e=row[0].split('_'); s=int(s)
+        chr_starts[c].append(s); chr_vals[c].append(np.array([float(x) for x in row[1:9]]))
+for c in chr_starts:
+    idx=np.argsort(chr_starts[c]); chr_starts[c]=np.array(chr_starts[c])[idx]; chr_vals[c]=np.array(chr_vals[c])[idx]
+
+def gene_activity(c,start,end):
+    st=chr_starts.get(c); va=chr_vals.get(c)
+    if st is None: return None
+    li=np.searchsorted(st, start-10000, side='right'); ri=np.searchsorted(st, end, side='right')
+    if li>=ri:return None
+    return va[li:ri].sum(axis=0)
+
+rna_syms=[]; R=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        rna_syms.append(row[0]); R.append([float(x) for x in row[1:9]])
+R=np.array(R)
+pairs=[]
+for gi,gn in enumerate(rna_syms):
+    g=genes.get(gn)
+    if not g: continue
+    a=gene_activity(g[0],g[1],g[2])
+    if a is None: continue
+    pairs.append((R[gi],a))
+Rs=np.array([p[0] for p in pairs]); As=np.array([p[1] for p in pairs])
+rr=np.log1p(Rs); aa=np.log1p(As)
+print('n',len(pairs))
+# cross-gene correlation per column pair (log1p)
+C=np.zeros((8,8))
+for i in range(8):
+    for j in range(8):
+        C[i,j]=np.corrcoef(rr[:,i],aa[:,j])[0,1]
+print('cross-gene C')
+print(np.round(C,4))
+ri,cj=linear_sum_assignment(-C)
+print('cross perm', {i:int(cj[i]) for i in range(8)}, 'score',C[ri,cj].sum())
+# within-gene pearson M
+rz=rr-rr.mean(axis=1,keepdims=True); az=aa-aa.mean(axis=1,keepdims=True)
+rden=np.sqrt((rz*rz).sum(axis=1,keepdims=True)); rden[rden==0]=1
+aden=np.sqrt((az*az).sum(axis=1,keepdims=True)); aden[aden==0]=1
+M=( (rz/rden)[:,:,None] * (az/aden)[:,None,:]).mean(axis=0)
+ri,cj=linear_sum_assignment(-M)
+print('within-gene M perm', [int(cj[i]) for i in range(8)], 'score',M[ri,cj].sum())
+print(np.round(M,4))
+# within-gene rank M
+rrank=np.apply_along_axis(rankdata,1,rr); arank=np.apply_along_axis(rankdata,1,aa)
+rz=rrank-rrank.mean(axis=1,keepdims=True); az=arank-arank.mean(axis=1,keepdims=True)
+rden=np.sqrt((rz*rz).sum(axis=1,keepdims=True)); rden[rden==0]=1
+aden=np.sqrt((az*az).sum(axis=1,keepdims=True)); aden[aden==0]=1
+Mrank=( (rz/rden)[:,:,None] * (az/aden)[:,None,:]).mean(axis=0)
+ri,cj=linear_sum_assignment(-Mrank)
+print('within-gene rank perm', [int(cj[i]) for i in range(8)], 'score',Mrank[ri,cj].sum())
+print(np.round(Mrank,4))
+PY"

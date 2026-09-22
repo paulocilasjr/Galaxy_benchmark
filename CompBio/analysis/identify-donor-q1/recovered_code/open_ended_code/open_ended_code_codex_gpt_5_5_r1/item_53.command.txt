@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np
+from work.score_donor import parse_bases
+samples=[l.strip() for l in open('work/samples.txt')]
+obs={}
+for line in open('work/panel_sites.mpileup'):
+    chrom,pos,ref,depth,bases,quals=line.rstrip('\\n').split('\\t')[:6]
+    obs[(chrom,int(pos))]=(ref.upper(),bases)
+settings=[('d4_strict',4,0.2,0.8),('d6_strict',6,0.2,0.8),('d4_mid',4,0.25,0.75),('d8_strict',8,0.2,0.8),('d4_any',4,0.01,0.99)]
+for name,minD,lo,hi in settings:
+    mism=np.zeros(len(samples),dtype=np.int32); used=np.zeros(len(samples),dtype=np.int32); nsites=0
+    with gzip.open('work/region.1kg.vcf.gz','rb') as f:
+        for line in f:
+            if line.startswith(b'#'): continue
+            parts=line.rstrip(b'\\n').split(b'\\t',9)
+            chrom=parts[0].decode(); pos=int(parts[1]); ref=parts[3].decode().upper(); alt=parts[4].decode().upper()
+            if len(ref)"'!=1 or len(alt)!=1: continue
+            got=obs.get((chrom,pos))
+            if not got: continue
+            r,a,o=parse_bases(got[1],ref,alt); total=r+a
+            if total<minD: continue
+            frac=a/total
+            if frac<=lo: hc=0
+            elif frac>=hi: hc=2
+            else: hc=1
+            gt=np.frombuffer(parts[9],dtype=np.uint8)
+            g=(gt[0::4]==49).astype(np.int8); g+=(gt[2::4]==49).astype(np.int8)
+            mism += (g!=hc); used += 1; nsites += 1
+    order=np.argsort(mism)
+    print(name, '"'sites', nsites)
+    for idx in order[:8]: print(samples[idx], int(mism[idx]))
+PY"

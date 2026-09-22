@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+from Bio import SeqIO
+from collections import defaultdict,Counter
+import math
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+names=list(seqs); comp=str.maketrans('ACGT','TGCA'); L=36;k=5
+rev={n:s.translate(comp)[::-1] for n,s in seqs.items()}
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in names}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1): index[name]['f'][s[i:i+k]].append(i)
+    rs=rev[name]
+    for i in range(len(rs)-L+1): index[name]['r'][rs[i:i+k]].append(i)
+def min_pattern(read):
+    best=L+1; pat=[]
+    for name in names:
+        d=L+1
+        for strand in ['f','r']:
+            idx=index[name][strand]; sstr=seqs[name] if strand=='f' else rev[name]
+            aligns=set()
+            for start in range(0,L-k+1,k):
+                seed=read[start:start+k]
+                for pos in idx.get(seed,()):
+                    a=pos-start
+                    if 0<=a<=len(sstr)-L: aligns.add(a)
+            for a in aligns:
+                dd=sum(sstr[a+j]"'!=read[j] for j in range(L))
+                if dd<d: d=dd
+                if d==0: break
+            if d==0: break
+        if d<best: best=d; pat=[name]
+        elif d==best: pat.append(name)
+    return tuple(names.index(x) for x in pat)
+# observed patterns from saved mins
+import pickle
+with open('"'counts_mins.pkl','rb') as f: data=pickle.load(f)
+obs_mins=data['mins']; names=data['names']
+obs=Counter(); 
+for row in obs_mins:
+    md=min(row); obs[tuple(i for i,d in enumerate(row) if d==md)]+=1
+# source pattern probs
+source_probs=[]
+for c,name in enumerate(names):
+    cnt=Counter(); total=0
+    for strand,t in [('f',seqs[name]),('r',rev[name])]:
+        for a in range(len(t)-L+1):
+            pat=min_pattern(t[a:a+L]); cnt[pat]+=1; total+=1
+    source_probs.append(cnt)
+    print('source',name,'total',total,'num patterns',len(cnt))
+patterns=sorted(obs.keys(), key=lambda x:(len(x),x))
+# fit pi by EM for categorical patterns: z_i pattern, source c, prob P_c(pat)
+def run(init):
+    pi=[.25]*4; prev=-1e100
+    for it in range(1000):
+        new=[0.0]*4; ll=0.0
+        for pat,count in obs.items():
+            vals=[]
+            for c in range(4):
+                p=source_probs[c].get(pat,0)/5930
+                v=pi[c]*p; vals.append(v)
+            den=sum(vals)
+            ll += count*math.log(den)
+            for c in range(4): new[c]+=count*vals[c]/den
+        pi=[x/sum(new) for x in new]
+        if abs(ll-prev)<1e-14: break
+        prev=ll
+    return pi,ll,it
+for init in ([.25]*4,[.5,.2,.2,.1]):
+    pi,ll,it=run(init)
+    print('init',init,'pi',pi,'pct',[100*x for x in pi],'ll',ll,'it',it)
+PY"

@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,struct,zlib
+
+def gr(u,a,b):return urllib.request.urlopen(urllib.request.Request(u,headers={'Range':f'bytes={a}-{b}'}),timeout=120).read()
+def ent(u,size,suffix='_1.tsv'):
+ n=1000000;st=size-n;d=gr(u,st,size-1);p=d.rfind(b'PK\\x05\\x06');
+ if p>=0:
+  norm=struct.unpack('<4s4H2LH',d[p:p+22]);nent=norm[4];cdsize,cdoff=norm[-3:-1]
+ else: nent=0;cdsize=cdoff=0
+ if cdsize==0xffffffff or cdoff==0xffffffff or nent==0xffff or p<0:
+  p=d.rfind(b'PK\\x06\\x06');x=struct.unpack('<4sQ2H2I4Q',d[p:p+56]);nent=x[6];cdsize,cdoff=x[-2:]
+ cd=gr(u,cdoff,cdoff+cdsize-1) if cdoff<st else d[cdoff-st:cdoff-st+cdsize]
+ i=0
+ while i<len(cd):
+  vals=struct.unpack('<4s6H3L5H2L',cd[i:i+46]);fnl,exl,col=vals[10:13];fn=cd[i+46:i+46+fnl].decode(errors='replace');extra=cd[i+46+fnl:i+46+fnl+exl];cs,us,off=vals[8],vals[9],vals[-1];j=0
+  while j<len(extra):
+   typ,ln=struct.unpack('<HH',extra[j:j+4]);dat=extra[j+4:j+4+ln];j+=4+ln
+   if typ==1:
+    k=0
+    if us==0xffffffff:us=struct.unpack('<Q',dat[k:k+8])[0];k+=8
+    if cs==0xffffffff:cs=struct.unpack('<Q',dat[k:k+8])[0];k+=8
+    if off==0xffffffff:off=struct.unpack('<Q',dat[k:k+8])[0];k+=8
+  if fn.endswith(suffix):
+   hd=gr(u,off,off+99);v=struct.unpack('<4s5H3L2H',hd[:30]);fnl2,exl2=v[-2:];return off+30+fnl2+exl2,cs,fn
+  i+=46+fnl+exl+col
+for label,u,size in [
+ ('old_afr','https://zenodo.org/api/records/11111186/files/afr47041.zip/content',6011347563),
+ ('old_eur','https://zenodo.org/api/records/11111186/files/eur94082.zip/content',4078857688),
+ ('new_afr','https://zenodo.org/api/records/17370173/files/afr47041.zip/content',5769815245),
+ ('new_lat','https://zenodo.org/api/records/17370173/files/lat36378.zip/content',5668676568),
+ ('new_eur','https://zenodo.org/api/records/17370173/files/eur115620.zip/content',4152398287)]:
+ try:
+  dataoff,cs,fn=ent(u,size);C=gr(u,dataoff,dataoff+5000000-1);out=zlib.decompressobj(-15).decompress(C).decode('utf8','replace'); lines=out.splitlines();h=lines[0].split('\\t');
+  for line in lines[1:]:
+   if line.startswith('1\\t14671'):
+    x=line.split('\\t'); print(label,fn,[(i,k,x[i]) for i,k in enumerate(h) if k.startswith('protein_density_')]);break
+ except Exception as e: print(label,'ERR',type(e).__name__,e)
+PY"

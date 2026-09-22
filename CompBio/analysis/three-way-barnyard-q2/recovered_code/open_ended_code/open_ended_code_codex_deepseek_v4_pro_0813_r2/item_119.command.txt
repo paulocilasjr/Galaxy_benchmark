@@ -1,0 +1,28 @@
+/bin/bash -lc "cd work && python3 - <<'PY'
+import numpy as np
+from collections import Counter, defaultdict
+# load barcode and umi for each read
+bc_list=[]; umi_list=[]
+with open('read_bc_umi.tsv') as f:
+    for l in f:
+        rid,b,u=l.rstrip().split('\\t'); bc_list.append(b); umi_list.append(u)
+barcodes=sorted(set(bc_list)); bidx={b:i for i,b in enumerate(barcodes)}; ridx=np.array([bidx[b] for b in bc_list],dtype=np.int32)
+h=np.load('human_scores.npy');m=np.load('mouse_scores.npy');p=np.load('pig_scores.npy')
+S=np.vstack([h,m,p]).T; order=np.argsort(-S,axis=1); best=S[np.arange(len(S)),order[:,0]]; second=S[np.arange(len(S)),order[:,1]]
+for min_score in [0,10,20,30]:
+ for margin in [0,1,2,5]:
+  assign=np.full(len(S),-1,dtype=np.int8); ok=(best>=min_score)&(best-second>=margin); assign[ok]=order[ok,0]
+  umi_counts=[defaultdict(set) for _ in barcodes]
+  for i,sp in enumerate(assign):
+   if sp>=0:
+    umi_counts[ridx[i]][sp].add(umi_list[i])
+  counts=np.zeros((len(barcodes),3),dtype=np.int32)
+  for i in range(len(barcodes)):
+   for sp,s in umi_counts[i].items(): counts[i,sp]=len(s)
+  total=counts.sum(axis=1); top=counts.argmax(axis=1); topc=counts.max(axis=1)
+  for mr in [10,20,50,100]:
+   for purity in [0.7,0.8,0.9,0.95]:
+    conf=(total>=mr)&(topc/np.maximum(total,1)>=purity)
+    if conf.sum()>=100:
+     c=Counter(top[conf]); print('min',min_score,'margin',margin,'mr',mr,'p',purity,'n',conf.sum(),'counts',[c[0],c[1],c[2]],'pcts',[round(x/conf.sum()*100) for x in [c[0],c[1],c[2]]])
+PY"

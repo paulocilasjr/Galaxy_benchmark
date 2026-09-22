@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_samples
+with gzip.open('cell.proportions.q1.mtx.gz','rt') as f:
+ for line in f:
+  if line.startswith('%'): continue
+  g,n=map(int,line.split()); break
+ v=np.fromiter((float(x) for line in f for x in line.split()),np.float32)
+X=v.reshape((g,n),order='F')
+lib=X.sum(0); det=(X>0).sum(0)
+Y=np.log1p(X/lib*1e4).T
+sel=np.argsort(Y.var(0))[-300:]
+p=PCA(n_components=20,random_state=1).fit_transform(Y[:,sel])
+km=KMeans(n_clusters=6,n_init=50,random_state=1).fit(p)
+labels=km.labels_
+# relabel by descending sizes
+order=np.argsort(np.bincount(labels))[::-1]
+print('label size total det mean sd min max; top genes / centroid')
+for j,l in enumerate(order):
+ ix=labels==l
+ print(j, 'size',ix.sum(),'lib',np.round(np.percentile(lib[ix],[0,1,5,25,50,75,95,99,100]),1),'det',np.round(np.percentile(det[ix],[0,1,5,25,50,75,95,99,100]),1))
+ centroid=Y[ix].mean(0)
+ # map selected gene indices and centroid
+ tops=sel[np.argsort(centroid)[-15:][::-1]]
+ print(' top',[(int(x),round(float(centroid[np.where(sel==x)[0][0]]),2)) for x in tops])
+ print(' centroid PC',np.round(km.cluster_centers_[l][:5],2),'sil median',np.median(silhouette_samples(p,labels)[ix]))
+# global lowest/highest qc and their labels
+for name,a in [('lib',lib),('det',det)]:
+ print(name,'lowest',[(i,int(a[i]),int(np.where(order==labels[i])[0][0])) for i in np.argsort(a)[:30]])
+ print(name,'highest',[(i,int(a[i]),int(np.where(order==labels[i])[0][0])) for i in np.argsort(a)[-30:][::-1]])
+PY"

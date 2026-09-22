@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 - <<'PY'
+from urllib.request import urlopen
+from urllib.parse import urlencode
+import json, time, csv
+query='(Mus musculus[Organism] OR mouse[All Fields]) AND (10x[All Fields] OR 10X[All Fields] OR Chromium[All Fields] OR \"Cell Ranger\"[All Fields]) AND (brain[All Fields] OR neuron[All Fields] OR neural[All Fields] OR embryo[All Fields] OR embryonic[All Fields] OR hypothalamus[All Fields] OR midbrain[All Fields] OR ganglion[All Fields]) AND gse[Entry Type]'
+base='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
+first=json.load(urlopen(base+'esearch.fcgi?'+urlencode({'db':'gds','term':query,'retmax':0,'retmode':'json'})))
+count=int(first['esearchresult']['count']); print('count',count)
+rows=[]
+for start in range(0,count,500):
+    es=json.load(urlopen(base+'esearch.fcgi?'+urlencode({'db':'gds','term':query,'retmax':500,'retstart':start,'retmode':'json'})))
+    ids=es['esearchresult']['idlist']
+    for i in range(0,len(ids),100):
+        s=json.load(urlopen(base+'esummary.fcgi?'+urlencode({'db':'gds','id':','.join(ids[i:i+100]),'retmode':'json'})))['result']
+        for uid in s['uids']:
+            d=s[uid]; acc=d.get('accession','')
+            if acc.startswith('GSE'):
+                rows.append({k:d.get(k,'') for k in ['accession','title','summary','taxon','suppfile','ftplink','n_samples','relations','pdat']})
+        time.sleep(0.12)
+    print('start',start,'rows',len(rows))
+    time.sleep(0.2)
+# dedup
+seen=set(); out=[]
+for r in rows:
+    if r['accession'] not in seen:
+        seen.add(r['accession']); out.append(r)
+print('unique',len(out))
+with open('geo_candidates_neural_10x_all.tsv','w',newline='') as f:
+    w=csv.DictWriter(f,fieldnames=out[0].keys(),delimiter='\\t'); w.writeheader(); w.writerows(out)
+PY"

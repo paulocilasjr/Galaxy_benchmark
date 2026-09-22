@@ -1,0 +1,80 @@
+/bin/bash -c "python - <<'PY'
+# just reload quick parquet? wasn't saved due crash. recreate quick with fixed and simpler
+import anndata as ad, numpy as np, scipy.sparse as sp, pandas as pd, time
+A=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+X=A.X[:].tocsr()
+obs=A.obs['sampleID'].values
+symbols=A.var['symbol'].astype(str).values
+lib=np.asarray(X.sum(1)).ravel()
+norm=X.copy().astype(np.float64)
+norm.data=np.log1p(norm.data / lib[norm.indices] * 10000)
+def get(g):
+    idx=np.where(symbols==g)[0]
+    if len(idx)==0: return np.zeros(X.shape[0])
+    col=norm[:,idx[0]]
+    return np.asarray(col.todense()).ravel() if sp.issparse(col) else np.asarray(col).ravel()
+genes=['PTPRC','EPCAM','KRT5','KRT6A','KRT14','TP63','SOX2','DSC3','NKX2-1','NAPSA','SFTPB','CD3D','CD79A','MS4A1','CD68','LYZ','FCER1A','CD1C','CLEC9A','LILRA4','VWF','PECAM1','DCN','COL1A1','TPSAB1','KIT','MZB1','JCHAIN','CD14','FCGR3A','IDO1','FLT3','IRF8','BATF3','XCR1','CD207','CD209','CCR7','LAMP3']
+d={g:get(g) for g in genes}
+df=pd.DataFrame(d)
+dc_score=df[['FCER1A','CD1C','CLEC9A','LILRA4']].max(axis=1)
+basal_score=df[['KRT5','KRT6A','KRT14','TP63','SOX2','DSC3']].mean(axis=1)
+alv_score=df[['NKX2-1','NAPSA','SFTPB']].mean(axis=1)
+df['dc_score']=dc_score
+df['basal_score']=basal_score
+df['alv_score']=alv_score
+# cell type calls with stricter DC
+ct=[]
+for i in range(X.shape[0]):
+    row=df.iloc[i]
+    is_immune=row.PTPRC>0.5 or row.CD3D>0.5 or row.CD79A>0.5 or row.MS4A1>0.5 or row.CD68>0.5 or row.LYZ>0.5 or row.TPSAB1>0.5 or row.MZB1>0.5 or row.JCHAIN>0.5 or dc_score.iloc[i]>0.5
+    if is_immune:
+        # DC if specific DC marker and not lineage T/B/myeloid/mast
+        is_dc=dc_score.iloc[i]>0.5 and not (row.CD3D>0.5 or row.CD79A>0.5 or row.MS4A1>0.5 or row.CD68>0.5 or row.LYZ>0.5 or row.TPSAB1>0.5 or row.MZB1>0.5 or row.JCHAIN>0.5)
+        if is_dc:
+            typ='DC'
+        elif row.CD3D>0.5:
+            typ='T_NK'
+        elif row.CD79A>0.5 or row.MS4A1>0.5 or row.MZB1>0.5 or row.JCHAIN>0.5:
+            typ='B_plasma'
+        elif row.TPSAB1>0.5 or row.KIT>0.5:
+            typ='Mast'
+        elif row.CD68>0.5 or row.LYZ>0.5:
+            typ='Myeloid'
+        else:
+            typ='Immune_other'
+    else:
+        if row.VWF>0.5 or row.PECAM1>0.5:
+            typ='Endothelial'
+        elif row.DCN>0.5 or row.COL1A1>0.5:
+            typ='Fibroblast'
+        elif row.EPCAM>0.5:
+            if row.basal_score>0.5 and row.basal_score>=row.alv_score:
+                typ='Basal_epi'
+            elif row.alv_score>0.5 and row.alv_score>row.basal_score:
+                typ='Alveolar_epi'
+            else:
+                typ='Other_epi'
+        else:
+            typ='Other_nonimmune'
+    ct.append(typ)
+df['celltype']=ct
+df['sample']=obs
+print('total counts')
+print(df.celltype.value_counts().to_string())
+print('\\nRelevant:')
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    sub=df[df['sample']==s]
+    print('\\n',s,len(sub), 'PTPRC+',(sub.PTPRC>0.5).sum(), 'DC strict',(sub.celltype=='DC').sum(), 'dc_score>0.5',(sub.dc_score>0.5).sum())
+    print(sub.celltype.value_counts().to_string())
+    for g in ['FCER1A','CD1C','CLEC9A','LILRA4']:
+        print(g,(sub[g]>0.5).sum(), end=' ')
+    print()
+# save
+df.to_parquet('quick_calls2.parquet')
+ctdf=pd.crosstab(df['sample'],df['celltype'])
+ctdf.to_csv('quick_celltype_counts2.csv')
+print('\\nBasal_epi >0')
+print(ctdf['Basal_epi'][ctdf['Basal_epi']>0].sort_values(ascending=False).to_string())
+print('\\nAlveolar_epi >0')
+print(ctdf['Alveolar_epi'][ctdf['Alveolar_epi']>0].sort_values(ascending=False).to_string())
+PY"

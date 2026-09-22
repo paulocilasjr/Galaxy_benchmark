@@ -1,0 +1,37 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.stats import ranksums, ttest_ind
+feat=pd.read_csv('feature_reference.csv')
+genes=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])['name'].tolist()
+bar=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',header=None)[0].tolist()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float).T.toarray() # cell x gene
+assert len(bar)==X.shape[0]==len(calls)
+assert np.all(np.array(bar)==calls.cell_barcode.values)
+# CPM-ish log normalized
+lib=X.sum(1)
+Y=np.log1p(X/lib[:,None]*1e4)
+# pathways first 20 genes from feature order likely IFN signature
+ifn=genes[:20]
+idx=np.array([genes.index(g) for g in ifn])
+score=Y[:,idx].mean(1)
+calls=calls.join(feat.set_index('id')[['target_gene_name']].rename(columns={'target_gene_name':'target'}),on='feature_call')
+# compare non-targeting
+ctrl=calls.target.eq('Non-Targeting').values
+print('n controls',ctrl.sum(),'score',score[ctrl].mean(),np.median(score[ctrl]),'lib',lib[ctrl].mean(),flush=True)
+rows=[]
+for guide,g in calls.groupby('feature_call',sort=True):
+  ix=g.index.values; z=score[ix]
+  target=g.target.iloc[0]
+  # expression of target if present
+  ti=genes.index(target) if target in genes else None
+  xt=Y[ix,ti] if ti is not None else np.full(len(ix),np.nan)
+  # mean differences from ctrl, standardized pooled
+  d=z.mean()-score[ctrl].mean()
+  pooled=np.sqrt(((len(z)-1)*z.var(ddof=1)+(ctrl.sum()-1)*score[ctrl].var(ddof=1))/(len(z)+ctrl.sum()-2))
+  rows.append(dict(guide=guide,target=target,n=len(ix),score=z.mean(),median=np.median(z),delta=d,cohen=d/pooled if pooled else np.nan,p=ranksums(z,score[ctrl]).pvalue,target_expr=np.nanmean(xt),target_delta=np.nanmean(xt)-np.nanmean(Y[ctrl,ti]) if ti is not None else np.nan))
+r=pd.DataFrame(rows).sort_values('score')
+pd.set_option('display.max_rows',60); pd.set_option('display.width',240); print(r.to_string(index=False,formatters={c:'{:.4g}'.format for c in ['score','median','delta','cohen','p','target_expr','target_delta']}),flush=True)
+print('\\nby target top lowest',r.head(15)[['guide','target','n','score','delta','p']].to_string(index=False),flush=True)
+PY"

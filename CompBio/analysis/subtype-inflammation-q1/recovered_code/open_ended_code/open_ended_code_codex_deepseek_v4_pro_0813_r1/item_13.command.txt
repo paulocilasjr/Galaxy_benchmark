@@ -1,0 +1,54 @@
+/bin/bash -c "cat > analyze.py <<'PY'
+import gzip, time
+import numpy as np
+import pandas as pd
+import scipy.io
+import scipy.sparse as sp
+import scanpy as sc
+import anndata as ad
+
+t=time.time()
+genes=pd.read_csv('subtype.inflammation.q1.genes.txt.gz', sep='\\t')
+print('genes', genes.shape, flush=True)
+with gzip.open('subtype.inflammation.q1.1.mtx.gz','rb') as f:
+    m1=scipy.io.mmread(f).tocsr()
+print('m1',m1.shape,m1.nnz,flush=True)
+with gzip.open('subtype.inflammation.q1.2.mtx.gz','rb') as f:
+    m2=scipy.io.mmread(f).tocsr()
+print('m2',m2.shape,m2.nnz,flush=True)
+X=sp.hstack([m1,m2], format='csr')
+print('X',X.shape,X.nnz,flush=True)
+adata=ad.AnnData(X)
+adata.var_names=genes['gene_symbols'].astype(str).values
+adata.var_names_make_unique()
+adata.obs['sample']=['eye1']*m1.shape[1]+['eye2']*m2.shape[1]
+adata.obs_names=[f'eye1_{i}' for i in range(m1.shape[1])]+[f'eye2_{i}' for i in range(m2.shape[1])]
+# QC
+mt=adata.var_names.str.startswith('MT-')
+ribo=adata.var_names.str.startswith(('RPS','RPL'))
+adata.obs['n_counts']=np.asarray(adata.X.sum(axis=1)).ravel()
+adata.obs['n_genes']=np.asarray((adata.X>0).sum(axis=1)).ravel()
+adata.obs['pct_mt']=np.asarray(adata.X[:,mt].sum(axis=1)).ravel()/adata.obs['n_counts'].values*100
+adata.obs['pct_ribo']=np.asarray(adata.X[:,ribo].sum(axis=1)).ravel()/adata.obs['n_counts'].values*100
+print(adata.obs.describe(),flush=True)
+# maybe filter by min genes/counts (already QC'd, but do)
+sc.pp.filter_cells(adata, min_genes=200)
+sc.pp.filter_genes(adata, min_cells=3)
+print('after filter',adata.shape,flush=True)
+adata.layers['counts']=adata.X.copy()
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+adata.raw=adata
+sc.pp.highly_variable_genes(adata, n_top_genes=3000, batch_key='sample', flavor='seurat_v3')
+print('hvg', adata.var.highly_variable.sum(), flush=True)
+sc.pp.scale(adata, max_value=10)
+sc.tl.pca(adata, svd_solver='arpack', n_comps=50)
+print('pca done', time.time()-t, flush=True)
+sc.pp.neighbors(adata, n_neighbors=15, n_pcs=30)
+sc.tl.umap(adata)
+sc.tl.leiden(adata, resolution=1.0)
+print('leiden', adata.obs.leiden.value_counts(), flush=True)
+adata.write('combined.h5ad', compression='gzip')
+print('saved', time.time()-t, flush=True)
+PY
+python3 analyze.py"

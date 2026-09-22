@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, time
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel'))
+state=load_file('model.safetensors')
+missing, unexpected = model.load_state_dict(state, strict=False)
+print('missing before tie',len(missing), missing[-1])
+model.tie_weights()
+# verify no missing after tie by running load with strict true on current state? reverse tied and lm tied
+missing2, unexp2=model.load_state_dict(state, strict=False)
+print('missing after tie',len(missing2))
+for k in missing2[:5]: print(k)
+# quick forward
+model.eval()
+ids=torch.tensor([[7,8,9,10,3,7,8,9]], dtype=torch.long)
+with torch.no_grad():
+ out=model(input_ids=ids)
+print('out', out.logits[0,4,:])
+print('embed equal lm?', torch.equal(model.get_input_embeddings().weight, model.lm_head.weight))
+# check fwd rev tie
+print('rev tied?', model.caduceus.backbone.layers[0].mixer.mamba_rev.in_proj.weight.data_ptr()==model.caduceus.backbone.layers[0].mixer.mamba_fwd.in_proj.weight.data_ptr())
+PY"

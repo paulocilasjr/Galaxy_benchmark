@@ -1,0 +1,83 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, csv, re, numpy as np, json
+# parse matrix
+mat='sample.swap.rna.q1.tsv.gz'
+with gzip.open(mat,'rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r); genes=[]; rows=[]
+    for row in r:
+        genes.append(row[0]); rows.append([float(x) for x in row[1:]])
+A=np.array(rows)
+cols=header[1:]
+# parse gff mapping from mRNA note ID to gene Name
+id2name={}
+with gzip.open('BraLan3.gff.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9: continue
+        typ=parts[2]
+        attr=parts[8]
+        if typ=='gene':
+            m=re.search(r'ID=gene-(["'^;]+);.*Name=([''^;]+);'"',attr)
+            if m:
+                locus=m.group(1); name=m.group(2); id2name[locus]=name
+# map matrix ID to locus? matrix BLAG01000002; need find locus? GFF mRNA Note has ID:BLAG01000002_1 and locus_tag=BLAG_LOCUS2.
+# Parse mRNA lines: Note ID transcript, locus_tag gene.
+trans2gene={}
+with gzip.open('BraLan3.gff.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        attr=p[8]
+        if p[2] in ('mRNA','transcript','CDS'):
+            pass
+        m=re.search(r'ID=(rna-)?(["'^;]+);.*Note=ID:([''^;%]+)'"',attr)
+        if m and p[2]=='mRNA':
+            transcript=m.group(3)
+            # find locus_tag
+            lt=re.search(r'locus_tag=(["'^;]+)'"',attr)
+            gene_name=re.search(r'gene=(["'^;]+)'"',attr)
+            if lt and gene_name:
+                trans2gene[transcript]=gene_name.group(1)
+# better parse all mRNA rows
+trans2name={}
+with gzip.open('BraLan3.gff.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'mRNA': continue
+        attr=p[8]
+        nt=re.search(r'Note=ID:(["'^;%]+)'"',attr)
+        gn=re.search(r'gene=(["'^;]+)'"',attr)
+        if nt and gn:
+            trans2name[nt.group(1)]=gn.group(1)
+print('parsed trans',len(trans2name),'genes',len(set(trans2name.values())))
+print('mapped matrix',sum(g in trans2name for g in genes), 'of',len(genes))
+# print unmapped examples
+unm=[g for g in genes if g not in trans2name][:20]
+print(unm)
+# map gene names for matrix; if missing use ID
+names=[trans2name.get(g,g) for g in genes]
+# compute for each col top genes by specificity (expression fraction vs max)
+# raw values maybe normalized. compute z-scores of log2(x+1)
+X=np.log2(A+1)
+mean=X.mean(axis=1,keepdims=True); std=X.std(axis=1,keepdims=True); std[std==0]=1
+Z=(X-mean)/std
+# For each col, list top genes by Z within col with expression > some percentile and uniqueness
+out={}
+for j,c in enumerate(cols):
+    vals=Z[:,j]
+    order=np.argsort(-vals)
+    top=[]
+    for idx in order[:100]:
+        # require expression in col > 10 and positive z
+        if A[idx,j]>5 and vals[idx]>2:
+            top.append((names[idx], round(float(A[idx,j]),2), round(float(vals[idx]),2)))
+        if len(top)>=20: break
+    out[c]=top
+    print('\\n',c)
+    for x in top: print(x)
+json.dump(out,open('top_genes.json','w'),indent=2)
+PY"

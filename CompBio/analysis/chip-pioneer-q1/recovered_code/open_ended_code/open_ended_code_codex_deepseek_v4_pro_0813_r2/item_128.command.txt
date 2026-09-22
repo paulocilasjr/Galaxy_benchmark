@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, os, pandas as pd
+factors=['SOX2wt','SOX2dbd']
+samples=[f'TF{i}.rep{r}' for i in range(1,7) for r in [1,2]]
+# totals dict from previous file
+lines=open('processed/frag_access_counts.tsv').read().strip().splitlines()
+totals={}
+for line in lines:
+    s,a,b,t=line.split('\\t'); totals[s]=int(t)
+rows=[]
+for s in samples:
+    for fac in factors:
+        geo=f'geo_peaks_hg38/{fac}.bed'
+        res=subprocess.check_output(['sh','-c',f'gzip -dc data/chip.pioneer.q1/{s}.bed.gz | bedtools intersect -a {geo} -b stdin -c -nonamecheck'], text=True)
+        # parse last col sum; count lines positive
+        n=0; sm=0; total_peaks=0
+        for line in res.splitlines():
+            if not line.strip(): continue
+            total_peaks+=1; c=int(line.split('\\t')[-1]); sm+=c; n+=c>0
+        rows.append((s,fac,n,total_peaks,sm,sm/total_peaks,sm/total_peaks/totals[s]*1e6,n/total_peaks))
+D=pd.DataFrame(rows,columns=['sample','factor','covered','total','sum','mean','rpm','frac'])
+for fac in factors:
+    piv=D[D.factor==fac].pivot(index='sample',columns='factor',values='rpm')
+    print(fac)
+    print(piv.round(3).to_string())
+    print()
+PY"

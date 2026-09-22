@@ -1,0 +1,25 @@
+/bin/bash -lc "cat > validate.py <<'PY'
+import anndata as ad
+import numpy as np
+from scipy import sparse
+z=np.load('summary.npz');genes=z['genes'];rg=z['rg'].tolist();qg=z['qg'].tolist()
+r=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')[:,genes].copy();q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')[:,genes].copy()
+def get(a):
+ X=a.X.astype(float).tocsr();X=sparse.diags(1e4/np.asarray(X.sum(1)).ravel())@X;X.data=np.log1p(X.data);return X.toarray()
+R=get(r);Q=get(q);rl=r.obs.target_gene.values;ql=q.obs.guide.astype(str).values
+rng=np.random.default_rng(45)
+for gene,expected in [('PABPC1','guide18'),('NUDT21','guide13'),('LEO1','guide14')]:
+ i=rg.index(gene);idx=np.argsort(abs(z['rd'][i])/np.sqrt(z['rv']+.05))[-500:]
+ rr=R[:,idx];qq=Q[:,idx];ri=np.where(rl==gene)[0];rn=np.where(rl=='NT')[0];qn=np.where(np.char.startswith(ql.astype(str),'NT'))[0]
+ gids=[x for x in qg if x"'!='"'NT'];qis=[np.where(ql==g)[0] for g in gids]
+ wins={g:0 for g in gids}; margins=[]
+ for b in range(200):
+  v=rr[rng.choice(ri,len(ri))].mean(0)-rr[rng.choice(rn,len(rn))].mean(0)
+  ctrl=qq[rng.choice(qn,len(qn))].mean(0)
+  m=np.array([qq[rng.choice(j,len(j))].mean(0)-ctrl for j in qis])
+  v-=v.mean();m-=m.mean(1)[:,None]
+  s=m@v/(np.linalg.norm(m,axis=1)*np.linalg.norm(v))
+  wins[gids[np.argmax(s)]]+=1;ex=gids.index(expected);margins.append(s[ex]-np.max(np.delete(s,ex)))
+ print(gene,'bootstrap winners',sorted(wins.items(),key=lambda p:-p[1])[:4],'margin quantiles',np.quantile(margins,[.025,.5,.975]),flush=True)
+PY
+OPENBLAS_NUM_THREADS=1 python -u validate.py"

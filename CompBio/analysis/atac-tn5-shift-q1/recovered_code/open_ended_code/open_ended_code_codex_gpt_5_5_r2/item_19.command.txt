@@ -1,0 +1,71 @@
+/bin/bash -lc "python3 - <<'PY'
+import sys, os, gzip, math
+sys.path.insert(0, os.path.abspath('pydeps'))
+import py2bit
+import numpy as np
+
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+frags=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for idx,line in enumerate(f):
+        chrom,s,e,bc,c=line.rstrip().split('\\t')[:5]
+        if chrom in std:
+            # deterministic spread, keep high enough signal
+            if len(frags)<8000 and idx % 11 == 0:
+                frags.append((chrom,int(s),int(e),int(c)))
+print('sample',len(frags))
+
+tb=py2bit.open('hg38.2bit'); sizes=tb.chroms()
+base_idx={'A':0,'C':1,'G':2,'T':3}; trans=str.maketrans('ACGT','TGCA')
+K=15; Dmin=-25; Dmax=25; flank=K+max(abs(Dmin),abs(Dmax)); L=2*K+1
+left={d:np.zeros((L,4),float) for d in range(Dmin,Dmax+1)}
+right={d:np.zeros((L,4),float) for d in range(Dmin,Dmax+1)}
+nL={d:0 for d in range(Dmin,Dmax+1)}; nR={d:0 for d in range(Dmin,Dmax+1)}
+for chrom,s,e,w in frags:
+    size=sizes[chrom]
+    # Fetch around observed endpoint, enough for all candidate centers.
+    for side,pos,dic,ns,orient in [('L',s,left,nL,1),('R',e,right,nR,-1)]:
+        a=pos-flank; b=pos+flank+1
+        if a<0 or b>size: continue
+        seq=tb.sequence(chrom,a,b).upper()
+        if len(seq)"'!=(2*flank+1) or '"'N' in seq: continue
+        for d in range(Dmin,Dmax+1):
+            center=flank+d
+            sub=seq[center-K:center+K+1]
+            if orient==-1:
+                sub=sub.translate(trans)[::-1]
+            mat=dic[d]
+            ok=True
+            for i,ch in enumerate(sub):
+                j=base_idx.get(ch)
+                if j is None:
+                    ok=False; break
+                mat[i,j]+=w
+            if ok: ns[d]+=w
+
+def freq(mat): return (mat+0.5)/(mat.sum(axis=1,keepdims=True)+2.0)
+def logodds(mat): return np.log2(freq(mat)/0.25)
+def corrmat(a,b):
+    x=logodds(a).ravel(); y=logodds(b).ravel(); x-=x.mean(); y-=y.mean()
+    den=np.linalg.norm(x)*np.linalg.norm(y)
+    return float(x@y/den) if den else -9
+scores=[]
+for dl in range(Dmin,Dmax+1):
+    for dr in range(Dmin,Dmax+1):
+        scores.append((corrmat(left[dl],right[dr]),dl,dr))
+scores.sort(reverse=True)
+print('top corr')
+for c,dl,dr in scores[:30]: print(f'{c:.5f}\\tdl={dl}\\tdr={dr}\\tu={4-dl};{-5-dr}')
+# Also score sharpness around center using IC in +/-4 bp only
+print('\\nIC by offset (left top, right top)')
+def ic_sum(mat):
+    f=freq(mat); ic=(f*np.log2(f/0.25)).sum(axis=1)
+    return float(ic[K-5:K+6].sum()), ''.join('ACGT'[i] for i in f.argmax(axis=1))
+for side,dic in [('L',left),('R',right)]:
+    arr=[]
+    for d in range(Dmin,Dmax+1):
+        arr.append((ic_sum(dic[d])[0],d,ic_sum(dic[d])[1]))
+    arr.sort(reverse=True)
+    print(side)
+    for val,d,cons in arr[:10]: print(f'{val:.4f}\\td={d}\\tu_part={4-d if side==\"L\" else -5-d}\\t{cons}')
+PY"

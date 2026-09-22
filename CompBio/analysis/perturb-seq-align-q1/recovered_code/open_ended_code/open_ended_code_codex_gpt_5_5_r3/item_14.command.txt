@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from collections import defaultdict
+
+def dec(ds): return [x.decode() if isinstance(x,bytes) else str(x) for x in ds[:]]
+def load_meta(fn):
+    f=h5py.File(fn,'r')
+    guides=dec(f['obs/guide/categories']); gc=f['obs/guide/codes'][:].astype(int)
+    genes=dec(f['var/_index'])
+    return f,guides,gc,genes
+
+def col(f, j):
+    indptr=f['X/indptr']; indices=f['X/indices']; data=f['X/data']
+    a=int(indptr[j]); b=int(indptr[j+1])
+    v=np.zeros(f['X'].attrs['shape'][0], dtype=float)
+    v[indices[a:b]]=data[a:b]
+    return v
+
+def group_means(vals, codes, cats):
+    out=[]
+    for i,c in enumerate(cats):
+        m=codes==i
+        if m.sum(): out.append((c, vals[m].mean(), int(m.sum())))
+    return out
+for fn in ['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']:
+    f,guides,gc,genes=load_meta(fn)
+    print('\\nFILE', fn)
+    nt=[i for i,g in enumerate(guides) if g.startswith('NT-')]
+    ntmask=np.isin(gc,nt)
+    for gene in ['PABPC1','NUDT21','LEO1']:
+        j=genes.index(gene)
+        vals=col(f,j)
+        ntmean=vals[ntmask].mean()
+        means=group_means(vals,gc,guides)
+        non=[x for x in means if not x[0].startswith('NT-')]
+        rank_low=sorted(non, key=lambda x:x[1])[:10]
+        print(gene,'NTmean',round(ntmean,3),'lowest',[(g,round(m,3),n) for g,m,n in rank_low])
+    f.close()
+PY"

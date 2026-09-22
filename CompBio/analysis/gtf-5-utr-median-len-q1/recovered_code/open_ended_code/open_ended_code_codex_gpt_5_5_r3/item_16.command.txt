@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, math
+from collections import defaultdict, Counter
+import numpy as np
+path='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY','chrM'}
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)";'"')
+def attrs(s):
+    d=defaultdict(list)
+    for k,v in attr_re.findall(s): d[k].append(v)
+    return d
+
+selected={}
+data=defaultdict(lambda:{'exon':[],'cds':[],'stop':[],'strand':None,'gene':None,'tags':set()})
+tx_locs=defaultdict(set)
+select_all=select_std=0
+with gzip.open(path,'rt') as fh:
+    for line in fh:
+        if not line.strip() or line.startswith('#'): continue
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<9: continue
+        chrom,source,feature,start,end,score,strand,frame,attr=f
+        a=attrs(attr); tid=a.get('transcript_id',[''])[0]
+        if not tid: continue
+        key=(chrom,tid)
+        rec=data[key]
+        rec['strand']=strand; rec['gene']=a.get('gene_id',[''])[0]; rec['tags'].update(a.get('tag',[]))
+        if feature=='transcript':
+            tx_locs[tid].add(chrom)
+            if 'MANE Select' in a.get('tag',[]):
+                select_all+=1
+                if chrom in std:
+                    select_std+=1
+                    selected[key]=(strand,a.get('gene_id',[''])[0])
+        elif feature=='exon': data[key]['exon'].append((int(start),int(end)))
+        elif feature=='CDS': data[key]['cds'].append((int(start),int(end)))
+        elif feature=='stop_codon': data[key]['stop'].append((int(start),int(end)))
+
+multi=[(tid,sorted(chrs)) for tid,chrs in tx_locs.items() if len(chrs)>1]
+five=[]; cds_lengths=[]; three=[]; missing=[]
+for key,(strand,gene) in selected.items():
+    rec=data[key]
+    exons=rec['exon']; coding=rec['cds']+rec['stop']
+    if not exons or not coding:
+        missing.append(key); continue
+    c_start=min(s for s,e in coding); c_end=max(e for s,e in coding)
+    merged=[]
+    for s,e in sorted(coding):
+        if not merged or s>merged[-1][1]+1: merged.append([s,e])
+        elif e>merged[-1][1]: merged[-1][1]=e
+    cds_len=sum(e-s+1 for s,e in merged)
+    def ov(ex,lo,hi):
+        s,e=ex; a=max(s,lo); b=min(e,hi); return max(0,b-a+1)
+    if strand=='+':
+        f5=sum(ov(ex,-10**18,c_start-1) for ex in exons)
+        f3=sum(ov(ex,c_end+1,10**18) for ex in exons)
+    else:
+        f5=sum(ov(ex,c_end+1,10**18) for ex in exons)
+        f3=sum(ov(ex,-10**18,c_start-1) for ex in exons)
+    five.append(f5); cds_lengths.append(cds_len); three.append(f3)
+
+print('select_all',select_all,'select_std',select_std,'used',len(five),'missing',len(missing),'multi_tid',len(multi))
+print('median_raw',np.median(five),np.median(cds_lengths),np.median(three))
+print('answer',f'{math.floor(np.median(five))};{math.floor(np.median(cds_lengths))};{math.floor(np.median(three))}')
+print('multi examples',multi[:10])
+PY"

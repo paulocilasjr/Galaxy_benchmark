@@ -1,0 +1,45 @@
+/bin/bash -lc "cat > fetch_genehub_mapping.py <<'PY'
+import requests, re, sys, json, concurrent.futures, time
+session=requests.Session()
+session.headers.update({'User-Agent':'Mozilla/5.0'})
+
+def get(g):
+    url='http://202.194.139.32/cgi-bin/geneDetail.py'
+    params={'search':g}
+    for attempt in range(3):
+        try:
+            r=session.get(url,params=params,timeout=30)
+            if r.status_code==200:
+                txt=r.text
+                # locate GeneID cell
+                m=re.search(r'<th>GeneID:</th><td["'^>]*>(.*?)</td>'"',txt,re.S)
+                if m:
+                    ids=re.findall(r'Traes(?:CS|CSU)\\S*03G\\S*',m.group(1))
+                    ids=[x for x in ids if not x.endswith('.1')] # not transcript
+                    # prefer gene id with chromosome pattern, return unique
+                    # ids may include .1? exclude
+                    ids=[re.sub(r'\\.\\d+"'$'"','',x) for x in ids]
+                    return g, list(dict.fromkeys(ids))
+                return g, []
+            elif r.status_code==404:
+                return g, []
+        except Exception:
+            time.sleep(1+attempt)
+    return g, []
+
+if __name__=='__main__':
+    genes=[]
+    for line in sys.stdin:
+        g=line.strip()
+        if g and not g.startswith('#') and g"'!='"'Gene':
+            genes.append(g)
+    out={}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+        futs={ex.submit(get,g):g for g in genes}
+        for i,f in enumerate(concurrent.futures.as_completed(futs),1):
+            g,ids=f.result(); out[g]=ids
+            if i%100==0: print(i,file=sys.stderr,flush=True)
+    json.dump(out,open('genehub_old_to_03.json','w'),indent=2)
+    print('done',len(out),file=sys.stderr)
+PY
+python3 fetch_genehub_mapping.py < old_marker_ids.txt"

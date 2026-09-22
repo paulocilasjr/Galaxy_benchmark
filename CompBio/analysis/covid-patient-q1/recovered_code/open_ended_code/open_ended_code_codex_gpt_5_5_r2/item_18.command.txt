@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+z=np.load('donor_pseudobulk.npz', allow_pickle=True)
+counts=z['counts']; donors=z['donors']; genes=z['genes']; cell_counts=z['cell_counts']; cell_umis=z['cell_umis']; cell_genes=z['cell_genes']; donor_codes=z['donor_codes']
+# numeric sort helper
+def dnum(d): return int(str(d).replace('donor',''))
+# logCPM pseudobulk
+lib=counts.sum(axis=1)
+logcpm=np.log1p(counts / lib[:,None] * 1e6)
+gene_to_i={g:i for i,g in enumerate(genes)}
+sets={
+ 'IFN_ISG':['ISG15','IFI6','IFIT1','IFIT2','IFIT3','IFITM1','IFITM2','IFITM3','IFI27','IFI44','IFI44L','MX1','MX2','OAS1','OAS2','OAS3','OASL','RSAD2','IRF7','STAT1','STAT2','SIGLEC1','CXCL10','DDX58','HERC5','XAF1','GBP1'],
+ 'inflammatory':['S100A8','S100A9','S100A12','IL1B','FCN1','LST1','CTSS','TYROBP','LGALS3','LYZ','VCAN','CD14'],
+ 'neutrophil':['MPO','ELANE','AZU1','PRTN3','MMP8','LTF','DEFA3','CEACAM8','FCGR3B','S100A8','S100A9'],
+ 'platelet':['PPBP','PF4','GP9','ITGA2B','TUBB1','NRGN'],
+ 'Tcell':['CD3D','CD3E','TRAC','IL7R','LTB','CCR7'],
+ 'Bcell':['MS4A1','CD79A','CD79B','BANK1','IGHM'],
+ 'NK':['NKG7','GNLY','PRF1','KLRD1','GZMB'],
+ 'plasma':['MZB1','JCHAIN','XBP1','IGHG1','IGHA1'],
+}
+rows=[]
+for di,d in enumerate(donors):
+    row={'donor':str(d), 'num':dnum(str(d)), 'cells':int(cell_counts[di]), 'lib':lib[di], 'umi_per_cell':lib[di]/cell_counts[di]}
+    for name,gs in sets.items():
+        ix=[gene_to_i[g] for g in gs if g in gene_to_i]
+        row[name]=float(logcpm[di,ix].mean()) if ix else np.nan
+        # pct total cpm too
+        row[name+'_sum_cpm']=float((counts[di,ix].sum()/lib[di])*1e6) if ix else np.nan
+    rows.append(row)
+df=pd.DataFrame(rows).sort_values('num')
+# z scores for selected signatures
+for c in ['IFN_ISG','inflammatory','neutrophil','platelet','Tcell','Bcell','NK','plasma']:
+    df[c+'_z']=(df[c]-df[c].mean())/df[c].std(ddof=0)
+print(df[['donor','cells','umi_per_cell','IFN_ISG','IFN_ISG_z','inflammatory_z','neutrophil_z','platelet_z','Tcell_z','Bcell_z','NK_z','plasma_z']].to_string(index=False, float_format=lambda x:f'{x:7.3f}'))
+print('\\nSorted by IFN')
+print(df.sort_values('IFN_ISG')[['donor','num','IFN_ISG','IFN_ISG_z','inflammatory_z','neutrophil_z','platelet_z']].to_string(index=False, float_format=lambda x:f'{x:7.3f}'))
+PY"

@@ -1,0 +1,68 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, pyBigWig, gzip, math, statistics, time
+analyses=json.load(open('encode4_dnase_v3alpha2_grch38_analyses.json'))
+# diagnostic bins top 200 maybe
+track=[]
+for line in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+    c,s,e,v=line.split(); track.append((float(v),c,int(s),int(e)))
+# Use top bins and random-ish medium bins for fingerprint
+sel=sorted(track, reverse=True)[:100]
+# Extract bw rows
+bws=[]
+for a in analyses:
+    if 'ERROR' in a: continue
+    datasets=[d.strip('/').split('/')[-1] for d in a.get('datasets',[])]
+    for f in a.get('files',[]):
+        if f.get('file_format')=='bigWig' and f.get('output_type')=='read-depth normalized signal' and f.get('assembly')=='GRCh38' and f.get('status')=='released':
+            bws.append({'analysis':a.get('accession'), 'datasets':datasets, 'file':f.get('accession'), 'href':f.get('href'), 'size':f.get('file_size'), 'cloud':(f.get('cloud_metadata') or {}).get('url')})
+print('bws',len(bws))
+print(bws[:5])
+# Candidate based on alignments total first maybe top 100 closest
+rows=json.load(open('encode4_filtered_bams.json'))
+from collections import defaultdict
+by=defaultdict(list)
+for r in rows:
+    if r.get('total'): by[tuple(r['datasets'])].append(r)
+closes=[]
+for key,rs in by.items():
+    s=sum(r['total'] for r in rs)
+    if 50_000_000 <= s <= 120_000_000:
+        closes.append((abs(s-76275600),key,s))
+close_keys=[key for _,key,_ in sorted(closes)[:200]]
+# map dataset to bws
+db=defaultdict(list)
+for bw in bws: db[tuple(bw['datasets'])].append(bw)
+print('close with bw',sum(1 for k in close_keys if k in db))
+
+def query_bw(bw):
+    url=bw['cloud'] or ('https://www.encodeproject.org'+bw['href'])
+    vals=[]
+    fh=pyBigWig.open(url)
+    for v,c,s,e in sel:
+        try:
+            # mean over bin, nBins 1
+            x=fh.stats(c,s,e,type='mean')[0]
+        except Exception:
+            x=None
+        vals.append(0.0 if x is None else float(x))
+    fh.close()
+    return vals
+# score correlation against target top values
+target=[v for v,_,_,_ in sel]
+def corr(x,y):
+    mx=sum(x)/len(x); my=sum(y)/len(y)
+    vx=sum((a-mx)**2 for a in x); vy=sum((b-my)**2 for b in y)
+    return sum((a-mx)*(b-my) for a,b in zip(x,y))/((vx*vy)**0.5) if vx and vy else 0
+scores=[]
+for idx,key in enumerate(close_keys[:100]):
+    if key not in db: continue
+    for bw in db[key]:
+        try:
+            vals=query_bw(bw)
+            scores.append((corr(target,vals), key[0] if key else None, bw['file'], sum(vals), vals[:5]))
+            print('score',scores[-1][:4], flush=True)
+        except Exception as e:
+            print('ERR',key,bw['file'],e, flush=True)
+print('TOP')
+for s in sorted(scores, reverse=True)[:20]: print(s)
+PY"

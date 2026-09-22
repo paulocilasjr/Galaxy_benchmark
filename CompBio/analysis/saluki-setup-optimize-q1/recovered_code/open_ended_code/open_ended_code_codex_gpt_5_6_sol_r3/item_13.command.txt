@@ -1,0 +1,29 @@
+/bin/bash -lc "curl -L --fail --silent --show-error -r 18743175510-18751132385 https://zenodo.org/api/records/6326409/files/datasets.zip/content -o zip_central.bin && python3 - <<'PY'
+import struct
+b=open('zip_central.bin','rb').read()
+i=0
+entries=[]
+while b[i:i+4]==b'PK\\x01\\x02':
+ vals=struct.unpack_from('<4s6H3L5H2L',b,i)
+ sig,vmade,vneed,flags,method,mt,md,crc,csize,usize,nlen,xlen,clen,disk,iattr,eattr,off=vals
+ name=b[i+46:i+46+nlen].decode('utf-8')
+ extra=b[i+46+nlen:i+46+nlen+xlen]
+ # zip64 extension replacements in sequence for FF values
+ if csize==0xffffffff or usize==0xffffffff or off==0xffffffff or disk==0xffff:
+  p=0
+  while p<len(extra):
+   eid,sz=struct.unpack_from('<HH',extra,p); data=extra[p+4:p+4+sz]; p+=4+sz
+   if eid==1:
+    q=0
+    if usize==0xffffffff: usize=struct.unpack_from('<Q',data,q)[0]; q+=8
+    if csize==0xffffffff: csize=struct.unpack_from('<Q',data,q)[0]; q+=8
+    if off==0xffffffff: off=struct.unpack_from('<Q',data,q)[0]; q+=8
+    if disk==0xffff: disk=struct.unpack_from('<L',data,q)[0]; q+=4
+    break
+ entries.append((name,csize,usize,off,method,flags))
+ i+=46+nlen+xlen+clen
+print('entries',len(entries),'parsed bytes',i)
+for e in entries:
+ if ('train_gru' in e[0] and (e[0].endswith('.h5') or e[0].endswith('params.json') or e[0].endswith('/'))) or 'deeplearning' in e[0] and e[0].endswith('targets.txt'):
+  print('\\t'.join(map(str,e)))
+PY"

@@ -1,0 +1,21 @@
+/bin/bash -c "python3 - <<'PY'
+import snapatac2 as snap, numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import cosine_similarity
+ap=snap.read('atac_peaks_scrub.h5ad'); X=ap.X[:].tocsr().astype(np.float32); X.data[:]=1; names=np.array(ap.obs_names)
+at=snap.read('atac.snap.h5ad'); names2=np.array(at.obs_names); idx=[np.where(names2==n)[0][0] for n in names]; leiden=np.array(at.obs['leiden'])[idx]; uniq,clusters=np.unique(leiden,return_inverse=True)
+means=np.vstack([np.asarray(X[clusters==c].mean(axis=0)).ravel() for c in range(len(uniq))]); means_norm=normalize(means,norm='l2',axis=1)
+b='GCGACACGCCGGGCAC-1'; j=np.where(names==b)[0][0]; v=np.asarray(X[j].toarray()).ravel().astype(np.float32); v=normalize(v.reshape(1,-1),norm='l2')[0]
+ci=7; cj=8
+mid=normalize(((means_norm[ci]+means_norm[cj])/2).reshape(1,-1),norm='l2')[0]
+sims=[cosine_similarity(v.reshape(1,-1),means_norm[k].reshape(1,-1))[0,0] for k in [ci,cj]]
+sim_mid=cosine_similarity(v.reshape(1,-1),mid.reshape(1,-1))[0,0]
+print('raw uniq',uniq[ci],uniq[cj], 'sim parents',sims,'mid',sim_mid)
+for k in [ci,cj]:
+ vals=[]
+ for i in np.where(clusters==k)[0]:
+  vi=np.asarray(X[i].toarray()).ravel().astype(np.float32); vi=normalize(vi.reshape(1,-1),norm='l2')[0]
+  vals.append(cosine_similarity(vi.reshape(1,-1),mid.reshape(1,-1))[0,0])
+ print(uniq[k],'sim_mid mean',np.mean(vals),'min',np.min(vals),'quant',np.quantile(vals,[0,.05,.5,.95,1]),'cand percentile',(np.array(vals)<sim_mid).mean())
+PY"

@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import sys, os, gzip
+sys.path.insert(0, os.path.abspath('pydeps'))
+import py2bit, numpy as np
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+frags=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        chrom,s,e,bc,c=line.rstrip().split('\\t')[:5]
+        if chrom in std:
+            frags.append((chrom,int(s),int(e),int(c)))
+print('frags', len(frags))
+tb=py2bit.open('hg38.2bit'); sizes=tb.chroms(); trans=str.maketrans('ACGT','TGCA')
+base_idx={'A':0,'C':1,'G':2,'T':3}; comp=[3,2,1,0]
+K=20; Dmin=-10; Dmax=10; flank=K+10; L=2*K+1
+mats={'L':{d:np.zeros((L,4)) for d in range(Dmin,Dmax+1)}, 'R':{d:np.zeros((L,4)) for d in range(Dmin,Dmax+1)}}
+for chrom,s,e,w in frags:
+    size=sizes[chrom]
+    for side,pos,orient in [('L',s,1),('R',e,-1)]:
+        a=pos-flank; b=pos+flank+1
+        if a<0 or b>size: continue
+        seq=tb.sequence(chrom,a,b).upper()
+        if len(seq)"'!=2*flank+1 or '"'N' in seq: continue
+        for d in range(Dmin,Dmax+1):
+            sub=seq[flank+d-K:flank+d+K+1]
+            if orient==-1: sub=sub.translate(trans)[::-1]
+            mat=mats[side][d]
+            for i,ch in enumerate(sub):
+                j=base_idx.get(ch)
+                if j is not None: mat[i,j]+=w
+
+def freq(mat): return (mat+0.5)/(mat.sum(axis=1,keepdims=True)+2.0)
+def lo(mat): return np.log2(freq(mat)/0.25)
+def corr(x,y):
+    x=x.ravel(); y=y.ravel(); x=x-x.mean(); y=y-y.mean(); return float(x@y/(np.linalg.norm(x)*np.linalg.norm(y)))
+def pal(mat):
+    x=lo(mat); return corr(x,x[::-1][:,comp])
+def ic_center(mat,rad=8):
+    f=freq(mat); ic=(f*np.log2(f/0.25)).sum(axis=1); return float(ic[K-rad:K+rad+1].sum())
+for side in ['L','R']:
+    arr=[]
+    for d,mat in mats[side].items():
+        f=freq(mat); cons=''.join('ACGT'[i] for i in f.argmax(axis=1))
+        arr.append((pal(mat),ic_center(mat),d,cons))
+    print(side)
+    for p,ic,d,cons in sorted(arr, reverse=True)[:8]:
+        u=4-d if side=='L' else -5-d
+        print(f'{p:.6f}\\tic={ic:.4f}\\td={d}\\tu={u}\\t{cons}')
+PY"

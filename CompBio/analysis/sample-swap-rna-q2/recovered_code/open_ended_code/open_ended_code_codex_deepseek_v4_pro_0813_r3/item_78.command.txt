@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re, itertools, json
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+cols=df.columns.tolist()
+stab=pd.read_csv('refs/wheat_root_atlas/GRN_regulon_analysis/input/stability_and_specificity_info.csv', sep=';')
+ms=stab[(stab['Specificity']=='specific') & (stab['Stability']=='stable') & stab['is_Marker_of_Cluster'].notna()].copy()
+# corrected mapping
+exact_map={'1Epidermis':'epidermis','2Cortex':'cortex','3Meristems':'meristems','4ProvascularCells':'provascular','5Unknown':'root_cap','6Pericycle':'pericycle','7Epidermis':'epidermis','8RootHair':'root_hair','9Endodermis':'endodermis','10Xylem':'xylem','11Endodermis/Phloem':'root_cap','12DividingCells':'meristems','13Phloem':'phloem','14RootCap':'root_cap'}
+sets={ct:set() for ct in cols}
+for lab,bt in exact_map.items():
+    genes=ms.loc[ms['is_Marker_of_Cluster'].str.contains(re.escape(lab), na=False),'Gene'].tolist()
+    sets[bt].update(genes)
+# only present and at least some
+present_sets={ct:[g for g in genes if g in df.index] for ct,genes in sets.items()}
+for ct,gs in present_sets.items(): print(ct,len(gs))
+# Use expression normalized by gene max; score ct = mean over genes of expr in col/rowmax.
+def score(colname, genes):
+    if not genes: return -1
+    mat=df.loc[genes]
+    # avoid divide zero (all zeros) by max->nan
+    mx=mat.max(axis=1)
+    prop=mat.div(mx.where(mx>0),axis=0).fillna(0)
+    return prop[colname].mean()
+observed={ct:score(ct, present_sets[ct]) for ct in cols}
+obs_total=sum(observed.values())
+print('\\nobserved scores')
+for ct,v in observed.items(): print(ct,round(v,4))
+print('total',obs_total)
+# Evaluate all pairs; swap columns labels for score computation, keep matrix columns fixed.
+# For pair a,b, score of a should be markers_a in col_b; b markers in col_a.
+pair_results=[]
+for a,b in itertools.combinations(cols,2):
+    new=observed.copy()
+    new[a]=score(b, present_sets[a]) # markers a evaluated at col b (current labels swapped)
+    new[b]=score(a, present_sets[b])
+    total=sum(new.values())
+    pair_results.append((total-obs_total,a,b,new[a],new[b]))
+for diff,a,b,sa,sb in sorted(pair_results, reverse=True)[:20]:
+    print(f'swap {a},{b}: diff {diff:.4f} scores a(b) {sa:.3f} b(a) {sb:.3f}')
+print('best improvement',max(pair_results))
+PY"

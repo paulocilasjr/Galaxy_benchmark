@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.spatial.distance import cdist
+comp=pd.read_csv('deconv_composition.csv')
+ctypes=['B_Cell','Endothelial','Fibroblast_Stroma','Macrophage','T_Cell','Tumor_Core']
+coords=comp[['array_row','array_col']].values
+tumor_mask=comp['Tumor_Core']>0
+tumor_coords=coords[tumor_mask]
+D=cdist(coords,tumor_coords)
+nearest=D.min(axis=1)
+comp['nearest_tumor']=nearest
+print('tumor spots', tumor_mask.sum())
+print('nearest dist all spots mean median max', nearest.mean(), np.median(nearest), nearest.max())
+for t in ctypes:
+    if t=='Tumor_Core': continue
+    m=comp[t]>0
+    print('\\n',t,'presence spots',m.sum())
+    print('mean nearest if present', nearest[m].mean(), 'median', np.median(nearest[m]))
+    # weighted by counts
+    w=comp[t].values
+    print('count-weighted mean', np.average(nearest, weights=w))
+    # compare to all spots
+    from scipy.stats import mannwhitneyu
+    stat,p=mannwhitneyu(nearest[m], nearest[~m], alternative='less')
+    print('MW presence vs absent less p',p,'U',stat)
+    # Compare presence cells distances to null same number random
+    # permutation
+    rng=np.random.default_rng(0)
+    null=[]
+    n=m.sum()
+    for _ in range(1000):
+        idx=rng.choice(len(nearest), size=n, replace=False)
+        null.append(nearest[idx].mean())
+    null=np.array(null)
+    z=(nearest[m].mean()-null.mean())/null.std()
+    print('perm p lower', (null<=nearest[m].mean()).mean(), 'z',z)
+PY"

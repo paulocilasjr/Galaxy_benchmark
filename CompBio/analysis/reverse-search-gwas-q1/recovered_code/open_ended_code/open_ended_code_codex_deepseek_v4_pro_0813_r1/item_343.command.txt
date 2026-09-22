@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, concurrent.futures, time
+accs=[]
+with open('summary_statistics_table_export.tsv') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>15 and p[15]=='40593539':
+            path=p[11].strip('\"').replace('http://ftp.ebi.ac.uk','https://ftp.ebi.ac.uk')
+            accs.append((p[1],path))
+print('accs',len(accs), flush=True)
+
+def head_len(url):
+    req=urllib.request.Request(url, method='HEAD', headers={'User-Agent':'Mozilla/5.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.headers.get('Content-Length'), r.status
+    except urllib.error.HTTPError as e:
+        return None, e.code
+    except Exception as e:
+        return None, type(e).__name__
+
+def sample(url):
+    req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Range':'bytes=0-20000'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read()
+    except Exception as e:
+        return b''
+
+def process(item):
+    acc,path=item; url=f'{path}/{acc}.tsv'
+    length,status=head_len(url)
+    data=sample(url)
+    if not data:
+        return acc,length,status,None,None,None,url
+    text=data.decode('utf-8','ignore')
+    lines=text.splitlines()
+    if not lines:
+        return acc,length,status,None,None,None,url
+    hb=data.find(b'\\n')+1 if data else 0
+    n=min(20,len(lines)-1)
+    if n<=0 or length is None:
+        avg=None
+    else:
+        total=sum(len(lines[i].encode('utf-8'))+1 for i in range(1,n+1))
+        avg=total/n
+    est=(int(length)-hb)/avg if length and avg else None
+    return acc,length,status,hb,avg,est,url
+
+results=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    futs=[ex.submit(process,item) for item in accs]
+    for fut in concurrent.futures.as_completed(futs):
+        results.append(fut.result())
+
+valid=[r for r in results if r[5] is not None]
+valid.sort(key=lambda r: abs(r[5]-12774703))
+print('valid',len(valid),'of',len(results), flush=True)
+for r in valid[:100]:
+    print(f'{r[0]}\\tlen={r[1]}\\tstatus={r[2]}\\test_rows={r[5]:.0f}\\tdiff={r[5]-12774703:.0f}')
+from collections import Counter
+print(Counter(r[2] for r in results))
+PY"

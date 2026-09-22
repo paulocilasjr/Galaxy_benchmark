@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re
+expr=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+s4=pd.read_excel('PMC11860762/mmc5.xlsx', sheet_name='Table S4')
+s4['cluster']=s4['cluster'].str.strip()
+# zscore log expression per gene
+log=np.log1p(expr)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1).replace(0,np.nan),axis=0)
+# expected mapping for clusters to matrix labels; G1/S and G2/M -> meristems, unknown ignored
+mapc={
+ '1 - Epidermis':'epidermis','7 - Epidermis':'epidermis','2 - Cortex':'cortex','4 - Provascular Cells':'provascular','6 - Pericycle':'pericycle','8 - Root Hair':'root_hair','9 - Endodermis':'endodermis','10 - Xylem':'xylem','11 - Endodermis/Phloem':None,'13 - Phloem':'phloem','14 - Root Cap':'root_cap','3 - G1/S':'meristems','12 - G2/M':'meristems'}
+print('cluster\\tn\\texpected\\ttop_by_mean_z\\tmean_z_by_col\\tmax_count')
+for c,sub in s4.groupby('cluster',sort=False):
+    genes=[g for g in sub.Gene_ID.dropna().astype(str).unique() if g in expr.index]
+    if not genes: continue
+    # score all DEGs weighted by avg_log2FC? top 100? output for all and top50
+    for label,genes2 in [('all',genes),('top50',[g for g in sub.sort_values('avg_log2FC',ascending=False).Gene_ID.astype(str).unique() if g in expr.index][:50]),('top20',[g for g in sub.sort_values('avg_log2FC',ascending=False).Gene_ID.astype(str).unique() if g in expr.index][:20])]:
+        mean_z=z.loc[genes2].mean(axis=0).sort_values(ascending=False)
+        maxcnt=expr.loc[genes2].idxmax(axis=1).value_counts().to_dict()
+        print(f'{c} [{label}]\\t{len(genes2)}\\t{mapc.get(c)}\\t{mean_z.index[0]}\\t'+', '.join(f'{k}:{v:.2f}' for k,v in mean_z.items())+'\\t'+str(maxcnt))
+    print()
+PY"

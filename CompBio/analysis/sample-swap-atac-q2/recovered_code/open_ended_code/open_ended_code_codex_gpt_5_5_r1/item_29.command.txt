@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,bisect,math
+import pandas as pd, numpy as np
+# Parse protein-coding/gene TSS coordinates from GENCODE
+pat_name=re.compile(r'gene_name \"(["'^"]+)"'"')
+pat_type=re.compile(r'gene_type \"(["'^"]+)"'"')
+tss_by_chr={}
+with gzip.open('gencode.v44.annotation.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        fields=line.rstrip('\\n').split('\\t')
+        if len(fields)<9 or fields[2] "'!= '"'gene': continue
+        chrom=fields[0]
+        if chrom not in ['chr'+str(i) for i in range(1,23)]+['chrX']: continue
+        m=pat_name.search(fields[8]); mt=pat_type.search(fields[8])
+        if not m: continue
+        name=m.group(1); typ=mt.group(1) if mt else ''
+        if typ not in ('protein_coding','lncRNA','miRNA'): continue
+        start=int(fields[3])-1; end=int(fields[4]); strand=fields[6]
+        tss=start if strand=='+' else end
+        tss_by_chr.setdefault(chrom,[]).append((tss,name))
+for c in tss_by_chr: tss_by_chr[c].sort()
+
+def nearest(chrom, pos, maxdist=200000):
+    arr=tss_by_chr.get(chrom,[]); xs=[x[0] for x in arr]
+    i=bisect.bisect_left(xs,pos); best=None
+    for j in [i-2,i-1,i,i+1,i+2]:
+        if 0<=j<len(arr):
+            d=abs(arr[j][0]-pos)
+            if best is None or d<best[0]: best=(d,arr[j][1])
+    if best and best[0]<=maxdist: return best[1],best[0]
+    return '.',None
+
+df=pd.read_csv('sample.swap.atac.q2.tsv.gz', sep='\\t')
+cts=list(df.columns[3:])
+X=df[cts].astype(float)
+tot=X.sum(axis=0)
+log=np.log2(X.div(tot,axis=1)*1e6 + 1)
+# z across cell types per bin, plus margin versus second best
+Z=(log.sub(log.mean(axis=1),axis=0)).div(log.std(axis=1,ddof=0).replace(0,np.nan),axis=0).fillna(0)
+for ct in cts:
+    z=Z[ct]
+    # require enough raw signal, margin; choose bins where target highest
+    others=Z[[c for c in cts if c"'!=ct]].max(axis=1)
+    margin=z-others
+    idx=np.where((z>2.0) & (margin>0.5) & (X[ct]>=5))[0]
+    order=idx[np.argsort((-margin.iloc[idx]).values)]
+    seen=set(); rows=[]
+    for ii in order:
+        chrom=df.at[ii,'"'chrom']; mid=(df.at[ii,'start']+df.at[ii,'end'])//2
+        gene,dist=nearest(chrom,mid)
+        key=gene if gene"'!='"'.' else f'{chrom}:{mid//100000}'
+        if key in seen: continue
+        seen.add(key)
+        rows.append((gene,dist,chrom,df.at[ii,'start'],df.at[ii,'end'],z.iloc[ii],margin.iloc[ii],X.at[ii,ct]))
+        if len(rows)>=25: break
+    print('\\n==',ct,'==')
+    for r in rows:
+        print('\\t'.join(map(str,r)))
+PY"

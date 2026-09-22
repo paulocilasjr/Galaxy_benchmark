@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections
+cbs=['']
+with gzip.open('three.way.barnyard.q2.R1.fq.gz','rt') as f:
+ while True:
+  h=f.readline()
+  if not h: break
+  seq=f.readline().strip(); f.readline(); f.readline(); cbs.append(seq[:16])
+target={}
+with open('refs/cds/t2gene.tsv') as f:
+ for line in f:
+  tid,sp,gene,sym,desc=line.rstrip('\\n').split('\\t')
+  target[tid]=(sp,sym.upper())
+marker_sets={
+'human': {'HBB','HBA1','HBA2','HBD','AHSP','ALAS2','HBM'},
+'mouse': {'SCGB1A1','SFTPC','SFTPA1','SFTPB','SFTPD','SCGB3A1','NAPSA'},
+'pig_skin': {'KRT12','KRT17','KRT10','KRT5','KRT14','KRT15'},
+'pig_testis': {'PRM1','PRM2','TNP1','TNP2','DDX4','DAZL','SYCP3','TEX101','ACR'},
+}
+readno_re=re.compile(r'READ_(\\d+)')
+counts=collections.defaultdict(lambda: collections.Counter())
+allsp=collections.defaultdict(lambda: collections.Counter())
+with open('cds_primary.paf') as f:
+ for line in f:
+  p=line.split('\\t'); matches=int(p[9]); aln=int(p[10])
+  if aln<45 or matches/max(aln,1)<0.88: continue
+  m=readno_re.match(p[0]); i=int(m.group(1)); cb=cbs[i]
+  sp,sym=target[p[5]]
+  allsp[cb][sp]+=1
+  for k,genes in marker_sets.items():
+   if sym in genes: counts[cb][k]+=1
+# classify by marker dominant (>0 counts)
+for minmarker in [1,2,5,10,20,50]:
+ cc=collections.Counter(); none=0; multi=0
+ for cb in set(list(allsp.keys())):
+  c=counts[cb]
+  # pig marker combined as skin+testis for species
+  vals={'human':c['human'], 'mouse':c['mouse'], 'pig':c['pig_skin']+c['pig_testis']}
+  top, n=max(vals.items(), key=lambda x:x[1])
+  if n<minmarker: none+=1; continue
+  second=sorted(vals.values(), reverse=True)[1]
+  if second>0 and second/n>0.2: multi+=1; continue
+  cc[top]+=1
+ print('minmarker',minmarker,'cc',cc,'none',none,'multi',multi,'pct',[round(cc[s]/sum(cc.values())*100) if sum(cc.values()) else 0 for s in ['human','mouse','pig']])
+# inspect markers per original allsp top class with 0.7
+for cls_sp in ['human','mouse','pig']:
+ print('\\nclass',cls_sp)
+ rows=[]
+ for cb,c in allsp.items():
+  tot=sum(c.values()); sp,n=c.most_common(1)[0]
+  if tot>=20 and sp==cls_sp and n/tot>=0.7:
+   rows.append((cb,tot,n/tot,counts[cb]))
+ print('n',len(rows),'marker sums',sum(r[3]['human'] for r in rows),sum(r[3]['mouse'] for r in rows),sum(r[3]['pig_skin'] for r in rows),sum(r[3]['pig_testis'] for r in rows))
+ print(rows[:5])
+PY"

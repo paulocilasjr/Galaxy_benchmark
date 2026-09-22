@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+from pyliftover import LiftOver
+import gzip, os
+lo=LiftOver('processed/hg19ToHg38.over.chain.gz')
+os.makedirs('geo_peaks_hg38',exist_ok=True)
+for fn in os.listdir('geo_peaks'):
+    if not fn.endswith('.bed.gz'): continue
+    factor=fn[:-7]
+    out=f'geo_peaks_hg38/{factor}.bed'
+    n=0; m=0
+    with gzip.open(os.path.join('geo_peaks',fn),'rt') as f, open(out,'w') as o:
+        for line in f:
+            if line.startswith('#') or line.startswith('track'): continue
+            parts=line.rstrip('\\n').split('\\t')
+            if len(parts)<3: continue
+            chrom=parts[0]; start=int(parts[1]); end=int(parts[2])
+            try:
+                res=lo.convert_coordinate(chrom,start)
+            except Exception:
+                res=[]
+            # lift start and end independently using midpoint perhaps
+            mids=(start+end)//2
+            try:
+                midres=lo.convert_coordinate(chrom,mids,'+')
+            except Exception:
+                midres=[]
+            if midres:
+                newchrom,newpos,newstrand,score=midres[0]
+                # approximate width and cap
+                width=end-start
+                newstart=max(0,newpos-width//2)
+                newend=newstart+width
+                o.write(f'{newchrom}\\t{newstart}\\t{newend}\\n')
+                m+=1
+            n+=1
+    print(factor,n,m)
+PY
+wc -l geo_peaks_hg38/*.bed"

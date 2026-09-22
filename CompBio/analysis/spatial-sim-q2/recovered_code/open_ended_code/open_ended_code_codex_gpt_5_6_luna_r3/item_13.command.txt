@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np,gzip,scipy.io as sio
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rt') as f:S=sio.mmread(f).tocsr().toarray().T.astype(float)
+types=list(meta.cell_type.unique()); X=sc.values.astype(float); means=np.array([X[meta.cell_type.values==t].mean(0) for t in types])
+# raw marker score log ratio; use top 50 each, nonzero
+sets=[]
+for j in range(6):
+ other=np.max(np.delete(means,j,axis=0),axis=0)
+ score=np.log2((means[j]+0.1)/(other+0.1))
+ sets.append(np.argsort(score)[-50:])
+marker=np.unique(np.concatenate(sets))
+print('marker',len(marker))
+for use,name in [(marker,'marker'),(np.arange(1000),'all')]:
+ co=np.array([nnls(means[:,use].T,S[i,use])[0] for i in range(900)])
+ prop=co/(co.sum(1,keepdims=True)+1e-10)
+ lab=np.array(types)[prop.argmax(1)]
+ print('\\n',name,'coef quantiles per type')
+ for j,t in enumerate(types): print(t,np.round(np.quantile(co[:,j],[0,.25,.5,.75,.9,.95,.99,1]),2))
+ print('counts > thresholds')
+ for th in [.05,.1,.2,.3,.5]: print(th,dict(zip(types,(prop>th).sum(0))))
+ print('max labels',pd.Series(lab).value_counts().to_dict())
+ # print central coordinate composition for any prop > .2 (sorted by row/col)
+ for i,p in pos.iterrows() if False else []: pass
+ # top tumor props positions and all props
+ t=prop[:,0]; inds=np.argsort(t)[::-1][:100]
+ pos=pd.read_csv('tissue_positions.csv')
+ print('top tumor')
+ for i in inds[:80]:
+  print(int(pos.iloc[i].array_row),int(pos.iloc[i].array_col),round(t[i],2),','.join(f'{types[j][:3]}={prop[i,j]:.2f}' for j in range(1,6) if prop[i,j]>.05), 'total',int(S[i].sum()))
+PY"

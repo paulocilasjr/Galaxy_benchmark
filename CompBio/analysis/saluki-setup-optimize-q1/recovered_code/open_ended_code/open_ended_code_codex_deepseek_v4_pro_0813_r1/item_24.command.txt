@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import struct, os
+fn='central.zip'; data=open(fn,'rb').read()
+pos=0; n=0; entries=[]
+while pos+46 <= len(data):
+    sig=data[pos:pos+4]
+    if sig "'!= b'"'PK\\x01\\x02':
+        print('end at', pos, sig, 'n',n); break
+    rec=struct.unpack('<4s6H3L5H2L', data[pos:pos+46])
+    # fields: sig, ver_made, ver_need, flag, method, modtime, moddate, crc32, comp_size, uncomp_size, name_len, extra_len, comment_len, disk_start, int_attr, ext_attr, local_offset
+    name_len, extra_len, comment_len = rec[10], rec[11], rec[12]
+    comp_size, uncomp_size, local_off = rec[8], rec[9], rec[16]
+    name=data[pos+46:pos+46+name_len].decode('utf-8','replace')
+    extra=data[pos+46+name_len:pos+46+name_len+extra_len]
+    # zip64 extra if sizes/offset sentinel
+    if comp_size==0xffffffff or uncomp_size==0xffffffff or local_off==0xffffffff:
+        ep=0
+        while ep+4 <= len(extra):
+            eid, esize=struct.unpack('<HH', extra[ep:ep+4])
+            if eid==1:
+                vals=struct.unpack('<QQQ', extra[ep+4:ep+4+esize])
+                if uncomp_size==0xffffffff: uncomp_size=vals[0]
+                if comp_size==0xffffffff: comp_size=vals[1]
+                if local_off==0xffffffff: local_off=vals[2]
+                break
+            ep += 4+esize
+    entries.append((name,comp_size,uncomp_size,local_off))
+    n+=1
+    pos += 46+name_len+extra_len+comment_len
+print('parsed', len(entries))
+# print names matching saluki/deeplearning/train_gru etc
+for e in entries:
+    if 'deeplearning/train_gru' in e[0] or 'saluki' in e[0].lower() or e[0].endswith('params.json'):
+        print(e)
+PY"

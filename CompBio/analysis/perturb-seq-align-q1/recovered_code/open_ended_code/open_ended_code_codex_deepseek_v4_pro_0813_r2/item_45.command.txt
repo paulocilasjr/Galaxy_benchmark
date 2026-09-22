@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+# Final targeted confirmation for three genes using NT-centered top markers
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import pearsonr, spearmanr
+warnings.filterwarnings('ignore')
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']; X=sp.csc_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]),shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]; gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  out.append((X,g,var))
+X1,g1,v1=out[0]; X2,g2,v2=out[1]
+common=[x for x in v1 if x in set(v2)]
+X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr(); X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+for X in [X1,X2]:
+ lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1; X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4)
+nt1=np.char.startswith(g1.astype(str),'NT-'); nt2=np.char.startswith(g2.astype(str),'NT-')
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); mu2=np.asarray(X2[nt2].mean(0)).ravel()
+def sigs(X,g,mu):
+ return {gg:np.asarray(X[g==gg].mean(0)).ravel()-mu for gg in set(g) if not gg.startswith('NT-')}
+rs=sigs(X1,g1,mu1); qs=sigs(X2,g2,mu2)
+for tg in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+ print('\\nTarget',tg)
+ sig=rs[tg]
+ # Use top 30/50/100 by abs logFC, but filter genes with baseline mean > .1? no
+ for n in [20,30,50,100]:
+  order=np.argsort(-np.abs(sig))[:n]
+  vals=[]
+  for q in qs:
+   vals.append((pearsonr(qs[q][order],sig[order])[0], q, spearmanr(qs[q][order],sig[order]).correlation))
+  top=sorted(vals,reverse=True)[:5]
+  print('n',n, [(q,round(p,3),round(s,3)) for p,q,s in top])
+PY"

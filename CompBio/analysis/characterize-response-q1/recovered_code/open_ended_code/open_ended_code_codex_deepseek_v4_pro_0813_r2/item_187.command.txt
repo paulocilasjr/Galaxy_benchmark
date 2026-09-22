@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,json
+with gzip.open('GSE5504_series_matrix.txt.gz','rt') as f: lines=f.read().splitlines()
+b=next(i for i,l in enumerate(lines) if l.startswith('"'!series_matrix_table_begin'"'))+1
+e=next(i for i,l in enumerate(lines) if l.startswith('"'!series_matrix_table_end'"'))
+h=lines[b].strip('\\n').split('\\t'); data=[l.strip('\\n').split('\\t') for l in lines[b+1:e] if l.strip()]
+with open('GSE5504_expr.csv','w',newline='') as f: w=csv.writer(f); w.writerow(h); w.writerows(data)
+meta={}
+for l in lines:
+ if l.startswith('"'!Sample_title'"'): titles=[x.strip('\"') for x in l.split('\\t')[1:]]
+ if l.startswith('"'!Sample_geo_accession'"'): gsms=[x.strip('\"') for x in l.split('\\t')[1:]]
+for g,t in zip(gsms,titles): meta[g]=t
+json.dump(meta,open('GSE5504_meta.json','w'))
+print(h[:3],len(data),list(meta.items())[:3])
+PY
+Rscript - <<'RS'
+library(data.table)
+library(hgu133plus2.db)
+expr <- fread('GSE5504_expr.csv')
+probes <- gsub('\"','',expr[[1]])
+map <- as.data.table(select(hgu133plus2.db, keys=probes, columns='SYMBOL', keytype='PROBEID'))
+setnames(map,'PROBEID','probe')
+expr[, probe := probes]
+numcols <- grep('"'^""GSM'"', names(expr), value=TRUE)
+for(j in numcols) set(expr, j=j, value=as.numeric(expr[[j]]))
+m <- merge(expr, map, by='probe', allow.cartesian=TRUE)
+m <- m["'!is.na(SYMBOL)]
+m[, SYMBOL := toupper(SYMBOL)]
+out <- m[, lapply(.SD, mean), by=SYMBOL, .SDcols=numcols]
+setnames(out, names(out), gsub('"'\"','',names(out)))
+fwrite(out, 'GSE5504_symbol_expr.csv')
+cat('symbols',nrow(out),'cols',ncol(out),'\\n')
+RS"

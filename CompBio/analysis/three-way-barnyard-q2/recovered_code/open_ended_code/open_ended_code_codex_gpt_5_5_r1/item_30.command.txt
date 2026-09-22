@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+thresholds=[0,1,5,10,20,30]
+counts={t:defaultdict(Counter) for t in thresholds}
+readmap=0
+with open('aln.paf') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        q=parts[0]; target=parts[5]; mapq=int(parts[11]); nm=int(parts[9]); alen=int(parts[10]); qlen=int(parts[1])
+        cb=q.split('|')[1]
+        sp=target.split('|',1)[0]
+        readmap+=1
+        for t in thresholds:
+            if mapq>=t and alen>=50 and nm/alen>=0.90:
+                counts[t][cb][sp]+=1
+print('mapped alignments', readmap)
+for t in thresholds:
+    assigned=[]; amb=0; low=0
+    for cb,c in counts[t].items():
+        tot=sum(c.values())
+        if tot==0: low+=1; continue
+        sp,n=c.most_common(1)[0]
+        frac=n/tot
+        if n>=20 and frac>=0.8:
+            assigned.append(sp)
+        else:
+            amb+=1
+    print('thr',t,'barcodes with counts',len(counts[t]),'assigned',len(assigned),'amb',amb,'species',Counter(assigned))
+    # percentages rounded 10
+    tot=len(assigned)
+    if tot:
+        print({sp: Counter(assigned)[sp]/tot*100 for sp in ['human','mouse','pig']})
+# print some ambiguous at t=20, top counts
+for t in [0,10,20]:
+    print('\\nexamples threshold',t)
+    rows=[]
+    allc=counts[t]
+    for cb,c in allc.items():
+        tot=sum(c.values());
+        if tot:
+            sp,n=c.most_common(1)[0]; frac=n/tot
+            if frac<0.8 or n<20:
+                rows.append((tot,frac,cb,dict(c)))
+    for r in sorted(rows, reverse=True)[:10]: print(r)
+PY"

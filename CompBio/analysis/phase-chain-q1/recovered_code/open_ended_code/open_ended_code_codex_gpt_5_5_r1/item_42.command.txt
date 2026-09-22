@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections, math
+bam=pysam.AlignmentFile('aln.chr22.bam'); fa=pysam.FastaFile('chr22.fa')
+start,end=27079126,27080624
+base=collections.defaultdict(collections.Counter); dele=collections.defaultdict(collections.Counter); ins=collections.defaultdict(collections.Counter)
+for r in bam.fetch('chr22', start-1, end):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    q=0; p=r.reference_start+1
+    for op,l in r.cigartuples:
+        if op in (0,7,8):
+            for i,ch in enumerate(r.query_sequence[q:q+l]):
+                pos=p+i
+                if start<=pos<=end: base[pos][ch]+=1
+            q+=l; p+=l
+        elif op==1:
+            if start<=p-1<=end: ins[p-1][r.query_sequence[q:q+l]]+=1
+            q+=l
+        elif op==2:
+            for pos in range(p,p+l):
+                if start<=pos<=end: dele[pos][l]+=1
+            p+=l
+        elif op==4:
+            q+=l
+        elif op==3:
+            p+=l
+print('balanced candidate scan')
+for pos in range(start,end+1):
+    alle=[]
+    for b,n in base[pos].items(): alle.append((b,n))
+    for l,n in dele[pos].items(): alle.append(('D'+str(l),n))
+    for s,n in ins[pos].items(): alle.append(('I'+s,n))
+    tot=sum(n for _,n in alle)
+    if tot<10: continue
+    alle=sorted(alle,key=lambda x:x[1],reverse=True)
+    if len(alle)>=2:
+        # print moderate secondary and not all tiny; candidate variants local AF >0.12 and support>=4
+        if alle[1][1]>=4 and alle[1][1]/tot>=0.12:
+            ref=fa.fetch('chr22',pos-1,pos).upper()
+            print(pos,'ref',ref,'tot',tot,alle[:5])
+print('all ins')
+for pos,c in sorted(ins.items()):
+    if sum(c.values())>=2: print(pos,c)
+PY"

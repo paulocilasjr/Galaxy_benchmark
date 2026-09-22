@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, fisher_exact, permutation_test
+from sklearn.metrics import pairwise_distances
+from statsmodels.stats.multitest import multipletests
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+features=pd.read_csv('features.tsv.gz', sep='\\t', header=None)
+barcodes=pd.read_csv('barcodes.tsv.gz', sep='\\t', header=None)[0].tolist()
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode').loc[barcodes]
+Y=mmread('matrix.mtx.gz').tocsc().T.toarray().astype(float)
+sc=sc[features[1].tolist()]
+ctypes=sorted(meta.cell_type.unique())
+ref=np.vstack([sc.loc[meta.cell_type.eq(ct)].mean(0).values for ct in ctypes]).T
+coef=[]
+for y in Y: coef.append(nnls(ref,y)[0])
+coef=pd.DataFrame(coef,index=barcodes,columns=ctypes)
+prop=coef.div(coef.sum(1).replace(0,np.nan),axis=0).fillna(0)
+coords=pos[['pxl_row_in_fullres','pxl_col_in_fullres']].astype(float).values
+D=pairwise_distances(coords); np.fill_diagonal(D,np.nan)
+print('coef positive counts thresholds')
+for thr in [.05,.1,.25,.5,.75,1.0,1.5]:
+    print('\\nCOEF THR',thr, (coef>=thr).sum().to_dict())
+    tc=(coef['Tumor_Core']>=thr).values
+    if tc.sum()<2: continue
+    dist=cdist(coords, coords[tc]).min(1)
+    rows=[]
+    for ct in ctypes:
+        if ct=='Tumor_Core': continue
+        m=(coef[ct]>=thr).values
+        if m.sum()<5 and (~m).sum()<5: continue
+        p=mannwhitneyu(dist[m],dist[~m],alternative='less').pvalue
+        rows.append((ct,m.sum(),dist[m].mean(),np.median(dist[m]),dist[~m].mean(),p))
+    adj=multipletests([r[-1] for r in rows], method='fdr_bh')[1]
+    for r,a in zip(rows,adj): print(r,'FDR',a)
+print('\\nDominant label proximity to Tumor_Core dominant spots')
+dom=prop.idxmax(1)
+tc=dom.eq('Tumor_Core').values
+dist=cdist(coords, coords[tc]).min(1)
+rows=[]
+for ct in ctypes:
+    if ct=='Tumor_Core': continue
+    m=dom.eq(ct).values
+    p=mannwhitneyu(dist[m],dist[~m],alternative='less').pvalue
+    rows.append((ct,m.sum(),dist[m].mean(),np.median(dist[m]),dist[~m].mean(),p))
+adj=multipletests([r[-1] for r in rows],method='fdr_bh')[1]
+for r,a in zip(rows,adj): print(r,'FDR',a)
+print('\\nMean/min distance by dominant label')
+for ct in ctypes:
+    m=dom.eq(ct).values
+    print(ct,m.sum(),dist[m].mean(),np.median(dist[m]),dist[m].min(),dist[m].max())
+# Grid means maps: print dominant 30x30 first letters maybe row order
+letters={'B_Cell':'B','Endothelial':'E','Fibroblast_Stroma':'F','Macrophage':'M','T_Cell':'T','Tumor_Core':'C'}
+arr=np.empty((30,30), dtype='<U1')
+for b,row in pos.iterrows():
+    i=int(row.array_row); j=int(row.array_col); arr[i,j]=letters[dom.loc[b]]
+print('\\nDominant map')
+for i in range(30): print(''.join(arr[i]))
+# top coefficient rounded map for Tumor/Fib/Mac presence at 0.5
+for ct,ch in [('Tumor_Core','C'),('Fibroblast_Stroma','F'),('Macrophage','M')]:
+    arr=np.full((30,30),'.',dtype='<U1')
+    for b,row in pos.iterrows():
+        if coef.loc[b,ct]>=0.5: arr[int(row.array_row), int(row.array_col)] = ch
+    print('\\nPresence',ct)
+    for i in range(30): print(''.join(arr[i]))
+PY"

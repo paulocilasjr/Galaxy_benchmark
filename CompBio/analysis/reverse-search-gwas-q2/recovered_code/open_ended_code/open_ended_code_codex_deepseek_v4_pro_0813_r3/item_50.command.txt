@@ -1,0 +1,99 @@
+/bin/bash -lc "cat > /workspace_query.py <<'PY'
+import gzip, math, json, time, sys, requests
+from collections import defaultdict
+
+# load top N variants
+N=100
+rows=[]
+with gzip.open('reverse.search.gwas.q2.gz','rt') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>=10 and p[9]"'!='"'NA':
+            try: pv=float(p[9])
+            except: continue
+            rows.append((pv, tuple(p)))
+rows.sort(key=lambda x:x[0])
+sel=rows[:N]
+s=requests.Session(); s.headers['User-Agent']='Mozilla/5.0 research'
+
+def get(url, retries=3):
+    for i in range(retries):
+        try:
+            r=s.get(url, timeout=20)
+            if r.status_code==200:
+                return r.json()
+            elif r.status_code==404:
+                return None
+        except Exception as e:
+            time.sleep(1+2*i)
+    return None
+
+def pnum(a):
+    m=a.get('pvalueMantissa'); e=a.get('pvalueExponent')
+    if m is None or e is None: return None
+    try: return float(m)*10**float(e)
+    except: return None
+
+matches=[]
+study_cache={}
+for idx,(pv,p) in enumerate(sel):
+    rs=p[1]
+    url=f'https://www.ebi.ac.uk/gwas/rest/api/singleNucleotidePolymorphisms/{rs}/associations?projection=associationBySnp'
+    obj=get(url)
+    if not obj:
+        continue
+    assocs=obj.get('_embedded',{}).get('associations',[])
+    beta_file=float(p[7]) if p[7] not in ('','NA') else None
+    se_file=float(p[8]) if p[8] not in ('','NA') else None
+    eaf_file=float(p[6]) if p[6] not in ('','NA') else None
+    for a in assocs:
+        cp=pnum(a)
+        beta=a.get('betaNum')
+        se=a.get('standardError')
+        rf=a.get('riskFrequency')
+        rf_val=None
+        if isinstance(rf,(int,float)): rf_val=float(rf)
+        elif isinstance(rf,str):
+            try: rf_val=float(rf)
+            except: pass
+        match=False
+        if cp is not None:
+            # exponent same and mantissa within factor 2? Also rounded single digit may differ
+            le=math.floor(math.log10(cp)); lf=math.floor(math.log10(pv))
+            if le==lf and abs(math.log10(cp)-math.log10(pv))<0.5: match=True
+        if beta_file is not None and beta is not None:
+            # sign may flip
+            if abs(abs(beta)-abs(beta_file))/max(abs(beta_file),1e-12)<0.15: match=True
+        if se_file is not None and se is not None:
+            try:
+                if abs(float(se)-se_file)/se_file<0.15: match=True
+            except: pass
+        if eaf_file is not None and rf_val is not None:
+            if abs(rf_val-eaf_file)<0.05 or abs((1-rf_val)-eaf_file)<0.05: match=True
+        if match:
+            # study
+            study_href=a.get('_links',{}).get('study',{}).get('href')
+            study_info=''
+            if study_href:
+                if study_href in study_cache:
+                    study_info=study_cache[study_href]
+                else:
+                    so=get(study_href)
+                    if so:
+                        dt=so.get('diseaseTrait',{})
+                        trait=dt.get('trait') if isinstance(dt,dict) else None
+                        study_info=f\"{so.get('accessionId')} {trait} pmid={so.get('pubmedId')} N={so.get('initialSampleSize')}\"
+                    study_cache[study_href]=study_info
+            print(f\"MATCH {rs}\\tfile p={pv:.3g} beta={beta_file} se={se_file} eaf={eaf_file}\\tcat p={cp:.3g} beta={beta} se={se} rf={rf} study={study_info}\")
+            matches.append((rs, study_info, a.get('_links',{}).get('self',{}).get('href')))
+    time.sleep(0.05)
+
+print('\\n--- candidates summary ---')
+cnt=defaultdict(int)
+for rs,st,link in matches:
+    cnt[st]+=1
+for st,c in sorted(cnt.items(), key=lambda x:-x[1]):
+    print(c, st)
+PY
+python3 /workspace_query.py"

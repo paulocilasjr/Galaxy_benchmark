@@ -1,0 +1,31 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy import sparse
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def load(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  g=h['X']; x=sparse.csc_matrix((g['data'][()],g['indices'][()],g['indptr'][()]),shape=tuple(g.attrs['shape']))
+  cats=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][()]]
+  guides=np.array([cats[z] for z in h['obs/guide/codes'][()]])
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var/_index'][()]],object)
+ stats={
+  'lib':np.asarray(x.sum(1)).ravel(),
+  'det':np.diff(x.tocsr().indptr),
+ }
+ mt=np.array([str(z).startswith('MT-') for z in genes]); rib=np.array([str(z).startswith(('RPS','RPL')) for z in genes]);
+ stats['mt']=np.asarray(x[:,mt].sum(1)).ravel()/stats['lib']
+ stats['rib']=np.asarray(x[:,rib].sum(1)).ravel()/stats['lib']
+ return guides,stats
+for f in ['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']:
+ guides,s=load(f); print('\\nFILE',f)
+ nt=guides.astype(str).astype(str)
+ for key, v in s.items():
+  ctrl=v[np.char.startswith(guides,'NT-')]; print('\\n',key,'control mean/median',np.mean(ctrl),np.median(ctrl))
+  rows=[]
+  for g in np.unique(guides):
+   if not g.startswith('NT-'):
+    z=v[guides==g]
+    rows.append((g,len(z),np.median(z),np.mean(z),np.mean(z)-np.mean(ctrl)))
+  rows.sort(key=lambda z:z[4])
+  print('low',rows[:10]);print('high',rows[-10:])
+PY"

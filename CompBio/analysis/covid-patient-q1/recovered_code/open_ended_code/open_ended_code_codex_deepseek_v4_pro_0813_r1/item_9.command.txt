@@ -1,0 +1,53 @@
+/bin/bash -lc "cat > analyze_donors.py <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp, pandas as pd, time
+p='covid.patients.q1.h5ad'
+print('reading')
+adata=ad.read_h5ad(p)
+print(adata.shape)
+donors=adata.obs['donor_id'].astype(str).values
+cats=sorted(set(donors), key=lambda x:int(x.replace('donor','')))
+print('ncells', len(donors))
+# onehot csc donors x cells maybe use pandas get_dummies sparse
+D=pd.get_dummies(donors).sparse.to_coo().tocsr() # cells x donors
+print('D', D.shape, D.nnz)
+X=adata.X.tocsr()
+print('X loaded')
+# gene x donor sum
+sum_gd=(X.T @ D).toarray() # genes x donors
+nnz_gd=((X>0).T @ D).toarray() # expensive bool maybe sparse op? X>0 creates sparse bool
+means=sum_gd/D.sum(axis=0).values.reshape(1,-1)
+frac=nnz_gd/D.sum(axis=0).values.reshape(1,-1)
+# also cell total counts per donor
+cell_sums=np.asarray(X.sum(axis=1)).ravel()
+total_per_donor=np.bincount(np.array([int(x[5:])-1 for x in donors]), weights=cell_sums)
+cell_count=np.bincount(np.array([int(x[5:])-1 for x in donors]))
+out={}
+for i,d in enumerate(cats):
+    n=int(d[5:])
+    out.setdefault('donor',[]).append(d)
+    out.setdefault('n_cells',[]).append(cell_count[n-1])
+    out.setdefault('mean_umi_per_cell',[]).append(total_per_donor[n-1]/cell_count[n-1])
+df=pd.DataFrame(out).set_index('donor')
+# save matrix and marker data
+np.savez_compressed('donor_sum.npz', sum=sum_gd, nnz=nnz_gd, cats=np.array(cats))
+df.to_csv('donor_stats.csv')
+print(df)
+print('saved')
+# top genes with max variance across donors in mean counts
+# use pseudo-count log1p(mean)
+logmean=np.log1p(means)
+vars=logmean.var(axis=1)
+idx=np.argsort(-vars)[:50]
+print('top var genes:')
+for j in idx[:50]:
+    print(adata.var['feature_name'].iloc[j], round(vars[j],3), [round(logmean[j,i],2) for i in range(len(cats))])
+# marker table
+markers=['ISG15','IFI27','IFI44L','IFIT1','IFIT3','MX1','OAS1','IFITM3','HLA-DRA','HLA-DRB1','CD14','LYZ','FCGR3A','S100A8','S100A9','CD3D','CD8A','MS4A1','IGHG1','JCHAIN','CXCL10','CCL2','IL1B','TNF','IFNG']
+name_to_idx={n:j for j,n in enumerate(adata.var['feature_name'].values)}
+print('\\nmarkers mean counts per donor')
+for m in markers:
+    if m in name_to_idx:
+        j=name_to_idx[m]
+        print(m, [round(means[j,i],3) for i in range(len(cats))], 'frac', [round(frac[j,i],3) for i in range(len(cats))])
+PY
+python analyze_donors.py"

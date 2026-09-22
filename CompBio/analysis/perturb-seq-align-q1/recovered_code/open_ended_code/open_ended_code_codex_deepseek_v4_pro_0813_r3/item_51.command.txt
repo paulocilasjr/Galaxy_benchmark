@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+# confusion among PAF1 complex members and candidates across methods/genes
+import anndata as ad, numpy as np
+from scipy import sparse
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0); qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+rg=[g for g in r.obs.guide.cat.categories if not g.startswith('NT-')]; qg=[g for g in q.obs.guide.cat.categories if not g.startswith('NT-')]
+Er=np.array([R[rguide==g].mean(0)-rnt for g in rg]); Eq=np.array([Q[qguide==g].mean(0)-qnt for g in qg])
+# top variable genes and raw correlations for group
+for k in [500,1000,2000,11857]:
+ v=Er.var(0)+Eq.var(0); idx=np.argsort(v)[-k:] if k<11857 else np.arange(Er.shape[1])
+ A=Er[:,idx]; B=Eq[:,idx]
+ A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True); A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-9; B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-9
+ C=A@B.T
+ refs=['LEO1-I2','CTR9-I7','CDC73-I2','PAF1-I6']
+ qids=['guide14','guide28','guide10','guide12']
+ print('\\nk',k)
+ print('     ', ' '.join(f'{q:8s}' for q in qids))
+ for ri in refs:
+  i=rg.index(ri)
+  print(f'{ri:10s}', ' '.join(f'{C[i,qg.index(q)]:8.3f}' for q in qids))
+ # show best query for each ref
+ for ri in refs:
+  i=rg.index(ri); print(ri, 'best', [(qg[j],round(C[i,j],3)) for j in np.argsort(C[i])[::-1][:5]])
+PY"

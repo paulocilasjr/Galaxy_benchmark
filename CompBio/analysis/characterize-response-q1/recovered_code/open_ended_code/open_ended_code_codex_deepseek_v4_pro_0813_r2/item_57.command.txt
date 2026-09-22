@@ -1,0 +1,55 @@
+/bin/bash -c "python3 - <<'PY'
+import gzip, pandas as pd, numpy as np, re
+with gzip.open('GSE4479_series_matrix.txt.gz','rt') as f: lines=f.readlines()
+start=next(i+1 for i,l in enumerate(lines) if l.startswith('"'!series_matrix_table_begin'"'))
+rows=[]
+for l in lines[start:]:
+    if l.startswith('"'!series_matrix_table_end'"'): break
+    rows.append(l.rstrip('\\n').split('\\t'))
+df=pd.DataFrame(rows[1:], columns=[c.strip('\"') for c in rows[0]])
+print(df.shape, df.columns[:6])
+probe=df['ID_REF'].astype(str)
+expr=df.iloc[:,1:11].apply(pd.to_numeric, errors='coerce')
+septic=expr.iloc[:,:5].mean(axis=1); sham=expr.iloc[:,5:10].mean(axis=1)
+logfc=np.log2((septic+0.5)/(sham+0.5))
+# download platform annot GPL1261
+# For now use probe-level, later map via GEO platform table
+d=pd.DataFrame({'probe':probe,'logfc':logfc})
+d=d.dropna()
+# Get platform annotation
+import requests, io
+url='https://ftp.ncbi.nlm.nih.gov/geo/platforms/GPL1261/annot/GPL1261.annot.gz'
+r=requests.get(url,timeout=60); print('annot',r.status_code,len(r.content) if r.ok else '')
+if r.ok:
+ open('GPL1261.annot.gz','wb').write(r.content)
+ import gzip
+ ann_lines=gzip.open('GPL1261.annot.gz','rt').read().splitlines()
+ # parse header and rows; find columns
+ header=None; data=[]
+ for l in ann_lines:
+  if l.startswith('#'): continue
+  parts=l.split('\\t')
+  if header is None:
+   header=[p.strip('\"') for p in parts]; continue
+  data.append([p.strip('\"') for p in parts])
+ ann=pd.DataFrame(data, columns=header)
+ print(ann.shape, ann.columns[:20])
+ # choose ID, Gene Symbol
+ idcol=ann.columns[0]
+ symcol='Gene Symbol' if 'Gene Symbol' in ann.columns else ann.columns[1]
+ print(idcol,symcol)
+ mp=ann.groupby(idcol)[symcol].agg(lambda x: x.iloc[0])
+ d['sym']=d['probe'].map(mp).astype(str).str.upper()
+ d=d[d.sym"'!='"'NAN']
+ d=d[~d.sym.str.contains('///|---', na=False)]
+ g=d.groupby('sym')['logfc'].mean().sort_values(ascending=False)
+ print('top up'); print(g.head(150).to_string())
+ print('top down'); print(g.tail(150).to_string())
+ our=[x.upper() for x in open('characterize.response.q1.txt').read().strip().split('\\n')]
+ m=g.to_dict()
+ print('found',sum(x in m for x in our))
+ print('our FC:')
+ for x in our: print(x, m.get(x))
+ up112=set(g.index[:112]); down112=set(g.index[-112:])
+ print('overlap up112',len(set(our)&up112),'down112',len(set(our)&down112))
+PY"

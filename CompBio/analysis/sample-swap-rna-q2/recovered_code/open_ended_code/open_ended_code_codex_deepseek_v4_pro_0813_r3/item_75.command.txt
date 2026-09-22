@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re, json
+# load matrix
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+cols=df.columns.tolist()
+# load stability marker info
+stab=pd.read_csv('refs/wheat_root_atlas/GRN_regulon_analysis/input/stability_and_specificity_info.csv', sep=';')
+print(stab.columns)
+# Only rows with is_Marker_of_Cluster and Specificity specific maybe stable
+m=stab.dropna(subset=['is_Marker_of_Cluster','Specificity']).copy()
+print('specific marker rows',len(m))
+# parse cluster assignments; keep unique Gene, cluster string. A gene can be in multiple.
+# Define broad mapping by matching substrings
+broad_patterns={
+'cortex':[r'Cortex'],
+'endodermis':[r'Endodermis'],
+'epidermis':[r'Epidermis'],
+'meristems':[r'Meristems',r'DividingCells'],
+'pericycle':[r'Pericycle'],
+'phloem':[r'Phloem'],
+'provascular':[r'ProvascularCells'],
+'root_cap':[r'RootCap',r'LRC',r'Columella',r'Root Cap'],
+'root_hair':[r'RootHair',r'Trichoblast'],
+'xylem':[r'Xylem'],
+}
+# But 'Endodermis/Phloem' matches both endodermis and phloem; treat separately maybe choose phloem? We'll see.
+def assign_broad(s):
+    s=str(s)
+    labels=[]
+    for ct,pats in broad_patterns.items():
+        if any(re.search(p,s,re.I) for p in pats): labels.append(ct)
+    return labels
+# For specific stable markers only
+ms=stab[(stab['Specificity']=='specific') & (stab['Stability']=='stable') & stab['is_Marker_of_Cluster'].notna()].copy()
+print('specific stable rows',len(ms))
+for label in ['1Epidermis','2Cortex','3Meristems','4ProvascularCells','5Unknown','6Pericycle','7Epidermis','8RootHair','9Endodermis','10Xylem','11Endodermis/Phloem','12DividingCells','13Phloem','14RootCap']:
+    sub=ms[ms['is_Marker_of_Cluster'].str.contains(re.escape(label), na=False)]
+    print(label, len(sub))
+# Build sets for each broad type using exact cluster labels (excluding mixed? handle)
+# create mapping exact cluster labels to broad labels manually based on known
+exact_map={
+'1Epidermis':'epidermis',
+'2Cortex':'cortex',
+'3Meristems':'meristems',
+'4ProvascularCells':'provascular',
+'5Unknown':'root_cap',  # to test alternatives
+'6Pericycle':'pericycle',
+'7Epidermis':'epidermis',
+'8RootHair':'root_hair',
+'9Endodermis':'endodermis',
+'10Xylem':'xylem',
+'11Endodermis/Phloem':'phloem', # alternative
+'12DividingCells':'meristems',
+'13Phloem':'phloem',
+'14RootCap':'root_cap',
+}
+sets={ct:set() for ct in broad_patterns}
+for ct in sets:
+    for lab,bt in exact_map.items():
+        if bt==ct:
+            genes=ms.loc[ms['is_Marker_of_Cluster'].str.contains(re.escape(lab), na=False),'Gene'].tolist()
+            sets[ct].update(genes)
+for ct in sets:
+    present=[g for g in sets[ct] if g in df.index]
+    print(ct,len(sets[ct]),'present',len(present))
+    if not present: continue
+    mat=df.loc[present]
+    prop=(mat.div(mat.max(axis=1),axis=0)).mean(axis=0)
+    print(prop.round(2).to_dict())
+    print('top3',prop.nlargest(3).index.tolist())
+print('\\nUsing only exact single cluster labels no mixed 5/11 maybe')
+PY"

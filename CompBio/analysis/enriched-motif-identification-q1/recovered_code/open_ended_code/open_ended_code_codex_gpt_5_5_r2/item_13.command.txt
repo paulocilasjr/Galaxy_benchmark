@@ -1,0 +1,83 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, json, math, sys, time
+from functools import lru_cache
+names='FOXA1 GATA3 MAX STAT1 OCT4 P53 NANOG HNF4A TBP FOS MYC JUN FOXO1 CTCF TCF7 SOX2 E2F1 CREB1 GATA1 KLF3'.split()
+aliases={n:[n] for n in names}
+aliases['OCT4']=['OCT4','POU5F1']
+aliases['P53']=['P53','TP53']
+seq=''.join(l.strip().upper() for l in open('dna_with_secret_motif.fasta') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA')
+
+def fetch_json(url):
+    with urllib.request.urlopen(url, timeout=40) as r:
+        return json.load(r)
+
+def search_matrices(term):
+    out=[]
+    url=f'https://jaspar.elixir.no/api/v1/matrix/?search={urllib.parse.quote(term)}&collection=CORE&tax_group=vertebrates&page_size=100'
+    while url:
+        data=fetch_json(url)
+        out += data['results']
+        url=data.get('next')
+    return out
+
+def get_matrix(mid):
+    return fetch_json(f'https://jaspar.elixir.no/api/v1/matrix/{mid}/')
+
+def pwm_scores(pfm, pseudo=0.1):
+    bases='ACGT'
+    L=len(pfm['A'])
+    pwm=[]; maxs=0; mins=0
+    for i in range(L):
+        total=sum(pfm[b][i] for b in bases)+pseudo*4
+        col={}
+        for b in bases:
+            p=(pfm[b][i]+pseudo)/total
+            col[b]=math.log2(p/0.25)
+        pwm.append(col); maxs += max(col.values()); mins += min(col.values())
+    return pwm, mins, maxs
+
+def score_window(pwm, w):
+    return sum(pwm[i][b] for i,b in enumerate(w))
+
+def count_hits(pfm, rel=0.85):
+    pwm, mins, maxs = pwm_scores(pfm)
+    L=len(pwm)
+    thresh=mins + rel*(maxs-mins)
+    c=0; best=-1e9; bestw=''
+    for s in (seq, seq.translate(comp)[::-1]):
+        for i in range(len(s)-L+1):
+            w=s[i:i+L]
+            if set(w) <= set('ACGT'):
+                sc=score_window(pwm,w)
+                if sc>best:
+                    best=sc; bestw=w
+                if sc>=thresh:
+                    c+=1
+    return c, best, bestw, L, thresh, maxs
+
+all_results={}
+for name in names:
+    mats=[]
+    exact_aliases={a.upper() for a in aliases[name]}
+    seen=set()
+    for term in aliases[name]:
+        for r in search_matrices(term):
+            if r['name'].upper() in exact_aliases and r['matrix_id'] not in seen:
+                seen.add(r['matrix_id']); mats.append(r['matrix_id'])
+    rows=[]
+    for mid in mats:
+        m=get_matrix(mid)
+        c,b,w,L,t,mx=count_hits(m['pfm'], rel=0.85)
+        rows.append((c,mid,m['name'],L,w,b,t,mx))
+    all_results[name]=rows
+    best=max(rows, default=(0,None,None,None,None,None,None,None))
+    print(name, 'matrices', len(rows), 'best', best[:5])
+print('\\nSorted best counts @rel 0.85')
+for name, rows in sorted(all_results.items(), key=lambda kv: max([r[0] for r in kv[1]] or [0]), reverse=True):
+    if rows:
+        best=max(rows)
+        print(name, best)
+    else:
+        print(name, 'no matrices')
+PY"

@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp, pandas as pd
+from scipy.stats import rankdata
+# load query/ref function
+def load(f):
+ with h5py.File(f,'r') as h:
+  X=sp.csr_matrix((h['X/data'][:],h['X/indices'][:],h['X/indptr'][:]),shape=(len(h['var/_index']),len(h['obs/_index']))).T.tocsr()
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+ return X,guides,codes,genes
+Xq,gq,cq,gq_genes=load('perturb.seq.align.q1.query.h5ad')
+guide_csv=pd.read_csv('k562_guide_profiles.csv',index_col=0)
+common,qi,ti=np.intersect1d(gq_genes,guide_csv.index.values,return_indices=True)
+def norm_log(X):
+ s=np.asarray(X.sum(1)).ravel().astype(float);s[s==0]=1
+ return np.log1p(X.multiply(1/s[:,None]*1e6).tocsr()).toarray()
+Lq=norm_log(Xq[:,qi]); uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))]); ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]; Eq=uq-uq[ntq].mean(0); pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+prof=guide_csv.iloc[ti].values
+gcols=guide_csv.columns.values
+nt_col=np.where(gcols=='NT-I1')[0] if 'NT-I1' in gcols else np.where([g.startswith('NT-') for g in gcols])[0]
+nt_mean=prof[:,nt_col].mean(1,keepdims=True)
+E=prof-nt_mean
+for target in ['PABPC1','NUDT21','LEO1']:
+ # find original guides whose name starts with target
+ cols=[i for i,g in enumerate(gcols) if g.startswith(target+'-')]
+ print('\\n',target,'original guide cols',[(gcols[i]) for i in cols])
+ qidx=[gq.tolist().index(g) for g in ['guide18','guide13','guide14']]
+ for qi_ in qidx:
+  x=Eq[pq.index(qi_)] if qi_ in pq else Eq[qi_]  # pq list index? careful
+ # compute scores for each query guide to each original guide for target
+ scores=[]
+ for qidx in pq:
+  x=Eq[qidx]
+  best=(-10,None)
+  for i in cols:
+   y=E[:,i]
+   xc=x-x.mean();yc=y-y.mean();den=np.sqrt((xc*xc).sum())*np.sqrt((yc*yc).sum())+1e-12
+   sc=(xc*yc).sum()/den
+   if sc>best[0]: best=(sc,gcols[i])
+  scores.append((gq[qidx],best[0],best[1]))
+ scores.sort(key=lambda z:z[1],reverse=True)
+ print(target,'top query guide matching original target guides:',scores[:10])
+PY"

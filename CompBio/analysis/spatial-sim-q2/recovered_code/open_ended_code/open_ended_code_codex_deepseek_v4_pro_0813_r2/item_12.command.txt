@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+import scipy.sparse as sp
+
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+types=meta['cell_type'].astype('category')
+ctypes=types.cat.categories.tolist()
+sig=np.array([sc.values[types==t].mean(axis=0) for t in ctypes])
+X=mmread('matrix.mtx.gz').T.tocsr()
+W=np.zeros((X.shape[0], len(ctypes)))
+for i in range(X.shape[0]):
+    x=X[i].toarray().ravel(); W[i]=nnls(sig.T,x,maxiter=10000)[0]
+R=np.rint(W).astype(int)
+res_round=np.array([np.sum((sig.T@R[i]-X[i].toarray().ravel())**2) for i in range(X.shape[0])])
+res_nn=np.array([np.sum((sig.T@W[i]-X[i].toarray().ravel())**2) for i in range(X.shape[0])])
+print('res rounded mean/max', res_round.mean(), res_round.max())
+print('res nnls mean/max', res_nn.mean(), res_nn.max())
+print('mean abs diff', np.mean(np.abs(sig.T@R.T - X.T).toarray()) if False else '')
+# exact prediction?
+print('exact zero res spots count rounded', np.sum(res_round<1e-8), 'nn', np.sum(res_nn<1e-8))
+print('max rounded residual genes')
+idx=np.argmax(res_round); print(idx, res_round[idx], R[idx], 'actual total', X[idx].sum(), 'pred total', R[idx].sum())
+print('NN W for max', W[idx])
+PY"

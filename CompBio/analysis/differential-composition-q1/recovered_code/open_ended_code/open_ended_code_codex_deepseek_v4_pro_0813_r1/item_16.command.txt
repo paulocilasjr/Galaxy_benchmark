@@ -1,0 +1,56 @@
+/bin/bash -lc "cat > inspect_markers.R <<'EOF'
+suppressMessages({library(Seurat); library(Matrix)})
+obj <- readRDS('integrated.rds')
+genes <- read.table(gzfile('differential.composition.q1.genes.txt.gz'), header=TRUE, sep='\\t', stringsAsFactors=FALSE, comment.char='')
+id2sym <- setNames(genes"'$gene_symbols, genes$gene_ids)
+sym2ids <- split(genes$gene_ids, genes$gene_symbols)
+expr <- GetAssayData(obj, assay='"'RNA', slot='data')
+# marker sets expanded
+sets <- list(
+ horizontal=c('ONECUT1','LHX1','CALB2','SLC17A8','GAD1','GAD2','PRKG1','CARTPT','TNR','SNTG2','NFIA','LRRTM4','SPOCK3','KCNB2'),
+ amacrine=c('GAD1','GAD2','SLC6A9','GLRA2','GLYT1','SLC32A1','TFAP2A','TFAP2B','ONECUT1','ONECUT2','ISL1','NEUROD1','ST18'),
+ bipolar=c('VSX2','CABP5','GRIK1','TRPM1','GRM6','ISL1','PRKCA','GNG13','PKC','CHAT','SLC17A6','OTX2'),
+ RGC=c('RBPMS','SNCG','NEFL','NEFM','POU4F2','THY1','SLIT2','ISL1','SLC17A6','MEG3'),
+ rod=c('RHO','NRL','PDE6A','PDE6B','CNGA1','NR2E3','GNAT1','SAG','RCVRN'),
+ cone=c('ARR3','PDE6H','GNAT2','OPN1SW','OPN1MW','OPN1LW','GUCA1A','GNGT2','CNGB3'),
+ muller=c('RLBP1','GLUL','SOX9','VIM','SLC1A3','DKK3','APOE','CLU','TF'),
+ astrocyte=c('GFAP','AQP4','SLC1A3','GJA1','S100B','SOX9'),
+ microglia=c('C1QA','C1QB','C1QC','CSF1R','PTPRC','AIF1','TYROBP','CX3CR1'),
+ endo=c('PECAM1','VWF','CLDN5','FLT1','KDR','CDH5','EGFL7'),
+ pericyte=c('RGS5','NOTCH3','PDGFRB','ACTA2','TAGLN','COX4I2'),
+ RPE=c('RPE65','BEST1','RLBP1','TTR','SERPINF1','PMEL','SLC16A8','MITF'),
+ schwann=c('MPZ','MBP','SOX10','PLP1','NGFR','S100B'),
+ fibroblast=c('DCN','COL1A1','LUM','COL1A2','SERPINE1','PDGFRA'),
+ T=c('CD3D','CD3E','CD3G','TRAC','IL7R','CCL5','CD2'),
+ B=c('CD79A','MS4A1','CD19','BANK1','PAX5','CD74'),
+ macrophage=c('CD68','LYZ','C1QA','C1QB','C1QC','CD163','ITGAX')
+)
+get_score <- function(symbols) {
+ ids <- unique(unlist(sym2ids[intersect(symbols, names(sym2ids))], use.names=FALSE))
+ ids <- ids[ids %in% rownames(expr)]
+ if(length(ids)==0) return(NULL)
+ colMeans(expr[ids,,drop=FALSE])
+}
+# For each cluster, mean expression per marker set
+for(nm in names(sets)) {
+ ids <- unique(unlist(sym2ids[intersect(sets[[nm]], names(sym2ids))], use.names=FALSE)); ids <- ids[ids %in% rownames(expr)]
+ if(length(ids)==0) next
+ sub <- expr[ids,,drop=FALSE]
+ # average by cluster
+ cl <- as.character(obj"'$seurat_clusters)
+ means <- sapply(sort(unique(cl)), function(cc) rowMeans(sub[,cl==cc,drop=FALSE]))
+ cat('"'\\nSET', nm, 'genes:', paste(sets[[nm]], collapse=','), 'ids', length(ids), '\\n')
+ for(j in seq_len(ncol(means))) cat('cl', colnames(means)[j], 'score', round(mean(means[,j]),3), ' top5 ', paste(rownames(means)[order(means[,j],decreasing=TRUE)[1:min(5,nrow(means))]], round(sort(means[,j],decreasing=TRUE)[1:min(5,nrow(means))],2), sep=':', collapse=', '), '\\n')
+}
+# Print selected clusters horizontal marker genes means
+sel <- c('0','3','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25')
+cat('\\nDetailed horizontal-related gene means across clusters\\n')
+mk <- c('ONECUT1','LHX1','CALB2','SLC17A8','GAD1','GAD2','TNR','SNTG2','CARTPT','NFIA','LRRTM4','SPOCK3','PRKG1','KCNB2','PCDH9','SLIT2','RBPMS','VSX2','TRPM1','GRM6')
+ids <- unique(unlist(sym2ids[intersect(mk,names(sym2ids))],use.names=FALSE)); ids <- ids[ids %in% rownames(expr)]
+cl <- as.character(obj"'$seurat_clusters)
+mat <- sapply(sel, function(cc) rowMeans(expr[ids,cl==cc,drop=FALSE]))
+rownames(mat) <- id2sym[ids]
+mat <- mat[rownames(mat) %in% mk,,drop=FALSE]
+print(round(mat,2))
+EOF
+Rscript inspect_markers.R'

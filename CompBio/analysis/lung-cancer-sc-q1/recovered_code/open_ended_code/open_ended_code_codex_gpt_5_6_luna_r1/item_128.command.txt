@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+# efficient target marker presence/score summary from h5ad
+import h5py,numpy as np
+p='lung.cancer.sc.h5ad'
+with h5py.File(p,'r') as f:
+ cats=np.array([x.decode() for x in f['obs']['sampleID']['categories'][:]])
+ codes=f['obs']['sampleID']['codes'][:]
+ syms=np.array([x.decode() for x in f['var']['symbol'][:]])
+ genes=['PTPRC','KRT5','KRT14','KRT17','TP63','KRT6A','KRT13','S100A2','SFN','KRT16','SFTPC','SFTPB','SFTPA1','NAPSA','NKX2-1','SCGB1A1','EPCAM','KRT8','KRT18','KRT19','FCER1A','CD1C','CLEC10A','HLA-DRA','CD74']
+ idx={g:i for i,g in enumerate(syms)}
+ print('missing',[g for g in genes if g not in idx])
+ sel=[idx[g] for g in genes]
+ indptr=f['X']['indptr'][:]; inds=f['X']['indices']; data=f['X']['data']
+ vals=np.zeros((len(codes),len(sel)),dtype=np.float32)
+ # row loop; only extract selected via indices in rows (about 15 sec)
+ wanted={col:g for col,g in enumerate(sel)}
+ # map gene index to col
+ gm={g:j for j,g in enumerate(sel)}
+ for i in range(len(codes)):
+  a,b=indptr[i],indptr[i+1]
+  ii=inds[a:b]
+  for k,v in zip(ii,data[a:b]):
+   j=gm.get(int(k))
+   if j is not None: vals[i,j]=v
+ for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+  ix=(cats[codes]==s)
+  # assume immune if PTPRC >0
+  non=ix & (vals[:,0]==0)
+  print('\\n',s,'all',ix.sum(),'non',non.sum())
+  for g in genes[1:]:
+   v=vals[:,genes.index(g)]
+   print(g, 'all>0',int((ix& (v>0)).sum()), 'non>0',int((non&(v>0)).sum()),'non>1',int((non&(v>1)).sum()),end='; ')
+  print()
+PY"

@@ -1,0 +1,65 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, numpy as np
+from scipy import sparse
+from scipy.stats import spearmanr
+from sklearn.metrics import pairwise_distances
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+
+def load(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  g=h['X']; shape=tuple(g.attrs['shape'])
+  x=sparse.csc_matrix((g['data'][()],g['indices'][()],g['indptr'][()]),shape=shape)
+  genes=[z.decode() if isinstance(z,bytes) else str(z) for z in h['var']['_index'][()]]
+  gc=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs']['guide']['categories'][()]]
+  guide=np.array([gc[z] for z in h['obs']['guide']['codes'][()]])
+  if 'target_gene' in h['obs']:
+   tc=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs']['target_gene']['categories'][()]]
+   target=np.array([tc[z] for z in h['obs']['target_gene']['codes'][()]])
+  else: target=None
+ return x,genes,guide,target
+
+def profile(x,genes,guide):
+ groups=[g for g in np.unique(guide) if not g.startswith('NT-')]
+ controls=np.flatnonzero(np.char.startswith(guide.astype(str),'NT-'))
+ # pseudobulk CPM-ish mean: sum counts / sum library * 1e6
+ lib=np.asarray(x.sum(axis=1)).ravel()
+ sums={g: np.asarray(x[guide==g].sum(axis=0)).ravel() for g in groups}
+ ctrl=np.asarray(x[controls].sum(axis=0)).ravel()
+ # Use mean of normalized count per cell? pooled pseudobulk
+ cpm={g:(sums[g]/lib[guide==g].sum())*1e6 for g in groups}
+ cpmctrl=(ctrl/lib[controls].sum())*1e6
+ lfc={g:np.log2((cpm[g]+0.05)/(cpmctrl+0.05)) for g in groups}
+ return groups,lfc,cpm,cpmctrl
+xr,gr,rg,rt=load('perturb.seq.align.q1.ref.h5ad')
+xq,gq,qg,qt=load('perturb.seq.align.q1.query.h5ad')
+print('same first gene?',gr[:3],gq[:3])
+ri={g:i for i,g in enumerate(gr)}; qi={g:i for i,g in enumerate(gq)}
+common=[g for g in gr if g in qi]
+ridx=np.array([ri[g] for g in common]); qidx=np.array([qi[g] for g in common])
+Rgroups,R,_,_=profile(xr,gr,rg); Qgroups,Q,_,_=profile(xq,gq,qg)
+Rmat=np.vstack([R[g][ridx] for g in Rgroups]); Qmat=np.vstack([Q[g][qidx] for g in Qgroups])
+# drop weak genes: use genes with some expression in controls or guide profiles
+# gene-wise center across guide signatures to deal baseline? Effects already control, then standardize each signature
+for mode, A,B in [('raw',Rmat,Qmat),('center',Rmat-Rmat.mean(1)[:,None],Qmat-Qmat.mean(1)[:,None])]:
+ print('\\nMODE',mode)
+ # restrict genes with effects / detectable; all common excluding NT target replacements etc
+ for ng in [100,300,1000,3000,6000,10000,len(common)]:
+  # select top variance across ref+query effects? 
+  v=np.var(np.vstack([A,B]),axis=0)
+  ix=np.argsort(v)[-ng:]
+  aa=A[:,ix]; bb=B[:,ix]
+  # normalize rows for cosine/Pearson = corr
+  aa=aa-aa.mean(axis=1,keepdims=True); bb=bb-bb.mean(axis=1,keepdims=True)
+  aa/=np.linalg.norm(aa,axis=1,keepdims=True)+1e-9; bb/=np.linalg.norm(bb,axis=1,keepdims=True)+1e-9
+  sim=bb@aa.T
+  # print requested ref rank and all top q
+  if ng in [300,1000,3000,10000,len(common)]:
+   print('ng',ng)
+   for target in ['PABPC1','NUDT21','LEO1']:
+    refg=[g for g in Rgroups if g.startswith(target+'-')][0]
+    j=Rgroups.index(refg)
+    best=np.argsort(sim[:,j])[::-1][:8]
+    print(refg,[(Qgroups[i],round(float(sim[i,j]),3)) for i in best])
+   # mutual assignment via max? 
+ # global top all perhaps
+PY"

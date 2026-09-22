@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import math, heapq, glob
+# primary fragment totals from original files, cached by counting once from binned script? Recompute quickly using line totals from previous wc output? Use shell-created count files with per-bin counts and library totals estimated from filenames by reading the scoring script inputs is not stored, so use coverage sum scales from actual primary fragment totals via a lightweight precomputed dictionary in this command.
+import subprocess, os
+
+def primary_total(pattern):
+    p=subprocess.run(f\"gzip -cd {pattern} | awk '"'$1 ~ /''^chr([0-9]+|X|Y)$/ {{c++}} END{{print c+0}}'"'\", shell=True, check=True, text=True, capture_output=True)
+    return float(p.stdout.strip())
+
+for tf in ['TF1','TF2','TF3','TF4','TF5','TF6']:
+    tt=primary_total(f'chip.pioneer.q1/{tf}.rep*.bed.gz')/1e6
+    ct=primary_total(f'chip.pioneer.q1/{tf}.control*.bed.gz')/1e6
+    sums={('narrow','closed'):0.0,('narrow','open'):0.0,('hotspot','closed'):0.0,('hotspot','open'):0.0}
+    heaps={('narrow',10000):[],('narrow',50000):[],('hotspot',10000):[],('hotspot',50000):[]}
+    with open(f'work/binned_counts/{tf}.treat.counts.bed') as ft, open(f'work/binned_counts/{tf}.control.counts.bed') as fc:
+        for lt,lc in zip(ft,fc):
+            a=lt.split('\\t'); b=lc.split('\\t')
+            tr=float(a[5])/tt; cr=float(b[5])/ct
+            diff=tr-cr
+            lfc=math.log2((tr+0.05)/(cr+0.05))
+            if diff>0 and lfc>1:
+                for idx,mask in [(3,'narrow'),(4,'hotspot')]:
+                    state='open' if a[idx]=='1' else 'closed'
+                    sums[(mask,state)] += diff
+            for idx,mask in [(3,'narrow'),(4,'hotspot')]:
+                if diff>0:
+                    closed = (a[idx] "'!= '"'1')
+                    for n in [10000,50000]:
+                        h=heaps[(mask,n)]
+                        item=(diff, closed)
+                        if len(h)<n: heapq.heappush(h,item)
+                        elif diff>h[0][0]: heapq.heapreplace(h,item)
+    print(tf)
+    for mask in ['narrow','hotspot']:
+        c=sums[(mask,'closed')]; o=sums[(mask,'open')]
+        print(mask, 'abs_closed', round(c,1), 'abs_open', round(o,1), 'frac', round(c/(c+o),6) if c+o else 0)
+        for n in [10000,50000]:
+            total=sum(x for x,closed in heaps[(mask,n)])
+            closed=sum(x for x,closed in heaps[(mask,n)] if closed)
+            print(mask, 'top_abs', n, round(closed,1), round(closed/total,6) if total else 0)
+PY"

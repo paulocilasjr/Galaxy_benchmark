@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse,pandas as pd,re,numpy as np,collections,os
+from scipy import stats
+q=[g.upper() for g in open('characterize.response.q1.txt').read().split()]; qc=collections.Counter(q)
+def get_symbol(gpl):
+ cols=list(gpl.table.columns)
+ for c in cols:
+  if c.upper() in ['GENE_SYMBOL','SYMBOL','GENE SYMBOL'] or c.upper().startswith('GENE_SYMBOL'):return gpl.table.set_index('ID')[c].to_dict()
+ for c in cols:
+  if c.upper()=='GENE':return gpl.table.set_index('ID')[c].to_dict()
+ if 'gene_assignment' in gpl.table.columns:
+  d={}
+  for pid,v in gpl.table.set_index('ID')['gene_assignment'].items():
+   if isinstance(v,str):
+    parts=v.split('//');s=parts[1].strip() if len(parts)>1 else ''
+    if s:d[pid]=s
+  return d
+ return None
+def parse(f):
+ g=GEOparse.get_GEO(filepath=f,silent=True);sym=None
+ for gn,gpl in g.gpls.items():
+  s=get_symbol(gpl)
+  if s:sym=s;break
+ mats={}
+ for n,gsm in g.gsms.items():
+  t=gsm.table;idcol='ID_REF' if 'ID_REF' in t.columns else 'ID'
+  if idcol in t.columns and 'VALUE' in t.columns:mats[n]=t.set_index(idcol)['VALUE']
+ mat=pd.DataFrame(mats);titles={n:gsm.metadata.get('title',[''])[0] for n,gsm in g.gsms.items()}
+ return g,sym,mat,titles
+def comp(f,a,b,name):
+ g,sym,mat,titles=parse(f);a=[x for x in a if x in mat.columns];b=[x for x in b if x in mat.columns]
+ X=mat[a].values;Y=mat[b].values
+ tstat,p=stats.ttest_ind(Y,X,axis=1,equal_var=False,nan_policy='omit')
+ rows=[]
+ for i,pid in enumerate(mat.index):
+  s=sym.get(pid)
+  if not isinstance(s,str):continue
+  s=re.split(r'///|\\|',s)[0].strip()
+  if not s or s.lower()=='nan':continue
+  if np.isnan(tstat[i]) or np.isnan(p[i]):continue
+  rows.append((s.upper(),tstat[i],p[i]))
+ df=pd.DataFrame(rows,columns=['g','t','p']).sort_values('t',ascending=False)
+ for dir,dd in [('up',df.head(112)),('down',df.tail(112))]:
+  cc=collections.Counter(dd.g);ov=sum(min(v,qc.get(k,0)) for k,v in cc.items())
+  print(f'{os.path.basename(f):30s} {name:18s} {dir} t_overlap={ov:3d}')
+for f,kind in [('geo/GSE108289_family.soft.gz','108'),('geo2/GSE55068_family.soft.gz','550'),('geo2/GSE66178_family.soft.gz','661'),('geo2/GSE96628_family.soft.gz','966')]:
+ g,sym,mat,titles=parse(f)
+ if kind=='108': aa=[n for n,t in titles.items() if 'immature' in t.lower()];bb=[n for n,t in titles.items() if 'maturation' in t.lower()]
+ elif kind=='550': aa=[n for n,t in titles.items() if t=='WT'];bb=[n for n,t in titles.items() if t=='WT_LPS']
+ elif kind=='661': aa=[n for n,t in titles.items() if 'WT_unstim' in t];bb=[n for n,t in titles.items() if 'WT_6hrLPS' in t]
+ else: aa=[n for n,t in titles.items() if 'WT DCs at 0h' in t];bb=[n for n,t in titles.items() if 'WT DCs at 4h' in t]
+ comp(f,aa,bb,kind)
+PY"

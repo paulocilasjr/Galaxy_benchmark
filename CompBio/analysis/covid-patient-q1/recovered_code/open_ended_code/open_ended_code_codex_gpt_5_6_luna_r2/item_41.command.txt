@@ -1,0 +1,32 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,pandas as pd,scipy.sparse as sp
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from scipy.cluster.hierarchy import linkage,dendrogram,fcluster
+with h5py.File('covid.patients.q1.h5ad','r') as f:
+ cats=f['obs/donor_id/categories'].asstr()[:]; codes=f['obs/donor_id/codes'][:]; n=f['X/indptr'].shape[0]-1; g=f['var/_index'].shape[0]
+ names=f['var/feature_name/categories'].asstr()[:][f['var/feature_name/codes'][:]]; idx={}
+ for i,x in enumerate(names): idx.setdefault(x,i)
+ ip=f['X/indptr'][:]; ds=np.zeros((len(cats),g),float); data=f['X/data']; inds=f['X/indices']
+ for r0 in range(0,n,3000):
+  r1=min(n,r0+3000); a=ip[r0:r1+1]; s,e=int(a[0]),int(a[-1]); mat=sp.csr_matrix((data[s:e],inds[s:e],a-s),shape=(r1-r0,g)); oh=sp.csr_matrix((np.ones(r1-r0,np.float32),(np.arange(r1-r0),codes[r0:r1])),shape=(r1-r0,len(cats))); ds+=(mat.T@oh).T.toarray()
+ cpm=ds/ds.sum(1,keepdims=True)*1e6; x=np.log1p(cpm*100)
+ # use genes with high across-donor variance but remove sex/mito/ribo perhaps
+ mean=x.mean(0); var=x.var(0); keep=np.argsort(var)[-1000:]
+ # marker only IFN/inflammation plus top variable
+ markers=['IFI27','IFI44L','IFIT1','IFIT3','IFIT2','ISG15','IFI6','MX1','OAS1','OAS2','OASL','RSAD2','BST2','LY6E','IRF7','SAMD9L','EPSTI1','USP18','XAF1','PARP9','CCL2','CXCL10','SIGLEC1','C15orf48','FCGR1A','S100A8','S100A9','DEFB1','CCL3','CCL4','IL1B','TNF','HLA-DRA','MPO','FCGR3A','LST1','KCTD14','OTOF','HESX1','RBP4']
+ mi=[idx[z] for z in markers if z in idx]
+ for label, y in [('ISG',x[:,mi]),('topvar',x[:,keep]),('all',x)]:
+  z=StandardScaler().fit_transform(y)
+  print('\\n',label,'PCA var',PCA(n_components=10).fit(z).explained_variance_ratio_[:5])
+  for k in [2,3,4,5,6]:
+   lab=KMeans(n_clusters=k,random_state=1,n_init=50).fit_predict(z)
+   # order clusters by mean IFI27 or marker sum
+   score=z.mean(1); means=[score[lab==j].mean() for j in range(k)]; ord=np.argsort(means)
+   print('k',k,'clusters low->high',[(int(j),round(means[j],2),','.join(cats[lab==j])) for j in ord])
+ # hierarchical on ISG z
+ z=StandardScaler().fit_transform(x[:,mi]); link=linkage(z,method='ward')
+ print('\\nward order')
+ leaf=dendrogram(link,labels=cats,no_plot=True)['ivl']; print(','.join(leaf))
+PY"

@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5224132ccd873fb7b",
+  "history_id": "bbd44e69cb8906b524e52ee6bc950292",
+  "tool_id": "deconvolve_target_spot",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-10T07:45:04.947074",
+  "update_time": "2026-08-10T07:45:44.273698",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "python - \"/jetstream2/scratch/main/jobs/79036873/inputs/dataset_53fde8be-6982-4db6-9ae1-72a8946f02d6.dat\" <<'PY' > report.txt\nimport sys, tarfile, tempfile, os, itertools\nimport numpy as np\nimport pandas as pd\nfrom scipy.io import mmread\nfrom scipy.optimize import nnls\n\nrng=np.random.RandomState(710)\np=sys.argv[1]\nd=tempfile.mkdtemp(prefix=\"spatial_deconv_\")\nwith tarfile.open(p,\"r:*\") as t: t.extractall(d)\nfiles=[]\nfor root,dirs,names in os.walk(d):\n    for n in names: files.append(os.path.join(root,n))\ndef pick(*parts):\n    for f in files:\n        b=os.path.basename(f)\n        if all(x in b for x in parts): return f\n    raise RuntimeError(\"missing \"+str(parts))\n\nsc=pd.read_csv(pick(\"sc_counts.csv\"),index_col=0)\nmd=pd.read_csv(pick(\"sc_metadata.csv\"))\nmd=md.rename(columns={md.columns[0]:\"cell_id\"})\nmd[\"cell_id\"]=md[\"cell_id\"].astype(str)\nmd=md.set_index(\"cell_id\").loc[sc.index.astype(str)]\nsp=mmread(pick(\"matrix.mtx\")).tocsr()\nfeatures=pd.read_csv(pick(\"features.tsv\"),sep=\"\\t\",header=None,compression=\"infer\")\nbarcodes=pd.read_csv(pick(\"barcodes.tsv\"),sep=\"\\t\",header=None,compression=\"infer\").iloc[:,0].astype(str).tolist()\ngenes=features.iloc[:,1].astype(str).tolist()\nassert list(sc.columns.astype(str))==genes\ntarget=\"Spot_710-1\"\nj=barcodes.index(target)\ny=np.asarray(sp[:,j].todense()).ravel().astype(float)\nX=sc.values.astype(float)\ntypes=sorted(md[\"cell_type\"].astype(str).unique())\nlabels=md[\"cell_type\"].astype(str).values\nK=len(types)\nG=len(genes)\n\n# Mean raw signatures and mean cell-library-normalized signatures.\nRraw=np.column_stack([X[labels==t].mean(axis=0) for t in types])\nlibs=X.sum(axis=1)\nXn=X/np.maximum(libs[:,None],1)\nRnorm=np.column_stack([Xn[labels==t].mean(axis=0) for t in types])\nyn=y/max(y.sum(),1)\n\ndef fit(A,b,idx=None):\n    if idx is None: idx=np.arange(A.shape[0])\n    w,res=nnls(A[idx,:],b[idx])\n    prop=w/max(w.sum(),1e-30)\n    pred=A.dot(w)\n    rss=float(np.sum((b-pred)**2))\n    return w,prop,rss\n\nwraw,praw,rssraw=fit(Rraw,y)\nwnorm,pnorm,rssnorm=fit(Rnorm,yn)\n\n# Marker genes: strongest type-vs-rest log fold changes.\nmarker=set()\nmarker_by_type={}\nfor k,t in enumerate(types):\n    other=np.delete(Rraw,k,axis=1).mean(axis=1)\n    score=np.log2((Rraw[:,k]+0.1)/(other+0.1))\n    ids=np.argsort(score)[-50:]\n    marker.update(ids.tolist())\n    marker_by_type[t]=ids\nmarker=np.array(sorted(marker))\nwm,pm,rssm=fit(Rraw,y,marker)\n\n# Highly discriminative genes by between-type variance after row normalization.\nrow_scale=Rraw.mean(axis=1)+0.1\ndisc=np.var(Rraw/row_scale[:,None],axis=1)\ndisc_ids=np.argsort(disc)[-300:]\nwd,pd,rssd=fit(Rraw,y,disc_ids)\n\n# Bootstrap genes and reference cells independently.\nB=300\nboot=np.zeros((B,K))\nfor b in range(B):\n    gids=rng.choice(G,size=int(0.75*G),replace=False)\n    cols=[]\n    for t in types:\n        ids=np.where(labels==t)[0]\n        samp=rng.choice(ids,size=len(ids),replace=True)\n        cols.append(X[samp].mean(axis=0))\n    Rb=np.column_stack(cols)\n    wb,_,_=fit(Rb,y,gids)\n    boot[b]=wb/max(wb.sum(),1e-30)\n\n# Leave-one-type-out relative deterioration.\nloo={}\nfor k,t in enumerate(types):\n    keep=[q for q in range(K) if q!=k]\n    ww,_=nnls(Rraw[:,keep],y)\n    pred=Rraw[:,keep].dot(ww)\n    loo[t]=(np.sum((y-pred)**2)-rssraw)/max(rssraw,1e-30)\n\n# Held-out-gene CV over all nonempty subsets, scored by normalized holdout MSE.\nsubsets=[]\nfor size in range(1,K+1):\n    for comb in itertools.combinations(range(K),size):\n        subsets.append(comb)\ncv_scores={s:[] for s in subsets}\nfor repi in range(120):\n    perm=rng.permutation(G)\n    train=perm[:int(0.7*G)]\n    test=perm[int(0.7*G):]\n    denom=np.sum(y[test]**2)+1e-30\n    for s in subsets:\n        ww,_=nnls(Rraw[train][:,s],y[train])\n        pred=Rraw[test][:,s].dot(ww)\n        cv_scores[s].append(float(np.sum((y[test]-pred)**2)/denom))\ncv_summary=[]\nfor s,vals in cv_scores.items():\n    cv_summary.append((np.mean(vals),np.std(vals,ddof=1)/np.sqrt(len(vals)),s))\ncv_summary.sort(key=lambda z:z[0])\nbest_mean,best_se,best_s=cv_summary[0]\neligible=[z for z in cv_summary if z[0] <= best_mean+best_se]\none_se=min(eligible,key=lambda z:(len(z[2]),z[0]))\n\n# Marker evidence: fraction of target UMIs in each type's top markers, compared with other signatures.\nmarker_evidence={}\nfor k,t in enumerate(types):\n    ids=marker_by_type[t]\n    observed=(y[ids].sum()+1)/(y.sum()+len(ids))\n    expected=(Rraw[ids,k].sum()+1)/(Rraw[:,k].sum()+len(ids))\n    other=(np.delete(Rraw,k,axis=1)[ids,:].mean(axis=1).sum()+1)/(np.delete(Rraw,k,axis=1).mean(axis=1).sum()+len(ids))\n    marker_evidence[t]=(observed,expected,other,observed/max(other,1e-30))\n\n# Context: fit every spot, report target rank and coefficient quantiles for threshold assessment.\nall_prop=np.zeros((len(barcodes),K))\nfor jj in range(len(barcodes)):\n    yy=np.asarray(sp[:,jj].todense()).ravel().astype(float)\n    ww,_=nnls(Rraw,yy)\n    all_prop[jj]=ww/max(ww.sum(),1e-30)\n\nprint(\"TARGET\",target,\"index\",j,\"UMIS\",int(y.sum()),\"NONZERO_GENES\",int((y>0).sum()))\nprint(\"REFERENCE_CELL_COUNTS\",dict((t,int(np.sum(labels==t))) for t in types))\nprint(\"RAW_NNLS\")\nfor t,w,q in zip(types,wraw,praw): print(t,\"weight\",round(float(w),6),\"proportion\",round(float(q),6))\nprint(\"NORMALIZED_NNLS\")\nfor t,w,q in zip(types,wnorm,pnorm): print(t,\"weight\",round(float(w),6),\"proportion\",round(float(q),6))\nprint(\"MARKER_NNLS\",len(marker),\"genes\")\nfor t,w,q in zip(types,wm,pm): print(t,\"weight\",round(float(w),6),\"proportion\",round(float(q),6))\nprint(\"DISCRIMINATIVE_NNLS\",len(disc_ids),\"genes\")\nfor t,w,q in zip(types,wd,pd): print(t,\"weight\",round(float(w),6),\"proportion\",round(float(q),6))\nprint(\"BOOTSTRAP\")\nfor k,t in enumerate(types):\n    q=np.quantile(boot[:,k],[0.025,0.5,0.975])\n    print(t,\"mean\",round(float(boot[:,k].mean()),6),\"CI95\",*[round(float(x),6) for x in q],\n          \"P_gt_0.02\",round(float(np.mean(boot[:,k]>0.02)),4),\n          \"P_gt_0.05\",round(float(np.mean(boot[:,k]>0.05)),4))\nprint(\"LEAVE_ONE_OUT_RSS_INCREASE_FOLD\")\nfor t in types: print(t,round(float(loo[t]),6))\nprint(\"CV_TOP10\")\nfor mean,se,s in cv_summary[:10]:\n    print(\",\".join(types[k] for k in s),\"n\",len(s),\"mean\",round(float(mean),8),\"se\",round(float(se),8))\nprint(\"CV_BEST\",\",\".join(types[k] for k in best_s))\nprint(\"CV_ONE_SE\",\",\".join(types[k] for k in one_se[2]),\"mean\",round(float(one_se[0]),8))\nprint(\"MARKER_EVIDENCE observed expected own expected other fold_vs_other\")\nfor t in types: print(t,*[round(float(x),6) for x in marker_evidence[t]])\nprint(\"ALL_SPOT_PROP_QUANTILES_AND_TARGET\")\nfor k,t in enumerate(types):\n    qs=np.quantile(all_prop[:,k],[0,0.1,0.25,0.5,0.75,0.9,1])\n    print(t,\"quantiles\",*[round(float(x),6) for x in qs],\"target\",round(float(praw[k]),6))\n# Conservative consensus call: >=5% in every fit, bootstrap lower 95% >2%, and positive LOO evidence.\nfits=np.vstack([praw,pnorm,pm,pd])\ncalled=[]\nfor k,t in enumerate(types):\n    if fits[:,k].min()>=0.05 and np.quantile(boot[:,k],0.025)>0.02 and loo[t]>0.01:\n        called.append(t)\nprint(\"CONSENSUS_CALL\",\",\".join(sorted(called)))\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "archive": {
+      "id": "f9cad7b01a472135942343ae846ed40f",
+      "src": "hda",
+      "uuid": "53fde8be-6982-4db6-9ae1-72a8946f02d6"
+    }
+  },
+  "outputs": {
+    "report": {
+      "id": "f9cad7b01a4721352cf36f5e9a6ddace",
+      "src": "hda",
+      "uuid": "b3bca40b-50c9-4e0f-bc39-891c57a750f6"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

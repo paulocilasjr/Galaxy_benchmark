@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.spatial
+pos=pd.read_csv('data/tissue_positions.csv', index_col=0)
+coords=pos[['array_row','array_col']].values.astype(float)
+cts=['B_Cell','Endothelial','Fibroblast_Stroma','Macrophage','T_Cell','Tumor_Core']
+C=pd.read_csv('map_compositions.csv'); C.columns=cts
+tumor=C['Tumor_Core'].values>0; tcoords=coords[tumor]
+# for shifts, map coords modulo 30, compute distance to fixed tumor on torus? use Euclidean torus min distances.
+# We'll consider all unique shifts 0..29 row/col.
+# For each type, only cells in non-tumor spots, weighted counts. Observed weighted mean distance to tumor.
+def torus_dist(points, tcoords):
+ # points Nx2, tcoords Mx2 on [0,30)
+ out=[]
+ for p in points:
+  d=np.abs(tcoords-p)
+  d=np.minimum(d,30-d)
+  out.append(np.min(np.sqrt((d[:,0]**2+d[:,1]**2))))
+ return np.array(out)
+nonT=(~tumor)
+for ct in cts[:-1]:
+ counts=C[ct].values.copy()
+ obs_pts=coords[(counts>0)&nonT]
+ w=counts[(counts>0)&nonT]
+ obs=np.average(torus_dist(obs_pts,tcoords),weights=w)
+ shifts=[]
+ for dr in range(30):
+  for dc in range(30):
+   pts=coords[(counts>0)&nonT].copy()
+   pts[:,0]=(pts[:,0]+dr)%30
+   pts[:,1]=(pts[:,1]+dc)%30
+   shifts.append(np.average(torus_dist(pts,tcoords),weights=w))
+ shifts=np.array(shifts); p=(shifts<=obs).mean(); z=(obs-shifts.mean())/shifts.std()
+ print(f'{ct:20s} obs={obs:.3f} p_shift={p:.4f} z={z:.2f} min={shifts.min():.3f}')
+PY"

@@ -1,0 +1,78 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, subprocess, urllib.parse, sys, os
+from collections import defaultdict
+# load local counts for chr1p_1 rows < 1M
+local_bins=[]; local_counts={}
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    cols=header[3:]
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if p[0]"'!='"'chr1p_1': break
+        st=int(p[1]); en=int(p[2])
+        if st>=1000000: break
+        local_bins.append((st,en))
+        vals=list(map(int,p[3:]))
+        for c,v in zip(cols,vals):
+            local_counts.setdefault(c,{})[(st,en)]=v
+print('local bins',len(local_bins),local_bins[:3], local_bins[-1])
+source_info={
+'Bladder':('GSM8426940','GSM8426940_Axolotl_Bladder_Fragments.bed.gz'),
+'Brain':('GSM8426943','GSM8426943_Axolotl_Brain_Fragments.bed.gz'),
+'Cloaca':('GSM8426946','GSM8426946_Axolotl_Cloaca_Fragments.bed.gz'),
+'GallBladder':('GSM8426949','GSM8426949_Axolotl_GallBladder_Fragments.bed.gz'),
+'Gill':('GSM8426952','GSM8426952_Axolotl_Gill_Fragments.bed.gz'),
+'Heart':('GSM8426953','GSM8426953_Axolotl_Heart_Fragments.bed.gz'),
+'Intestine':('GSM8426954','GSM8426954_Axolotl_Intestine_Fragments.bed.gz'),
+'Kidney':('GSM8426957','GSM8426957_Axolotl_Kidney_Fragments.bed.gz'),
+'Limb':('GSM8426960','GSM8426960_Axolotl_Limb_Fragments.bed.gz'),
+'Liver':('GSM8426963','GSM8426963_Axolotl_Liver_Fragments.bed.gz'),
+'Lung':('GSM8426966','GSM8426966_Axolotl_Lung_Fragments.bed.gz'),
+'Pancreas':('GSM8426967','GSM8426967_Axolotl_Pancreas_Fragments.bed.gz'),
+'Prostate':('GSE273356','GSE273356_Axolotl_Prostate_Fragments.bed.gz'),
+'Spleen':('GSM8426970','GSM8426970_Axolotl_Spleen_Fragments.bed.gz'),
+'Stomach':('GSM8426973','GSM8426973_Axolotl_Stomach_Fragments.bed.gz'),
+}
+
+def get_counts(acc, fname, limit=1000000):
+    url='https://www.ncbi.nlm.nih.gov/geo/download/?acc=%s&format=file&file=%s' % (acc, urllib.parse.quote(fname))
+    # shell handles broken pipe okay; use python streaming gzip? easier command gzip -dc pipe
+    cmd=['bash','-lc', f\"set -o pipefail; curl -L --fail --silent {url"'!r} | gzip -dc"]
+    proc=subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    counts=defaultdict(int)
+    try:
+        for line in proc.stdout:
+            p=line.rstrip('"'\\n').split('\\t')
+            if len(p)<3: continue
+            chrom=p[0]; st=int(p[1]); en=int(p[2])
+            if chrom"'!='"'chr1p_1' or st>=limit:
+                break
+            sbin=(st//10000)*10000
+            ebin=((en-1)//10000)*10000
+            for b in range(sbin, min(ebin,limit-1)+1, 10000):
+                counts[(b,b+10000)] += 1
+    finally:
+        try: proc.kill()
+        except Exception: pass
+        proc.stdout.close()
+        # don't wait too long
+        try: proc.wait(timeout=5)
+        except Exception: pass
+    return counts
+
+matches=[]
+for s,(acc,fname) in source_info.items():
+    sc=get_counts(acc,fname)
+    diffs=[]
+    for c in cols:
+        # compare all local bins in region; source missing bins count zero
+        mism=sum(1 for b in local_bins if sc.get(b,0)"'!=local_counts[c][b])
+        absdiff=sum(abs(sc.get(b,0)-local_counts[c][b]) for b in local_bins)
+        diffs.append((mism,absdiff,c))
+    diffs.sort()
+    print('"'SOURCE',s,'best',diffs[:5])
+    matches.append((s,diffs[0]))
+print('summary')
+for s,(m,a,c) in matches:
+    print(f'{s:12s} -> {c:12s} mism={m} abs={a}')
+PY"

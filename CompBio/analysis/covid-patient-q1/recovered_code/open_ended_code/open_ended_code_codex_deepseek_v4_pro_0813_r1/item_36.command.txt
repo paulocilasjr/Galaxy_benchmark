@@ -1,0 +1,47 @@
+/bin/bash -lc "cat > cluster_donors2.py <<'PY'
+import numpy as np, pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+import anndata as ad
+
+adata=ad.read_h5ad('covid.patients.q1.h5ad')
+names=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); sums=D['sum']; nnz=D['nnz']; cats=D['cats']; cc=D['cell_counts']
+libs=sums.sum(axis=0, keepdims=True); cpm=sums/libs*1e6; log=np.log1p(cpm)
+frac=nnz/cc.reshape(1,-1)
+# remove genes: sex, ribo, mito, hb, platelet? not all platelet
+sex_patterns=['XIST','TSIX','RPS4Y1','RPS4Y2','DDX3Y','UTY','KDM5D','ZFY','NLGN4Y','PRKY','TXLNGY','EIF1AY','USP9Y','TMSB4Y','TTTY','LINC00278']
+ribo=[n.startswith(('RPS','RPL','MRPS','MRPL')) for n in names]
+mito=[n.startswith(('MT-','MTRNR','MTCO','MTND','MTATP','MTCYB')) for n in names]
+hb=[n.startswith(('HBA','HBB','HBD','HBE','HBG','HBM','HBQ','HBZ')) for n in names]
+remove=np.array([n in sex_patterns for n in names]) | np.array(ribo) | np.array(mito) | np.array(hb)
+print('removed', remove.sum())
+keep=(~remove) & ((frac>0.05).sum(axis=1)>=3)
+print('kept', keep.sum())
+X=log[keep,:].T
+Xz=StandardScaler().fit_transform(X)
+pca=PCA(n_components=min(20,X.shape[0]), random_state=0)
+scores=pca.fit_transform(Xz)
+print('var', pca.explained_variance_ratio_[:10])
+for n in [2,3,5,10,20]:
+ km=KMeans(n_clusters=2,n_init=30,random_state=0).fit(scores[:,:n])
+ print('nPC',n)
+ for lab in range(2):
+  members=sorted([str(c) for c,l in zip(cats,km.labels_) if l==lab])
+  print(' ',lab,len(members),members)
+# marker mean per cluster for kmeans nPC=5
+km=KMeans(n_clusters=2,n_init=30,random_state=0).fit(scores[:,:5])
+for lab in range(2):
+ idx=np.where(km.labels_==lab)[0]
+ print('\\ncluster',lab,'n',len(idx))
+ for g in ['IFI27','ISG15','IFITM3','MX1','OAS1','HLA-DRA','HLA-DRB1','CD14','LYZ','S100A8','S100A9','CD3D','CD8A','MS4A1','IGHG1','JCHAIN','NKG7','GNLY','FCGR3A']:
+  j=np.where(names==g)[0]
+  if len(j):
+   print(g, 'meanlog', round(log[j[0],idx].mean(),3), 'meancpm', round(cpm[j[0],idx].mean(),2))
+# print scores
+print('\\nPCs')
+for c,s in zip(cats,scores): print(c,' '.join(f'{v:.2f}' for v in s[:5]))
+PY
+python cluster_donors2.py"

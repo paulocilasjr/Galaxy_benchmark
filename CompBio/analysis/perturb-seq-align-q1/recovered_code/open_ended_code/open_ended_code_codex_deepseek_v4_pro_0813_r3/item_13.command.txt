@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+from scipy.stats import spearmanr, pearsonr
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+
+def prep(a):
+    X=a.X
+    if sparse.issparse(X): X=X.toarray()
+    lib=X.sum(axis=1,keepdims=True)
+    return np.log1p(X/lib*1e4), np.array(a.var_names), a.obs.guide.astype(str).values
+RX,rgenes,rguides=prep(ref)
+QX,qgenes,qguides=prep(q)
+# align common vars, common order in ref (exclude target genes not in query)
+common=np.intersect1d(rgenes,qgenes)
+ri=np.array([list(rgenes).index(g) for g in common])
+qi=np.array([list(qgenes).index(g) for g in common])
+print('common',len(common))
+def sig(X, genes, guide, common_idx):
+    nt=X[np.array([g.startswith('NT') for g in guide])].mean(axis=0)
+    sigs={}
+    for g in sorted(set(guide)):
+        if g.startswith('NT'): continue
+        mask=guide==g
+        sigs[g]=X[mask].mean(axis=0)[common_idx]-nt[common_idx]
+    return sigs
+RS=sig(RX,rguides,rguides,ri); QS=sig(QX,qguides,qguides,qi)
+# Build matrix guide x genes, maybe standardize columns?
+rg=list(RS.keys()); qg=list(QS.keys())
+Rmat=np.vstack([RS[g] for g in rg]); Qmat=np.vstack([QS[g] for g in qg])
+# standardize across guides per gene
+def zcols(M):
+    mu=M.mean(axis=0,keepdims=True); sd=M.std(axis=0,keepdims=True)+1e-8
+    return (M-mu)/sd
+Rz=zcols(Rmat); Qz=zcols(Qmat)
+# correlation
+for metric in ['pearson','spearman']:
+    print('\\nMetric',metric)
+    # use corrcoef for pearson; for spearman loop gene rows
+    if metric=='pearson':
+        C=np.corrcoef(Qz,Rz)[:len(qg),len(qg):]
+    else:
+        from scipy.stats import rankdata
+        # compute spearman between rows using pandas? 
+        C=np.zeros((len(qg),len(rg)))
+        for i in range(len(qg)):
+            qi=rankdata(Qz[i])
+            for j in range(len(rg)):
+                rj=rankdata(Rz[j])
+                C[i,j]=np.corrcoef(qi,rj)[0,1]
+    best=[]
+    for i,g in enumerate(qg):
+        j=np.argmax(C[i]); best.append((g,rg[j],C[i,j]))
+    for row in sorted(best, key=lambda x:-x[2]):
+        print(row)
+PY"

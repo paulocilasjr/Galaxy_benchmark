@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+# compare variants of GRU on first 5 TFR records quickly by reusing test_gru_act forward functions
+import struct, sys, numpy as np, torch, h5py
+torch.set_num_threads(1)
+sys.path.insert(0,'proto'); from example_pb2 import Example
+from saluki_torch import Saluki, load_weights
+from test_gru_act import forward_manual, left_justify_input
+
+def parse(N):
+ data=open('models/train_gru/f0_c0/test-0.tfr.dec','rb').read(); pos=0; arr=[]; n=0
+ while pos+16<=len(data) and n<N:
+  length=struct.unpack('<Q',data[pos:pos+8])[0]; payload=data[pos+12:pos+12+length]
+  ex=Example(); ex.ParseFromString(payload); f=ex.features.feature
+  seq=np.frombuffer(f['sequence'].bytes_list.value[0],dtype=np.uint8)
+  coding=np.frombuffer(f['coding'].bytes_list.value[0],dtype=np.uint8)
+  splice=np.frombuffer(f['splice'].bytes_list.value[0],dtype=np.uint8)
+  L=f['lengths'].int64_list.value[0]
+  one=np.eye(4,dtype=np.float32)[seq]
+  x=np.zeros((12288,6),dtype=np.float32); x[:L,:4]=one; x[:L,4]=coding; x[:L,5]=splice
+  arr.append(x)
+  pos += 12+length+4; n+=1
+ return np.array(arr)
+X=torch.from_numpy(parse(5)).permute(0,2,1).contiguous()
+model=Saluki(); load_weights(model,'models/train_gru/f0_c0/train/model0_best.h5'); model.eval()
+with torch.no_grad():
+ py=model(X).numpy().ravel()
+ hs=forward_manual(model,X,'hard_sigmoid').numpy().ravel()
+ ss=forward_manual(model,X,'sigmoid').numpy().ravel()
+with h5py.File('models/train_gru/f0_c0/test0_preds.h5','r') as f: ref=f['preds'][:5].ravel()
+for i in range(5): print(i,'py',py[i],'sigman',ss[i],'hard',hs[i],'ref',ref[i])
+PY"

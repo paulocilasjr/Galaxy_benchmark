@@ -1,0 +1,39 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, fisher_exact, spearmanr
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+cts=sorted(md.cell_type.unique()); P=np.stack([sc.loc[md.cell_type==t].mean().values for t in cts],1)
+Y=mmread('matrix.mtx.gz').tocsr().T.toarray(); C=np.rint(np.array([nnls(P,y)[0] for y in Y])).astype(int)
+pos=pd.read_csv('tissue_positions.csv'); xy=pos[['array_row','array_col']].values
+T=C[:,cts.index('Tumor_Core')]>0
+d=cdist(xy,xy[T]).min(1)
+print('tumor spots',T.sum(),'locations row/col range',xy[T].min(0),xy[T].max(0))
+print('all d bins',pd.Series(d).value_counts().sort_index().head(15).to_string())
+print('\\nPresence and distances:')
+rng=np.random.default_rng(1)
+for j,t in enumerate(cts):
+ q=C[:,j]>0; obs=d[q].mean(); null=np.array([d[rng.choice(900,q.sum(),False)].mean() for _ in range(20000)])
+ p=(1+(null<=obs).sum())/(len(null)+1)
+ adj=d<=1.01
+ odds,pf=fisher_exact([[np.sum(q&adj),np.sum(~q&adj)],[np.sum(q&~adj),np.sum(~q&~adj)]],alternative='greater')
+ print(t,'n',q.sum(),'coTumor',np.sum(q&T),'meanD',round(obs,3),'median',np.median(d[q]),'permP',p,'z',round((obs-null.mean())/null.std(),2),'adj',np.sum(q&adj),'/',np.sum(adj),'OR',round(odds,2),'pF',pf,'rho_count_dist',spearmanr(C[:,j],d).statistic)
+# proportions by exact distance categories
+bins=[-0.1,.1,1.1,2.1,3.1,5.1,10.1,99]
+labels=['0','1','2','3','4-5','6-10','>10']
+cat=pd.cut(d,bins=bins,labels=labels)
+for t in cts:
+ print('\\n',t)
+ print(pd.DataFrame({'pres':C[:,cts.index(t)]>0,'cat':cat}).groupby('cat',observed=True).pres.agg(['mean','sum','count']).to_string())
+# dominant map near tumor char
+chars={'B_Cell':'B','Endothelial':'E','Fibroblast_Stroma':'F','Macrophage':'M','T_Cell':'T','Tumor_Core':'X'}
+# print maps of presence for tumor plus each type
+for t in cts:
+ print('\\nMAP',t)
+ q=C[:,cts.index(t)]>0
+ arr=np.full((30,30),'.',dtype='<U1')
+ for (r,c),tv,qv in zip(xy,T,q): arr[r,c]='@' if tv and qv else ('X' if tv else (chars[t] if qv else '.'))
+ for row in arr: print(''.join(row))
+PY"

@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+X=mmread('matrix.mtx.gz').tocsr()
+bc=pd.read_csv('barcodes.tsv.gz',header=None)[0]
+types=md.cell_type.unique().tolist()
+print('shape',sc.shape,X.shape,'types',md.cell_type.value_counts().to_dict())
+j=np.where(bc.values=='Spot_710-1')[0][0]
+y=X[:,j].toarray().ravel()
+print('spot index,total,nonzero',j,y.sum(),(y>0).sum())
+# raw means, median, library normalized means
+for label,A in [
+ ('raw mean',np.column_stack([sc.loc[md.index[md.cell_type==t]].mean(axis=0).values for t in types])),
+ ('raw sumprofile',np.column_stack([sc.loc[md.index[md.cell_type==t]].sum(axis=0).values for t in types])),
+ ('norm mean',np.column_stack([(sc.loc[md.index[md.cell_type==t]].div(sc.loc[md.index[md.cell_type==t]].sum(1),axis=0)).mean(axis=0).values for t in types]))]:
+ coef,res=nnls(A,y)
+ if label=='raw sumprofile': coef=coef*200
+ print(label,'res',res,'coef',dict(zip(types,np.round(coef,4))))
+ print('shares',dict(zip(types,np.round(coef/coef.sum(),4))))
+# type correlations
+means=sc.groupby(md.cell_type).mean().T
+for transformed in ['raw','log']:
+ yy=y if transformed=='raw' else np.log1p(y)
+ A=means if transformed=='raw' else np.log1p(means)
+ print(transformed,'corr',A.apply(lambda z: np.corrcoef(z,yy)[0,1]).sort_values(ascending=False).to_dict())
+PY"

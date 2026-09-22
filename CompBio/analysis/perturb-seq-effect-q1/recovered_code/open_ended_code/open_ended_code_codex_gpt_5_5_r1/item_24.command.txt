@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse, stats
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f: features=[l.rstrip('\\n').split('\\t')[1] for l in f]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f: barcodes=[l.strip() for l in f]
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+lib=np.asarray(X.sum(axis=0)).ravel(); Xn=X @ sparse.diags(1/np.maximum(lib,1)*1e4); Xn.data=np.log1p(Xn.data)
+Xd=Xn.T.toarray()
+calls=pd.read_csv('protospacer_calls_per_cell.csv').set_index('cell_barcode').loc[barcodes]
+ref=pd.read_csv('feature_reference.csv').set_index('id')
+guides=calls['feature_call'].values; targets=np.array([ref.loc[g,'target_gene_name'] for g in guides])
+nt=targets=='Non-Targeting'
+path=[features[i] for i in range(20)]
+path_idx=list(range(20))
+nt_score=Xd[nt][:,path_idx].mean(axis=1)
+rows=[]
+for guide in sorted(set(guides)):
+    if ref.loc[guide,'target_gene_name']=='Non-Targeting': continue
+    target=ref.loc[guide,'target_gene_name']
+    idx=[i for i in path_idx if features[i]"'!=target]
+    m=guides==guide
+    sc=Xd[m][:,idx].mean(axis=1)
+    nt_sc=Xd[nt][:,idx].mean(axis=1)
+    # gene-wise deltas excluding target if in pathway
+    deltas=Xd[m][:,idx].mean(axis=0)-Xd[nt][:,idx].mean(axis=0)
+    frac_down=(deltas<0).mean()
+    min_delta=deltas.max() # closest to zero, i.e. worst pathway gene effect
+    t=stats.ttest_ind(sc,nt_sc,equal_var=False)
+    u=stats.mannwhitneyu(sc, nt_sc, alternative='"'less')
+    rows.append(dict(guide=guide,target=target,n=m.sum(),mean=sc.mean(),median=np.median(sc),delta=sc.mean()-nt_sc.mean(),cohen=(sc.mean()-nt_sc.mean())/nt_sc.std(ddof=1),frac_down=frac_down,worst_delta=min_delta,t_p=t.pvalue,u_p=u.pvalue))
+df=pd.DataFrame(rows)
+for sort in ['delta','cohen','u_p','t_p','worst_delta']:
+    print('\\nSORT',sort)
+    print(df.sort_values(sort).head(10).to_string(index=False, float_format=lambda x: f'{x:.3g}'))
+print('\\nFull non-NT by delta')
+print(df.sort_values('delta').to_string(index=False, float_format=lambda x: f'{x:.4g}'))
+PY"

@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+path='sample.swap.atac.q1.tsv.gz'
+cols=pd.read_csv(path,sep='\\t',nrows=0).columns.tolist(); samples=cols[3:]
+# library sizes from previous print
+lib=np.array([701506327,1168148790,484000505,565994637,1094125058,868549497,699794434,745602917,1147926115,398317869,877686879,1398702406,973845979,497829833,455786546],dtype=np.float64)
+K=200000
+keep_var=np.empty(0,dtype=np.float32); keep_x=np.empty((0,len(samples)), dtype=np.float32); keep_idx=np.empty(0,dtype=np.int64)
+offset=0
+for ci,chunk in enumerate(pd.read_csv(path, sep='\\t', usecols=samples, chunksize=100000)):
+    a=chunk.to_numpy(dtype=np.float32)
+    x=np.log2(a/lib.astype(np.float32)*1e6 + 1.0).astype(np.float32)
+    xc=x-x.mean(axis=1, keepdims=True)
+    var=xc.var(axis=1)
+    # local top maybe all if current kept small
+    take=min(K, len(var))
+    loc=np.argpartition(var, -take)[-take:]
+    keep_var=np.concatenate([keep_var,var[loc]])
+    keep_x=np.vstack([keep_x,x[loc]])
+    keep_idx=np.concatenate([keep_idx, offset+loc])
+    if len(keep_var)>K:
+        top=np.argpartition(keep_var, -K)[-K:]
+        keep_var=keep_var[top]; keep_x=keep_x[top]; keep_idx=keep_idx[top]
+    offset += len(var)
+    if ci%5==0: print('chunk',ci,'offset',offset,'minvar',float(keep_var.min()), flush=True)
+# sort decreasing variance
+ord=np.argsort(-keep_var); keep_var=keep_var[ord]; keep_x=keep_x[ord]; keep_idx=keep_idx[ord]
+print('selected', keep_x.shape, 'var range', float(keep_var[0]), float(keep_var[-1]))
+for subset in [20000,50000,100000,200000]:
+    X=keep_x[:subset].astype(np.float64)
+    # row-center and scale by sd to equalize markers
+    Xc=X-X.mean(axis=1,keepdims=True)
+    # optional no row scaling due noisy? compute both
+    for scale in [False, True]:
+        Y=Xc.copy()
+        label='center_scale' if scale else 'center'
+        if scale:
+            sd=Y.std(axis=1,keepdims=True); sd[sd==0]=1; Y/=sd
+        # sample corr: columns over rows
+        C=np.corrcoef(Y, rowvar=False)
+        print('\\nSUB',subset,label,'nearest')
+        for i,s in enumerate(samples):
+            order=np.argsort(-C[i])
+            print(s, ', '.join(f'{samples[j]}:{C[i,j]:.3f}' for j in order[1:5]))
+        # PCA on sample positions from Y.T
+        # correlation/distance not enough; print PCs from SVD of features x samples
+        U,S,Vt=np.linalg.svd(Y, full_matrices=False)
+        scores=Vt.T*S
+        print('var', [round(float((S[k]**2)/(S**2).sum()),3) for k in range(5)])
+        for k in range(3):
+            vals=scores[:,k]
+            print(' PC',k+1, ', '.join(f'{s}:{v:.1f}' for s,v in sorted(zip(samples,vals), key=lambda x:x[1])))
+PY"

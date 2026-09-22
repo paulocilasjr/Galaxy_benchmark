@@ -1,0 +1,23 @@
+/bin/bash -lc 'tmpdir=$(find . -maxdepth 1 -type d -name '"'refcheck.*' | head -n 1); python - \""'$tmpdir" <<'"'PY'
+import sys, subprocess, math
+from collections import Counter
+import numpy as np
+from scipy.optimize import minimize_scalar
+p=sys.argv[1]
+files={k:f'{p}/exogenous.mix.reads.q2.{k}.sorted.bam' for k in ('endo','exo','mix')}
+for width in (50,100,200):
+    cs={}
+    for k,f in files.items():
+        out=subprocess.check_output(['samtools','view',f],text=True)
+        c=Counter(((int(x.split('\\t')[3])-1)//width)*width for x in out.splitlines())
+        cs[k]=c
+    keys=sorted(set().union(*[set(c) for c in cs.values()]))
+    d=np.array([cs['endo'][x] for x in keys],float); e=np.array([cs['exo'][x] for x in keys],float); m=np.array([cs['mix'][x] for x in keys],float)
+    d/=d.sum(); e/=e.sum()
+    def nll(q):
+        pr=q*e+(1-q)*d
+        return -sum(mi*math.log(pi) for mi,pi in zip(m,pr) if mi and pi)
+    fit=minimize_scalar(nll,bounds=(0,1),method='bounded')
+    print(width,'MLE p=',round(fit.x,6),'nll=',round(fit.fun,3),'counts',len(keys),flush=True)
+    print('  p values NLL',[(q,round(nll(q),2)) for q in (0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1)],flush=True)
+PY"

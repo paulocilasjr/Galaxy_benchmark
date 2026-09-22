@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np
+from pyfaidx import Fasta
+
+def parse_motifs(path):
+ pwms={'+':{},'-':{}}; cur=None; name=None
+ with open(path) as f:
+  for line in f:
+   line=line.rstrip('\\n')
+   if not line: continue
+   if line.startswith('>'):
+    if cur is not None: pwms[orient][name]=np.array(cur)
+    orient='+' if line.endswith('_plus') else '-'
+    name=line[1:]; cur=[]
+   else: cur.append([float(x) for x in line.split('\\t')])
+  pwms[orient][name]=np.array(cur)
+ return pwms['+'],pwms['-']
+def onehot(seqs):
+ a=np.zeros((len(seqs),40,4),np.float32); mp={'A':0,'C':1,'G':2,'T':3}
+ for i,s in enumerate(seqs):
+  for j,c in enumerate(s.upper()):
+   if c in mp:a[i,j,mp[c]]=1
+ return a
+def norm(p): return p/np.sum(p,axis=-1,keepdims=True)
+def ic_scale(p):
+ p=norm(p); ps=.001; bg=np.array([.25]*4)
+ ic=((np.log((p+ps)/(1+ps*4))/np.log(2))*p - (np.log(bg)*bg/np.log(2))[None,:])
+ return p*(np.sum(ic,axis=1)[:,None])
+def conv(r,i): return np.array([np.sum(r*i[j:j+len(r)]) for j in range(len(i)-len(r)+1)])
+refp,refm=parse_motifs('ATAC.ref.motifs.txt')
+plus=[];minus=[]
+with gzip.open('standardized_chr1.frag.bed.gz','rt') as f:
+ for line in f:
+  p=line.rstrip('\\n').split('\\t'); plus.append(int(p[1])-4); minus.append(int(p[2])+5)
+g=Fasta('chr1.fa')
+sp=[];sm=[]
+for pos in plus:
+ s=str(g['chr1'][pos-20:pos+20]);
+ if len(s)==40:sp.append(s)
+for pos in minus:
+ s=str(g['chr1'][pos-20:pos+20]);
+ if len(s)==40:sm.append(s)
+pp=norm(onehot(sp).mean(0));mp=norm(onehot(sm).mean(0))
+for k,r in refp.items():
+ c=conv(ic_scale(r),ic_scale(pp));print('plus BAM',k,14-np.argmax(c),np.argmax(c))
+for k,r in refm.items():
+ c=conv(ic_scale(r),ic_scale(mp));print('minus BAM',k,5-np.argmax(c),np.argmax(c))
+PY"

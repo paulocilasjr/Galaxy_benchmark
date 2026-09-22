@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, torch, h5py
+torch.set_num_threads(1)
+from saluki_torch import Saluki, load_weights
+
+def left_justify_input(X):
+    Y=torch.zeros_like(X)
+    s=X[:,:4,:].sum(dim=1)
+    for i in range(X.shape[0]):
+        idx=(s[i]"'!=0).nonzero()
+        start=idx[0,0].item() if idx.shape[0]>0 else 0
+        length=X.shape[2]-start
+        Y[i,:,:length]=X[i,:,start:]
+    return Y
+N=20
+with h5py.File('"'models/train_gru/f0_c0/ism_scores.h5','r') as f:
+ seqs=f['seqs'][:N]; coding=f['coding'][:N]; splice=f['splice'][:N]
+X=np.concatenate([seqs.astype(np.float32),coding[...,None].astype(np.float32),splice[...,None].astype(np.float32)],axis=2)
+X=torch.from_numpy(X).permute(0,2,1).contiguous(); X=left_justify_input(X)
+model=Saluki(); load_weights(model,'models/train_gru/f0_c0/train/model0_best.h5'); model.eval()
+with torch.no_grad():
+ pred=model(X).numpy().ravel()
+with h5py.File('models/train_gru/f0_c0/test0_preds.h5','r') as f: ref=f['preds'][:N].ravel()
+for i in range(N): print(i, pred[i], ref[i], pred[i]-ref[i])
+print('corr', np.corrcoef(pred,ref)[0,1])
+PY"

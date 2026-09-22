@@ -1,0 +1,28 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0); sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); M=mmread('matrix.mtx.gz').tocsr()
+x=np.asarray(M[:,710].todense()).ravel().astype(float)
+types=sorted(meta.cell_type.unique())
+means=np.stack([sc.loc[meta.cell_type==t].to_numpy(float).mean(0) for t in types])
+print('types',types)
+for ranges in [None, [(0,50),(50,100),(100,150),(150,200),(200,250),(250,300)], [(0,300)], [(0,50),(50,100),(100,150),(150,200),(200,250),(250,300),(300,1000)]]:
+ print('\\nRANGES',ranges)
+ if ranges is None: continue
+ for lo,hi in ranges:
+  print(lo,hi,'spot',int(x[lo:hi].sum()),'means',np.round(means[:,lo:hi].sum(1),1))
+# NNLS raw target; normalize profiles by total to expected fractions
+for subset_name, ix in [('all',np.arange(1000)),('markers',np.arange(300)),('rest',np.arange(300,1000))]:
+ A=means[:,ix].T
+ y=x[ix]
+ c,res=nnls(A,y)
+ print('\\nNNLS',subset_name,'coeff',dict(zip(types,np.round(c,4))), 'predsum',c.sum(), 'resnorm',res, 'rel',res/np.linalg.norm(y))
+ # normalized proportions profile
+ An=(means[:,ix]/means[:,ix].sum(1,keepdims=True)).T
+ cn,resn=nnls(An,y/y.sum())
+ print('fraction coeff',dict(zip(types,np.round(cn,4))), 'resnorm',resn)
+# least squares unconstrained
+c=np.linalg.lstsq(means.T,x,rcond=None)[0]
+print('\\nOLS',dict(zip(types,np.round(c,4))), 'pred sum',c.sum(), 'res',np.linalg.norm(means.T@c-x))
+PY"

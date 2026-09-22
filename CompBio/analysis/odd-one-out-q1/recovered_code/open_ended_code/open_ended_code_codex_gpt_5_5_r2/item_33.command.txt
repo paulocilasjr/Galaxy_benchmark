@@ -1,0 +1,31 @@
+/bin/bash -lc "command -v bedtools || echo no-bedtools
+python3 - <<'PY'
+import gzip
+seen=set(); outs={100:'ref/tss_pm100.bed',500:'ref/tss_pm500.bed',1000:'ref/tss_pm1000.bed',5000:'ref/tss_pm5000.bed'}
+rows={w:[] for w in outs}
+for line in gzip.open('ref/refGene.hg38.txt.gz','rt'):
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<6: continue
+    chrom=f[2]; strand=f[3]
+    if not chrom.startswith('chr') or '_' in chrom: continue
+    txStart=int(f[4]); txEnd=int(f[5])
+    tss=txStart if strand=='+' else txEnd
+    key=(chrom,tss,strand)
+    if key in seen: continue
+    seen.add(key)
+    for w in rows:
+        s=max(0,tss-w); e=tss+w+1
+        rows[w].append((chrom,s,e))
+for w,path in outs.items():
+    rows[w].sort(key=lambda x:(x[0],x[1],x[2]))
+    # merge overlapping intervals for faster overlap and no double count
+    merged=[]
+    for chrom,s,e in rows[w]:
+        if merged and merged[-1][0]==chrom and s<=merged[-1][2]:
+            if e>merged[-1][2]: merged[-1]=(chrom, merged[-1][1], e)
+        else:
+            merged.append((chrom,s,e))
+    with open(path,'w') as out:
+        for r in merged: out.write(f'{r[0]}\\t{r[1]}\\t{r[2]}\\n')
+    print(w, 'raw', len(rows[w]), 'merged', len(merged), 'bp', sum(e-s for _,s,e in merged))
+PY"

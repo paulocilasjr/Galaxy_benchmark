@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+# Generate score matrix and save
+import numpy as np
+D=np.load('promoter_matrix.npz',allow_pickle=True)
+G=D['G']; genes=list(D['genes']); names=list(D['names'])
+Md=np.load('matrix_data.npz',allow_pickle=True); totals=Md['X'].sum(axis=0)
+from collections import defaultdict
+idx=defaultdict(list)
+for i,g in enumerate(genes): idx[g].append(i)
+markers={
+'Brain':['NEUROD1[nr]','SOX2','GFAP','RBFOX3','TUBB3.L[nr]|TUBB3[hs]','MBP.L[nr]|MBP[hs]'],
+'Heart':['TNNT2','NPPA.S[nr]','NKX2-5','LOC115458003[nr]|MYH6[hs]'],
+'Liver':['ALB[nr]','APOA1','FGB','TTR[nr]','HNF4A'],
+'Kidney':['NPHS1[nr]','NPHS2','SLC12A1'],
+'Lung':['SFTPC','NKX2-1'],
+'Pancreas':['CPA1','GCG','SST','PDX1','INS','LOC115471867[nr]|AMY2A[hs]','LOC104526273[nr]|AMY2A[hs]'],
+'Intestine':['VIL1','SI[nr]|MGAM[hs]','MUC2','CDX1[nr]|CDX2[hs]','FABP2'],
+'Stomach':['GKN1','TFF2','LOC115479045[nr]|SLC26A3[hs]','MUC5AC'],
+'Bladder':['UPK1B','UPK2.S[nr]','UPK3A'],
+'GallBladder':['SOX17','HNF1B[hs]','CFTR','KRT19'],
+'Gill':['FOXI1','ATP6V1B1','LOC115094121[nr]|CA4[hs]','SLC4A4','STC1'],
+'Cloaca':['UPK1B','UPK3A','CFTR','KRT19'],
+'Limb':['PAX7','SOX9','COL2A1[hs]','HOXD13'],
+'Prostate':['NKX3-1','MSMB','LOC104073169[nr]|MSMB[hs]','LOC104478335[nr]|MSMB[hs]'],
+'Spleen':['PTPRC','LOC108785844[nr]|MPO[hs]','HBA1[hs]','HBZ[hs]','EPOR'],
+}
+def find_genes(pat):
+ if pat in idx: return idx[pat]
+ return [i for i,g in enumerate(genes) if pat.lower() in g.lower()]
+Gnorm=G/(totals[None,:]+1e-9)
+L=np.log2(Gnorm*1e6+1)
+mu=L.mean(axis=1,keepdims=True); sd=L.std(axis=1,keepdims=True)+1e-9
+Z=(L-mu)/sd
+tissues=list(markers.keys())
+score=np.zeros((len(tissues),len(names)))
+for ti,t in enumerate(tissues):
+ rows=set()
+ for p in markers[t]: rows.update(find_genes(p))
+ rows=sorted(rows)
+ score[ti]=Z[rows].mean(axis=0)
+np.save('marker_score.npy',score)
+np.save('marker_tissues.npy',np.array(tissues,dtype=str))
+print('saved',score.shape)
+PY
+python3 - <<'PY'
+import numpy as np, itertools
+score=np.load('marker_score.npy'); tissues=list(np.load('marker_tissues.npy',allow_pickle=True))
+names=tissues
+base_diag=np.diag(score).sum()
+base_rank=np.mean([np.sum(score[i] > score[i,i])+1 for i in range(len(tissues))])
+base_match=sum(1 for j in range(len(names)) if np.argmax(score[:,j])==j)
+print('base',base_diag,base_rank,base_match)
+res=[]
+for a,b in itertools.combinations(range(len(tissues)),2):
+ S=score.copy(); S[:,[a,b]]=S[:,[b,a]]
+ diag=np.diag(S).sum()
+ ranks=[np.sum(S[i] > S[i,i])+1 for i in range(len(tissues))]
+ mr=np.mean(ranks)
+ match=sum(1 for j in range(len(names)) if np.argmax(S[:,j])==j)
+ res.append((diag,mr,match,a,b,S))
+for order_desc,label in [(lambda x:-x[0],'diag'),(lambda x:-x[2],'match')]:
+ print('\\nTop',label)
+ arr=sorted(res,key=order_desc)
+ for diag,mr,match,a,b,S in arr[:20]:
+  if label=='diag' and arr.index((diag,mr,match,a,b,S))>=10: pass
+  print(f'{tissues[a]:12s} {tissues[b]:12s} diag={diag:.2f} rank={mr:.2f} match={match}')
+PY"

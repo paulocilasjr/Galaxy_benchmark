@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip, itertools, numpy as np
+p='atac.doublet.q1.bed.gz'
+bmap={}; bcs=[]; ov=np.zeros((1000,1000),dtype=np.int32)
+last=None; bs=set(); ng=0; n=0; order_bad=0
+prev=None
+
+def flush(s):
+ global ng
+ if not s:return
+ ids=sorted(s)
+ for i,j in itertools.combinations(ids,2): ov[i,j]+=1; ov[j,i]+=1
+ ng+=1
+with gzip.open(p,'rt') as f:
+ for line in f:
+  a=line.rstrip('\\n').split('\\t'); key=(a[0],int(a[1]),int(a[2])); bc=a[3]
+  if prev is not None and key < prev: order_bad+=1
+  prev=key
+  if bc not in bmap: bmap[bc]=len(bmap); bcs.append(bc)
+  i=bmap[bc]; n+=1
+  if key"'!=last:
+   flush(bs); bs={i}; last=key
+  else: bs.add(i)
+flush(bs)
+print('"'rows',n,'cells',len(bcs),'unique coord',ng,'order inversions',order_bad)
+for metric,name in [
+ (ov.copy(),'overlap'),
+ (ov/np.maximum(np.minimum(ov.sum(axis=1)[:,None],ov.sum(axis=1)[None,:]),1),'overlap/min'),
+ (ov/np.sqrt(np.maximum(ov.sum(axis=1)[:,None]*ov.sum(axis=1)[None,:],1)),'overlap/cos'),
+ (ov/np.maximum(ov.sum(axis=1)[:,None]+ov.sum(axis=1)[None,:]-ov,1),'jaccard')]:
+ np.fill_diagonal(metric,0)
+ flat=np.triu(metric,1); inds=np.argpartition(flat.ravel(),-30)[-30:]
+ inds=inds[np.argsort(flat.ravel()[inds])[::-1]]
+ print('\\n',name)
+ for z in inds[:20]:
+  i,j=np.unravel_index(z,metric.shape)
+  print(f'{metric[i,j]:.6f}\\t{ov[i,j]}\\t{bcs[i]}\\t{bcs[j]}')
+print('\\ntop each max overlap')
+for i in np.argsort(np.sort(ov,axis=1)[:,-2])[::-1][:30]:
+ j=np.argsort(ov[i])[-1]
+ print(ov[i,j],bcs[i],bcs[j], 'second',np.sort(ov[i])[-3])
+PY"

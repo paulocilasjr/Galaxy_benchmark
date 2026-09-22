@@ -1,0 +1,89 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,itertools
+import numpy as np,pandas as pd
+from collections import defaultdict
+R=pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz',sep='\\t',index_col=0)
+A=pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz',sep='\\t',index_col=0)
+A_values=A.to_numpy(float); peak_to_idx={p:i for i,p in enumerate(A.index)}
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)";'"')
+gene_records=defaultdict(list)
+with gzip.open('gencode.v44.annotation.gtf.gz','rt') as fh:
+  for line in fh:
+    if line.startswith('#'): continue
+    parts=line.rstrip('\\n').split('\\t')
+    if len(parts)<9 or parts[2] "'!= '"'gene': continue
+    attrs=dict(attr_re.findall(parts[8])); name=attrs.get('gene_name')
+    if name not in R.index: continue
+    chrom=parts[0] if parts[0].startswith('chr') else 'chr'+parts[0]
+    start=int(parts[3])-1; end=int(parts[4]); strand=parts[6]
+    tss=start if strand=='+' else end-1
+    typ=attrs.get('gene_type') or attrs.get('gene_biotype')
+    gene_records[name].append((chrom,tss,start,end,typ))
+
+def activity(win=2, body=False, protein=False):
+    genes=[]; rows=[]
+    for g in R.index:
+      vals=[]
+      for chrom,tss,start,end,typ in gene_records.get(g,[]):
+        if protein and typ"'!='"'protein_coding': continue
+        idx=[]
+        if body:
+          b0=start//10000; b1=(end-1)//10000
+          rng=range(max(0,b0-win),b1+win+1)
+        else:
+          b=tss//10000; rng=range(max(0,b-win),b+win+1)
+        for bb in rng:
+          ii=peak_to_idx.get(f'{chrom}_{bb*10000}_{(bb+1)*10000}')
+          if ii is not None: idx.append(ii)
+        if idx: vals.append(A_values[idx].sum(axis=0))
+      if vals:
+        genes.append(g); rows.append(np.mean(vals,axis=0))
+    return genes,np.vstack(rows)
+
+def zrows(X):
+  X=X.copy(); m=X.mean(1,keepdims=True); s=X.std(1,keepdims=True); s[s==0]=np.nan; return (X-m)/s
+
+def rank_cols(X):
+  # rank within each gene across columns
+  return np.apply_along_axis(lambda x: pd.Series(x).rank().to_numpy(),1,X)
+
+def best_for(genes,GA,log=True,top=None,min_expr=0,min_acc=0,rank=False):
+  RR=R.loc[genes].to_numpy(float); AA=GA.copy()
+  mask=(RR.mean(1)>=min_expr)&(AA.mean(1)>=min_acc)
+  RR=RR[mask]; AA=AA[mask]
+  if log: RR=np.log1p(RR); AA=np.log1p(AA)
+  if rank: RR=rank_cols(RR); AA=rank_cols(AA)
+  if top and len(RR)>top:
+    v=RR.var(1)+AA.var(1); idx=np.argsort(v)[-top:]; RR=RR[idx]; AA=AA[idx]
+  RR=zrows(RR); AA=zrows(AA)
+  ok=~(np.isnan(RR).any(1)|np.isnan(AA).any(1)); RR=RR[ok]; AA=AA[ok]
+  # cos sim since rows centered; columns not necessarily centered. Also Pearson across genes:
+  S=np.corrcoef(RR.T,AA.T)[:8,8:]
+  best=(-9,None)
+  for p in itertools.permutations(range(8)):
+    sc=sum(S[i,p[i]] for i in range(8))
+    if sc>best[0]: best=(sc,p)
+  return len(RR),best,S
+configs=[]
+for body in [False,True]:
+ for win in ([0,1,2,5] if not body else [0,1,2]):
+  for protein in [False,True]:
+   genes,GA=activity(win,body,protein)
+   for top in [2000,5000,10000,None]:
+    for min_expr in [0,0.1,1,5]:
+     n,b,S=best_for(genes,GA,log=True,top=top,min_expr=min_expr,min_acc=0,rank=False)
+     configs.append((b[1],b[0],n,body,win,protein,top,min_expr))
+from collections import Counter
+cnt=Counter(p for p,sc,n,body,win,protein,top,min_expr in configs)
+print('permutation counts among configs:')
+for p,c in cnt.most_common(10): print(c,p)
+print('non-target examples')
+for row in configs:
+ if row[0]"'!=(5,1,4,0,6,3,7,2): print(row); break
+# margin summary for target configs top two maybe for representative exact
+p_target=(5,1,4,0,6,3,7,2)
+print('"'target count',cnt[p_target],'of',len(configs))
+# inverse check display string
+print(';'.join(map(str,p_target)))
+print('inverse', ';'.join(map(str, [p_target.index(j) for j in range(8)])))
+PY"

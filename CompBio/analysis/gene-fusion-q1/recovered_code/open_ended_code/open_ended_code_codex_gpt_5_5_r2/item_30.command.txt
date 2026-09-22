@@ -1,0 +1,22 @@
+/bin/bash -lc "python - <<'PY'
+want={'SOX2','GAPDH'}
+tids=set()
+with open('refs/ensembl_t2g.tsv') as f:
+    for line in f:
+        tid,g=line.rstrip('\\n').split('\\t')[:2]
+        if g in want: tids.add(tid)
+keep=False
+with open('refs/Homo_sapiens.GRCh38.cdna.all.fa') as inp, open('refs/sox2_gapdh_cdna.fa','w') as out:
+    for line in inp:
+        if line.startswith('>'):
+            tid=line[1:].split()[0]
+            keep=tid in tids
+        if keep: out.write(line)
+print(len(tids))
+PY
+makeblastdb -in refs/sox2_gapdh_cdna.fa -dbtype nucl -out refs/sox2_gapdh_cdna >/dev/null
+awk 'NR%4==1{h=substr("'$0,2)"/1"} NR%4==2{print ">"h"'"\\n\""'$0}'"' <(gzip -cd gene.fusion.q1.R1.fq.gz) > work/all_reads.fa
+awk 'NR%4==1{h=substr("'$0,2)"/2"} NR%4==2{print ">"h"'"\\n\""'$0}'"' <(gzip -cd gene.fusion.q1.R2.fq.gz) >> work/all_reads.fa
+blastn -task blastn-short -dust no -word_size 11 -evalue 1000 -max_target_seqs 20 -query work/all_reads.fa -db refs/sox2_gapdh_cdna -outfmt '6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore sstrand' -num_threads 4 > work/reads_vs_sox2_gapdh.tsv
+wc -l work/reads_vs_sox2_gapdh.tsv
+head -n 5 work/reads_vs_sox2_gapdh.tsv"

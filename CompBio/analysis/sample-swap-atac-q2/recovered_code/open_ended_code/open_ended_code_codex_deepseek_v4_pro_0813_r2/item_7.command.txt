@@ -1,0 +1,85 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import gzip, csv, requests, json, numpy as np, pandas as pd, os, time
+
+path='sample.swap.atac.q2.tsv.gz'
+cols=None
+data={}
+with gzip.open(path,'rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r)
+    cols=header[3:]
+    for row in r:
+        if len(row)<12: continue
+        chrom=row[0]
+        start=int(row[1])
+        vals=np.array([float(x) for x in row[3:]], dtype=np.float64)
+        data[(chrom,start)]=vals
+print('loaded',len(data),'bins')
+
+# fetch markers
+markers = {
+'AIIamacrine': ['GJD2','GJD3','PRKCA','TRPM1','GRM6','ISL1','TFAP2A','TFAP2B'],
+'Astrocyte': ['GFAP','S100B','AQP4','ALDH1L1','SLC1A3','GJA1','SOX9','VIM'],
+'Cone': ['PDE6H','GNAT2','OPN1SW','OPN1MW','PDE6C','ARR3','THRB','RXRG'],
+'GABAamacrine': ['GAD1','GAD2','SLC6A1','SLC32A1','TFAP2A','TFAP2B','ONECUT2','MEIS2'],
+'Horizontal': ['ONECUT1','ONECUT2','LHX1','CALB1','GABRA1','GABRG2','SEMA6A'],
+'Microglia': ['P2RY12','TMEM119','CX3CR1','CSF1R','AIF1','C1QA','C1QB','TYROBP'],
+'Mullerglia': ['RLBP1','GLUL','SOX9','APOE','CLU','SLC1A3','AQP4','DKK3'],
+'Retinalganglioncell': ['RBPMS','POU4F2','POU4F1','ISL1','SNCG','THY1','NEFL','SLC17A6'],
+'Rod': ['RHO','NRL','NR2E3','PDE6B','GNAT1','CNGA1','PDE6A','ROM1','CNGB1','SAG'],
+}
+
+# dedup fetch tss
+allgenes=sorted(set(sum(markers.values(),[])))
+gene_tss={}
+for gene in allgenes:
+    url=f'https://rest.ensembl.org/lookup/symbol/homo_sapiens/{gene}?content-type=application/json'
+    try:
+        r=requests.get(url,timeout=20)
+        if r.status_code==200:
+            j=r.json()
+            gene_tss[gene]=(j['seq_region_name'], int(j['start']), int(j['end']), int(j['strand']))
+            print(gene, gene_tss[gene])
+        else:
+            print('fail',gene,r.status_code)
+    except Exception as e:
+        print('err',gene,e)
+    time.sleep(0.1)
+print('fetched', len(gene_tss))
+
+# compute marker promoter accessibility score per cell type: sum counts over all bins overlapping [tss-2000,tss+2000] for each marker, normalize by max across celltypes maybe then average markers.
+# Because bins fixed 10kb; find bin(s) overlapping promoter.
+rows=[]
+for ct, genes in markers.items():
+    scores=np.zeros(len(cols))
+    ng=0
+    for gene in genes:
+        if gene not in gene_tss: continue
+        chrom,tss_start,tss_end,strand=gene_tss[gene]
+        tss=tss_start if strand==1 else tss_end
+        lo=tss-2000; hi=tss+2000
+        # bins overlapping interval
+        bstart=(lo//10000)*10000
+        found=[]
+        while bstart<=hi:
+            key=(chrom,bstart)
+            if key in data:
+                found.append(data[key])
+            bstart+=10000
+        if not found: continue
+        v=np.sum(found,axis=0)
+        if v.sum()==0: continue
+        # log? scale to max across ct for each gene
+        scores += v/(v.max() if v.max()>0 else 1)
+        ng+=1
+    if ng: scores/=ng
+    rows.append((ct,scores,ng))
+
+for ct,scores,ng in rows:
+    print('\\n',ct,'markers',ng)
+    order=np.argsort(-scores)
+    for idx in order:
+        print(f'  {cols[idx]:20s} {scores[idx]:.3f}')
+PY"

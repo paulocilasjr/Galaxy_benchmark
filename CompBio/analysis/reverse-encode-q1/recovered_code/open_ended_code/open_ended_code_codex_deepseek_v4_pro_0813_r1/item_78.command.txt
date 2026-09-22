@@ -1,0 +1,105 @@
+/bin/bash -lc "cat > run_stage2.py <<'PY'
+import json, math, time, sys, concurrent.futures
+import pyBigWig
+from collections import defaultdict
+CHROMS=['chr1','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrX','chrY']
+
+def corr(a,b):
+ n=len(a); ma=sum(a)/n; mb=sum(b)/n
+ cov=va=vb=0.0
+ for x,y in zip(a,b):
+  cov+=(x-ma)*(y-mb); va+=(x-ma)**2; vb+=(y-mb)**2
+ return cov/math.sqrt(va*vb) if va>0 and vb>0 else 0.0
+
+def spearman(a,b):
+ # rank data values
+ def ranks(x):
+  order=sorted(range(len(x)), key=lambda i:x[i])
+  r=[0]*len(x); j=0
+  for i,idx in enumerate(order):
+   if i+1==len(x) or x[order[i+1]]"'!=x[idx]:
+    r[idx]=(j+i)/2+1; j=i+1
+   else:
+    pass
+  return r
+ # simpler pairwise brute too slow, use scipy? install? use Pearson on ranks via sorting
+ x=[(val,i) for i,val in enumerate(a)]; x.sort()
+ # average ranks
+ rx=[0]*len(a); i=0
+ while i<len(x):
+  j=i
+  while j<len(x) and x[j][0]==x[i][0]: j+=1
+  avg=(i+j-1)/2+1
+  for k in range(i,j): rx[x[k][1]]=avg
+  i=j
+ y=[(val,i) for i,val in enumerate(b)]; y.sort(); ry=[0]*len(b); i=0
+ while i<len(y):
+  j=i
+  while j<len(y) and y[j][0]==y[i][0]: j+=1
+  avg=(i+j-1)/2+1
+  for k in range(i,j): ry[y[k][1]]=avg
+  i=j
+ return corr(rx,ry)
+
+def open_bw(url):
+ last=None
+ for i in range(4):
+  try: return pyBigWig.open(url)
+  except Exception as e: last=e; time.sleep(1+i)
+ raise last
+
+# lengths and obs
+cands_all=json.load(open('"'candidate_bw.json'))
+first=open_bw(cands_all[0]['files'][0]['url']); lengths={ch:first.chroms(ch) for ch in CHROMS}; first.close()
+targ=defaultdict(float)
+for line in open('counts.tsv'):
+ ch,s,e,v=line.split(); targ[(ch,int(s))]+=float(v)
+obs=[]
+for ch in CHROMS:
+ n=(lengths[ch]+9999)//10000
+ for i in range(n): obs.append(targ[(ch,i*10000)])
+print('obs len',len(obs),'sum',sum(obs), flush=True)
+
+def work(cand):
+ try:
+  vec=None
+  for f in cand['files']:
+   bw=open_bw(f['url'])
+   add=[]
+   for ch in CHROMS:
+    L=lengths[ch]; n=(L+9999)//10000
+    try: arr=bw.stats(ch,0,L,nBins=n,type='mean')
+    except Exception: arr=[0.0]*n
+    if arr is None: arr=[0.0]*n
+    add.extend([0.0 if val is None else float(val) for val in arr])
+   bw.close()
+   if vec is None: vec=[0.0]*len(add)
+   if len(add)"'!=len(vec): return {'"'exp':cand['exp'],'corr':None,'spear':None,'error':'len mismatch'}
+   for i,val in enumerate(add): vec[i]+=val
+  c=corr(obs,vec); sp=spearman(obs,vec)
+  return {'exp':cand['exp'],'corr':c,'spear':sp,'error':None}
+ except Exception as e:
+  return {'exp':cand['exp'],'corr':None,'spear':None,'error':repr(e)}
+
+if __name__=='__main__':
+ topn=int(sys.argv[1]); workers=int(sys.argv[2])
+ # read stage1 results and select topn
+ rows=[]
+ for line in open('stage1_0_1120.jsonl'):
+  d=json.loads(line)
+  if d['corr'] is not None: rows.append((d['corr'],d['exp']))
+ rows.sort(reverse=True)
+ top=rows[:topn]
+ expmap={c['exp']:c for c in cands_all}
+ subset=[expmap[e] for _,e in top]
+ outfile=f'stage2_top{topn}.jsonl'
+ t=time.time(); done=0
+ with open(outfile,'w') as out, concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
+  futs=[ex.submit(work,c) for c in subset]
+  for fut in concurrent.futures.as_completed(futs):
+   r=fut.result(); done+=1
+   out.write(json.dumps(r)+'\\n'); out.flush()
+   if done%10==0: print(done,'/',len(subset),'elapsed',time.time()-t,'last',r.get('exp'),r.get('corr'),r.get('spear'), flush=True)
+ print('done',outfile,'elapsed',time.time()-t)
+PY
+python3 run_stage2.py 100 16"

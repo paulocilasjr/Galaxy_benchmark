@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np
+from scipy import sparse
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0); qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+rg=[g for g in r.obs.guide.cat.categories if not g.startswith('NT-')]; qg=[g for g in q.obs.guide.cat.categories if not g.startswith('NT-')]
+Er=np.array([R[rguide==g].mean(0)-rnt for g in rg]); Eq=np.array([Q[qguide==g].mean(0)-qnt for g in qg])
+v=Er.var(0)+Eq.var(0); idx=np.argsort(v)[-2000:]
+# For pair LEO vs other, define diff = Er_leo - Er_other restricted idx; correlate query effects with diff
+leo=rg.index('LEO1-I2')
+for other in ['PAF1-I6','CTR9-I7','CDC73-I2']:
+ oi=rg.index(other)
+ diff=Er[leo,idx]-Er[oi,idx]
+ # Pearson of each query effect with diff; positive means more LEO1-like
+ scores=[]
+ for j,g in enumerate(qg):
+  c=np.corrcoef(Eq[j,idx],diff)[0,1]
+  scores.append((c,g))
+ scores.sort(reverse=True)
+ print('\\nPair LEO1 vs',other,'top positive (LEO-like):',[(g,round(c,3)) for c,g in scores[:10]])
+ print('top negative (other-like):',[(g,round(c,3)) for c,g in scores[-10:]])
+PY"

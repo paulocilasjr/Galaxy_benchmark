@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,collections,re,math
+sizes={}
+for line in open('sample.swap.atac.q1.chrom.sizes'):
+    c,s=line.split(); sizes[c]=int(s)
+cols=None; sums=collections.defaultdict(lambda:[0]*15)
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); cols=next(r)[3:]
+    for row in r:
+        c=row[0]; arr=sums[c]
+        for i,v in enumerate(map(int,row[3:])): arr[i]+=v
+def key(c):
+    m=re.match(r'chr(\\d+)([pq])',c); return int(m.group(1)), m.group(2), c
+chroms=sorted(sizes,key=key)
+# fractions per sample
+totals=[sum(sums[c][i] for c in chroms) for i in range(len(cols))]
+frac=[[sums[c][i]/totals[i] for c in chroms] for i in range(len(cols))]
+# Pearson correlation across chrom fractions
+import numpy as np
+F=np.array(frac)
+print('correlation matrix (chrom fractions)')
+print('        '+' '.join(f'{c:>12}' for c in cols))
+for i,c in enumerate(cols):
+    row=' '.join(f'{np.corrcoef(F[i],F[j])[0,1]:12.3f}' for j in range(len(cols)))
+    print(f'{c:>10} {row}')
+# also correlation log1p? 
+# PCA
+from numpy.linalg import svd
+X=F-F.mean(axis=1,keepdims=True)
+u,s,v=np.linalg.svd(X,full_matrices=False)
+print('singular values',s)
+print('PC1',u[:,0])
+print('PC2',u[:,1])
+# print each sample top differing chromosomes from mean
+mean=F.mean(axis=0)
+print('\\nTop deviations from mean per sample')
+for i,c in enumerate(cols):
+    d=F[i]-mean
+    idx=np.argsort(-np.abs(d))[:8]
+    print(c, ', '.join(f'{chroms[j]}:{d[j]*1000:+.2f}' for j in idx))
+PY"

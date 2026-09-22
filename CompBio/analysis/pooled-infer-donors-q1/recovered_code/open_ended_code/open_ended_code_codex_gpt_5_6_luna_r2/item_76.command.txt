@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+z=np.load('allele_counts.npz'); keys=z['keys'];dp=z['dp'].astype(float);ad=z['ad'].astype(float);sites=z['sites'];n=len(z['barcodes']);rows=keys>>16;cells=keys&65535;ns=len(sites)
+sp=np.bincount(rows,minlength=ns);sd=np.bincount(rows,weights=dp,minlength=ns);sa=np.bincount(rows,weights=ad,minlength=ns);f=sa/np.maximum(sd,1)
+sel=(sp>=30)&(sd>=50)&(f>=.05)&(f<=.5); ii=np.flatnonzero(sel); mp={r:j for j,r in enumerate(ii)};X=np.zeros((n,len(ii)),dtype='float32')
+for k,r in enumerate(rows):
+ j=mp.get(r)
+ if j is not None:X[cells[k],j]=(ad[k]-dp[k]*f[r])/np.sqrt(dp[k]+1)
+p=PCA(n_components=10,random_state=1).fit_transform(X);lab=KMeans(n_clusters=2,n_init=30,random_state=1).fit_predict(p)
+print('clusters',np.bincount(lab), 'pca var',PCA(n_components=5,random_state=1).fit(X).explained_variance_ratio_)
+# table score for sites by alt frac diff; require >=20 pairs in each cluster
+best=[]
+for r in ii:
+ mask=rows==r; c=cells[mask]; d=dp[mask];a=ad[mask]
+ vals=[]
+ for g in [0,1]:
+  q=(lab[c]==g)
+  vals.append((a[q].sum()+0.5)/(d[q].sum()+1))
+ if all((lab[c]==g).sum()>=5 for g in [0,1]): best.append((abs(vals[0]-vals[1]),r,vals,[(int((lab[c]==g).sum()),int(d[lab[c]==g].sum())) for g in [0,1]]))
+for diff,r,v,q in sorted(best,reverse=True)[:80]:print(f'{diff:.3f}',r,sites[r].tolist(),[round(x,3) for x in v],q)
+PY"

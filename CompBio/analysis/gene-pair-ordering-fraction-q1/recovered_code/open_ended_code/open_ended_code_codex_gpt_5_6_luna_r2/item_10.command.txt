@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+p='10x_pbmc68k_reduced.h5ad'
+with h5py.File(p,'r') as f:
+ obs=f['obs'][:]
+ cats=np.array([x.decode() for x in f['uns/bulk_labels_categories'][:]])
+ labels=cats[obs['bulk_labels']]
+ mito=obs['percent_mito'].astype(float)
+ sel=(labels=='CD19+ B') & (mito < 0.04)
+ print('B total', np.sum(labels=='CD19+ B'), 'eligible', sel.sum(), 'mito max eligible', mito[sel].max())
+ genes=np.array([x.decode() for x in f['var/index'][:]])
+ i,j=np.where(genes[:,None]==np.array(['SRM','MRPS21']))
+ print(i,j)
+ X=np.asarray(f['X'][:], dtype=float)
+ diff=X[:,i[0]]-X[:,i[1]]
+ d=diff[sel]
+ print('X SRM/MRPS21 eligible values')
+ print('diff min/max', d.min(), d.max())
+ print('counts >1, <-1, within', (d>1).sum(), (d<-1).sum(), ((d>=-1)&(d<=1)).sum(), 'sum', ((d>1)|(d<-1)|((d>=-1)&(d<=1))).sum())
+ print('boundary diffs', d[np.isclose(np.abs(d),1,atol=1e-7)])
+ # raw csr
+ rx=f['raw.X']; shape=tuple(rx.attrs['h5sparse_shape'])
+ R=csr_matrix((rx['data'][:],rx['indices'][:],rx['indptr'][:]),shape=shape)
+ rawd=np.asarray(R[sel,i[0]].toarray()).ravel()-np.asarray(R[sel,j[0]].toarray()).ravel()
+ print('raw diff min/max', rawd.min(), rawd.max())
+ print('raw counts >1, <-1, within', (rawd>1).sum(), (rawd<-1).sum(), ((rawd>=-1)&(rawd<=1)).sum(), 'sum', ((rawd>1)|(rawd<-1)|((rawd>=-1)&(rawd<=1))).sum())
+ print('raw boundary diffs', rawd[np.isclose(np.abs(rawd),1,atol=1e-7)])
+ print('selected rows', np.flatnonzero(sel))
+ print('selected mito', mito[sel])
+ print('X d', d)
+ print('raw d', rawd)
+PY"

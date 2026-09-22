@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,numpy as np
+from collections import defaultdict
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+def attrs(s):return dict(re.findall(r'(\\S+) \"(["'^"]*)"'"',s))
+def U(iv):
+ if not iv:return 0
+ q=sorted(iv);a,b=q[0];n=0
+ for c,d in q[1:]:
+  if c<=b+1:b=max(b,d)
+  else:n+=b-a+1;a,b=c,d
+ return n+b-a+1
+records=[];selected=set()
+with gzip.open('MANE.GRCh38.v1.3.refseq_genomic.gtf.gz','rt') as f:
+ for l in f:
+  if l.startswith('#'):continue
+  p=l.rstrip().split('\\t'); a=attrs(p[8]); tid=a.get('transcript_id','')
+  if p[0] in std and p[2]=='transcript' and a.get('tag')=='MANE Select': selected.add(tid)
+  records.append((p,a,tid))
+D=defaultdict(lambda: {'strand':None,'exon':[],'CDS':[],'stop_codon':[]})
+for p,a,t in records:
+ if p[0] not in std or t not in selected:continue
+ if p[2] in D[t]:D[t][p[2]].append((int(p[3]),int(p[4])))
+vals=[]
+for t,d in D.items():
+ assert d['exon'] and d['CDS'] and d['stop_codon']
+ cod=d['CDS']+d['stop_codon'];lo=min(a for a,b in cod);hi=max(b for a,b in cod); fiv=[]; thr=[]
+ for a,b in d['exon']:
+  if d['strand']=='+':
+   if a<lo:fiv.append((a,min(b,lo-1)))
+   if b>hi:thr.append((max(a,hi+1),b))
+  else:
+   if b>hi:fiv.append((max(a,hi+1),b))
+   if a<lo:thr.append((a,min(b,lo-1)))
+ vals.append([U(fiv),U(cod),U(thr)])
+a=np.array(vals)
+print('selected',len(selected),'aggregated',len(vals),'med',np.median(a,axis=0),'floored',np.floor(np.median(a,axis=0)).astype(int))
+PY"

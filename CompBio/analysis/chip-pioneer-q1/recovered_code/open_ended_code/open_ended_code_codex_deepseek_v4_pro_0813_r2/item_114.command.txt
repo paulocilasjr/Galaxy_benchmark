@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import os, subprocess
+samples=[]
+for f in sorted(os.listdir('processed/macs')):
+    if f.endswith('_peaks.narrowPeak'):
+        samples.append(f[:-len('_peaks.narrowPeak')])
+cuts=[0,2,3,5]
+print('sample\\tn_all\\tacc_all\\tfrac_all\\tn_q0.01\\tacc_q0.01\\tfrac_q0.01\\tn_q0.001\\tacc_q0.001\\tfrac_q0.001\\tn_q1e-5\\tacc_q1e-5\\tfrac_q1e-5')
+for s in samples:
+    peak='processed/macs/'+s+'_peaks.narrowPeak'
+    rows=[]
+    with open(peak) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith('track'): continue
+            p=line.split('\\t'); score=float(p[8]) if len(p)>8 else 0
+            rows.append((p[0],int(p[1]),int(p[2]),score))
+    vals=[]
+    for cut in cuts:
+        sub=rows if cut==0 else [r for r in rows if r[3]>=cut]
+        # count acc by intersecting via bedtools needs temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile('w',delete=False) as fh:
+            for r in sub:
+                fh.write(f'{r[0]}\\t{r[1]}\\t{r[2]}\\n')
+            tmp=fh.name
+        try:
+            inter=subprocess.check_output(['bedtools','intersect','-u','-a',tmp,'-b','processed/dnase_hotspot_union.bed'])
+            acc=sum(1 for line in inter.decode().splitlines() if line.strip())
+        finally:
+            os.unlink(tmp)
+        vals.append(len(sub)); vals.append(acc); vals.append(acc/len(sub) if sub else 0)
+    print('\\t'.join([s]+[str(x) for x in vals]))
+PY"

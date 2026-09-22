@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+
+def dec(ds): return [x.decode() if isinstance(x,bytes) else str(x) for x in ds[:]]
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        X=sparse.csc_matrix((f['X/data'][:].astype(float),f['X/indices'][:],f['X/indptr'][:]),shape=tuple(f['X'].attrs['shape'])).tocsr()
+        return X, dec(f['obs/guide/categories']), f['obs/guide/codes'][:].astype(int), dec(f['var/_index'])
+def lognorm(X):
+    lib=np.asarray(X.sum(1)).ravel(); s=np.divide(1e4,lib,out=np.zeros_like(lib,dtype=float),where=lib>0)
+    Y=X.multiply(s[:,None]).tocsr(); Y.data=np.log1p(Y.data); return Y
+def mean_var(Y, mask):
+    n=int(mask.sum()); sub=Y[mask]
+    mean=np.asarray(sub.mean(0)).ravel()
+    sq=sub.copy(); sq.data **= 2
+    mean2=np.asarray(sq.mean(0)).ravel()
+    var=np.maximum(mean2-mean*mean,0)
+    return mean,var,n
+def t_sigs(Y,g,c):
+    ntidx=[i for i,x in enumerate(g) if x.startswith('NT-')]
+    ntmask=np.isin(c,ntidx)
+    bm,bv,bn=mean_var(Y,ntmask)
+    sig={}; diff={}; n={}
+    for i,x in enumerate(g):
+        m=c==i
+        if not m.sum(): continue
+        gm,gv,gn=mean_var(Y,m)
+        se=np.sqrt(gv/max(gn,1)+bv/max(bn,1)+1e-8)
+        sig[x]=(gm-bm)/se
+        diff[x]=gm-bm
+        n[x]=gn
+    return sig,diff,n
+
+def corr(A,B):
+    A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True)
+    A=A/np.maximum(A.std(1,keepdims=True),1e-12); B=B/np.maximum(B.std(1,keepdims=True),1e-12)
+    return A@B.T/A.shape[1]
+Xr,gr,cr,genr=load('perturb.seq.align.q1.ref.h5ad'); Xq,gq,cq,genq=load('perturb.seq.align.q1.query.h5ad')
+Yr=lognorm(Xr); Yq=lognorm(Xq)
+tr,dr,nr=t_sigs(Yr,gr,cr); tq,dq,nq=t_sigs(Yq,gq,cq)
+common=list(set(genr)&set(genq)); ri=np.array([genr.index(x) for x in common]); qi=np.array([genq.index(x) for x in common])
+ref=[x for x in gr if not x.startswith('NT-')]; que=[x for x in gq if not x.startswith('NT-')]
+Rall=np.vstack([tr[x][ri] for x in ref]); Qall=np.vstack([tq[x][qi] for x in que])
+# cap t to reduce sample size dominance
+for cap in [None,10,5,3]:
+    R=Rall.copy(); Q=Qall.copy()
+    if cap:
+        R=np.clip(R,-cap,cap); Q=np.clip(Q,-cap,cap)
+    var=R.var(0)+Q.var(0)
+    for name,idx in [('all',np.arange(R.shape[1])),('top500',np.argsort(var)[-500:]),('top1000',np.argsort(var)[-1000:]),('top2000',np.argsort(var)[-2000:])]:
+        C=corr(R[:,idx],Q[:,idx])
+        print('\\ncap',cap,'set',name)
+        for rg in ['PABPC1-I1','NUDT21-I3','LEO1-I2','CDC73-I2','CTR9-I7','PAF1-I6']:
+            i=ref.index(rg); top=np.argsort(C[i])[::-1][:6]
+            print(rg,[(que[j],round(float(C[i,j]),3)) for j in top])
+        rows,cols=linear_sum_assignment(-C); lookup={ref[i]:que[j] for i,j in zip(rows,cols)}
+        print('assign', {rg:lookup.get(rg) for rg in ['PABPC1-I1','NUDT21-I3','LEO1-I2','CDC73-I2','CTR9-I7','PAF1-I6']})
+PY"

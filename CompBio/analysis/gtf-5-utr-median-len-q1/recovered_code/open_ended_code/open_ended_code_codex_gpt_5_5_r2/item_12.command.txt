@@ -1,0 +1,102 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, collections, math
+import numpy as np
+path='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+standard={f'chr{i}' for i in range(1,23)} | {'chrX','chrY','chrM','chrMT','MT','M'}
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)";'"')
+
+def attrs(s):
+    d=collections.defaultdict(list)
+    for k,v in attr_re.findall(s):
+        d[k].append(v)
+    return d
+
+selected={}  # key -> transcript coords/info
+transcript_dups=collections.Counter()
+with gzip.open(path,'rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        chrom, feat, start, end, strand = p[0], p[2], int(p[3]), int(p[4]), p[6]
+        if feat"'!='"'transcript' or chrom not in standard: continue
+        a=attrs(p[8])
+        if 'MANE Select' not in a.get('tag',[]): continue
+        tid=a.get('transcript_id',[''])[0]
+        if not tid: continue
+        key=(tid, chrom, strand)
+        transcript_dups[key]+=1
+        selected[key]=(start,end,a.get('gene_id',[''])[0])
+
+exons=collections.defaultdict(list)
+cds=collections.defaultdict(list)
+stops=collections.defaultdict(list)
+with gzip.open(path,'rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        chrom, feat, start, end, strand = p[0], p[2], int(p[3]), int(p[4]), p[6]
+        if chrom not in standard or feat not in {'exon','CDS','stop_codon'}: continue
+        a=attrs(p[8])
+        tid=a.get('transcript_id',[''])[0]
+        key=(tid, chrom, strand)
+        if key not in selected: continue
+        if feat=='exon': exons[key].append((start,end))
+        elif feat=='CDS': cds[key].append((start,end))
+        elif feat=='stop_codon': stops[key].append((start,end))
+
+def merge_intervals(intervals):
+    if not intervals: return []
+    intervals=sorted(intervals)
+    out=[list(intervals[0])]
+    for s,e in intervals[1:]:
+        if s<=out[-1][1]+1:
+            if e>out[-1][1]: out[-1][1]=e
+        else:
+            out.append([s,e])
+    return [(s,e) for s,e in out]
+
+def sum_len(intervals):
+    return sum(e-s+1 for s,e in intervals)
+
+def overlap_len(a,b):
+    s=max(a[0],b[0]); e=min(a[1],b[1])
+    return max(0,e-s+1)
+
+utr5=[]; cdsl=[]; utr3=[]
+missing=[]
+for key in selected:
+    if not exons[key] or (not cds[key] and not stops[key]):
+        missing.append(key); continue
+    coding=merge_intervals(cds[key]+stops[key])
+    c_len=sum_len(coding)
+    c_min=min(s for s,e in coding); c_max=max(e for s,e in coding)
+    strand=key[2]
+    e5=e3=0
+    for ex in exons[key]:
+        s,e=ex
+        if strand=='+':
+            # 5' UTR: exon bases before first coding base; 3' UTR after last coding base
+            if s < c_min:
+                e5 += max(0, min(e, c_min-1)-s+1)
+            if e > c_max:
+                e3 += max(0, e-max(s, c_max+1)+1)
+        elif strand=='-':
+            # transcript 5' is high genomic coordinate side
+            if e > c_max:
+                e5 += max(0, e-max(s, c_max+1)+1)
+            if s < c_min:
+                e3 += max(0, min(e, c_min-1)-s+1)
+        else:
+            raise ValueError(key)
+    utr5.append(e5); cdsl.append(c_len); utr3.append(e3)
+
+print('selected',len(selected),'dups',sum(v>1 for v in transcript_dups.values()),'missing',len(missing))
+print('n',len(utr5),len(cdsl),len(utr3))
+print('median raw',np.median(utr5),np.median(cdsl),np.median(utr3))
+print('floor',math.floor(np.median(utr5)),math.floor(np.median(cdsl)),math.floor(np.median(utr3)))
+print('answer',f'{math.floor(np.median(utr5))};{math.floor(np.median(cdsl))};{math.floor(np.median(utr3))}')
+print('zero utr5',sum(x==0 for x in utr5),'zero utr3',sum(x==0 for x in utr3))
+if missing[:5]: print('missing examples',missing[:5])
+PY"

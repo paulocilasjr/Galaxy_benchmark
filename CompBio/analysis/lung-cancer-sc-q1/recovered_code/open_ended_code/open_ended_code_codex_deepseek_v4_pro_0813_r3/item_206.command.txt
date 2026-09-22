@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp, hashlib
+our=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r')
+ref=ad.read_h5ad('luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad',backed='r')
+# map intersection as before
+og=our.var['symbol'].astype(str).to_numpy(); rg=ref.var.index.to_numpy()
+rpos={g:i for i,g in enumerate(rg)}
+oidx=np.array([i for i,g in enumerate(og) if g in rpos]); ridx=np.array([rpos[g] for g in og if g in rpos])
+# sample first 100 our vectors and reference hashes for all 892k? expensive but do hash of bytes for 5158 counts.
+def row_hash(X, idx):
+    X=X[idx]
+    if sp.issparse(X):
+        X=X.toarray().ravel()
+    return hashlib.blake2b(X.tobytes()).hexdigest()
+# build reference hash for all? 892k*5158 ints ~18GB if Python, no. Chunk and store hash only maybe 600MB? Let's do small for first 100 exact search by chunk comparisons
+start=0; end=100
+# Store our vectors
+q=[]
+for i in range(start,end):
+    q.append(our.X[i,oidx].toarray().ravel())
+q=np.array(q,dtype=np.int32)
+found=np.full(len(q),False)
+found_idx=np.full(len(q),-1,dtype=int)
+chunk=5000
+n=ref.n_obs
+for s in range(0,n,chunk):
+    e=min(s+chunk,n)
+    Xr=ref.layers['raw_counts'][s:e,ridx]
+    if sp.issparse(Xr): Xr=Xr.toarray()
+    # compare exact
+    for j in range(len(q)):
+        # use np.argwhere row equality
+        eq=np.flatnonzero((Xr==q[j]).all(axis=1))
+        if len(eq):
+            found[j]=True; found_idx[j]=eq[0]+s
+    if s%100000==0: print(s)
+print('found',found.sum())
+for j in np.where(found)[0]:
+    print(j, ref.obs.index[found_idx[j]], ref.obs['cell_type_tumor'][found_idx[j]])
+PY"

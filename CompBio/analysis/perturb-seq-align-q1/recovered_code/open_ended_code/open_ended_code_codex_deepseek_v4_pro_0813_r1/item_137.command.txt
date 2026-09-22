@@ -1,0 +1,51 @@
+/bin/bash -lc "cat > extract_target_profiles.R <<'EOF'
+suppressMessages({library(Seurat); library(Matrix)})
+con <- pipe('gzip -dc CPA_K562.Rds.gz | gzip -dc','rb')
+obj <- readRDS(con)
+close(con)
+cat('read done\\n')
+targets <- as.character(obj"'$target_gene)
+guides <- as.character(obj$guide)
+cells <- colnames(obj)
+cat('"'cells', length(cells), '\\n')
+counts <- GetAssayData(obj, assay='RNA', layer='counts')
+cat('counts dim', dim(counts), '\\n')
+lib <- Matrix::colSums(counts)
+lib[lib==0] <- 1
+# scale columns and log1p; use Matrix
+norm <- counts %*% Diagonal(x = 1e6/lib)
+ln <- log1p(norm)
+rm(counts, norm)
+gc()
+# unique target groups using table names
+ut <- names(table(targets))
+cat('target groups', length(ut), paste(ut, collapse=','), '\\n')
+profiles <- list()
+for (tg in ut) {
+  idx <- which(targets == tg)
+  if (length(idx) == 0) next
+  # mean of sparse columns
+  sub <- ln[, idx, drop=FALSE]
+  m <- Matrix::rowMeans(sub)
+  profiles[[tg]] <- m
+}
+# also NT mean (already in profiles if NT)
+cat('profile lengths', sapply(profiles, length), '\\n')
+# Build matrix genes x groups as sparse/dense? use dgCMatrix columns
+genes <- rownames(ln)
+mat <- do.call(cbind, lapply(profiles, function(m) as(m, 'sparseVector')))
+mat <- as(mat, 'CsparseMatrix')
+rownames(mat) <- genes; colnames(mat) <- names(profiles)
+saveRDS(mat, 'k562_target_profiles.rds')
+# also save guide profiles for a few/all? maybe all guides groups
+ug <- names(table(guides))
+gmat <- do.call(cbind, lapply(ug, function(g) {
+  idx <- which(guides == g)
+  Matrix::rowMeans(ln[, idx, drop=FALSE])
+}))
+gmat <- as(gmat, 'CsparseMatrix')
+rownames(gmat) <- genes; colnames(gmat) <- ug
+saveRDS(gmat, 'k562_guide_profiles.rds')
+cat('saved\\n')
+EOF
+Rscript extract_target_profiles.R > extract_target_profiles.out 2>&1"

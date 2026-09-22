@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import json, urllib.request, struct, zlib, os
+entries={e['name']:e for e in json.load(open('central_entries.json'))}
+e=entries['datasets/deeplearning/train_gru/f0_c0/train/params.json']
+print(e)
+url='https://zenodo.org/api/records/6326409/files/datasets.zip/content'
+# request generous range
+start=e['local_off']; size=e['comp_size']; end=start+size+4096-1
+req=urllib.request.Request(url, headers={'Range':f'bytes={start}-{end}'})
+with urllib.request.urlopen(req, timeout=60) as r:
+    data=r.read()
+print('downloaded',len(data), 'content range', r.headers.get('Content-Range'))
+# parse local header
+sig=struct.unpack('<I',data[:4])[0]
+print(hex(sig))
+rec=struct.unpack('<IHHHHHIIIHH', data[:30])
+print(rec)
+name_len,extra_len=rec[9],rec[10]
+print('name',data[30:30+name_len],'extra',extra_len)
+comp_start=30+name_len+extra_len
+comp=data[comp_start:comp_start+e['comp_size']]
+method=rec[2]
+print('method',method,'comp size expected',e['comp_size'],len(comp))
+if method==8:
+    out=zlib.decompress(comp,-15)
+elif method==0:
+    out=comp
+print(out[:200])
+os.makedirs('models/f0_c0/train',exist_ok=True)
+open('models/f0_c0/train/params.json','wb').write(out)
+print('written',len(out))
+PY"

@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import re, subprocess, itertools, numpy as np
+from collections import Counter, defaultdict
+lines=[x.strip() for x in subprocess.check_output(['strings','-n','4','k562_hto_guide_segment.bin'], text=True).splitlines()]
+pat=re.compile(r'"'^(?:[A-Z0-9]+-I'"\\d+|NT-I\\d+)"'$'"')
+start=next(i for i,x in enumerate(lines) if pat.match(x))
+hto_before=[x for x in lines[:start] if x.startswith('HTO-')]
+guides=[x for x in lines if pat.match(x)]
+hto=hto_before[-len(guides):]
+selected=set(['CDC73-I2','CPSF1-I3','CPSF2-I1','CPSF3-I3','CPSF3L-I8','CPSF4-I8','CPSF6-I5','CPSF7-I1','CSTF1-I5','CSTF2-I4','CSTF3-I5','CTR9-I7','FIP1L1-I1','LEO1-I2','NUDT21-I3','PABPC1-I1','PABPN1-I2','PAF1-I6','PAPOLA-I3','PCF11-I5','PHF3-I5','RBBP6-I4','RPAP2-I2','RPRD1A-I5','RPRD1B-I1','SCAF1-I2','SCAF4-I4','SCAF8-I3','SCAF11-I3','SF3A1-I5','SRSF3-I1','SYMPK-I3','THOC5-I1']+[f'NT-I{i}' for i in range(1,11)])
+by=defaultdict(Counter)
+for h,g in zip(hto,guides):
+    if g in selected: by[h][g]+=1
+htos=list(by.keys())
+qnt=np.array([119,175,152,90,117,158,150,82,104,277],float)
+# query nonNT sorted descending
+qnon=np.array([208,200,199,178,158,127,102,97,86,83,68,65,55,55,48,43,40,38,32,29,27,23,22,20,16,16,15,13,10,10,6,3],float)
+def score(c):
+    total=sum(c.values())
+    nt=np.array([c[f'NT-I{i}'] for i in range(1,11)],float)
+    scale_nt=(qnt@nt)/(nt@nt+1e-9) if nt.sum()>0 else 1
+    err_nt=np.sqrt(np.mean((scale_nt*nt-qnt)**2))
+    non=np.array(sorted([v for k,v in c.items() if not k.startswith('NT-')], reverse=True),float)
+    # pad/truncate to 32? subset may have fewer nonNT labels; use top 32 only
+    non=non[:32]
+    if len(non)<32: non=np.pad(non,(0,32-len(non)))
+    # scale all counts to query total
+    scale_all=sum(qnt)+sum(qnon); scale_all/=total if total>0 else 1
+    err_non=np.sqrt(np.mean((scale_all*non-qnon)**2))
+    return err_nt, err_non, abs(total-(sum(qnt)+sum(qnon))), total, scale_nt
+best=[]
+for r in range(1,len(htos)+1):
+    for comb in itertools.combinations(htos,r):
+        c=Counter()
+        for h in comb: c.update(by[h])
+        e1,e2,dt,total,s=score(c)
+        best.append((e1+e2*0.5, e1,e2,dt,total,comb,c))
+# Sort by combined err
+best_sorted=sorted(best,key=lambda x:(x[0],x[1],x[2]))[:30]
+for b in best_sorted:
+    _,e1,e2,dt,total,comb,c=b
+    print('err',round(b[0],2),'nt',round(e1,2),'non',round(e2,2),'total',total,'diff',dt,'comb',comb)
+    print('  NT',[c[f'NT-I{i}'] for i in range(1,11)],'nonNT top',sorted([v for k,v in c.items() if not k.startswith('NT-')],reverse=True)[:15])
+PY"

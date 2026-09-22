@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,pyBigWig,numpy as np,time,collections
+N=76275859
+T={}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.split()
+ if c=='chr1': T[int(s)]=round(float(v)*N/1e6)
+a=np.array([T[i*10000] for i in range(24896)],float)
+p=json.load(open('encode_alpha_bams.json'))['@graph']
+def m(x):
+ vals=[]
+ for q in x.get('quality_metrics',[]):
+  if 'reads mapped' in q: vals.append(q['reads mapped'])
+  if 'mapped' in q and isinstance(q['mapped'],int): vals.append(q['mapped'])
+ return max(vals)
+by=collections.defaultdict(list)
+for x in p: by[x['dataset']].append(x)
+groups=[]
+for d,xs in by.items():
+ s=sum(m(x) for x in xs)
+ if 75e6<=s<=82e6: groups.append((abs(s-N),d,s))
+b=json.load(open('encode_alpha_bw_urls.json'))['@graph']
+bwby=collections.defaultdict(list)
+for x in b:
+ if x.get('status')=='released': bwby[x['dataset']].append((x['accession'],x['cloud_metadata']['url']))
+for _,d,s in sorted(groups):
+ for acc,u in bwby[d]:
+  print('query',d,acc,'mapped',s,flush=True)
+  t=time.time()
+  try:
+   bw=pyBigWig.open(u)
+   z=np.nan_to_num(np.array(bw.stats('chr1',0,248956422,nBins=24896,type='sum'),dtype=float))
+   bw.close()
+   print('RESULT',d,acc,'corr',np.corrcoef(a,z)[0,1],'logcorr',np.corrcoef(np.log1p(a),np.log1p(z))[0,1],'sum',z.sum(),'secs',round(time.time()-t,1),flush=True)
+  except Exception as e: print('ERR',repr(e),flush=True)
+PY"

@@ -1,0 +1,70 @@
+/bin/bash -c "python3 - <<'PY'
+# Quick scan all raw SNVs annotate nonsense, no depth filter, print all nonsense with dp/alt
+import gzip, pysam
+transcripts={}
+gene_info={}
+with gzip.open('ann/gencode.v47.annotation.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'CDS': continue
+        attrs=p[8]; d={}
+        for x in attrs.split(';'):
+            x=x.strip()
+            if not x: continue
+            kv=x.split(' ',1) if ' ' in x else x.split('=')
+            if len(kv)==2: d[kv[0]]=kv[1].strip().strip('\"')
+        tid=d.get('transcript_id'); gid=d.get('gene_id')
+        if not tid: continue
+        gene_info[gid]=d.get('gene_name')
+        transcripts.setdefault(tid,{'strand':p[6],'gene_id':gid,'exons':[]})['exons'].append((int(p[3]),int(p[4])))
+fa=pysam.FastaFile('ref/chr9.fa')
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+cmaps={}
+for tid,t in transcripts.items():
+    strand=t['strand']; ex=t['exons']
+    if strand=='+':
+        exs=sorted(ex); pos=[]; 
+        for s,e in exs: pos += list(range(s,e+1))
+        seq=''.join(fa.fetch('chr9',x-1,x).upper() for x in pos)
+    else:
+        exs=sorted(ex,reverse=True); pos=[]
+        for s,e in exs: pos += list(range(e,s-1,-1))
+        seq=''.join(rc(fa.fetch('chr9',x-1,x).upper()) for x in pos)
+    cmaps[tid]={'strand':strand,'gene_id':t['gene_id'],'pos_index':{x:i for i,x in enumerate(pos)},'seq':seq}
+bases='TCAG'; codons=[a+b+c for a in bases for b in bases for c in bases]
+aa='FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG'
+ct=dict(zip(codons,aa))
+found=[]
+with open('raw.vcf') as f:
+  for line in f:
+    if line.startswith('#'): continue
+    p=line.rstrip().split('\\t')
+    if len(p)<10 or len(p[3])"'!=1 or len(p[4])!=1: continue
+    chrom,pos,ref,alt=p[0],int(p[1]),p[3],p[4]
+    fmt=p[8].split('"':'); sv=p[9].split(':'); d=dict(zip(fmt,sv))
+    dp=int(d.get('DP',0)); ad=d.get('AD','').split(',') if d.get('AD') else []
+    altad=int(ad[1]) if len(ad)>1 else 0
+    for tid,cm in cmaps.items():
+        idx=cm['pos_index'].get(pos)
+        if idx is None: continue
+        if idx%3"'!=0 and idx%3!=1 and idx%3!=2: pass
+        start=(idx//3)*3
+        if start+3>len(cm['"'seq']): continue
+        codon=list(cm['seq'][start:start+3])
+        if codon[idx%3].upper()"'!=ref: continue
+        raa=ct.get('"''.join(codon),'X')
+        alt_trans=alt if cm['strand']=='+' else rc(alt)
+        codon[idx%3]=alt_trans.upper()
+        aaa=ct.get(''.join(codon),'X')
+        if raa"'!='"'*' and aaa=='*':
+            found.append((pos,ref,alt,dp,altad,altad/dp if dp else 0,gene_info.get(cm['gene_id']),cm['gene_id'],tid,raa,aaa,cm['strand'],idx%3))
+seen=set()
+for x in found:
+    key=x[:6]
+    if key in seen: continue
+    seen.add(key)
+    print(x)
+print('unique',len(seen))
+PY"

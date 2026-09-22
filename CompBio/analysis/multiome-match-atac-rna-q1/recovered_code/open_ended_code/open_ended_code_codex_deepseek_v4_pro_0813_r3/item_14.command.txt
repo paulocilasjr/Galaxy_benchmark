@@ -1,0 +1,87 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv, re, numpy as np
+from collections import defaultdict
+from scipy.optimize import linear_sum_assignment
+
+gene_list=defaultdict(list)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2]"'!='"'gene': continue
+        chrom=parts[0]; start=int(parts[3]); end=int(parts[4]); strand=parts[6]
+        m=re.search(r'gene_name \"(["'^"]+)"'"', parts[8])
+        if not m: continue
+        gn=m.group(1)
+        bt=re.search(r'gene_biotype \"(["'^"]+)"'"', parts[8])
+        biotype=bt.group(1) if bt else ''
+        gene_list[gn].append((chrom,start,end,strand,biotype))
+
+def choose_gene(entries):
+    pc=[e for e in entries if e[4]=='protein_coding']
+    if pc: return max(pc,key=lambda e:e[2]-e[1])
+    return max(entries,key=lambda e:e[2]-e[1])
+genes={}
+for gn,ents in gene_list.items():
+    chrom,start,end,strand,bt=choose_gene(ents)
+    if not chrom.startswith('chr'): chrom='chr'+chrom
+    tss=start if strand=='+' else end
+    genes[gn]=(chrom,start,end,strand,tss)
+
+atac_dict={}
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        atac_dict[row[0]]=np.array([float(x) for x in row[1:9]])
+chr_bins=defaultdict(lambda:[[],[]])
+for bid,val in atac_dict.items():
+    parts=bid.split('_'); c=parts[0]; s=int(parts[1]); e=int(parts[2])
+    chr_bins[c][0].append(s); chr_bins[c][1].append(val)
+for c in chr_bins:
+    arr=np.array(chr_bins[c][0]); vals=np.array(chr_bins[c][1])
+    idx=np.argsort(arr)
+    chr_bins[c][0]=arr[idx]; chr_bins[c][1]=vals[idx]
+
+rna_syms=[]; R=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        rna_syms.append(row[0]); R.append([float(x) for x in row[1:9]])
+R=np.array(R)
+
+def get_region(c, start, end):
+    starts,vals=chr_bins.get(c,([],[]))
+    if len(starts)==0: return None
+    li=np.searchsorted(starts, start-10000, side='right')
+    ri=np.searchsorted(starts, end, side='right')
+    if li>=ri: return None
+    return vals[li:ri].sum(axis=0)
+
+methods={
+ 'tss_bin': lambda g: get_region(g[0], g[4]//10000*10000, g[4]//10000*10000),
+ 'prom2kb': lambda g: get_region(g[0], g[4]-2000, g[4]+2000),
+ 'prom5kb': lambda g: get_region(g[0], g[4]-5000, g[4]+5000),
+ 'gene_body': lambda g: get_region(g[0], g[1], g[2]),
+ 'gene_body_prom2kb': lambda g: get_region(g[0], min(g[1],g[4]-2000), max(g[2],g[4]+2000)),
+ 'upstream2k_to_end': lambda g: get_region(g[0], g[4]-2000, g[2]),
+}
+for mname,func in methods.items():
+    pairs=[]
+    for gi,gn in enumerate(rna_syms):
+        g=genes.get(gn)
+        if not g: continue
+        a=func(g)
+        if a is None: continue
+        pairs.append((R[gi],a))
+    if len(pairs)<100: print(mname,'too few',len(pairs)); continue
+    Rs=np.array([p[0] for p in pairs]); As=np.array([p[1] for p in pairs])
+    rr=np.log1p(Rs); aa=np.log1p(As)
+    rz=rr-rr.mean(axis=1,keepdims=True); az=aa-aa.mean(axis=1,keepdims=True)
+    rden=np.sqrt((rz*rz).sum(axis=1,keepdims=True)); rden[rden==0]=1
+    aden=np.sqrt((az*az).sum(axis=1,keepdims=True)); aden[aden==0]=1
+    M=( (rz/rden)[:,:,None] * (az/aden)[:,None,:] ).mean(axis=0)
+    ri,cj=linear_sum_assignment(-M)
+    perm=[int(cj[k]) for k in range(8)]
+    print(f'{mname:20s} n={len(pairs):5d} perm={perm} score={M[ri,cj].sum():.4f}')
+    print(np.round(M,3))
+PY"

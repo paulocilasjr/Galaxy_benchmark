@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, urllib.request, re, concurrent.futures, sys, os
+path='summary_statistics_table_export.tsv'
+urls=[]
+with open(path, encoding='utf-8', newline='') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        if row.get('pubmedId')=='40593539':
+            u=row['summaryStatistics']
+            if u and u not in urls: urls.append(u)
+target=151441444
+
+def get(url):
+    req=urllib.request.Request(url, method='HEAD', headers={'User-Agent':'curl/8'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return (url, resp.status, resp.headers.get('Content-Length'))
+    except Exception as e:
+        return (url, 'ERR', str(e))
+
+def list_harmonised(base):
+    try:
+        html=urllib.request.urlopen(base+'/harmonised/', timeout=30).read().decode('utf-8','replace')
+        files=re.findall(r'href=\"(["'^"]+'"\\.h\\.tsv\\.gz)\"',html)
+        return [(base.rstrip('/')+'/harmonised/'+f) for f in files]
+    except Exception as e:
+        return []
+
+# first discover all harmonised file URLs
+harm=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+    futs=[ex.submit(list_harmonised,u) for u in urls]
+    for f in concurrent.futures.as_completed(futs):
+        harm.extend(f.result())
+print('harm files',len(harm))
+# head sizes
+found=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+    futs=[ex.submit(get,u) for u in harm]
+    for fut in concurrent.futures.as_completed(futs):
+        url,status,cl=fut.result()
+        if cl and cl.isdigit():
+            cl=int(cl)
+            if cl==target:
+                print('FOUND',url,cl); found.append((url,cl))
+            elif abs(cl-target)<50000000:
+                pass
+        else:
+            pass
+print('found',len(found))
+# print closest few
+PY"

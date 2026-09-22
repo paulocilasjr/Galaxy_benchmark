@@ -1,0 +1,81 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, pandas as pd, numpy as np, re
+from collections import defaultdict
+
+# load data
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+log=np.log1p(df)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+# parse markers
+wb=openpyxl.load_workbook('supp/mmc5.xlsx', read_only=True, data_only=True)
+ws=wb['Table S4']
+rows=[]
+for r in ws.iter_rows(values_only=True):
+    if r[0] and isinstance(r[0],str) and r[0].startswith('Traes') and r[7] and r[7]"'!='"'cluster':
+        gene=r[0]; cl=r[7].strip(); lfc=float(r[2]) if r[2] is not None else 0; ratio=float(r[5]) if r[5] is not None else 0; pct1=float(r[3]) if r[3] is not None else 0
+        rows.append((gene,cl,lfc,ratio,pct1))
+wb.close()
+# clean duplicate xylem name
+for i,(g,c,lfc,ratio,p1) in enumerate(rows):
+    if c.startswith('10 - Xylem'): c='10 - Xylem'
+    rows[i]=(g,c,lfc,ratio,p1)
+clusters=['0 - Unknown','1 - Epidermis','2 - Cortex','3 - G1/S','4 - Provascular Cells','5 - Unknown','6 - Pericycle','7 - Epidermis','8 - Root Hair','9 - Endodermis','10 - Xylem','11 - Endodermis/Phloem','12 - G2/M','13 - Phloem','14 - Root Cap']
+print('counts')
+for cl in clusters:
+    print(cl, sum(1 for r in rows if r[1]==cl))
+
+def score_sets(mapping, topN=100, score='zmean', union=True, weight=False):
+    # select topN per cluster by ratio (or lfc?) among data genes
+    chosen=defaultdict(list)
+    for cl, genes in mapping.items():
+        pool=[r for r in rows if r[1] in genes]
+        # dedupe per gene choose max
+        best={}
+        for g,c,lfc,ratio,p1 in pool:
+            if g not in best or (ratio,lfc)>(best[g][1],best[g][0]):
+                best[g]=(lfc,ratio,p1,c)
+        sorted_genes=sorted(best.items(), key=lambda kv:(kv[1][1],kv[1][0]), reverse=True)
+        for g,vals in sorted_genes[:topN]:
+            chosen[cl].append(g)
+    # score each column
+    res=pd.DataFrame(index=list(mapping.keys()), columns=df.columns, dtype=float)
+    for cl,genes in chosen.items():
+        present=[g for g in genes if g in df.index]
+        if score=='zmean':
+            res.loc[cl]=z.loc[present].mean()
+        elif score=='logmean':
+            res.loc[cl]=log.loc[present].mean()
+        elif score=='mean':
+            res.loc[cl]=df.loc[present].mean()
+        elif score=='rankz':
+            # mean of rank percentile transformed columns across genes
+            ranks=df.loc[present].rank(axis=1,pct=True)
+            res.loc[cl]=ranks.mean()
+        elif score=='sumlog':
+            res.loc[cl]=log.loc[present].sum()
+    return res, chosen
+
+mapping_basic={
+ 'cortex':['2 - Cortex'],
+ 'endodermis':['9 - Endodermis'],
+ 'epidermis':['1 - Epidermis','7 - Epidermis'],
+ 'meristems':['3 - G1/S','12 - G2/M'],
+ 'pericycle':['6 - Pericycle'],
+ 'phloem':['13 - Phloem'],
+ 'provascular':['4 - Provascular Cells'],
+ 'root_cap':['14 - Root Cap'],
+ 'root_hair':['8 - Root Hair'],
+ 'xylem':['10 - Xylem'],
+}
+for N in [30,50,100,200]:
+    for sc in ['zmean','logmean','rankz']:
+        res,chosen=score_sets(mapping_basic,N,sc)
+        print('\\nN',N,sc)
+        print(res.round(2))
+        # predicted for each column
+        pred=res.idxmax()
+        print('preds',pred.tolist())
+        # print mismatch labels
+        mism=[c for c in df.columns if pred[c]"'!=c]
+        print('"'mism',mism)
+PY"

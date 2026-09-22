@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+# Recalc quick with FDR for score_all from saved? We'll rerun concise
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+id2target=dict(zip(ref.id, ref.target_gene_name))
+calls['target']=calls.feature_call.map(id2target)
+bc2col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc2col)
+lib=np.asarray(mat.sum(axis=0)).ravel()
+path=features[:20]
+sub=mat[[features.index(g) for g in path],:].tocsc()
+score=np.log2(1 + np.asarray(sub.todense())*(10000/lib[None,:])).mean(axis=0)
+df=pd.DataFrame({'score':score,'cell':barcodes}).merge(calls[['cell_barcode','target','col']], left_on='cell', right_on='cell_barcode')
+nt=df[df.target=='Non-Targeting'].score
+rows=[]
+for t,g in df[df.target"'!='"'Non-Targeting'].groupby('target'):
+    p=stats.mannwhitneyu(g.score, nt, alternative='two-sided').pvalue
+    rows.append((t,g.score.mean()-nt.mean(),p,len(g)))
+res=pd.DataFrame(rows,columns=['target','diff','p','n']).sort_values('p')
+res['bh']=multipletests(res.p, method='fdr_bh')[1]
+res['bonf']=np.minimum(1,res.p*len(res))
+print(res.to_string(index=False))
+PY"

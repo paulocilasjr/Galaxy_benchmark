@@ -1,0 +1,23 @@
+/bin/bash -lc "python -u - <<'PY'
+import anndata as ad,numpy as np,pandas as pd
+from scipy.optimize import linear_sum_assignment
+ads=[ad.read_h5ad(x) for x in ['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']]
+common=np.array(sorted(set(ads[0].var_names)&set(ads[1].var_names)))
+out=[]
+for a in ads:
+ X=a.X[:,a.var_names.get_indexer(common)].tocsr().astype(float); lib=np.asarray(X.sum(1)).ravel();X=X.multiply((1e4/np.maximum(lib,1))[:,None]).tocsr();X.data=np.log1p(X.data)
+ labs=a.obs.guide.astype(str).values; cats=np.array([x for x in a.obs.guide.cat.categories if not x.startswith('NT')]); nt=np.char.startswith(labs,'NT')
+ base=np.asarray(X[nt].mean(0)).ravel(); eff=np.vstack([np.asarray(X[labs==g].mean(0)).ravel()-base for g in cats]);out.append((cats,base,eff))
+Rcats,Rb,R=out[0];Qcats,Qb,Q=out[1];mask=(Rb>.1)&(Qb>.1)
+def norm(A): A=A[:,mask].copy();A-=A.mean(1)[:,None];return A/np.sqrt((A*A).sum(1))[:,None]
+C=norm(R)@norm(Q).T
+ri,qi=linear_sum_assignment(-C)
+print('FULL HUNGARIAN')
+for i,j in sorted(zip(ri,qi),key=lambda z:z[0]): print(f'{Rcats[i]:12s} {Qcats[j]:8s} {C[i,j]:.3f} rowrank={1+np.sum(C[i]>C[i,j])} colrank={1+np.sum(C[:,j]>C[i,j])}')
+print('\\nQUERY nearest refs guide13,19,14,18')
+for q in ['guide13','guide19','guide14','guide18']:
+ j=np.where(Qcats==q)[0][0];oo=np.argsort(C[:,j])[::-1][:10];print(q,[(Rcats[i],round(C[i,j],3)) for i in oo])
+print('\\nREF nearest query target complexes')
+for r in ['NUDT21-I3','CPSF6-I5','CPSF7-I1','CPSF1-I3','PABPC1-I1','LEO1-I2','CTR9-I7','PAF1-I6','CDC73-I2']:
+ i=np.where(Rcats==r)[0][0];oo=np.argsort(C[i])[::-1][:10];print(r,[(Qcats[j],round(C[i,j],3)) for j in oo])
+PY"

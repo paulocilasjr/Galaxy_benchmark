@@ -1,0 +1,54 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, pandas as pd
+from scipy.sparse import csc_matrix
+
+def read(fn):
+ with h5py.File(fn,'r') as f:
+  shape=tuple(f['X'].attrs['shape'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=shape)
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['var/_index'][...]])
+  cats={}
+  for col0 in f['obs'].attrs['column-order']:
+   col=col0.decode() if isinstance(col0,bytes) else str(col0)
+   g=f['obs'][col]
+   cats[col]=[x.decode() if isinstance(x,bytes) else str(x) for x in g['categories'][...]]
+  guides=np.array([cats['guide'][i] for i in f['obs']['guide/codes'][...]],dtype=object)
+  targets=None
+  if 'target_gene' in cats: targets=np.array([cats['target_gene'][i] for i in f['obs']['target_gene/codes'][...]],dtype=object)
+ return X,genes,guides,targets
+
+def norm_means(X, groups, group_names, genes):
+ lib=np.asarray(X.sum(axis=1)).ravel()
+ # CPM 10k
+ Y=X.multiply(1e4/np.maximum(lib,1)[:,None])
+ return pd.DataFrame({g:np.asarray(Y[np.asarray(groups)==g].mean(axis=0)).ravel() for g in group_names},index=genes)
+ref,rgene,rg,rt=read('perturb.seq.align.q1.ref.h5ad')
+qry,qgene,qg,qt=read('perturb.seq.align.q1.query.h5ad')
+assert np.array_equal(rgene,qgene)
+refm=norm_means(ref,rg,np.unique(rg),rgene)
+qrm=norm_means(qry,qg,np.unique(qg),qgene)
+controls=[g for g in np.unique(rg) if g.startswith('NT-')]
+qcontrols=[g for g in np.unique(qg) if g.startswith('NT-')]
+refbase=refm[controls].mean(axis=1)
+qbase=qrm[qcontrols].mean(axis=1)
+targets=['PABPC1','NUDT21','LEO1']
+# Print ref direct target fold changes and all query values sorted descending/decreasing
+for t in targets:
+ print('\\nTARGET',t,'gene index',np.where(rgene==t)[0])
+ print('ref guide',[(g, round(np.log2((refm.loc[t,g]+0.1)/(refbase[t]+0.1)),2),round(refm.loc[t,g],2)) for g in np.unique(rg) if not g.startswith('NT-') and (g.split('-')[0]==t)])
+ arr=np.log2((qrm.loc[t]+0.1)/(qbase[t]+0.1)).sort_values()
+ print('query lowest',[(g,round(v,2),round(qrm.loc[t,g],2)) for g,v in arr.iloc[:15].items()])
+ print('query highest',[(g,round(v,2),round(qrm.loc[t,g],2)) for g,v in arr.iloc[-10:].items()])
+# full target-by-query logfc, each target ref guide's target
+alltargets=[]
+for t in np.unique(rt):
+ if t"'!='"'NT': alltargets.append(t)
+print('\\nDirect-target q log2 FC table (rows target, cols query sorted)')
+qfc=np.log2((qrm.loc[alltargets]+0.1)/(qbase.loc[alltargets]+0.1))
+print(qfc.round(2).to_string())
+print('\\nReference direct target FC')
+for g in np.unique(rg):
+ if g.startswith('NT-'): continue
+ t=next((x for x in alltargets if g.startswith(x+'-')),None)
+ if t: print(g,t,round(np.log2((refm.loc[t,g]+.1)/(refbase[t]+.1)),2),round(refm.loc[t,g],2),round(refbase[t],2))
+PY"

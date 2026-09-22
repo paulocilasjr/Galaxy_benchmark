@@ -1,0 +1,42 @@
+/bin/bash -lc "POLARS_SKIP_CPU_CHECK=1 python3 - <<'PY'
+import snapatac2 as snap, numpy as np, time
+from scipy.sparse import csr_matrix
+adata=snap.read('atac.h5ad')
+X=adata.X[:]
+names=adata.obs_names
+ci=names.index('AACATGGAGCGCCGGG-1')
+cand=X.getrow(ci)
+idx=np.flatnonzero(cand.toarray().ravel())
+print('cand nonzeros',len(idx))
+Xs=X[:,idx].astype(np.float32).tocsr()
+print('Xs',Xs.shape,Xs.nnz)
+t=time.time()
+dots=Xs @ Xs.T
+print('dots',dots.shape,'dense?',type(dots), time.time()-t)
+dots=dots.toarray()
+norms=np.sqrt(dots.diagonal())
+d=Xs @ cand[:,idx].T # sparse? cand[:,idx] wrong maybe
+d=d.toarray().ravel()
+print('diag',norms.shape)
+cnorm=np.linalg.norm(cand.data)
+# candidate self maybe
+n=norms.shape[0]
+scores=np.empty((n,n),dtype=np.float32)
+# vectorized: denom = sqrt(norms_i"'^2+norms_j''^2+2*dots_ij); num=d_i+d_j
+D=d[:,None]+d[None,:]
+den=np.sqrt(norms[:,None]**2+norms[None,:]**2+2*dots)
+S=D/(den*cnorm)
+np.fill_diagonal(S,-1)
+idx_flat=np.argmax(S)
+i,j=np.unravel_index(idx_flat,S.shape)
+print('"'best pair',names[i],names[j],S[i,j], 'individual', d[i]/norms[i]/cnorm, d[j]/norms[j]/cnorm)
+# top pairs
+vals=S.ravel(); inds=np.argsort(vals)[::-1][:50]
+pairs=[]
+for k in inds:
+ ii,jj=np.unravel_index(k,S.shape)
+ if ii<jj:
+  pairs.append((names[ii],names[jj],vals[k], d[ii]/norms[ii]/cnorm, d[jj]/norms[jj]/cnorm))
+ if len(pairs)>=20: break
+for p in pairs: print(p)
+PY"

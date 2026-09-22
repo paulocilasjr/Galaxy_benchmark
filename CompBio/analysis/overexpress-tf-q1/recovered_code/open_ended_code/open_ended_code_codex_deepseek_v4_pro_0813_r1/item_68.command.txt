@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, glob, os
+from scipy.stats import fisher_exact
+sets=['cond1','common','cond2']
+dfs={s:pd.read_csv(f'macs/bdgdiff/{s}.motif_scan.tsv',sep='\\t') for s in sets}
+print('peaks', {s:len(d) for s,d in dfs.items()}, 'total bp', {s:d.length.sum() for s,d in dfs.items()})
+cols=[c for c in dfs['cond2'].columns if c.endswith('_p1e-4')]
+# for each motif, fraction of peaks with >=1, and total hits / bp
+rows=[]
+for col in cols:
+    motif=col[:-len('_p1e-4')]
+    row={'motif':motif}
+    for s in sets:
+        d=dfs[s]
+        frac=(d[col]>0).mean()
+        hits=d[col].sum()
+        rate=hits/d.length.sum()*1000
+        row[f'{s}_frac']=frac; row[f'{s}_rate_per_kb']=rate
+    # enrichment cond2 vs common peak presence Fisher
+    a=(dfs['cond2'][col]>0).sum(); b=(~ (dfs['cond2'][col]>0)).sum()
+    c=(dfs['common'][col]>0).sum(); d=(~ (dfs['common'][col]>0)).sum()
+    odds,p=fisher_exact([[a,b],[c,d]], alternative='greater')
+    row['odds_vs_common']=odds; row['p_vs_common']=p
+    rows.append(row)
+res=pd.DataFrame(rows)
+res=res.sort_values('odds_vs_common',ascending=False)
+pd.set_option('display.width',200); pd.set_option('display.max_rows',200)
+print(res.to_string(index=False, float_format=lambda x:f'{x:,.4g}'))
+# also enrichment vs cond1
+rows=[]
+for col in cols:
+    motif=col[:-6]
+    a=(dfs['cond2'][col]>0).sum(); b=(~ (dfs['cond2'][col]>0)).sum(); c=(dfs['cond1'][col]>0).sum(); d=(~ (dfs['cond1'][col]>0)).sum()
+    odds,p=fisher_exact([[a,b],[c,d]], alternative='greater')
+    rows.append({'motif':motif,'odds_vs_cond1':odds,'p':p})
+res2=pd.DataFrame(rows).sort_values('odds_vs_cond1',ascending=False)
+print('\\nvs cond1')
+print(res2.to_string(index=False, float_format=lambda x:f'{x:,.4g}'))
+PY"

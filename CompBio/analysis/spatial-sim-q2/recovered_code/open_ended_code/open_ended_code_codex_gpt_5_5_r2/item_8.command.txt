@@ -1,0 +1,62 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, ranksums
+
+# Load data
+sc = pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta = pd.read_csv('spatial_q_sc_metadata.csv')
+meta = meta.set_index('Unnamed: 0').loc[sc.index]
+cts = sorted(meta['cell_type'].unique())
+print('cell types', cts)
+# profiles: average relative expression per cell type
+lib = sc.sum(axis=1).replace(0, np.nan)
+sc_rel = sc.div(lib, axis=0).fillna(0)
+profiles = np.vstack([sc_rel.loc[meta['cell_type']==ct].mean(axis=0).values for ct in cts]).T
+# maybe filter marker genes? keep all for nnls
+profiles = profiles / profiles.sum(axis=0, keepdims=True)
+
+X = mmread('matrix.mtx.gz').tocsc() # genes x spots
+barcodes = [line.strip() for line in gzip.open('barcodes.tsv.gz','rt')]
+features = [line.strip().split('\\t')[1] for line in gzip.open('features.tsv.gz','rt')]
+assert features == list(sc.columns)
+# deconvolve each spot from raw counts as combination of probability profiles
+coefs=[]; residual=[]
+A=profiles
+for j in range(X.shape[1]):
+    y = np.asarray(X[:,j].todense()).ravel().astype(float)
+    c,r = nnls(A, y)
+    coefs.append(c); residual.append(r/np.linalg.norm(y) if np.linalg.norm(y)>0 else np.nan)
+coefs=np.array(coefs)
+fracs=coefs/coefs.sum(axis=1, keepdims=True)
+print('residual median range', np.nanmedian(residual), np.nanmin(residual), np.nanmax(residual))
+print(pd.DataFrame(fracs, columns=cts).describe().T[['mean','std','min','25%','50%','75%','max']])
+print('dominant counts')
+print(pd.Series(np.array(cts)[fracs.argmax(1)]).value_counts())
+
+# positions
+pos=pd.read_csv('tissue_positions.csv')
+pos=pos.set_index('barcode').loc[barcodes]
+coords=pos[['array_row','array_col']].astype(float).values
+pix=pos[['pxl_row_in_fullres','pxl_col_in_fullres']].astype(float).values
+# Store for further inspection
+pd.DataFrame(fracs, index=barcodes, columns=cts).to_csv('nnls_spot_fractions.csv')
+
+# Try threshold definitions for containing: fractions > thresholds; compare distance to nearest tumor-containing spot for spots containing ct vs not containing ct (excluding Tumor_Core spots? include?)
+for thr in [0.01,0.025,0.05,0.1,0.15,0.2,0.3,0.5]:
+    tumor = fracs[:,cts.index('Tumor_Core')] > thr
+    if tumor.sum()==0 or tumor.sum()==len(tumor): continue
+    dist = cdist(coords, coords[tumor]).min(axis=1)
+    print('\\nTHR',thr,'tumor spots',tumor.sum(),'dist summary all med',np.median(dist),'max',dist.max())
+    for ct in cts:
+        if ct=='Tumor_Core': continue
+        mask = fracs[:,cts.index(ct)] > thr
+        if mask.sum()==0 or mask.sum()==len(mask):
+            print(ct,'n',mask.sum())
+            continue
+        # maybe exclude tumor spots from testing ct proximity? compute both all and non-tumor
+        u=mannwhitneyu(dist[mask], dist[~mask], alternative='less').pvalue
+        print(ct,'n',mask.sum(),'med_in',np.median(dist[mask]),'med_out',np.median(dist[~mask]),'p_less',u)
+PY"

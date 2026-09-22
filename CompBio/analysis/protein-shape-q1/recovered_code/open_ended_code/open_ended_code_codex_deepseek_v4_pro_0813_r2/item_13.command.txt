@@ -1,0 +1,91 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, time
+from PIL import Image, ImageDraw, ImageFont
+from scipy.signal import fftconvolve
+from skimage.transform import rotate
+
+# load atoms
+coords=[]; ca=[]
+for line in open('protein.shape.q1.pdb'):
+    if line.startswith('ATOM'):
+        x=float(line[30:38]); y=float(line[38:46]); z=float(line[46:54])
+        coords.append((x,y,z))
+        if line[12:16].strip()=='CA': ca.append((x,y,z))
+coords=np.array(coords); ca=np.array(ca)
+
+def make_template(ch,N=96,font_path='/System/Library/Fonts/Supplemental/Arial Bold.ttf'):
+    img=Image.new('L',(N,N),0)
+    d=ImageDraw.Draw(img)
+    # find font size to fit about 0.8 N using bbox at 100 then scale
+    font_size=100
+    font=ImageFont.truetype(font_path,font_size)
+    bbox=d.textbbox((0,0),ch,font=font)
+    w=bbox[2]-bbox[0]; h=bbox[3]-bbox[1]
+    target=0.82*N
+    scale=target/max(w,h)
+    font_size=max(1,int(font_size*scale))
+    font=ImageFont.truetype(font_path,font_size)
+    bbox=d.textbbox((0,0),ch,font=font)
+    w=bbox[2]-bbox[0]; h=bbox[3]-bbox[1]
+    d.text(((N-w)/2-bbox[0], (N-h)/2-bbox[1]), ch, font=font, fill=255)
+    return np.array(img)>40
+
+def project_image(points, n, N=96, sigma_pix=None):
+    # n unit view direction. pick u,v perpendicular.
+    n=np.asarray(n,float); n/=np.linalg.norm(n)
+    # arbitrary basis
+    a=np.array([0.,0.,1.]) if abs(n[2])<0.9 else np.array([1.,0.,0.])
+    u=np.cross(n,a); u/=np.linalg.norm(u)
+    v=np.cross(n,u); v/=np.linalg.norm(v)
+    p=points-points.mean(0)
+    x=p@u; y=p@v
+    margin=4
+    span=max(x.max()-x.min(), y.max()-y.min())
+    if span==0: span=1
+    scale=(N-2*margin)/span
+    xi=((x-x.min())*scale + margin).astype(int)
+    yi=((y-y.min())*scale + margin).astype(int)
+    img=np.zeros((N,N),np.float32)
+    # binary occupancy
+    for xx,yy in zip(xi,yi):
+        if 0<=xx<N and 0<=yy<N: img[yy,xx]=1.0
+    # blur slightly and threshold to thicken
+    if sigma_pix:
+        from scipy.ndimage import gaussian_filter
+        img=gaussian_filter(img,sigma_pix)
+        img=(img>0.1).astype(np.float32)
+    return img
+
+def dice_rot(imgp, imgt, angles=None):
+    # best translation dice between binary p and rotated t
+    if angles is None: angles=np.arange(0,180,5)
+    best=(-1,None,None,None)
+    for ang in angles:
+        tr=rotate(imgt, ang, order=1, mode='constant', cval=0, preserve_range=True)
+        tr=tr>0.5
+        corr=fftconvolve(imgp, tr[::-1,::-1], mode='same')
+        maxcorr=corr.max()
+        area_t=tr.sum(); area_p=imgp.sum()
+        dice=2*maxcorr/(area_p+area_t) if area_p+area_t>0 else 0
+        if dice>best[0]: best=(dice,ang,maxcorr,tr.sum())
+    return best
+
+letters='BDFHJLNPRTVXZ'
+for mode, pts in [('all',coords),('ca',ca)]:
+    # PCA directions
+    c=pts.mean(0); U,S,Vt=np.linalg.svd(pts-c)
+    dirs={f'PC{i}':U[:,i] for i in range(3)}
+    # also a few arbitrary
+    dirs['x']=np.array([1.,0,0]); dirs['y']=np.array([0,1.,0]); dirs['z']=np.array([0,0,1.])
+    print('\\nMODE',mode)
+    for dname,n in dirs.items():
+        imgp=project_image(pts,n,N=96,sigma_pix=0.8)
+        scores=[]
+        for ch in letters:
+            imgt=make_template(ch,N=96)
+            sc=dice_rot(imgp,imgt,angles=np.arange(0,180,5))
+            scores.append((sc[0],ch,sc[1]))
+        scores.sort(reverse=True)
+        print(dname, 'top:', [(ch,round(sc,3),int(ang)) for sc,ch,ang in scores[:5]])
+PY
+python3 [REDACTED LOCAL PATH]"

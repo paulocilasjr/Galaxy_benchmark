@@ -1,0 +1,22 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.stats import ranksums
+f=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','gene','type']); genes=f.gene.tolist(); X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float).T.toarray(); c=pd.read_csv('protospacer_calls_per_cell.csv'); ref=pd.read_csv('feature_reference.csv'); c['target']=c.feature_call.map(ref.set_index('id').target_gene_name); Y=np.log1p(X/X.sum(1,keepdims=True)*1e4); ctrl=c.target.eq('Non-Targeting').values; sig=np.arange(20)
+# pathway effects leave-one-gene-out and raw normalized geometric/pseudobulk
+print('ISG15 leave-one-out deltas')
+for j,g in zip(sig,genes[:20]):
+ ix=np.delete(sig,np.where(sig==j)[0][0]); a=Y[c.target.eq('ISG15').values][:,ix].mean(1); b=Y[ctrl][:,ix].mean(1)
+ print(f'exclude {g:8s}: delta {a.mean()-b.mean():.4f}, median {np.median(a)-np.median(b):.4f}, p {ranksums(a,b).pvalue:.2g}')
+print('\\nrobust summary')
+for t in ['Non-Targeting','ISG15','STAT1']:
+ z=Y[c.target.eq(t).values][:,sig].mean(1); print(t,'n',len(z),'mean',z.mean(),'median',np.median(z),'q10',np.quantile(z,.1),'q90',np.quantile(z,.9),'min',z.min(),'max',z.max())
+# bootstrap mean delta
+rng=np.random.default_rng(1); a=Y[c.target.eq('ISG15').values][:,sig].mean(1); b=Y[ctrl][:,sig].mean(1)
+d=[]
+for _ in range(20000): d.append(a[rng.integers(len(a),size=len(a))].mean()-b[rng.integers(len(b),size=len(b))].mean())
+print('ISG15 bootstrap delta',np.quantile(d,[.001,.025,.5,.975,.999]))
+# count fraction lower than control median each gene
+print('\\nISG15 fraction below control median by gene')
+for j,g in zip(sig,genes[:20]): print(g, np.mean(Y[c.target.eq('ISG15').values,j] < np.median(Y[ctrl,j])))
+PY"

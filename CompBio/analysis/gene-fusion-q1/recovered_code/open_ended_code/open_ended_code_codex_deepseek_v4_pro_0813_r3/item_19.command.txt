@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, collections
+# map transcript id to gene
+gs={}
+for line in open('cdna.fa'):
+    if line.startswith('>'):
+        parts=line.rstrip().split(' '); tid=parts[0][1:]
+        d={}
+        for p in parts[1:]:
+            if ':' in p:
+                k,v=p.split(':',1); d[k]=v
+        gs[tid]=d.get('gene_symbol')
+# Parse primary + supplementary records and group by read name to see all gene alignments for each read
+recs=collections.defaultdict(list)
+for line in open('aln.sam'):
+    if line.startswith('@'): continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<11: continue
+    qname=f[0]; flag=int(f[1]); rname=f[2]; pos=int(f[3]); cigar=f[5]
+    g=gs.get(rname)
+    recs[qname].append((flag,g,pos,cigar))
+# For each read, if it aligns to >=2 distinct genes, count unordered pair; ignore same gene isoforms and None
+pair_counts=collections.Counter()
+examples=collections.defaultdict(list)
+for q,rs in recs.items():
+    genes=set(g for _,g,_,_ in rs if g)
+    if len(genes)>=2:
+        for i,a in enumerate(genes):
+            for b in list(genes)[i+1:]:
+                pair=tuple(sorted([a,b]))
+                pair_counts[pair]+=1
+                if len(examples[pair])<5: examples[pair].append(q)
+print('Chimeric read gene pairs:')
+for pair,c in pair_counts.most_common(100):
+    print(c,pair,examples[pair][:3])
+PY"

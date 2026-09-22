@@ -1,0 +1,56 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:g=pd.read_csv(f,sep='\\t').gene_symbols.astype(str).to_numpy()
+mp={x.upper():i for i,x in enumerate(g)}
+Xs=[]
+for z in ['1','2']:
+ with gzip.open(f'subtype.inflammation.q1.{z}.mtx.gz','rb') as f:Xs.append(mmread(f).tocsr())
+X=sparse.hstack(Xs,format='csr'); lib=np.asarray(X.sum(0)).ravel(); Xn=X.multiply(1e4/np.maximum(lib,1)).tocsr();Xn.data=np.log1p(Xn.data); Xc=Xn.T.tocsr(); n1=Xs[0].shape[1]
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','GJA1','SOX9','CLDN11','ATP1B2','AGT'],
+'microglial':['P2RY12','TMEM119','CX3CR1','C1QA','C1QB','C1QC','AIF1','TYROBP','CSF1R','LST1','CTSS','SPI1'],
+'RPE':['RPE65','BEST1','RLBP1','PMEL','TYR','MITF','LRAT','MERTK','RDH5'],
+'cone':['ARR3','GNB3','PDE6H','OPN1SW','OPN1MW','OPN1LW','GNAT2','RXRG','GUCA1C','GRK7'],
+'rod':['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','ROM1','GNGT1','CNGB1'],
+'horizontal':['LHX1','LHX2','ONECUT1','PROX1','CALB1','CACNA1A','GAD1','GAD2','VSX1'],
+'bipolar':['VSX2','VSX1','PRKCA','GRM6','TRPM1','CABP5','PCP4','OTX2','GPR149','LHX3'],
+'RGC':['RBPMS','SNCG','ISL1','POU4F1','POU4F2','THY1','NEFL','SLC17A6','GAP43','CPLX3'],
+'T':['CD3D','CD3E','TRBC1','TRBC2','CD2','CD247','IL7R','LTB','CCL5','LST1'],
+'macrophage':['LYZ','FCER1G','TYROBP','CTSD','CD68','LILRB1','AIF1','CTSS','CD14','MS4A7','LGALS3','MARCO','ADGRE1','OLR1'],
+'Schwann':['S100B','SOX10','PLP1','MPZ','NCAM1','ERBB3','MAG','PMP22','GFAP'],
+'Pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ACTA2','COL4A1','DES','NOTCH3','ABCC9','KCNJ8'],
+'B':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD22','CD19','CD83'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','PDGFRA','C7','FBLN1','COL6A2'],
+'Muller':['SLC1A3','RLBP1','GLUL','VIM','SOX9','RAX','KCNJ10','AQP4','FABP7','SLC1A2','DIO2'],
+'endothelial':['EMCN','KDR','ESAM','PECAM1','VWF','ENG','CLDN5','RAMP2','PLVAP','RGCC'],
+}
+def vals(gs):return [mp[x] for x in gs if x in mp]
+scores=np.array([np.asarray(Xc[:,vals(gs)].mean(1)).ravel() for gs in markers.values()]).T
+ct=list(markers); best=scores.argmax(1)
+inf=['CD69','IL18RAP','CMKLR1','ICAM4','APLNR','SLAMF1','CXCL9','CXCL6','MEFV','CCL7','CXCL11','CSF3','IL7R','CSF3R','TNFSF15','CCL22','MEP1A','LCP2','FFAR2','PTGIR','TNFRSF9','HAS2','MYC','CD70','PIK3R5','CCL20','LCK','OLR1','MARCO','ADGRE1','P2RY2','IL1B','CXCL10','BDKRB1','TPBG','SELL','CCL2','CCL5','NFKBIA','S100A8','S100A9']
+print('Counts/prevalence of eye1-specific genes')
+for name in inf:
+ if name not in mp:continue
+ i=mp[name]; cnt=[]
+ for a,b in [(0,n1),(n1,X.shape[1])]:
+  z=X[i,a:b].toarray().ravel();cnt.append((int((z>0).sum()),round(float(z.mean()),4),round(float(np.quantile(z,[.5,.9,.99,.999])[3]),2)))
+ print(name,cnt)
+print('\\nMarker scores in cells expressing selected eye1 inflammatory genes')
+for name in ['CD69','IL18RAP','CMKLR1','SLAMF1','CXCL9','CXCL6','CCL7','CSF3','IL7R','CSF3R','CCL22','TNFRSF9','CCL20','OLR1','MARCO','ADGRE1','P2RY2','IL1B','CXCL10','CCL2','CCL5']:
+ if name not in mp:continue
+ i=mp[name]; print('\\n',name)
+ for b,(a,c) in enumerate([(0,n1),(n1,X.shape[1])]):
+  z=X[i,a:c].toarray().ravel(); ii=z>0
+  if ii.sum(): print('eye',b+1,'n',ii.sum(),'mean scores', {ct[j]:round(float(scores[a:c][ii,j].mean()),2) for j in range(len(ct))},'best',pd.Series(np.array(ct)[best[a:c][ii]]).value_counts().to_dict())
+# coexpression of inflammatory genes among eye1
+print('\\ncoexpression sets eye1')
+sel=[x for x in inf if x in mp]
+A=(X[[mp[x] for x in sel],:n1]>0).astype(np.int8).toarray().T
+for k,x in enumerate(sel):
+ if A[:,k].sum():
+  co=A[:,k:].sum(0)
+  z=sorted([(int(v),sel[k+j]) for j,v in enumerate(co)],reverse=True)[:12]
+  print(x,'n',int(A[:,k].sum()),z)
+PY"

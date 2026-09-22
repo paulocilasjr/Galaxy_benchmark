@@ -1,0 +1,98 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from collections import defaultdict, Counter
+p='single_cell_dynamics_question.csv'
+by=defaultdict(list)
+with open(p, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        cid=int(row['cell_id']); t=int(row['time'])
+        dx=float(row['enh_x'])-float(row['prom_x'])
+        dy=float(row['enh_y'])-float(row['prom_y'])
+        dz=float(row['enh_z'])-float(row['prom_z'])
+        d=math.sqrt(dx*dx+dy*dy+dz*dz)
+        c=1 if d<=260 else 0
+        y=int(row['transcription'])
+        by[cid].append((t,d,c,y))
+for cid in by:
+    by[cid].sort()
+print('cells', len(by), 'lengths', sorted(set(len(v) for v in by.values()))[:10], sorted(set(len(v) for v in by.values()))[-10:])
+# same time contingency
+cnt=Counter()
+for arr in by.values():
+    for t,d,c,y in arr:
+        cnt[(c,y)] +=1
+print('same contingency', cnt)
+for c in [0,1]:
+    den=sum(cnt[(c,y)] for y in [0,1]); print('P(y=1|c=%d)'%c, cnt[(c,1)]/den, 'n',den)
+for y in [0,1]:
+    den=sum(cnt[(c,y)] for c in [0,1]); print('P(c=1|y=%d)'%y, cnt[(1,y)]/den, 'n',den)
+print('overall y', (cnt[(0,1)]+cnt[(1,1)])/sum(cnt.values()), 'c', (cnt[(1,0)]+cnt[(1,1)])/sum(cnt.values()))
+# lagged P(y future | c now), P(c future | y now)
+print('\\nlag analysis: lag k means compare c_t with y_t+k and y_t with c_t+k')
+for k in range(-10,11):
+    # c_t vs y_t+k: if k negative, y before c
+    cc=Counter(); yy=Counter()
+    for arr in by.values():
+        n=len(arr)
+        for i in range(n):
+            j=i+k
+            if 0<=j<n:
+                c=arr[i][2]; y=arr[j][3]
+                cc[(c,y)] +=1
+                y0=arr[i][3]; cf=arr[j][2]
+                yy[(y0,cf)] +=1
+    den0=cc[(0,0)]+cc[(0,1)]; den1=cc[(1,0)]+cc[(1,1)]
+    py0=cc[(0,1)]/den0; py1=cc[(1,1)]/den1
+    denY0=yy[(0,0)]+yy[(0,1)]; denY1=yy[(1,0)]+yy[(1,1)]
+    pc0=yy[(0,1)]/denY0; pc1=yy[(1,1)]/denY1
+    print(k, 'P(y_t+k|c=1)-P(y|c=0)=', round(py1-py0,4), 'py0', round(py0,4),'py1',round(py1,4), '| P(c_t+k|y=1)-P(c|y=0)=', round(pc1-pc0,4), 'pc0', round(pc0,4),'pc1',round(pc1,4))
+# transition condition: contact predicts y next conditional y_t; y predicts contact next conditional c_t
+print('\\ntransition conditional next-step')
+# P(y_next=1 | y_t, c_t)
+tcnt=Counter()
+for arr in by.values():
+    for i in range(len(arr)-1):
+        y=arr[i][3]; c=arr[i][2]; yn=arr[i+1][3]; cn=arr[i+1][2]
+        tcnt[('yn',y,c,yn)] +=1
+        tcnt[('cn',c,y,cn)] +=1
+for y in [0,1]:
+    for c in [0,1]:
+        den=tcnt[('yn',y,c,0)]+tcnt[('yn',y,c,1)]
+        if den: print('P(y_next=1 | y_t=%d,c_t=%d)'%(y,c), tcnt[('yn',y,c,1)]/den, 'n', den)
+for c in [0,1]:
+    for y in [0,1]:
+        den=tcnt[('cn',c,y,0)]+tcnt[('cn',c,y,1)]
+        if den: print('P(c_next=1 | c_t=%d,y_t=%d)'%(c,y), tcnt[('cn',c,y,1)]/den, 'n', den)
+# Onsets: y onset at t+1 among y_t=0 vs c_t; c onset at t+1 among c_t=0 vs y_t
+print('\\nonsets')
+for c in [0,1]:
+    den=num=0
+    for arr in by.values():
+        for i in range(len(arr)-1):
+            if arr[i][3]==0 and arr[i][2]==c:
+                den+=1; num += arr[i+1][3]==1
+    print('P(y onset next | y_t=0,c_t=%d)'%c, num/den, 'n', den, 'num', num)
+for y in [0,1]:
+    den=num=0
+    for arr in by.values():
+        for i in range(len(arr)-1):
+            if arr[i][2]==0 and arr[i][3]==y:
+                den+=1; num += arr[i+1][2]==1
+    print('P(c onset next | c_t=0,y_t=%d)'%y, num/den, 'n', den, 'num', num)
+# Termination maybe
+for c in [0,1]:
+    den=num=0
+    for arr in by.values():
+        for i in range(len(arr)-1):
+            if arr[i][3]==1 and arr[i][2]==c:
+                den+=1; num += arr[i+1][3]==0
+    print('P(y off next | y_t=1,c_t=%d)'%c, num/den, 'n', den, 'num', num)
+for y in [0,1]:
+    den=num=0
+    for arr in by.values():
+        for i in range(len(arr)-1):
+            if arr[i][2]==1 and arr[i][3]==y:
+                den+=1; num += arr[i+1][2]==0
+    print('P(c off next | c_t=1,y_t=%d)'%y, num/den, 'n', den, 'num', num)
+PY"

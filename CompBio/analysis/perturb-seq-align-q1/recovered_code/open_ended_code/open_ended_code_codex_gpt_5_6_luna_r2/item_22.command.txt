@@ -1,0 +1,23 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csc_matrix
+
+def load(fn):
+ with h5py.File(fn,'r') as f:
+  nobs,nvar=len(f['obs/_index']),len(f['var/_index'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=(nobs,nvar)).tocsr()
+  genes=f['var/_index'][...].astype(str); cats=f['obs/guide/categories'][...].astype(str); codes=f['obs/guide/codes'][...]
+ lib=np.asarray(X.sum(1)).ravel(); Y=X.multiply(1e4/np.maximum(lib,1)[:,None]).tocsr(); Y.data=np.log1p(Y.data)
+ base=Y[np.array([x.startswith('NT-') for x in cats])[codes]].mean(0).A1
+ d=np.vstack([Y[codes==i].mean(0).A1 for i in range(len(cats))])-base
+ return genes,cats,d
+for fn,terms in [('perturb.seq.align.q1.ref.h5ad',['LEO1-I2','CTR9-I7','PAF1-I6','CDC73-I2','CPSF1-I3','NUDT21-I3','PABPC1-I1']),('perturb.seq.align.q1.query.h5ad',['guide14','guide17','guide20','guide4','guide13','guide18'])]:
+ genes,cats,d=load(fn); ix={g:i for i,g in enumerate(genes)}
+ gset=['CDC73','CPSF1','CPSF2','CPSF3','CPSF3L','CPSF4','CPSF6','CPSF7','CTR9','LEO1','PAF1','RPRD1A','RPRD1B','SCAF1','SCAF4','SCAF8','SCAF11','THOC5','PABPC1','NUDT21','PABPN1','PAPOLA']
+ print('\\n',fn)
+ print('gene '+ ' '.join(f'{x:>10}' for x in terms))
+ for g in gset:
+  if g in ix:
+   row=[d[list(cats).index(x),ix[g]] if x in cats else np.nan for x in terms]
+   print(f'{g:8} '+' '.join(f'{x:10.3f}' for x in row))
+PY"

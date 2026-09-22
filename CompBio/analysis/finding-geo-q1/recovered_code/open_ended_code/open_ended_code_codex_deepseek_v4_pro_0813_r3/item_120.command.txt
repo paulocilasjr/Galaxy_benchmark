@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+src=h5py.File('candidates/GSE125620/GSM3578982_raw_gene_bc_matrices_h5.h5','r')
+g=h5py.File('finding.geo.q1.h5ad','r')
+gdict={b.decode():i for i,b in enumerate(src['output_genome2']['barcodes'][:])}
+genes_src=np.array([x.decode() for x in src['output_genome2']['genes'][:]])
+genes_our=np.array([x.decode() for x in g['var/_index'][:]])
+# source indices for our genes in order (all in source)
+src_idx=np.array([np.where(genes_src==gg)[0][0] for gg in genes_our])
+print('len src_idx',len(src_idx),src_idx[:5])
+# our matrix arrays
+odata=g['X/data'][:]; oindices=g['X/indices'][:]; oindptr=g['X/indptr'][:]
+# source arrays (already loaded? no)
+sdata=src['output_genome2']['data'][:]; sindices=src['output_genome2']['indices'][:]; sindptr=src['output_genome2']['indptr'][:]
+# check first 5 our barcodes and first 5 genes
+our_bars=[b.decode() for b in g['obs/_index'][:]]
+for bi,b in enumerate(our_bars[:5]):
+    si=gdict[b]
+    srow=sdata[sindptr[si]:sindptr[si+1]]; scol=sindices[sindptr[si]:sindptr[si+1]]
+    smap={idx:val for idx,val in zip(scol,srow)}
+    orow=odata[oindptr[bi]:oindptr[bi+1]]; ocol=oindices[oindptr[bi]:oindptr[bi+1]]
+    omap={int(idx):int(val) for idx,val in zip(ocol,orow)}
+    for gi,gene in enumerate(genes_our[:5]):
+        sv=smap.get(int(src_idx[gi]),0); ov=omap.get(gi,0)
+        print(b,gene,'src',sv,'our',ov,'ok',sv==ov)
+# compare total counts per cell for first 100
+for bi,b in enumerate(our_bars[:100]):
+    si=gdict[b]
+    ssum=int(sindptr[si+1]-sindptr[si]); osum=int(oindptr[bi+1]-oindptr[bi])
+    if ssum"'!=osum:
+        print('"'mismatch nz',bi,b,ssum,osum); break
+else:
+    print('first 100 nz match')
+PY"

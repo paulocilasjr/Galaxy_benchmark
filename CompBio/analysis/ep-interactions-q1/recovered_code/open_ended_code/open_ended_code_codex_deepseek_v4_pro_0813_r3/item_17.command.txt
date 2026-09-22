@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+import statsmodels.api as sm
+hic=pd.read_csv('ep.interactions.q1.hic.csv')
+expr=pd.read_csv('ep.interactions.q1.expr.csv')
+# Fit NB GLM to long background counts
+bg=hic[hic.set=='background'].copy()
+long=bg.melt(id_vars=['pair_id','distance_bp'], value_vars=['count_rep1','count_rep2','count_rep3'], var_name='rep', value_name='count')
+long['logd']=np.log(long.distance_bp)
+# Negative binomial
+nb=sm.GLM(long['count'], sm.add_constant(long[['logd']]), family=sm.families.NegativeBinomial()).fit()
+print('NB params', nb.params, 'alpha', nb.scale)
+print(nb.summary())
+cand=hic[hic.set=='candidate'].copy()
+cand['logd']=np.log(cand.distance_bp)
+mu=nb.predict(sm.add_constant(cand[['logd']]))
+alpha=nb.scale
+# var for total across 3 reps: 3mu + alpha*3mu? for NB with var=mu+alpha mu"'^2 per rep, sum var =3mu+alpha*3mu? Actually sum NB same alpha var =3mu+alpha*3*mu? no sum of independent NB with same mean, total mean=3mu, variance=3mu+alpha*3mu''^2? wait variance per rep=mu+alpha mu''^2, sum=3mu+alpha*3 mu''^2 = 3mu(1+alpha mu), not 3mu + alpha*9mu''^2. Let'"'s not.
+# Just compute upper p from NB distribution using expected mean per rep and sum convolution? use simple negative binomial with n=3*size? If NB mean mu, variance mu+alpha mu"'^2 = mu + mu''^2/theta with theta=1/alpha. Sum of 3 independent NB same theta? mean=3mu, size=3*theta. Use scipy nbinom.
+theta=1/alpha if alpha>0 else 1e9
+size_total=3*theta
+mean_total=3*mu
+obs_total=cand[['"'count_rep1','count_rep2','count_rep3']].sum(axis=1)
+# scipy nbinom: n successes? In scipy, mean = n*(1-p)/p, var=mean/p. p = n/(n+mean). n=size.
+p = size_total/(size_total+mean_total)
+cand['upper_p']=1-stats.nbinom.cdf(obs_total-1, size_total, p)
+cand['lower_p']=stats.nbinom.cdf(obs_total, size_total, p)
+cand['mu']=mu
+cand['expected_total']=mean_total
+print(cand[['pair_id','distance_bp','obs_total','expected_total','upper_p','lower_p']].to_string(index=False))
+# Also local nonparametric upper tail among nearest 20 bg sums (sum 3 reps)
+for i,row in cand.iterrows():
+    close=bg.iloc[(bg.distance_bp-row.distance_bp).abs().argsort()[:30]].copy()
+    close['sum']=close[['count_rep1','count_rep2','count_rep3']].sum(axis=1)
+    obs=row.obs_total
+    p_hi=(close['sum']>=obs).mean()
+    p_lo=(close['sum']<=obs).mean()
+    print(row.pair_id,'local30 p_hi',p_hi,'p_lo',p_lo,'median',close['sum'].median(),'obs',obs)
+PY"

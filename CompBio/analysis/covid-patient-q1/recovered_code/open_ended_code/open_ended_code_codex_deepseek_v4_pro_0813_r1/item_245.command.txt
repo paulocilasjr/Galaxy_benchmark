@@ -1,0 +1,57 @@
+/bin/bash -lc "cat > match_donors_robust.py <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+from scipy.stats import spearmanr, pearsonr
+from collections import defaultdict
+import warnings; warnings.filterwarnings('ignore')
+# load working
+ad=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array(ad.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); wsum=D['sum']; wcats=D['cats']; wcc=D['cell_counts']
+# original
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array(orig.index.astype(str)); ocols=np.array(orig.columns.astype(str)); O=orig.values.astype(float)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False).drop_duplicates('Donor').set_index('Donor')
+labels=meta.loc[ocols,'Class'].values
+genders=meta.loc[ocols,'Gender'].fillna('NA').values
+# common case insensitive
+wl=np.array([s.lower() for s in wnames]); ol=np.array([s.lower() for s in onames])
+common, wi, oi=np.intersect1d(wl,ol,return_indices=True)
+print('common genes',len(common))
+Wraw=wsum[wi,:].astype(float); Oraw=O[oi,:].astype(float)
+# log1p cpm
+def logcpm(X):
+    lib=X.sum(axis=0,keepdims=True); return np.log1p(X/lib*1e6)
+W=logcpm(Wraw); O=logcpm(Oraw)
+# variable genes across all
+allm=np.concatenate([W,O],axis=1)
+mu=allm.mean(axis=1,keepdims=True); sd=allm.std(axis=1,keepdims=True); sd[sd==0]=1
+Zall=(allm-mu)/sd
+# Use genes with var across combined > some quantile
+var=Zall.var(axis=1)
+for top_n in [200,500,1000,2000,5000,10000]:
+    idx=np.argsort(-var)[:top_n]
+    Wz=Zall[idx,:W.shape[1]]; Oz=Zall[idx,W.shape[1]:]
+    print(f'\\n===== TOP {top_n} variable genes, Pearson =====')
+    mapping={}
+    for j,d in enumerate(wcats):
+        sims=[]
+        for k,od in enumerate(ocols):
+            r=pearsonr(Wz[:,j],Oz[:,k])[0]
+            sims.append((r,od,labels[k],genders[k]))
+        sims.sort(reverse=True)
+        mapping[d]=sims[:5]
+        print(d, '->', ', '.join(f'{od}({lab}/{g}):{r:.3f}' for r,od,lab,g in sims[:5]))
+    # evaluate if top class
+    correct=sum(1 for d in wcats if mapping[d][0][2]=='HC')
+    print('top matches HC count (if assume HC):',correct)
+    # spearman maybe top
+    print('\\nSpearman top')
+    for j,d in enumerate(wcats):
+        sims=[]
+        for k,od in enumerate(ocols):
+            r=spearmanr(Wz[:,j],Oz[:,k])[0]
+            sims.append((r,od,labels[k],genders[k]))
+        sims.sort(reverse=True)
+        print(d, '->', ', '.join(f'{od}({lab}/{g}):{r:.3f}' for r,od,lab,g in sims[:3]))
+PY
+python3 match_donors_robust.py > match_donors_robust.out"

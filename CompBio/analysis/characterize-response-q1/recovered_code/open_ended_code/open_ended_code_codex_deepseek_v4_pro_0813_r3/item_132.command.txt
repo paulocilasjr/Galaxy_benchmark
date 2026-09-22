@@ -1,0 +1,147 @@
+/bin/bash -lc "cat > geo_de.py <<'PY'
+import pandas as pd, numpy as np, re, os, pickle, json
+from scipy.stats import ttest_ind
+
+def parse_geo(path):
+    meta={}
+    sample_ids=[]
+    sample_titles=[]
+    table_start=False
+    # read header lines until table_begin
+    with open(path) as f:
+        for line in f:
+            line=line.rstrip('\\n')
+            if line.startswith('"'!Sample_title'"'):
+                # parse quoted fields from whole line
+                fields=parse_quoted(line)
+                # first field label then samples
+                sample_titles=fields[1:]
+            elif line.startswith('"'!Sample_geo_accession'"'):
+                fields=parse_quoted(line); sample_ids=fields[1:]
+            elif line.startswith('"'!series_matrix_table_begin'"'):
+                table_start=True; break
+    if not table_start:
+        raise RuntimeError('no table')
+    # read table until end
+    lines=[]
+    with open(path) as f:
+        inside=False
+        for line in f:
+            line=line.rstrip('\\n')
+            if line.startswith('"'!series_matrix_table_begin'"'):
+                inside=True; continue
+            if inside and line.startswith('"'!series_matrix_table_end'"'):
+                break
+            if inside:
+                lines.append(line)
+    header=lines[0].split('\\t')
+    # skip 'ID_REF'
+    ncols=len(header)-1
+    rows=[]
+    for line in lines[1:]:
+        p=line.split('\\t')
+        if len(p)<=1: continue
+        vals=[]
+        ok=True
+        for x in p[1:ncols+1]:
+            try: vals.append(float(x))
+            except: ok=False; break
+        if ok:
+            rows.append((p[0],vals))
+    mat=pd.DataFrame({r[0]:r[1] for r in rows}).T
+    mat.index.name='probe'
+    return meta, sample_ids, sample_titles, mat
+
+def parse_quoted(line):
+    return re.findall(r'\"(["'^"]*)"'"', line)
+
+def groups_from_titles(titles):
+    # dict group name -> indices
+    groups={}
+    for i,t in enumerate(titles):
+        # normalize
+        g=t.split(' [')[0].strip()
+        groups.setdefault(g,[]).append(i)
+    return groups
+
+def de_contrast(mat, idxA, idxB, min_expr=1):
+    A=mat.iloc[:,idxA].values; B=mat.iloc[:,idxB].values
+    # log2 transform if raw >; assume already normalized maybe raw, use log2(x+1)
+    A=np.log2(A+1); B=np.log2(B+1)
+    logfc=np.mean(A,axis=1)-np.mean(B,axis=1)
+    # Welch t-test on log scale
+    tstat,pv=ttest_ind(A,B,axis=1,equal_var=False)
+    # replace nan
+    pv=np.nan_to_num(pv,nan=1.0); tstat=np.nan_to_num(tstat,nan=0.0)
+    res=pd.DataFrame({'probe':mat.index,'logFC':logfc,'t':tstat,'p':pv})
+    return res
+
+# Probe symbol maps
+mouse_cache=pickle.load(open('probe_symbol_cache.pkl','rb'))
+
+def get_human_map(probes):
+    import mygene
+    mg=mygene.MyGeneInfo()
+    chunks=[probes[i:i+1000] for i in range(0,len(probes),1000)]
+    mp={}
+    for ch in chunks:
+      r=mg.querymany(ch, scopes='reporter', fields='symbol', species='human', verbose=False)
+      for d in r:
+       if 'symbol' in d and 'query' in d: mp[d['query']]=d['symbol'].upper()
+    return mp
+
+def aggregate_gene(res, probe_map, gene_set=None, by='t'):
+    # select best abs t per gene
+    df=res.copy()
+    df['gene']=[probe_map.get(p) for p in df.probe]
+    df=df[df.gene.notna()]
+    if gene_set is not None:
+      df=df[df.gene.isin(gene_set)]
+    # choose row max abs t per gene
+    df['abst']=df['t'].abs()
+    out=df.sort_values('abst', ascending=False).drop_duplicates('gene').sort_values('gene')
+    # rank by logFC descending (positive = A>B)
+    return out[['gene','logFC','t','p']]
+
+def compare_query_order(query_human, res):
+    # res has genes with logFC/t; restrict query genes present; compute Spearman between query rank and logFC rank; overlap positions
+    ranks={g:i for i,g in enumerate(query_human)}
+    df=res[res.gene.isin(set(query_human))].copy()
+    df['qrank']=[ranks[g] for g in df.gene]
+    # Spearman corr with logFC
+    if len(df)>2:
+      from scipy.stats import spearmanr
+      rho,p=spearmanr(df.qrank, df.logFC)
+      rho_abs,p2=spearmanr(df.qrank, df.logFC.abs())
+    else: rho,p,rho_abs,p2=np.nan,np.nan,np.nan,np.nan
+    # fraction of query genes found
+    return df, rho, p, rho_abs,p2
+
+if __name__=='__main__':
+    pass
+PY
+python3 - <<'PY'
+import geo_de, pickle, json
+# load query mouse->human
+mp=json.load(open('mouse_to_human3.json'))
+q=list(dict.fromkeys(mp.values()))
+# GSE22886 GPL96 DC
+path='GSE22886-GPL96_series_matrix.txt'
+meta, ids, titles, mat=geo_de.parse_geo(path)
+groups=geo_de.groups_from_titles(titles)
+print(groups.keys())
+gA='DendriticCell-Control'; gB='DendriticCell-LPSstimulated'
+res=geo_de.de_contrast(mat, groups[gB], groups[gA])
+probes=list(mat.index)
+hmap=geo_de.get_human_map(probes)
+print('mapped',len(hmap),'/',len(probes))
+agg=geo_de.aggregate_gene(res,hmap,set(q))
+df,rho,p,rho_abs,p2=geo_de.compare_query_order(q,agg)
+print('genes found',len(df),'rho logFC',rho,'rho_abs',rho_abs)
+print(df.sort_values('qrank')[['gene','logFC','t','qrank']].to_string(index=False))
+# top query genes by logFC rank
+print('top20')
+print(agg.nlargest(20,'logFC')[['gene','logFC','t']].to_string(index=False))
+print('bottom20')
+print(agg.nsmallest(20,'logFC')[['gene','logFC','t']].to_string(index=False))
+PY"

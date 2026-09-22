@@ -1,0 +1,80 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections,numpy as np, math
+# read matrix
+coords=[]; rows=[]
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+ names=f.readline().rstrip().split('\\t')[3:]
+ for l in f:
+  x=l.rstrip().split('\\t'); coords.append((x[0],int(x[1]),int(x[2]))); rows.append([int(v) for v in x[3:]])
+a=np.asarray(rows,dtype=np.float32)
+lib=a.sum(0); norm=a/lib*1e6
+# chunks offsets
+by=collections.defaultdict(list)
+for l in open('sample.swap.atac.q1.chrom.sizes'):
+ n,v=l.split(); by[re.sub(r'_\\d+"'$'"','',n)].append((n,int(v)))
+off={}
+for b,items in by.items():
+ cur=0
+ for n,v in sorted(items,key=lambda z:int(z[0].rsplit('_',1)[1]) if '_' in z[0] else 0): off[n]=(b,cur); cur+=v
+idx={(off[c][0],off[c][1]+s):i for i,(c,s,e) in enumerate(coords)}
+# gene promoter bin neighborhoods; aggregate max? use sum across +/-20kb bins, per gene unique id
+records=[]; seen=set()
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.clean.gtf.gz','rt') as f:
+ for l in f:
+  if l.startswith('#'): continue
+  x=l.rstrip().split('\\t')
+  if x[2]"'!='"'gene' or x[0] not in by: continue
+  attr=x[8]
+  gid=re.search(r'gene_id \"(["'^"]+)"'"',attr)
+  gn=re.search(r'gene_name \"(["'^"]+)"'"',attr)
+  if not gid: continue
+  gid=gid.group(1)
+  if gid in seen: continue
+  seen.add(gid)
+  nm=(gn.group(1) if gn else gid).split('|')[0]
+  nm=re.sub(r'\\s*\\[["'^]]+'"\\]','',nm).strip()
+  st,en=int(x[3]),int(x[4]); tss=st if x[6]=='+' else en
+  b=x[0]; cur=0; globalp=None
+  for cn,sz in sorted(by[b],key=lambda z:int(z[0].rsplit('_',1)[1]) if '_' in z[0] else 0):
+   if tss-1 < cur+sz: globalp=cur+(tss-1-cur); break
+   cur+=sz
+  if globalp is None: continue
+  # sum all rows in +/-20kb of promoter, using bin starts, not double counting
+  bs=(globalp//10000)*10000
+  ii=[idx.get((b,bs+d)) for d in range(-20000,30000,10000)]
+  ii=[i for i in ii if i is not None]
+  if not ii: continue
+  # sum raw then normalize
+  val=norm[ii].sum(0)
+  records.append((gid,nm,val))
+# combine duplicate nm? use max per name (gene aliases may duplicate) and prioritize real gene names
+byname={}
+for gid,nm,v in records:
+ if nm not in byname: byname[nm]=[]
+ byname[nm].append(v)
+# one gene name only unique or max across ids; choose max each sample to avoid paralog pileup
+G=[]; N=[]
+for nm,vs in byname.items():
+ if len(nm)<2 or nm.startswith('LOC'): continue
+ v=np.max(np.stack(vs),axis=0)
+ if np.max(v)<2: continue
+ G.append(v);N.append(nm)
+G=np.stack(G)
+print('genes',G.shape,'lib',lib.astype(int))
+# rank LFC vs mean of other columns (log2 normalized + pseudocount)
+L=np.log2(G+1)
+for j,n in enumerate(names):
+ other=np.delete(L,j,axis=1).mean(1)
+ score=L[:,j]-other
+ # top score, excluding high ubiquitous perhaps score okay
+ order=np.argsort(score)[::-1]
+ print('\\nTOP',n)
+ print(' '.join(f'{N[i]}:{score[i]:.2f}/{G[i,j]:.1f}' for i in order[:40]))
+# values of markers with gene names exact table
+sel=['ALB','APOA1','APOA2','TTR','HNF4A','CYP3A','CYP2','FABP1','FABP2','ALPI','VILL','VIL1','MUC2','GAST','MUC5AC','ATP4A','ATP4B','INS','GCG','AMY2A','PRSS1','REG1','SFTPA1','SFTPB','SFTPC','SCGB1A1','FOXJ1','AQP5','UPK1A','UPK1B','UPK2','UPK3A','KRT20','KRT19','KRT8','KRT18','MYH6','MYH7','TNNT2','ACTC1','RYR2','DES','MYOD1','MYOG','PAX7','PAX3','SOX9','COL1A1','ACTA1','RBFOX3','SYN1','SNAP25','TUBB3','MAP2','GRIN1','CAMK2A','SLC17A7','GAD1','GAD2','AQP2','UMOD','SLC12A1','WT1','PAX2','CD74','MS4A1','CD3D','LST1','TYROBP','SPI1','NKG7','KLK3','NKX3-1','SRD5A2','KRT5','KRT14','MUC1']
+print('\\nMARKERS')
+for m in sel:
+ hits=[i for i,nm in enumerate(N) if nm.upper()==m.upper()]
+ if hits:
+  i=hits[0]; print(m,' '.join(f'{n}:{G[i,j]:.1f}' for j,n in enumerate(names)))
+PY"

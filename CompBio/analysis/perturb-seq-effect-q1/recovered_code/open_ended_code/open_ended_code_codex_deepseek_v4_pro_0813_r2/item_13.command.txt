@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+from scipy.stats import ttest_ind, mannwhitneyu
+mat = scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat = pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz', sep='\\t', header=None, names=['id','name','type'])
+bc = pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz', sep='\\t', header=None, names=['barcode'])
+calls = pd.read_csv('protospacer_calls_per_cell.csv')
+ref = pd.read_csv('feature_reference.csv')
+guide_to_gene=dict(zip(ref.id,ref.target_gene_name)); guide_to_name=dict(zip(ref.id,ref.name))
+bc['pos']=np.arange(len(bc))
+calls=calls.merge(bc,left_on='cell_barcode',right_on='barcode')
+totals=np.asarray(mat.sum(axis=0)).ravel()
+cpm = mat.multiply(1.0/totals).tocsr()*10000
+logcpm=cpm.copy(); logcpm.data=np.log1p(logcpm.data)
+nt=calls[calls.feature_call.str.startswith('guide_00')] # guides 1-10? actually 001-010 non-targeting
+# nt includes guide_001-010; gene Non-Targeting
+path_genes=feat['name'][:20].tolist()
+nt_mean=np.asarray(logcpm[:20,:][:,nt.pos.values].mean(axis=1)).ravel()
+print('NT mean for 20 genes:')
+for i,g in enumerate(path_genes): print(g, round(nt_mean[i],3))
+# for select guides, print mean logcpm per gene and diff vs NT
+for guide in ['guide_011','guide_012','guide_019','guide_035','guide_029']:
+    grp=calls[calls.feature_call==guide]
+    m=np.asarray(logcpm[:20,:][:,grp.pos.values].mean(axis=1)).ravel()
+    print('\\n', guide, guide_to_gene[guide], 'n',len(grp),'path mean',round(m.mean(),3))
+    for i,g in enumerate(path_genes):
+        diff=m[i]-nt_mean[i]
+        if abs(diff)>0.2 or guide in ['guide_011','guide_012']:
+            print(f'{g:8s} nt={nt_mean[i]:6.3f} grp={m[i]:6.3f} diff={diff:7.3f}')
+# compute pathway score excluding each guide's target gene if target in first20, and rank
+rows=[]
+for guide, grp in calls.groupby('feature_call'):
+    gene=guide_to_gene[guide]
+    if gene=='Non-Targeting': continue
+    # exclude target gene from signature if among first20
+    idx=[i for i,g in enumerate(path_genes) if g"'!=gene]
+    m=np.asarray(logcpm[idx,:][:,grp.pos.values].mean(axis=1)).ravel()
+    nm=nt_mean[np.array(idx)]
+    # actually nt_mean already per gene; compute nt cell values
+    ntv=np.asarray(logcpm[idx,:][:,nt.pos.values].mean(axis=0)).ravel()
+    t,p=ttest_ind(m,ntv,equal_var=False)
+    sd=np.sqrt(((len(m)-1)*m.var(ddof=1)+(len(ntv)-1)*ntv.var(ddof=1))/(len(m)+len(ntv)-2))
+    d=(m.mean()-ntv.mean())/sd
+    rows.append(dict(gene=gene,n=len(m),mean=m.mean(),nt_mean=ntv.mean(),diff=m.mean()-ntv.mean(),d=d,p=p))
+res=pd.DataFrame(rows).set_index('"'gene').sort_values('diff')
+print('\\nRank by pathway logmean excluding own target:')
+print(res.to_string())
+PY"

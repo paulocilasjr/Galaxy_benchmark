@@ -1,0 +1,43 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import gzip, math, collections, os
+bs=500
+files=[('ref','overexpress.tf.q1.ref.bed.gz'),('pert','overexpress.tf.q1.perturb.bed.gz')]
+counts={}
+totals={}
+for label,fn in files:
+    d=collections.Counter(); n=0
+    with gzip.open(fn,'rt') as f:
+        for line in f:
+            if not line or line[0]=='#': continue
+            chrom,s,e=line.rstrip('\\n').split('\\t')[:3]
+            if '_' in chrom or chrom in ('chrM','chrEBV'): continue
+            s=int(s); e=int(e); mid=(s+e)//2
+            d[(chrom, mid//bs)] += 1
+            n += 1
+    counts[label]=d; totals[label]=n
+    print(label,n,len(d),flush=True)
+keys=set(counts['ref'])|set(counts['pert'])
+scale_r=1_000_000/totals['ref']; scale_p=1_000_000/totals['pert']
+out=[]
+for k in keys:
+    r=counts['ref'].get(k,0); p=counts['pert'].get(k,0)
+    rc=r*scale_r; pc=p*scale_p
+    total=rc+pc
+    if p>=5 and total>=0.7:
+        logfc=math.log2((pc+0.05)/(rc+0.05))
+        # approximate binomial z under equal normalized rates
+        exp=totals['pert']*(r+p)/(totals['ref']+totals['pert'])
+        var=exp*(1-totals['pert']/(totals['ref']+totals['pert']))
+        z=(p-exp)/math.sqrt(var+1e-9)
+        out.append((logfc,z,pc-rc,k[0],k[1]*bs,(k[1]+1)*bs,r,p,rc,pc))
+out.sort(reverse=True, key=lambda x:(x[1],x[0]))
+with open('diff_bins.tsv','w') as w:
+    w.write('logfc\\tz\\tdiff_cpm\\tchrom\\tstart\\tend\\tref\\tpert\\tref_cpm\\tpert_cpm\\n')
+    for row in out:
+        w.write('\\t'.join(map(str,row))+'\\n')
+print('candidates',len(out))
+print('top')
+for row in out[:20]: print(row)
+PY"

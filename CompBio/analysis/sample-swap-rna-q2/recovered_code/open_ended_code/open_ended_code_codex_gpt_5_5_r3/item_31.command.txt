@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,math,urllib.parse,urllib.request,collections,time,sys
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t'); cols=next(r)[1:]
+    rows=[(row[0],[float(x) for x in row[1:]]) for row in r]
+selected=[]; byobs={}
+for j,c in enumerate(cols):
+    scored=[]
+    for g,v in rows:
+        order=sorted(range(len(cols)), key=lambda k: v[k], reverse=True)
+        if order[0]==j and v[j] >= 5:
+            ratio=(v[j]+1)/(v[order[1]]+1)
+            scored.append((ratio, v[j], g))
+    scored.sort(reverse=True)
+    genes=[g for _,_,g in scored[:40]]
+    byobs[c]=genes; selected.extend(genes)
+selected=list(dict.fromkeys(selected))
+print('selected unique', len(selected), flush=True)
+base='https://wheatomics.sdau.edu.cn/scRNA/download_dotplot_data.php'
+ref={}
+for i in range(0,len(selected),20):
+    chunk=selected[i:i+20]
+    qs=urllib.parse.urlencode({'genome':'Chinese_Spring','folder':'root','genes':','.join(chunk)})
+    url=base+'?'+qs
+    for attempt in range(3):
+        try:
+            req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                text=resp.read().decode()
+            break
+        except Exception as e:
+            print('retry',i,attempt,type(e).__name__,e, flush=True); time.sleep(2+attempt)
+    else:
+        raise SystemExit('failed chunk '+str(i))
+    lines=text.strip().splitlines()
+    if not lines or not lines[0].startswith('gene\\t'):
+        print('bad response',i,text[:200], flush=True); continue
+    for rec in csv.DictReader(lines, delimiter='\\t'):
+        ref.setdefault(rec['gene'],{})[rec['cluster']]=(float(rec['avg_exp_scaled']), float(rec['avg_exp']))
+    time.sleep(0.15)
+mapcl={'Cortex':'cortex','Endodermis':'endodermis','Epidermis':'epidermis','Meristems':'meristems','Dividing Cells':'meristems','Pericycle':'pericycle','Phloem':'phloem','Provascular cells':'provascular','Root Cap':'root_cap','Root Hair':'root_hair','Xylem':'xylem'}
+print('ref genes',len(ref), flush=True)
+for c,genes in byobs.items():
+    counts=collections.Counter(); weighted=collections.Counter(); n=0
+    for rank,g in enumerate(genes,1):
+        if g not in ref: continue
+        items=[(cl,vals[0],vals[1]) for cl,vals in ref[g].items() if cl in mapcl]
+        if not items: continue
+        cl,sc,avg=max(items, key=lambda x:x[1])
+        lab=mapcl[cl]; counts[lab]+=1; weighted[lab]+=1.0/rank; n+=1
+    print('OBS',c,'n',n,'counts',counts.most_common(),'weighted',[(k,round(v,3)) for k,v in weighted.most_common()], flush=True)
+PY"

@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv
+import numpy as np
+import pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        features.append(p[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    for line in f:
+        barcodes.append(line.strip())
+mat = mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+print(mat.shape, len(features), len(barcodes))
+# guide calls
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+# Some calls maybe >1 features? Let's inspect.
+print(calls.num_features.value_counts())
+# Map barcodes to guide
+bc_idx={b:i for i,b in enumerate(barcodes)}
+# keep cells in matrix with single guide? guide calls maybe all cells and one guide
+calls['col']=calls['cell_barcode'].map(bc_idx)
+print('calls matched', calls.col.notna().sum(), 'total', len(calls))
+# One guide per cell?
+print('multiple calls per cell?', calls.groupby('cell_barcode').size().gt(1).sum())
+# matrix barcodes not in calls?
+matched=set(calls.cell_barcode)
+unmatched=sum(1 for b in barcodes if b not in matched)
+print('barcodes unmatched', unmatched)
+# Add target gene
+id2target=dict(zip(ref.id, ref.target_gene_name))
+calls['target']=calls['feature_call'].map(id2target)
+print(calls.target.value_counts().head(20))
+print('total targets', calls.target.nunique())
+# expression sum
+expr=np.asarray(mat.sum(axis=0)).ravel()
+print('expr stats', expr.min(), expr.max(), expr.mean(), np.median(expr), np.percentile(expr,[5,95]))
+PY"

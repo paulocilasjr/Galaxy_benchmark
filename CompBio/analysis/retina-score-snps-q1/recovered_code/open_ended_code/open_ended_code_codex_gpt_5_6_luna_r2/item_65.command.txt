@@ -1,0 +1,44 @@
+/bin/bash -lc "DYLD_LIBRARY_PATH=/opt/miniconda3/pkgs/libffi-3.5.2-hcf2aa1b_0/lib:/opt/miniconda3/lib TF_CPP_MIN_LOG_LEVEL=2 zenodo/native_env/bin/python -u - <<'PY'
+from pathlib import Path
+import csv,json,gc
+import numpy as np
+import tensorflow as tf
+
+rows=[]
+with open('retina.score.snps.q1.tsv',newline='') as f:
+ for r in csv.DictReader(f,delimiter='\\t'):
+  rows.append(r)
+seqs=json.loads(Path('zenodo/hg19_windows.json').read_text())
+assert len(rows)==len(seqs)==500
+L=2114; center=L//2
+ref=[]; alt=[]
+for r,s in zip(rows,seqs):
+ s=s.upper(); assert len(s)==L and s[center]==r['ref'].upper(),(r,s[center])
+ ref.append(s)
+ alt.append(s[:center]+r['alt'].upper()+s[center+1:])
+
+def one_hot(ss):
+ a=np.zeros((len(ss),L,4),dtype=np.float32)
+ for k,b in enumerate('ACGT'):
+  a[:,:,k]=np.fromiter((c==b for s in ss for c in s),dtype=np.float32,count=len(ss)*L).reshape(len(ss),L)
+ return a
+ref_oh=one_hot(ref); alt_oh=one_hot(alt)
+print('inputs',ref_oh.shape,alt_oh.shape,'center',center,flush=True)
+refs=[]; alts=[]
+for fold in range(5):
+ path=f'zenodo/models/fold{fold}/Rod.h5'
+ print('loading',path,flush=True)
+ model=tf.keras.models.load_model(path,compile=False)
+ print('predicting fold',fold,flush=True)
+ rp=model.predict(ref_oh,batch_size=256,verbose=0)
+ ap=model.predict(alt_oh,batch_size=256,verbose=0)
+ refs.append(np.asarray(rp[1]).ravel())
+ alts.append(np.asarray(ap[1]).ravel())
+ print('fold',fold,'ref mean',float(np.mean(refs[-1])),'alt mean',float(np.mean(alts[-1])),'lfc mean',float(np.mean(alts[-1]-refs[-1])),flush=True)
+ del model,rp,ap
+ tf.keras.backend.clear_session(); gc.collect()
+refs=np.array(refs); alts=np.array(alts)
+lfcs=(alts-refs).mean(axis=0)
+np.savez('zenodo/rod_scores_center1057.npz',refs=refs,alts=alts,lfcs=lfcs,labels=np.array([int(r['label']) for r in rows]))
+print('saved score array',lfcs.shape,'range',float(lfcs.min()),float(lfcs.max()),'abs mean',float(np.mean(np.abs(lfcs))),flush=True)
+PY"

@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections, re, gzip
+sym={}
+with gzip.open('Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as fh:
+    for line in fh:
+        if line.startswith('>'):
+            tid=line[1:].split()[0]
+            m=re.search(r'gene_symbol:(\\S+)',line)
+            if m: sym[tid]=m.group(1)
+sam=pysam.AlignmentFile('raw_transcriptome.sam','r')
+supp=0; sec=0; chimeric=0; uniq_chim=0; chim_examples=collections.Counter(); sa_examples=collections.Counter()
+for a in sam.fetch(until_eof=True):
+    if a.is_unmapped: continue
+    if a.is_supplementary:
+        supp+=1
+        # record gene from this supplementary vs primary? need primary not here
+    if a.is_secondary: sec+=1
+    if a.has_tag('SA'):
+        sa=a.get_tag('SA')
+        # parse SA ref names
+        refs=[]
+        for item in sa.split(';'):
+            if item:
+                parts=item.split(',')
+                if len(parts)>=2: refs.append(parts[0])
+        genes={sym.get(r,r) for r in [a.reference_name]+refs}
+        if len(genes)>1:
+            chimeric+=1
+            uniq_chim += 1
+            chim_examples[tuple(sorted(genes))]+=1
+print('supp',supp,'sec',sec,'reads_with_SA',sum(1 for a in sam.fetch(until_eof=True) if a.has_tag('SA') and not a.is_unmapped))
+print('chimeric SA records', chimeric)
+for pair,c in chim_examples.most_common(50):
+    print(c,pair)
+PY"

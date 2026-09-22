@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+import re,gzip,collections
+from Bio.Seq import Seq
+cands={'ZIC2','SP1','MYC','CATSPER4'}
+def gene(r):
+ x=r.split('|'); return x[5] if len(x)>5 else r
+def qr(c):
+ t=re.findall(r'(\\d+)([MIDNSHP=X])',c); p=0
+ for n,o in t:
+  n=int(n)
+  if o in 'HS': p+=n
+  else: break
+ a=sum(int(n) for n,o in t if o in 'MI=X'); return p,p+a
+def refend(pos,c):
+ return pos-1+sum(int(n) for n,o in re.findall(r'(\\d+)([MIDNSHP=X])',c) if o in 'MDN=X')
+# Load only candidate transcript refs.
+refs={}
+with gzip.open('gencode.v49.pc_transcripts.fa.gz','rt') as f:
+ h=None; chunks=[]
+ for line in f:
+  if line.startswith('>'):
+   if h is not None and gene(h) in cands: refs[h]=''.join(chunks)
+   h=line[1:].strip(); chunks=[]
+  else: chunks.append(line.strip())
+ if h is not None and gene(h) in cands: refs[h]=''.join(chunks)
+print('candidate transcript sequences',len(refs))
+# Read FASTQ into target qnames after identify from SAM; collect primary + SA cross candidates.
+target={}
+with open('pc_align.sam') as f:
+ for line in f:
+  if line[0]=='@': continue
+  a=line.rstrip().split('\\t'); rn=a[2]; gg=gene(rn)
+  sa=next((x[5:] for x in a[11:] if x.startswith('SA:Z:')),None)
+  if not sa: continue
+  for ent in sa.strip(';').split(';'):
+   b=ent.split(',')
+   if len(b)>=6 and gg in cands and gene(b[0]) in cands and gg"'!=gene(b[0]):
+    target.setdefault(a[0],[]).append((a,b))
+# sequences
+seqs={}
+with gzip.open('"'gene.fusion.q2.fq.gz','rt') as f:
+ while True:
+  h=f.readline()
+  if not h:break
+  s=f.readline().strip(); f.readline(); f.readline(); seqs[h[1:].strip()]=s
+print('target reads',len(target))
+for qn,arr in list(target.items())[:80]:
+ a,b=arr[0]; flag=int(a[1]); strand='-' if flag&16 else '+'
+ p1,q1=qr(a[5]); p2,q2=qr(b[3]);
+ # sort segments by q coordinate, then transcript 5'->3' ordering
+ segs=[(p1,q1,gene(a[2]),a[2],int(a[3]),a[5],strand),(p2,q2,gene(b[0]),b[0],int(b[1]),b[3],b[2])]
+ segs.sort(key=lambda z:z[0],reverse=(strand=='-'))
+ s=seqs[qn]
+ print('\\n'+qn, 'READ',s, 'strand',strand, 'ORDER',segs[0][2]+'-'+segs[1][2])
+ for x in segs:
+  st,en,g,rn,pos,cig,ss=x
+  # reference substring based on aligned ref span, strand as SA/primary
+  rend=refend(pos,cig); sub=refs.get(rn,'?')[pos-1:rend] if rn in refs else '?'
+  if ss=='-': sub=str(Seq(sub).reverse_complement())
+  print(' ',g, f'q{st}:{en}', 'ref',pos,'cig',cig,'mapstrand',ss,'refseq',sub,'qseq',s[st:en])
+PY"

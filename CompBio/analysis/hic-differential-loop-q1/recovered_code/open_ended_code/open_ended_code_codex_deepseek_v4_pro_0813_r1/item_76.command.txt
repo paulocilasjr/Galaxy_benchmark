@@ -1,0 +1,47 @@
+/bin/bash -lc "python - <<'PY'
+import fsspec,h5py,bisect,numpy as np,time
+
+def open_mcool(url):
+ fs=fsspec.filesystem('http')
+ f=fs.open(url,block_size=1<<20)
+ return h5py.File(f,'r')
+
+def query(h5,chrom,pos1,pos2,binsize=5000):
+ g=h5['resolutions'][str(binsize)]
+ chroms=[x.decode() for x in g['chroms']['name'][:]]
+ cid=chroms.index(chrom)
+ chrom_offset=g['indexes']['chrom_offset'][:]
+ start,end=chrom_offset[cid],chrom_offset[cid+1]
+ bins_chrom=g['bins']['chrom'][start:end]
+ bins_start=g['bins']['start'][start:end]
+ bins_end=g['bins']['end'][start:end]
+ # bin ids absolute
+ abs_ids=np.arange(start,end)
+ i1=abs_ids[(bins_start==pos1)]
+ i2=abs_ids[(bins_start==pos2)]
+ if len(i1)==0 or len(i2)==0:
+  print('missing bin',chrom,pos1,pos2); return None
+ bi1=int(i1[0]); bi2=int(i2[0])
+ # ensure bi1<=bi2? for upper storage
+ if bi1>bi2: bi1,bi2=bi2,bi1
+ off=g['indexes']['bin1_offset'][:]
+ lo,hi=off[bi1],off[bi1+1]
+ if hi>lo:
+  ids=g['pixels']['bin2_id'][lo:hi]
+  j=np.searchsorted(ids,bi2)
+  if j<len(ids) and ids[j]==bi2:
+   cnt=g['pixels']['count'][lo+j]
+   return int(cnt), int(bi1), int(bi2), int(lo),int(hi)
+ return 0,int(bi1),int(bi2),int(lo),int(hi)
+
+urls={
+'H1':'https://4dn-open-data-public.s3.amazonaws.com/fourfront-webprod/wfoutput/d13aa1ea-053c-4113-94fe-a1e7ab1dbbab/4DNFI9GMP2J8.mcool',
+'HFF':'https://4dn-open-data-public.s3.amazonaws.com/fourfront-webprod/wfoutput/27bbfb40-0224-427c-be41-398b43d70c48/4DNFI9FVHJZQ.mcool'}
+pairs=[(7675000,7805000),(7715000,7805000),(7220000,7805000),(7640000,8070000),(7795000,7905000),(7130000,7630000),(7220000,7635000),(7460000,7635000)]
+for name,url in urls.items():
+ t=time.time(); h=open_mcool(url); print('open',name,time.time()-t)
+ for p1,p2 in pairs:
+  res=query(h,'chr12',p1,p2)
+  print(name,p1,p2,res)
+ h.close()
+PY"

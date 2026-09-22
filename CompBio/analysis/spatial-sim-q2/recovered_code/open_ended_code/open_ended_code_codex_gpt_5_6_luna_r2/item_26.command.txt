@@ -1,0 +1,21 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import numpy as np,csv
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=np.loadtxt('data/spatial_q_sc_counts.csv',delimiter=',',skiprows=1,usecols=range(1,1001))
+with open('data/spatial_q_sc_metadata.csv') as f: rows=list(csv.reader(f))[1:]
+labels=np.array([r[1] for r in rows]); types=sorted(set(labels)); S=np.array([sc[labels==t].mean(0) for t in types]);
+sp=mmread('data/matrix.mtx.gz').toarray(); blocks=[(0,50),(50,100),(100,150),(150,200),(200,250),(250,300)];
+# rows blocks, cols types
+X=np.array([[S[i,a:b].sum() for i in range(6)] for a,b in blocks])
+Y=np.array([sp[a:b].sum(0) for a,b in blocks]).T
+C=np.array([nnls(X,Y[j])[0] for j in range(900)])
+print('types',types,'X',X.round(1))
+for i,t in enumerate(types): print(t, 'min med max sum',*(round(float(x),3) for x in [C[:,i].min(),np.median(C[:,i]),C[:,i].max(),C[:,i].sum()]),'thresholds',[(x,int((C[:,i]>x).sum())) for x in [.1,.5,.8]])
+print('rounded combo counts')
+cr=np.rint(C).astype(int)
+from collections import Counter
+print(Counter(tuple(x) for x in cr).most_common(20))
+# compare total estimated number vs spatial total / average
+print('fit relative residual',np.median(np.linalg.norm(Y-C@X.T,axis=1)/np.linalg.norm(Y,axis=1)))
+PY"

@@ -1,0 +1,59 @@
+/bin/bash -lc "cat > get_gnomad.py <<'PY'
+import gzip,json,struct,collections,requests,concurrent.futures,zlib,time,os
+url='https://gnomad-public-us-east-1.s3.amazonaws.com/release/2.1.1/vcf/exomes/gnomad.exomes.r2.1.1.sites.1.vcf.bgz'
+query={};counts=collections.Counter()
+with gzip.open('vcf.infer.ancestry.q1.vcf.gz','rt') as f:
+ for l in f:
+  if l[0]=='#':continue
+  a=l.split();p=int(a[1]);
+  if len(a[3])"'!=1 or len(a[4])!=1:continue
+  query[(p,a[3],a[4])]=[sum(map(int,x.split('"':')[0].split('/'))) for x in a[9:13]]
+  counts[(p-1)//16384+4681]+=1
+bins=json.load(open('gnomad_index.json'))['0']['bins'];candidates=[]
+for b,cs in bins.items():
+ b=int(b)
+ if b<4681 or counts[b]<4:continue
+ start=min(a>>16 for a,e in cs);end=max(e>>16 for a,e in cs)+65536
+ size=end-start
+ candidates.append((counts[b]/size,b,start,end,counts[b]))
+candidates.sort(reverse=True)
+selected=candidates[:500]
+print('Selected bins',len(selected),'MB',sum(e-s for _,b,s,e,n in selected)/1e6,'query SNPs',sum(n for *_,n in selected),flush=True)
+os.makedirs('gnomad_chunks',exist_ok=True)
+def process(rec):
+ _,b,start,end,n=rec;path=f'gnomad_chunks/{b}.bgz'
+ for retry in range(3):
+  try:
+   if os.path.exists(path):data=open(path,'rb').read()
+   else:
+    r=requests.get(url,headers={'Range':f'bytes={start}-{end-1}'},timeout=90);r.raise_for_status()
+    if r.status_code"'!=206:raise ValueError('"'Range not supported')
+    data=r.content;open(path,'wb').write(data)
+   buf=[];off=0
+   while off+18<=len(data):
+    size=struct.unpack_from('<H',data,off+16)[0]+1
+    if off+size>len(data):break
+    buf.append(zlib.decompress(data[off:off+size],31));off+=size
+   lines=b''.join(buf).decode().splitlines();found=[]
+   for l in lines:
+    a=l.split('\\t')
+    if len(a)<8 or a[0]"'!='"'1':continue
+    k=(int(a[1]),a[3],a[4])
+    if k not in query or a[6]"'!='"'PASS':continue
+    info=dict(x.split('=',1) for x in a[7].split(';') if '=' in x)
+    pops=['afr','asj','eas','nfe','sas','fin','amr']
+    vals=[info.get('AF_'+p,'.') for p in pops]
+    if '.' not in vals:found.append((k,query[k],vals))
+   return found
+  except Exception as e:
+   if retry==2:print('ERROR',b,str(e),flush=True);return []
+results={}
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+ for i,res in enumerate(ex.map(process,selected)):
+  for k,g,v in res:results[k]=(g,v)
+  if (i+1)%25==0:print('Bins',i+1,'matches',len(results),flush=True)
+with open('gnomad_matched.tsv','w') as f:
+ f.write('pos\\tref\\talt\\tSample1\\tSample2\\tSample3\\tSample4\\tafr\\tasj\\teas\\tnfe\\tsas\\tfin\\tamr\\n')
+ for k,(g,v) in sorted(results.items()):f.write('\\t'.join(map(str,(*k,*g,*v)))+'\\n')
+PY
+python3 -u get_gnomad.py"

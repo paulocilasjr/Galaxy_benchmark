@@ -1,0 +1,31 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.request,json,concurrent.futures,collections
+fn='reverse.search.gwas.q2.gz'; rows=[]
+with gzip.open(fn,'rt') as f:
+ h=next(f).rstrip('\\n').split('\\t')
+ for line in f:
+  x=dict(zip(h,line.rstrip('\\n').split('\\t')))
+  try:p=float(x['P'])
+  except:continue
+  if x['RSID']"'!='"'.':rows.append((p,x['RSID'],x))
+rows.sort(); rs=[r[1] for r in rows[:100]]; base='https://www.ebi.ac.uk/gwas/rest/api/'
+def get(u):
+ try:return json.load(urllib.request.urlopen(urllib.request.Request(u,headers={'Accept':'application/json'}),timeout=30))
+ except Exception:return None
+def one(rs):
+ d=get(base+'singleNucleotidePolymorphisms/'+rs+'/associations?projection=associationBySnp');out=[]
+ if not d:return rs,out
+ for a in d.get('_embedded',{}).get('associations',[]):
+  sl=a.get('_links',{}).get('study',{}).get('href'); s=get(sl) if sl else None
+  if s:out.append((s.get('accessionId'),s.get('publicationInfo',{}).get('pubmedId'),s.get('publicationInfo',{}).get('title'),a.get('pvalue'),a.get('betaNum'),a.get('betaDirection'),a.get('efoTraits')))
+ return rs,out
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex: allout=list(ex.map(one,rs))
+c=collections.Counter();details={};hits={}
+for rid,outs in allout:
+ for x in outs:c[x[0]]+=1;details.setdefault(x[0],x);hits.setdefault(x[0],[]).append(rid)
+print('top file variants')
+for r in rows[:30]:print(r[0],r[1],r[2].get('BETA'),r[2].get('SE'))
+print('\\nStudy occurrence among top100')
+for acc,n in c.most_common():
+ x=details[acc];print(n,acc,x[1],x[2],x[3],x[4],x[5],','.join(hits[acc]))
+PY"

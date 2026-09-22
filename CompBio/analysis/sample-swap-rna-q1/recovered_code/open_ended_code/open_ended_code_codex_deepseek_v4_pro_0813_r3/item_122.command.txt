@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,json,re,numpy as np
+id2name=json.load(open('id2name.json'))
+with gzip.open('sample.swap.rna.q1.tsv.gz','rt') as f:
+ r=csv.reader(f,delimiter='\\t'); h=next(r); cols=h[1:]; rows=[]
+ for row in r: rows.append((row[0],[float(x) for x in row[1:]]))
+A=np.array([v for _,v in rows]); names=np.array([id2name.get(g,g) for g,_ in rows])
+X=np.log2(A+1); Z=(X-X.mean(1,keepdims=True))/(X.std(1,keepdims=True)+1e-9)
+markers={
+'endoderm': {'A1CF','HNF1B','BHLHA15','FCN3','TIMP4','SOX7','PDX1','CDX4'},
+'endostyle_csg': {'NKX2-1','FOXE1','FOXQ1','NKX2-6','PAX9','TBX1','SIX1','RSPO2'},
+'epidermal_neural': {'POU4F3','ISL1','INSM1','PRDM12','ASCL1','NTRK2','RBPMS','ELAVL4','DDC'},
+'epidermis': {'KRT13','KRT75','KRT5','FOXJ1','SHH','TFAP2D','GAD1','SLC6A5'},
+'mesodermal_notochord': {'T','FOXA2','SOX9','COL1A2','FBN2','MYH10','TNNC2','PRTG','ACVR2B'},
+'muscular_somites': {'MYOD1','MYF5','MYF6','ACTC1','MYH7','CKM','TNNT3','MYL12A','NEXN','FOXC2','PAX7'},
+'neural': {'ELAVL4','NEUROG3','SYT1','CHAT','ONECUT1','OLIG3','GBX1','SCG3','SLC32A1'},
+'neural_like': {'SOX2','NKX6-1','POU3F4','CDX4','TCF15','PAX7','OTP','HOXB6','WNT5A'},
+'putative_neuro_endo': {'DDC','SLC18A2','PCSK1','HNF4G','ARX','NEUROG3','SCGN'},
+'somite': {'TCF21','ALX4','RIPPLY2','FERD3L','HAND2','WNT5A','NEUROD4','MEOX2','FOXC2'},
+'tailbud': {'T','CDX4','AXIN1','FGF17','OTP','EMX2','DUXA','NOTUM','RHOU'},
+'tailbud_neural': {'MITF','SOX2','KRT75','KRT13','ELAVL4','LAMB1','FHL2','KIRREL3','NOTCH4','POSTN'},
+}
+# exact match case-insensitive (allow gene symbol exact only, with hyphen variants)
+name_set=set(names)
+score=np.zeros((len(markers),len(cols)))
+for li,(label,ms) in enumerate(markers.items()):
+ inds=[i for i,n in enumerate(names) if n.upper() in {m.upper() for m in ms}]
+ # for T exact may include only one? duplicate okay
+ print(f'{label:22s} n={len(inds):3d}', sorted(set(names[i] for i in inds))[:20])
+ score[li]=Z[inds].mean(0) if inds else np.zeros(len(cols))
+print('\\nScore matrix')
+print('marker'.ljust(22), ' '.join(f'{c[:8]:>8}' for c in cols))
+for li,label in enumerate(markers):
+ print(f'{label:22s}', ' '.join(f'{score[li,j]:8.2f}' for j in range(len(cols))))
+print('\\nBest 2 per column')
+for j,c in enumerate(cols):
+ order=np.argsort(-score[:,j])
+ print(f'{c:22s}', [f'{list(markers)[i]}({score[i,j]:.2f})' for i in order[:2]])
+PY"

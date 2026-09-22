@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request,json,urllib.parse,math,time
+
+def get_all(chrom, rs, maxpages=200):
+    url=f'https://www.ebi.ac.uk/gwas/summary-statistics/api/chromosomes/{chrom}/associations/{rs}?size=1000'
+    out=[]; seen=set(); pages=0
+    while url and pages<maxpages:
+        d=json.load(urllib.request.urlopen(url,timeout=60))
+        ass=d.get('_embedded',{}).get('associations',{})
+        if isinstance(ass, dict): out += list(ass.values())
+        elif isinstance(ass, list): out += ass
+        links=d.get('_links',{})
+        nxt=links.get('next',{}).get('href') if isinstance(links.get('next'),dict) else None
+        url=nxt.replace('http://','https://') if nxt else None
+        if url in seen: break
+        seen.add(url); pages+=1
+    return out
+for chrom,rs,target in [('1','rs7554873',7.85125e-21),('17','rs34562254',1.4221e-16),('2','rs1260326',3.44112e-08)]:
+    print('\\n',rs)
+    ass=get_all(chrom,rs)
+    print('n',len(ass))
+    rows=[]
+    for a in ass:
+        pv=a.get('p_value')
+        if pv is None: continue
+        score=abs(math.log10(pv)-math.log10(target)) if pv>0 and target>0 else 999
+        rows.append((score,pv,a.get('study_accession'),a.get('beta'),a.get('effect_allele'),a.get('other_allele'),a.get('trait')))
+    for r in sorted(rows,key=lambda x:x[0])[:30]:
+        print(r)
+PY"

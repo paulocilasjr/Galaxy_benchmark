@@ -1,0 +1,91 @@
+/bin/bash -lc "cat > promoter_scores.py <<'PY'
+import gzip, re, csv, collections, sys
+markers = {
+'Brain': ['NEUROD1','SOX2','GFAP','MBP','SLC17A7','OLIG2','RBFOX3','SYP'],
+'Heart': ['TNNT2','MYH6','MYH7','MYL2','MYL7','NPPA','NKX2-5','ACTC1'],
+'Liver': ['ALB','APOA1','FGA','FGB','FGG','HNF4A','TTR','SERPINA1'],
+'Intestine': ['CDX2','VIL1','FABP2','MUC2','SI','KRT20','EPCAM'],
+'Kidney': ['SLC12A1','AQP2','UMOD','PAX8','NPHS2','WT1','SLC34A1'],
+'Lung': ['SFTPC','NKX2-1','SCGB1A1','SCGB3A2','FOXJ1'],
+'Pancreas': ['INS','GCG','AMY2A','CPA1','PDX1','PTF1A','CEL'],
+'Prostate': ['KLK3','ACPP','NKX3-1','MSMB','HOXB13'],
+'Bladder': ['UPK1B','UPK2','UPK3A','KRT20','KRT7'],
+'GallBladder': ['MUC5B','CFTR','FGF19','SLC4A4','AQP1'],
+'Gill': ['ATP6V1E1','SLC12A2','CA4','NHE3','FOXI1'],
+'Limb': ['HOXD13','PRRX1','SHH','FGF8','TBX5','HAND2'],
+'Spleen': ['CD3D','PTPRC','MS4A1','CD19','CD79A','NKG7'],
+'Stomach': ['ATP4A','ATP4B','PGC','GAST','MUC5AC','TFF2','GKN1'],
+'Cloaca': ['KRT8','KRT18','KRT19','UPK3A','CDX2','HOXA13'],
+}
+all_markers=set()
+for v in markers.values(): all_markers.update(v)
+# parse genes
+intervals=collections.defaultdict(list) # chrom -> list (start,end,marker,strand)
+count_genes=collections.Counter()
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        chrom=p[0]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+        m=re.search(r'gene_name \"(["'^"]+)"'"',attrs)
+        if not m: continue
+        names=set()
+        for part in m.group(1).split('|'):
+            name=part.strip()
+            base=re.sub(r'\\s*\\[(?:hs|nr|mm|dr|xt|zf|gg)\\]"'$'"','',name).strip()
+            names.add(base)
+        for mk in all_markers:
+            if mk in names:
+                tss=start if strand=='+' else end
+                prom_start=max(0,tss-2000); prom_end=tss+2000
+                intervals[chrom].append((prom_start,prom_end,mk))
+                count_genes[mk]+=1
+                break
+# sort intervals natural? within chrom sorted
+def chrom_key(c):
+    m=re.match(r'chr(\\d+)([pq])',c)
+    if m: return (int(m.group(1)), 0 if m.group(2)=='p' else 1, c)
+    return (999,0,c)
+for c in intervals: intervals[c].sort()
+# print found markers
+for mk in sorted(all_markers):
+    if count_genes[mk]==0: print('NOTFOUND',mk)
+print('count_genes', dict(count_genes), file=sys.stderr)
+# open counts and scan in natural order
+cols=None; sums=collections.defaultdict(lambda:[0]*len(markers)); bins=collections.defaultdict(int)
+# mapping marker->organ and sample indexes
+marker_organ={}
+for organ,ms in markers.items():
+    for mk in ms: marker_organ[mk]=organ
+# We need counts sum by marker and sample. Initialize after header.
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r); cols=header[3:]
+    sums=collections.defaultdict(lambda:[0]*len(cols))
+    # pointers per chrom: current index
+    ptr={c:0 for c in intervals}
+    for row in r:
+        chrom=row[0]; start=int(row[1]); end=int(row[2])
+        arr=intervals.get(chrom)
+        if arr is None: continue
+        p=ptr[chrom]
+        # advance past intervals ending before start
+        while p<len(arr) and arr[p][1] < start:
+            p+=1
+        ptr[chrom]=p
+        # check intervals overlapping current bin
+        j=p
+        vals=list(map(int,row[3:]))
+        while j<len(arr) and arr[j][0] <= end and arr[j][1] >= start:
+            mk=arr[j][2]
+            s=sums[mk]
+            for i,v in enumerate(vals): s[i]+=v
+            bins[mk]+=1
+            j+=1
+# print table raw by marker
+print('marker\\torgan\\tcopies\\tbins\\t'+'\\t'.join(cols))
+for mk in sorted(sums, key=lambda x: marker_organ.get(x,'zzz')+x):
+    print(mk+'\\t'+marker_organ.get(mk,'')+'\\t'+str(count_genes[mk])+'\\t'+str(bins[mk])+'\\t'+'\\t'.join(map(str,sums[mk])))
+PY
+python3 promoter_scores.py > promoter_raw.tsv"

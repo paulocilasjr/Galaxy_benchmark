@@ -1,0 +1,79 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, math, csv
+from collections import defaultdict
+import numpy as np
+from scipy.stats import chi2, spearmanr, pearsonr
+from cyvcf2 import VCF
+
+super_by_sample={}
+with open('refs/integrated_call_samples_v3.20130502.ALL.panel') as f:
+    next(f)
+    for line in f:
+        parts=line.split()
+        if len(parts)>=3: super_by_sample[parts[0]]=parts[2]
+windows=[('locus1',16500000,18000000),('locus2',171500000,172500000)]
+gwas_by_posalleles={}; region_keys=defaultdict(list)
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        if row['P']=='NA': continue
+        chrom,pos,a1,a2=row['SNPID'].split(':')
+        pos=int(pos); p=float(row['P'])
+        if p<=0 or p>1: continue
+        key=(pos, frozenset([a1,a2]))
+        rec={'id':row['RSID'], 'pos':pos, 'p':p, 'chi':chi2.isf(p,1), 'alleles':(a1,a2)}
+        gwas_by_posalleles[key]=rec
+        for name,a,b in windows:
+            if a<=pos<=b: region_keys[name].append(key)
+vcf=VCF('refs/kg_chr1_loci.vcf.gz')
+samples=vcf.samples
+superpops=sorted(set(super_by_sample.values()))
+idx_by_super={sp:np.array([i for i,s in enumerate(samples) if super_by_sample.get(s)==sp], dtype=int) for sp in superpops}
+geno_by_key={}; pos_by_key={}
+for v in vcf:
+    if len(v.REF)"'!=1 or len(v.ALT)!=1 or len(v.ALT[0])!=1: continue
+    key=(v.POS, frozenset([v.REF, v.ALT[0]]))
+    if key not in gwas_by_posalleles: continue
+    arr=np.array([(a+b if a>=0 and b>=0 else np.nan) for a,b,*_ in v.genotypes], dtype=float)
+    geno_by_key[key]=arr; pos_by_key[key]=v.POS
+print('"'matched',len(geno_by_key),'of',len(gwas_by_posalleles))
+combined={sp:[] for sp in superpops}
+for name,keys in region_keys.items():
+    keys2=[k for k in keys if k in geno_by_key]
+    top=sorted([gwas_by_posalleles[k] for k in keys2], key=lambda x:x['p'])[:10]
+    print('\\n',name,'keys',len(keys),'matched',len(keys2),'top',[(t['id'],t['pos'],t['p'],round(t['chi'],1)) for t in top])
+    y=np.array([gwas_by_posalleles[k]['chi'] for k in keys2])
+    for sp,idx in idx_by_super.items():
+        X=np.vstack([geno_by_key[k][idx] for k in keys2])
+        vars_=np.nanvar(X,axis=1)
+        keep=np.isfinite(y) & (vars_>1e-6)
+        keys_keep=[k for k,ok in zip(keys2,keep) if ok]
+        X=X[keep]; yy=y[keep]
+        if len(keys_keep)<20: continue
+        X=(X-X.mean(axis=1,keepdims=True))/X.std(axis=1,keepdims=True)
+        order=np.argsort(-yy)
+        # score using top p lead only plus optimize among top 20 to account for causal/proxy
+        for label,candidates in [('lead',[order[0]]),('top20',order[:20])]:
+            best=None
+            for ci in candidates:
+                r=(X @ X[ci])/(X.shape[1]-1)
+                r2=np.clip(r*r,0,1)
+                cpos=pos_by_key[keys_keep[ci]]
+                locmask=np.array([abs(pos_by_key[k]-cpos)<=500000 for k in keys_keep])
+                yy2=yy[locmask]; r22=r2[locmask]
+                pr=pearsonr(yy2,r22).statistic if np.std(r22)>0 else float('nan')
+                sr=spearmanr(yy2,r22).statistic if np.std(r22)>0 else float('nan')
+                A=np.vstack([np.ones_like(r22),r22]).T
+                coef=np.linalg.lstsq(A,yy2,rcond=None)[0]
+                pred=A@coef
+                denom=float(((yy2-yy2.mean())**2).sum())
+                fit=1-float(((yy2-pred)**2).sum())/denom if denom else float('nan')
+                score=(0 if math.isnan(pr) else pr)+(0 if math.isnan(sr) else sr)+(0 if math.isnan(fit) else fit)
+                if best is None or score>best[0]:
+                    rec=gwas_by_posalleles[keys_keep[ci]]
+                    best=(score,rec['id'],rec['pos'],rec['p'],pr,sr,fit,coef.tolist(),int(locmask.sum()))
+            print(sp,label,best)
+            if label=='top20': combined[sp].append(best[0])
+print('\\ncombined top20 score sums')
+for sp,vals in combined.items(): print(sp, sum(vals), vals)
+PY"

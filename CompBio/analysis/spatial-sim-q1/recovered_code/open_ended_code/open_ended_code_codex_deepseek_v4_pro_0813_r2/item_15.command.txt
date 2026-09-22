@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.sparse import csc_matrix
+sc = pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta = pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+mat=mmread('matrix.mtx.gz').tocsc()
+t=mat[:,710].toarray().ravel().astype(float)
+cts=meta.cell_type.unique()
+# use all cells as reference, normalized? NNLS counts with cells
+X=sc.values.T.astype(float) # genes x cells
+coef,res=nnls(X,t)
+print('NNLS all cells residual',res,'sum coef',coef.sum(),'nonzero',(coef>1e-6).sum())
+idx=np.argsort(coef)[::-1][:20]
+for i in idx:
+    if coef[i]>0.01:
+        print(meta.index[i], meta.iloc[i].cell_type, coef[i], sc.iloc[i].sum())
+# group coefficients by type
+sel=coef>1e-8
+group=pd.Series(coef[sel], index=meta.index[sel]).groupby(meta.cell_type[sel]).sum().sort_values(ascending=False)
+print(group)
+# cell type means NNLS
+means=sc.groupby(meta.cell_type).mean()
+Xm=means.T.values
+coefm,resm=nnls(Xm,t)
+print('NNLS means coef', dict(zip(means.index, np.round(coefm,3))), 'sum',coefm.sum(),'res',resm)
+# normalized mean NNLS (profiles)
+def norm(v): return v/v.sum()
+means_norm=sc.groupby(meta.cell_type).apply(lambda x: x.sum()).apply(norm, axis=1)
+tn=t/t.sum()
+Xn=means_norm.T.values
+coefn,resn=nnls(Xn,tn)
+print('NNLS normalized',dict(zip(means_norm.index,np.round(coefn,4))),'sum',coefn.sum(),'res',resn)
+# correlations with means normalized
+for c in cts:
+    print(c, np.corrcoef(means_norm.loc[c],tn)[0,1])
+PY"

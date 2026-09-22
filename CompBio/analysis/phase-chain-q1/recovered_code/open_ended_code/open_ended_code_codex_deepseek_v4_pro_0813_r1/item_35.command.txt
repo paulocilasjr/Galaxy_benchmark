@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('phase.bam','rb')
+events=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+# define state from aligned pairs
+def state_at(read,pos):
+    for q,r in read.get_aligned_pairs(matches_only=False):
+        if r is not None and r+1==pos:
+            return 'D' if q is None else read.query_sequence[q]
+    return None
+pair_vec={}
+for read in bam.fetch('chr22', min(events)-300, max(events)+300):
+    if read.is_unmapped or read.is_secondary or read.is_supplementary: continue
+    name=read.query_name
+    vec={}
+    for pos in events:
+        s=state_at(read,pos)
+        if s is not None: vec[pos]=s
+    pair_vec.setdefault(name,[]).append(vec)
+# combine pair
+comb={}
+for name,vecs in pair_vec.items():
+    cc={}
+    for vec in vecs:
+        for p,s in vec.items(): cc.setdefault(p,[]).append(s)
+    final={p:collections.Counter(ss).most_common(1)[0][0] for p,ss in cc.items()}
+    comb[name]=final
+# true haplotypes (hap order arbitrary)
+H1={events[0]:'C',events[1]:'T',events[2]:'A',events[3]:'G',events[4]:'G',events[5]:'D',events[6]:'G',events[7]:'A'}
+H2={events[0]:'A',events[1]:'C',events[2]:'T',events[3]:'D',events[4]:'C',events[5]:'A',events[6]:'D',events[7]:'G'}
+# For each pair vector, compute mismatches to H1/H2 among observed
+for name,vec in comb.items():
+    m1=sum(vec[p]"'!=h for p,h in H1.items() if p in vec)
+    m2=sum(vec[p]!=h for p,h in H2.items() if p in vec)
+    # ignore if only one mismatch? print any with min>0 and more than1 obs or min>0
+    if min(m1,m2)>0:
+        print(name, vec, m1,m2)
+print('"'done')
+PY"

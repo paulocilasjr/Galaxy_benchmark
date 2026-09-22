@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,math
+from collections import defaultdict, Counter
+site=defaultdict(dict)
+with open('Chinese_Spring_root_dotplot_data.tsv') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        site[row['cluster']][row['gene']]=float(row['avg_exp'])
+clusters=sorted(site)
+source_genes=set().union(*(set(d) for d in site.values()))
+local={}
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t')
+    header=next(r)[1:]
+    for row in r:
+        if row[0] in source_genes:
+            local[row[0]]=[float(x) for x in row[1:]]
+genes=sorted(local)
+print('clusters', clusters)
+print('source genes', len(source_genes), 'local overlap', len(genes))
+def pearson(x,y):
+    n=len(x); mx=sum(x)/n; my=sum(y)/n
+    vx=sum((a-mx)**2 for a in x); vy=sum((b-my)**2 for b in y)
+    return sum((a-mx)*(b-my) for a,b in zip(x,y))/math.sqrt(vx*vy) if vx and vy else float('nan')
+# all genes log1p; also variable genes in source/local to avoid housekeeping dilution
+print('\\nLocal -> source, all overlap')
+mat=[]
+for j,h in enumerate(header):
+    vals=[]
+    for cl in clusters:
+        x=[math.log1p(local[g][j]) for g in genes]
+        y=[math.log1p(site[cl].get(g,0)) for g in genes]
+        vals.append((cl, pearson(x,y)))
+    vals.sort(key=lambda x:x[1], reverse=True)
+    mat.append((h, vals))
+    print(f'{h:<12} ' + ' | '.join(f'{cl}:{r:.3f}' for cl,r in vals[:7]))
+print('\\nSource -> local, all overlap')
+for cl in clusters:
+    vals=[]
+    for j,h in enumerate(header):
+        x=[math.log1p(site[cl].get(g,0)) for g in genes]
+        y=[math.log1p(local[g][j]) for g in genes]
+        vals.append((h, pearson(x,y)))
+    vals.sort(key=lambda x:x[1], reverse=True)
+    print(f'{cl:<18} ' + ' | '.join(f'{h}:{r:.3f}' for h,r in vals[:5]))
+# Determine best expected mapping for 10 shared labels
+name_map={'cortex':'Cortex','endodermis':'Endodermis','epidermis':'Epidermis','meristems':'Meristems','pericycle':'Pericycle','phloem':'Phloem','provascular':'Provascular cells','root_cap':'Root Cap','root_hair':'Root Hair','xylem':'Xylem'}
+print('\\nExpected-label correlations')
+for h,cl in name_map.items():
+    j=header.index(h)
+    corr=pearson([math.log1p(local[g][j]) for g in genes], [math.log1p(site[cl].get(g,0)) for g in genes])
+    # best local for source cl
+    best=max(((hh, pearson([math.log1p(site[cl].get(g,0)) for g in genes], [math.log1p(local[g][jj]) for g in genes])) for jj,hh in enumerate(header)), key=lambda x:x[1])
+    print(f'{h:<12} vs {cl:<17} corr={corr:.3f} best_local_for_source={best[0]}:{best[1]:.3f}')
+PY"

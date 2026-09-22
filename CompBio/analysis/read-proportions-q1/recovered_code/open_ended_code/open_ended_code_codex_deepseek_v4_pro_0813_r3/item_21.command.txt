@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+from Bio import SeqIO
+import gzip, time, pickle
+from collections import defaultdict
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+names=list(seqs); comp=str.maketrans('ACGT','TGCA'); L=36;k=5;maxd=6
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in seqs}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1): index[name]['f'][s[i:i+k]].append(i)
+    rs=s.translate(comp)[::-1]
+    for i in range(len(rs)-L+1): index[name]['r'][rs[i:i+k]].append(i)
+
+def count_dists(read,name):
+    cnt=[0]*(maxd+1); min_any=L+1
+    for strand in ['f','r']:
+        idx=index[name][strand]; sstr=seqs[name] if strand=='f' else seqs[name].translate(comp)[::-1]
+        aligns=set()
+        for start in range(0,L-k+1,k):
+            seed=read[start:start+k]
+            for pos in idx.get(seed,()):
+                a=pos-start
+                if 0<=a<=len(sstr)-L: aligns.add(a)
+        for a in aligns:
+            d=0
+            for j in range(L):
+                if sstr[a+j]"'!=read[j]:
+                    d+=1
+                    if d>maxd and d>=min_any: break
+            # above breaks early; but need exact d up to maxd? We'"'ll just sum if d<=maxd; for min we need exact if lower than min.
+            # Actually early break could undercount min if d is high but still lower than previous min? initial high. Use direct sum for now.
+            d=sum(sstr[a+j]"'!=read[j] for j in range(L))
+            if d<min_any: min_any=d
+            if d<=maxd: cnt[d]+=1
+    return cnt,min_any
+
+def brute_counts(read,name):
+    cnt=[0]*(maxd+1); best=L+1
+    for strand in ['"'f','r']:
+        sstr=seqs[name] if strand=='f' else seqs[name].translate(comp)[::-1]
+        for a in range(len(sstr)-L+1):
+            d=sum(sstr[a+j]"'!=read[j] for j in range(L))
+            if d<best: best=d
+            if d<=maxd: cnt[d]+=1
+    return cnt,best
+
+start=time.time(); allcnt=[]; allmin=[]; no_cand=0; reads=[]
+with gzip.open('"'read.proportions.q1.fq.gz','rt') as f:
+    for i in range(40000):
+        h=f.readline(); seq=f.readline().strip().upper(); f.readline(); f.readline(); reads.append(seq)
+        row=[None]*4; mins=[L+1]*4
+        for j,n in enumerate(names):
+            c,m=count_dists(seq,n)
+            if m==L+1:
+                no_cand+=1
+                c,m=brute_counts(seq,n)
+            row[j]=c; mins[j]=m
+        allcnt.append(row); allmin.append(mins)
+print('time',time.time()-start,'no_cand chromosome calls',no_cand)
+with open('counts_mins.pkl','wb') as f:
+    pickle.dump({'counts':allcnt,'mins':allmin,'reads':reads,'names':names},f)
+# report hist
+from collections import Counter
+hist=Counter(min(row) for row in allmin)
+print('hist exact min',hist)
+unique=Counter()
+for i,row in enumerate(allmin):
+    md=min(row); ns=[j for j,d in enumerate(row) if d==md]
+    if len(ns)==1: unique[names[ns[0]]]+=1
+print('unique',unique)
+PY"

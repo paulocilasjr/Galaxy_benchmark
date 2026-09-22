@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from Bio import SeqIO
+import statsmodels.api as sm
+sets=['cond1','common','cond2']
+orig={}; shuf={}
+for s in sets:
+ o=pd.read_csv(f'macs/bdgdiff/{s}.motif_scan.tsv',sep='\\t')
+ sh=pd.read_csv(f'macs/bdgdiff/{s}.dinuc_motif_scan.tsv',sep='\\t')
+ gcs=[]; lens=[]
+ for rec in SeqIO.parse(f'macs/bdgdiff/{s}.fa','fasta'):
+  seq=str(rec.seq).upper(); lens.append(len(seq)); gcs.append((seq.count('G')+seq.count('C'))/len(seq) if seq else 0)
+ o['gc']=gcs; o['length']=lens; o['set']=s
+ for c in [c for c in sh.columns if c.endswith('_dinuc')]:
+  col=c[:-6]+'_p1e-4_dinucbin'; o[col]=(sh[c]>0).astype(int)
+ orig[s]=o
+# prevalence diff
+rows=[]
+for col in [c for c in orig['cond2'].columns if c.endswith('_p1e-4')]:
+ motif=col[:-6]
+ diffs={}
+ for s in sets:
+  o=(orig[s][col]>0).mean(); sh=(orig[s][col+'_dinucbin']>0).mean(); diffs[s]=o-sh
+ rows.append({'motif':motif,'cond2_o_minus_d':diffs['cond2'],'common_o_minus_d':diffs['common'],'diff':diffs['cond2']-diffs['common']})
+res=pd.DataFrame(rows).sort_values('diff',ascending=False)
+print('Dinucleotide-shuffled prevalence differences')
+print(res.to_string(index=False,float_format=lambda x:f'{x:,.4g}'))
+# logistic with dinuc binary
+d=pd.concat([orig['cond2'],orig['common']],ignore_index=True); d['cond2']=(d['set']=='cond2').astype(int)
+rows=[]
+for col in [c for c in d.columns if c.endswith('_p1e-4')]:
+ motif=col[:-6]; din=col+'_dinucbin'; d['has']=(d[col]>0).astype(int); d['has_din']=d[din]
+ X=sm.add_constant(d[['cond2','gc','length','has_din']].astype(float))
+ try:
+  m=sm.Logit(d['has'],X).fit(disp=0); coef=m.params['cond2']; odds=np.exp(coef); p=m.pvalues['cond2']
+ except Exception as e: coef=np.nan;odds=np.nan;p=np.nan
+ rows.append({'motif':motif,'adj_OR_dinuc':odds,'logOR':coef,'p':p})
+res2=pd.DataFrame(rows).sort_values('adj_OR_dinuc',ascending=False)
+print('\\nLogistic adjusted by GC+length+dinuc-shuffled motif')
+print(res2.to_string(index=False,float_format=lambda x:f'{x:,.4g}'))
+PY"

@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, json, concurrent.futures, time, collections, math
+
+rows=[l.rstrip('\\n').split('\\t') for l in open('[REDACTED LOCAL PATH]')]
+# take first 120 unique rs
+pvals={}
+seen=set(); candidates=[]
+for r in rows:
+    p,ch,pos,ref,alt,vid,rsstr=r
+    rs=rsstr.split(',')[0] if rsstr and not rsstr.startswith('ERR') else ''
+    if rs and rs not in seen:
+        seen.add(rs); pvals[rs]=float(p); candidates.append(rs)
+print('candidates',len(candidates))
+
+def query(rs):
+    u='https://www.ebi.ac.uk/gwas/rest/api/associations/search/findByRsId?rsId='+rs+'&size=100'
+    req=urllib.request.Request(u,headers={'Accept':'application/json','User-Agent':'Mozilla/5.0'})
+    try:
+        d=json.load(urllib.request.urlopen(req,timeout=60))
+        assocs=d['_embedded']['associations']
+    except Exception as e:
+        return rs,[]
+    out=[]
+    for a in assocs:
+        # get study link and p
+        p=a.get('pvalue')
+        sturl=a['_links']['study']['href'].replace('{?projection}','')
+        try:
+            st=json.load(urllib.request.urlopen(urllib.request.Request(sturl,headers={'Accept':'application/json','User-Agent':'Mozilla/5.0'}),timeout=30))
+            pmid=st.get('publicationInfo',{}).get('pubmedId')
+            acc=st.get('accessionId')
+            trait=st.get('diseaseTrait',{}).get('trait')
+            author=st.get('publicationInfo',{}).get('author',{}).get('fullname')
+            out.append({'p':p,'pmid':pmid,'acc':acc,'trait':trait,'author':author})
+        except Exception as e:
+            out.append({'p':p,'pmid':None,'acc':'ERR','trait':str(e)[:50],'author':None})
+        time.sleep(0.02)
+    return rs,out
+
+results=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+    futs=[ex.submit(query,rs) for rs in candidates]
+    for fut in concurrent.futures.as_completed(futs):
+        rs,out=fut.result(); results.append((rs,out))
+        print(rs, 'assoc',len(out))
+# collect repeated pmid among top matching
+for rs,out in results:
+    ours=pvals[rs]
+    matches=[]
+    for o in out:
+        try:
+            op=float(o['p'])
+            # compare exponent and mantissa tolerance
+            if op>0 and abs(math.log10(op)-math.log10(ours)) < 0.2:
+                matches.append((o['pmid'],o['trait'],o['p'],o['author']))
+        except: pass
+    if matches:
+        print('\\n',rs,'ours',ours,'close:',matches[:10])
+PY"

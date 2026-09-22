@@ -1,0 +1,37 @@
+/bin/bash -lc "cat > marker_check.py <<'PY'
+# Reuse gene activity computed quickly? compute G for window 50k log1p and zscore rows
+import gzip,bisect,numpy as np,pandas as pd
+rna=pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz',sep='\\t',index_col=0,compression='gzip')
+atac=pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz',sep='\\t',index_col=0,compression='gzip')
+gi=pd.read_csv('gene_info.tsv',sep='\\t',names=['gene','chrom','start','end','strand']); gi=gi[gi.gene.isin(rna.index)].copy(); gi['tss']=np.where(gi.strand=='-',gi.end,gi.start)
+names=atac.index.to_numpy(); parts=np.array([x.split('_') for x in names]); chroms=parts[:,0]; starts=parts[:,1].astype(int); ends=parts[:,2].astype(int)
+chrom_idx={}
+for c in np.unique(chroms):
+ m=chroms==c; idx=np.where(m)[0]; order=idx[np.argsort(starts[idx])]; chrom_idx[c]=(starts[order],ends[order],order)
+def gene_activity(window=50000):
+ av=np.log1p(atac.to_numpy()); rows=[]; genes=[]
+ for row in gi.itertuples(index=False):
+  c=row.chrom
+  if c not in chrom_idx: genes.append(row.gene); rows.append(np.zeros(8)); continue
+  st_arr,en_arr,order=chrom_idx[c]; tss=row.tss
+  lo=bisect.bisect_left(st_arr,tss-window); lo=max(0,lo-1); hi=bisect.bisect_right(st_arr,tss+window); hi=min(len(st_arr),hi)
+  vals=av[order[lo:hi]].sum(axis=0) if hi>lo else np.zeros(8)
+  rows.append(vals); genes.append(row.gene)
+ return pd.DataFrame(np.vstack(rows),index=genes)
+G=gene_activity()
+# zscore across atac columns per gene
+Gz=G.sub(G.mean(axis=1),axis=0).div(G.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+# markers for each RNA col based on logfc computed
+markers={}
+for j in range(8):
+ vals=rna.iloc[:,j].values; others=rna.drop(columns=rna.columns[j]).mean(axis=1).values
+ fc=np.log2((vals+0.1)/(others+0.1)); score=fc*(vals>0)
+ markers[j]=rna.index[np.argsort(score)[::-1][:50]]
+for j,gs in markers.items():
+ common=[g for g in gs if g in Gz.index]
+ print('\\nRNA col',j,'common',len(common))
+ scores=Gz.loc[common].mean(axis=0)
+ print('avg Gz ATAC columns', scores.round(3).tolist())
+ print('best',scores.idxmax())
+PY
+python3 marker_check.py"

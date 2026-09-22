@@ -1,0 +1,72 @@
+/bin/bash -lc "cat > calculate_lengths.py <<'PY'
+import gzip, re, collections
+import numpy as np
+
+standard = {f'chr{i}' for i in range(1, 23)} | {'chrX','chrY','chrM'}
+transcripts = {}
+features = collections.Counter()
+chroms = collections.Counter()
+with gzip.open('MANE.GRCh38.v1.3.refseq_genomic.gtf.gz', 'rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        chrom, source, feature, start, end, score, strand, phase, attrs = line.rstrip('\\n').split('\\t')
+        chroms[chrom] += 1
+        features[feature] += 1
+        if chrom not in standard or 'tag \"MANE Select\";' not in attrs: continue
+        tid = re.search(r'transcript_id \"(["'^"]+)"'"', attrs).group(1)
+        t = transcripts.setdefault((chrom,tid), {'strand': strand, 'features': collections.defaultdict(list)})
+        assert t['strand'] == strand
+        t['features'][feature].append((int(start), int(end)))
+
+def merge(intervals):
+    out = []
+    for a,b in sorted(intervals):
+        if out and a <= out[-1][1]+1:
+            out[-1] = (out[-1][0], max(out[-1][1],b))
+        else: out.append((a,b))
+    return out
+
+rows = []
+issues = []
+for (chrom,tid),t in transcripts.items():
+    fs = t['features']
+    assert len(fs['transcript']) == 1
+    exons = merge(fs['exon'])
+    coding = merge(fs['CDS'] + fs['stop_codon'])
+    if not coding:
+        issues.append((tid,'no coding'))
+        continue
+    lo, hi = coding[0][0], coding[-1][1]
+    left = sum(max(0,min(b,lo-1)-a+1) for a,b in exons)
+    right = sum(max(0,b-max(a,hi+1)+1) for a,b in exons)
+    utr5,utr3 = (left,right) if t['strand']=='+' else (right,left)
+    cds = sum(b-a+1 for a,b in coding)
+    total = sum(b-a+1 for a,b in exons)
+    if utr5+cds+utr3 "'!= total: issues.append((tid,'"'partition',total,utr5,cds,utr3))
+    # Independently map the coding boundary into spliced transcript coordinates.
+    oriented_exons = exons if t['strand']=='+' else exons[::-1]
+    offset = 0
+    mapped = []
+    for a,b in oriented_exons:
+        for c,d in coding:
+            x,y = max(a,c),min(b,d)
+            if x<=y:
+                mapped.append((offset+x-a,offset+y-a) if t['strand']=='+' else (offset+b-y,offset+b-x))
+        offset += b-a+1
+    assert min(a for a,b in mapped) == utr5
+    assert total-max(b for a,b in mapped)-1 == utr3
+    assert sum(b-a+1 for a,b in mapped) == cds
+    rows.append((chrom,tid,utr5,cds,utr3))
+print('Features:',features)
+print('Chromosomes:',chroms)
+print('Selected transcripts:',len(transcripts),'Rows:',len(rows))
+print('Issues:',issues)
+values = np.array([r[2:] for r in rows])
+print('Zero lengths:',(values==0).sum(axis=0))
+print('Medians:',np.median(values,axis=0))
+print('Answer:',';'.join(str(int(np.floor(x))) for x in np.median(values,axis=0)))
+with open('transcript_lengths.tsv','w') as f:
+    f.write('chromosome\\ttranscript_id\\tutr5\\tcds\\tutr3\\n')
+    for row in rows: f.write('\\t'.join(map(str,row))+'\\n')
+PY
+python calculate_lengths.py"

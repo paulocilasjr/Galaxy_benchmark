@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from Bio import SeqIO
+import statsmodels.api as sm
+sets=['cond1','common','cond2']; orig={}; shuf={}
+for s in sets:
+ o=pd.read_csv(f'macs/bdgdiff/{s}.motif_scan.tsv',sep='\\t'); sh=pd.read_csv(f'macs/bdgdiff/{s}.shuffled_motif_scan.tsv',sep='\\t')
+ gcs=[]; lens=[]
+ for rec in SeqIO.parse(f'macs/bdgdiff/{s}.fa','fasta'):
+  seq=str(rec.seq).upper(); lens.append(len(seq)); gcs.append((seq.count('G')+seq.count('C'))/len(seq) if seq else 0)
+ o['gc']=gcs; o['length']=lens; o['set']=s
+ for c in [c for c in sh.columns if c.endswith('_shuf')]:
+  col=c[:-5]+'_p1e-4_shufbin'; o[col]=(sh[c]>0).astype(int)
+ orig[s]=o
+d=pd.concat([orig['cond2'],orig['common']],ignore_index=True); d['cond2']=(d['set']=='cond2').astype(int)
+col='PAX7_MA0680.3_p1e-4'; shufcol=col+'_shufbin'; d['has']=(d[col]>0).astype(int); d['has_shuf']=d[shufcol]
+print(d.groupby('cond2')[['has','has_shuf']].mean())
+X=sm.add_constant(d[['cond2','gc','length','has_shuf']].astype(float)); m=sm.Logit(d['has'],X).fit(disp=0)
+print(m.params); print(m.pvalues)
+# remove shuf
+X2=sm.add_constant(d[['cond2','gc','length']].astype(float)); m2=sm.Logit(d['has'],X2).fit(disp=0); print('no shuf',m2.params)
+PY"

@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+
+def prep(a):
+    X=a.X
+    if sparse.issparse(X): X=X.toarray()
+    # library normalize to median? use log1p CPM
+    lib=X.sum(axis=1,keepdims=True)
+    cpm=X/lib*1e4
+    return np.log1p(cpm), a.obs.copy(), a.var_names
+
+for name,a in [('ref',ref),('query',q)]:
+    X,obs,genes=prep(a)
+    nt_mask=obs.guide.astype(str).str.startswith('NT').values
+    nt_mean=X[nt_mask].mean(axis=0)
+    print('\\n',name)
+    for guide, sub in obs.groupby(obs.guide.astype(str), observed=True):
+        if guide.startswith('NT'): continue
+        m=X[sub.index].mean(axis=0)-nt_mean
+        # top positive/negative
+        order=np.argsort(m)
+        print(guide, 'down genes:', ', '.join(genes[order[:8]].astype(str)), 'score', m[order[:3]].round(3))
+PY"

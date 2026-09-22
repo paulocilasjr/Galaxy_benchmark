@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+# reuse simple calculation from saved? recompute only unshifted all, print profile and smoothed
+import gzip, collections, numpy as np
+chroms={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+S=collections.defaultdict(list);E=collections.defaultdict(list);T=collections.defaultdict(set)
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+ for l in f:
+  a=l.split('\\t'); c=a[0]
+  if c in chroms:S[c].append(int(a[1]));E[c].append(int(a[2]))
+with gzip.open('ncbiRefSeq.txt.gz','rt') as f:
+ for l in f:
+  a=l.rstrip().split('\\t')
+  if len(a)>=6 and a[2] in chroms:T[a[2]].add(int(a[4]) if a[3]=='+' else int(a[5]))
+for d in [S,E]:
+ for c in d:d[c]=np.sort(np.array(d[c]));
+for c in T:T[c]=np.array(list(T[c]))
+for name,D in [('s',S),('e',E),('both',{c:np.r_[S.get(c,[]),E.get(c,[])] for c in chroms})]:
+ h=np.zeros(401,dtype=int);win=200
+ for c,ts in T.items():
+  arr=np.sort(np.array(D.get(c,[])))
+  for p in ts:
+   lo=np.searchsorted(arr,p-win-20);hi=np.searchsorted(arr,p+win+20)
+   v=arr[lo:hi]-p;v=v[(v>=-win)&(v<=win)]
+   h+=np.bincount(v+win,minlength=401)
+ print(name,'sum',h.sum(),'mean',h.mean(),'max',h.max(),'argmax',h.argmax()-win)
+ for r in range(-200,201,5):
+  x=h[r+win:r+win+5].sum(); print(f'{r:+4d} {x:5d}')
+ print()
+PY"

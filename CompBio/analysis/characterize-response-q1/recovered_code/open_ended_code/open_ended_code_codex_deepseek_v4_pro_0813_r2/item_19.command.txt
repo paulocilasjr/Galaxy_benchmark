@@ -1,0 +1,38 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, json, math
+genes=[g.upper() for g in open('characterize.response.q1.txt').read().strip().split('\\n')]
+N=len(genes)
+libs=['Disease_Perturbations_from_GEO_up','Disease_Perturbations_from_GEO_down','Ligand_Perturbations_from_GEO_up','Ligand_Perturbations_from_GEO_down','Gene_Perturbations_from_GEO_up','Gene_Perturbations_from_GEO_down','MCF7_Perturbations_from_GEO_up','MCF7_Perturbations_from_GEO_down','CellMarker_Augmented_2021','PanglaoDB_Augmented_2021','ARCHS4_Tissues']
+rank={g:i+1 for i,g in enumerate(genes)}
+results=[]
+for lib in libs:
+    try:
+      r=requests.get('https://maayanlab.cloud/Enrichr/geneSetLibrary',params={'libraryName':lib},timeout=120)
+      data=r.json()[lib]['terms']
+    except Exception as e:
+      print('err',lib,e); continue
+    for term, vals in data.items():
+      vals=[v.upper() for v in vals]
+      # Compare first N term genes to our exact order (rank-biased)
+      common=[v for v in vals[:N] if v in rank]
+      if not common: continue
+      # Kendall-like: sum rank distance over common? use normalized DCG or Spearman footrule on common prefix
+      # score exact prefix positions: sum 1/(abs(diff)+1)
+      prefix_score=0
+      for j,v in enumerate(vals[:N]):
+        if v in rank:
+          prefix_score += 1/(abs(j+1-rank[v])+1)
+      # overlap first k
+      overlap_first=len(set(vals[:N]) & set(genes))
+      # also average rank of our genes in term (only those present)
+      present=[v for v in genes if v in vals]
+      avgterm=sum((vals.index(v)+1) for v in present)/len(present) if present else 9999
+      # count genes in top 10/20/50/112 of term
+      c10=len(set(vals[:10]) & set(genes)); c20=len(set(vals[:20]) & set(genes)); c50=len(set(vals[:50]) & set(genes)); c112=len(set(vals[:N]) & set(genes))
+      results.append((prefix_score,overlap_first,c112,c50,c20,c10,avgterm,len(vals),term,lib))
+# Sort by prefix_score desc
+results.sort(key=lambda x:x[0], reverse=True)
+print('top by prefix positional similarity')
+for row in results[:50]:
+ print(round(row[0],2),'ov',row[1],'firstN',row[2],'first50',row[3],'first20',row[4],'first10',row[5],'avgterm',round(row[6],1),'len',row[7],row[8][:80],row[9])
+PY"

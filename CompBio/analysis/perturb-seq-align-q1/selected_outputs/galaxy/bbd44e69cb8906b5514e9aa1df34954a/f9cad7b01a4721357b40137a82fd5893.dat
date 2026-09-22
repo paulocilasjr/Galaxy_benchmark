@@ -1,0 +1,208 @@
+import sys
+
+import h5py
+import numpy as np
+import pandas as pd
+from scipy import sparse
+from scipy.stats import rankdata
+
+
+def read_categorical(node):
+    if isinstance(node, h5py.Dataset):
+        values = node[()]
+        if values.dtype.kind == "O":
+            values = values.astype(str)
+        else:
+            values = values.astype(str)
+        return values
+    categories = node["categories"][()].astype(str)
+    codes = node["codes"][()]
+    return categories[codes]
+
+
+def read_csc_matrix(group):
+    shape = tuple(int(v) for v in group.attrs["shape"])
+    data = group["data"][()]
+    indices = group["indices"][()]
+    indptr = group["indptr"][()]
+    return sparse.csc_matrix((data, indices, indptr), shape=shape).tocsr()
+
+
+def load_h5ad(path):
+    with h5py.File(path, "r") as f:
+        x = read_csc_matrix(f["X"])
+        guide = read_categorical(f["obs"]["guide"]).astype(str)
+        if "target_gene" in f["obs"]:
+            target = read_categorical(f["obs"]["target_gene"]).astype(str)
+        else:
+            target = np.full(guide.shape, "", dtype=str)
+        var_names = read_categorical(f["var"]["_index"]).astype(str)
+    return x, guide, target, var_names
+
+
+def log_normalized_csr(x):
+    totals = np.asarray(x.sum(axis=1)).ravel().astype(float)
+    totals[totals <= 0] = 1.0
+    scale = 1e4 / totals
+    counts = np.diff(x.indptr)
+    x = x.copy()
+    x.data = x.data.astype(float) * np.repeat(scale, counts)
+    x.data = np.log1p(x.data)
+    x.eliminate_zeros()
+    return x.tocsr()
+
+
+def group_mean_vectors(x, labels, groups):
+    out = np.zeros((len(groups), x.shape[1]), dtype=float)
+    for i, group in enumerate(groups):
+        idx = np.flatnonzero(labels == group)
+        if idx.size:
+            out[i] = np.asarray(x[idx, :].mean(axis=0)).ravel()
+    return out
+
+
+def nt_mean_vector(x, labels):
+    mask = np.array([s.startswith("NT-") for s in labels])
+    if not mask.any():
+        raise RuntimeError("No NT controls found")
+    return np.asarray(x[mask, :].mean(axis=0)).ravel()
+
+
+def safe_pearson(a, b):
+    a = a - a.mean(axis=1, keepdims=True)
+    b = b - b.mean(axis=1, keepdims=True)
+    an = np.sqrt((a * a).sum(axis=1, keepdims=True))
+    bn = np.sqrt((b * b).sum(axis=1, keepdims=True))
+    denom = an @ bn.T
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = (a @ b.T) / denom
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    return corr
+
+
+def spearman_matrix(a, b):
+    a_rank = np.vstack([rankdata(row) for row in a])
+    b_rank = np.vstack([rankdata(row) for row in b])
+    return safe_pearson(a_rank, b_rank)
+
+
+def top_variable_genes(concat, n=5000):
+    var = np.var(concat, axis=0)
+    n = min(n, int((var > 0).sum()))
+    return np.argsort(var)[::-1][:n]
+
+
+def best_hits(corr, query_names, ref_names):
+    rows = []
+    for i, qname in enumerate(query_names):
+        j = int(np.argmax(corr[i]))
+        rows.append((qname, ref_names[j], corr[i, j]))
+    return pd.DataFrame(rows, columns=["query_guide", "ref_target", "correlation"])
+
+
+def target_hits(corr, query_names, ref_names, targets):
+    rows = []
+    for target in targets:
+        j = np.flatnonzero(ref_names == target)[0]
+        order = np.argsort(corr[:, j])[::-1]
+        top = [(query_names[k], corr[k, j]) for k in order[:3]]
+        for rank, (qname, value) in enumerate(top, 1):
+            rows.append((target, qname, value, rank))
+    return pd.DataFrame(rows, columns=["target_gene", "query_guide", "correlation", "rank"])
+
+
+def write_matrix(path, corr, query_names, ref_names):
+    frame = pd.DataFrame(corr, index=query_names, columns=ref_names)
+    frame.to_csv(path, sep="\t")
+
+
+def main(ref_path, query_path, out_prefix):
+    ref_x, ref_guide, ref_target, ref_genes = load_h5ad(ref_path)
+    query_x, query_guide, _, query_genes = load_h5ad(query_path)
+
+    if not np.array_equal(ref_genes, query_genes):
+        query_gene_to_col = {g: i for i, g in enumerate(query_genes)}
+        if not np.isin(ref_genes, query_genes).all():
+            missing = ref_genes[~np.isin(ref_genes, query_genes)]
+            raise RuntimeError(f"Query is missing reference genes: {missing[:5]}")
+        query_col_order = np.array([query_gene_to_col[g] for g in ref_genes])
+        query_x = query_x[:, query_col_order]
+        query_genes = ref_genes
+
+    ref_x = log_normalized_csr(ref_x)
+    query_x = log_normalized_csr(query_x)
+
+    ref_groups = np.unique(ref_guide)
+    query_groups = np.unique(query_guide)
+    ref_pert_groups = np.array([g for g in ref_groups if not g.startswith("NT-")])
+    query_pert_groups = np.array([g for g in query_groups if not g.startswith("NT-")])
+
+    ref_means = group_mean_vectors(ref_x, ref_guide, ref_groups)
+    query_means = group_mean_vectors(query_x, query_guide, query_groups)
+    ref_nt = nt_mean_vector(ref_x, ref_guide)
+    query_nt = nt_mean_vector(query_x, query_guide)
+
+    ref_group_to_row = {g: i for i, g in enumerate(ref_groups)}
+    query_group_to_row = {g: i for i, g in enumerate(query_groups)}
+    ref_pert_rows = [ref_group_to_row[g] for g in ref_pert_groups]
+    query_pert_rows = [query_group_to_row[g] for g in query_pert_groups]
+    ref_sig = ref_means[ref_pert_rows, :] - ref_nt[None, :]
+    query_sig = query_means[query_pert_rows, :] - query_nt[None, :]
+
+    ref_target_names = np.array([ref_target[ref_guide == g][0] for g in ref_pert_groups])
+    query_names = query_pert_groups
+
+    all_genes = np.arange(ref_sig.shape[1])
+    var_genes = top_variable_genes(np.vstack([ref_sig, query_sig]), n=5000)
+
+    corr_all = safe_pearson(query_sig, ref_sig)
+    corr_var = safe_pearson(query_sig[:, var_genes], ref_sig[:, var_genes])
+    corr_spearman = spearman_matrix(query_sig[:, var_genes], ref_sig[:, var_genes])
+
+    best_all = best_hits(corr_all, query_names, ref_target_names)
+    best_var = best_hits(corr_var, query_names, ref_target_names)
+    best_spearman = best_hits(corr_spearman, query_names, ref_target_names)
+    best_all.to_csv(f"{out_prefix}.best_all.tsv", sep="\t", index=False)
+    best_var.to_csv(f"{out_prefix}.best_var.tsv", sep="\t", index=False)
+    best_spearman.to_csv(f"{out_prefix}.best_spearman.tsv", sep="\t", index=False)
+
+    write_matrix(f"{out_prefix}.corr_all.tsv", corr_all, query_names, ref_target_names)
+    write_matrix(f"{out_prefix}.corr_var.tsv", corr_var, query_names, ref_target_names)
+    write_matrix(f"{out_prefix}.corr_spearman.tsv", corr_spearman, query_names, ref_target_names)
+
+    interest = ["PABPC1", "NUDT21", "LEO1"]
+    for label, corr in [("all", corr_all), ("var", corr_var), ("spearman", corr_spearman)]:
+        target_hits(corr, query_names, ref_target_names, interest).to_csv(
+            f"{out_prefix}.targets.{label}.tsv", sep="\t", index=False
+        )
+
+    # Compact final answer table: highest correlation for the three requested genes.
+    final_rows = []
+    for target in interest:
+        j = np.flatnonzero(ref_target_names == target)[0]
+        order = np.argsort(corr_spearman[:, j])[::-1]
+        final_rows.append(
+            {
+                "target_gene": target,
+                "query_guide": query_names[order[0]],
+                "spearman_correlation": corr_spearman[order[0], j],
+                "pearson_var_correlation": corr_var[order[0], j],
+                "pearson_all_correlation": corr_all[order[0], j],
+            }
+        )
+    pd.DataFrame(final_rows).to_csv(f"{out_prefix}.final.tsv", sep="\t", index=False)
+
+    with open(f"{out_prefix}.readme.txt", "w") as out:
+        out.write(
+            "Perturb-seq guide matching\n"
+            "Normalization: counts per 10k, log1p; group mean per guide.\n"
+            "Signature: group mean - mean of NT control cells.\n"
+            "Matrices: query guides x reference target genes; Pearson all genes, "
+            "Pearson top 5000 variable genes, Spearman top 5000 variable genes.\n"
+            f"reference perturbation guides={len(ref_pert_groups)}, "
+            f"query perturbation guides={len(query_pert_groups)}\n"
+        )
+
+
+if __name__ == "__main__":
+    main(sys.argv[1], sys.argv[2], sys.argv[3])

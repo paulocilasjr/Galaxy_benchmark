@@ -1,0 +1,68 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+
+base='extracted/'
+sc=pd.read_csv(base+'spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv(base+'spatial_q_sc_metadata.csv',index_col=0)
+sp=mmread(base+'matrix.mtx.gz').tocsr().toarray().T # spots x genes
+features=pd.read_csv(base+'features.tsv.gz',sep='\\t',header=None)
+barcodes=pd.read_csv(base+'barcodes.tsv.gz',header=None)[0].values
+pos=pd.read_csv(base+'tissue_positions.csv')
+# ensure gene order
+print('gene names match',list(sc.columns)==features[1].tolist())
+types=sorted(meta.cell_type.unique())
+# ref mean normalized per cell
+sc_norm=sc.div(sc.sum(axis=1),axis=0)
+ref1=meta.join(sc_norm).groupby('cell_type')[sc.columns].mean().loc[types].T.values
+# ref total mean normalized
+ref2=meta.join(sc).groupby('cell_type')[sc.columns].mean().loc[types].T.values
+ref2=ref2/ref2.sum(axis=0)
+# all genes and marker genes
+# marker score: differential and expression; top 100 each by log fold nmean vs other
+nmeans=meta.join(sc_norm).groupby('cell_type')[sc.columns].mean().loc[types]
+markers=[]
+for ti,t in enumerate(types):
+ other=nmeans.drop(t).mean(axis=0)
+ # log fold + specificity, choose top 100 among genes with mean > etc
+ score=np.log2((nmeans.loc[t]+1e-6)/(other+1e-6))
+ markers.extend(score.sort_values(ascending=False).head(100).index.tolist())
+markers=list(dict.fromkeys(markers))
+# also top discriminative based max-min
+print('types',types,'marker union',len(markers))
+
+def solve(ref, genes=None, weight=False):
+ if genes is None: rr=ref; yy=sp
+ else:
+  gi=[sc.columns.get_loc(g) for g in genes]
+  rr=ref[gi,:]; yy=sp[:,gi]
+ # normalized spatial profiles
+ y=yy/(yy.sum(axis=1,keepdims=True)+1e-12)
+ # possible weighted by expected; use raw normalized
+ A=rr
+ co=[]; res=[]
+ for row in y:
+  c,r=nnls(A,row)
+  if c.sum()>0:c=c/c.sum()
+  co.append(c);res.append(r)
+ return np.array(co),np.array(res)
+for name,ref in [('ref1',ref1),('ref2',ref2)]:
+ for gm,genes in [('all',None),('markers',markers)]:
+  co,res=solve(ref,genes)
+  print('\\n',name,gm,'mean residual',res.mean(),'range',res.min(),res.max())
+  print('frac means',dict(zip(types,np.round(co.mean(0),3))))
+  print('min max', {t:(round(co[:,i].min(),3),round(co[:,i].max(),3)) for i,t in enumerate(types)})
+  # grid map mean fractions each 10 rows
+  for t in ['Tumor_Core','B_Cell','Endothelial','Fibroblast_Stroma','Macrophage','T_Cell']:
+   i=types.index(t); ar=pos.array_row.values; ac=pos.array_col.values
+   grid=np.full((ar.max()+1,ac.max()+1),np.nan);grid[ar,ac]=co[:,i]
+   print(t,'center/top spots',np.round(np.sort(co[:,i])[-10:],3),'map rows')
+   for row in grid: print(' '.join(f'{v:.2f}' for v in row))
+PY
+python [REDACTED LOCAL PATH] > [REDACTED LOCAL PATH]
+wc -l [REDACTED LOCAL PATH]
+sed -n '1,100p' [REDACTED LOCAL PATH]"

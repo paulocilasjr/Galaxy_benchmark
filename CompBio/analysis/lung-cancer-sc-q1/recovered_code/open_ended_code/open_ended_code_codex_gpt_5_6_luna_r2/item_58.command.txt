@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, pandas as pd, numpy as np, json
+m=pd.read_csv('site_meta.csv',low_memory=False)
+# h5ad sample groups and original sample IDs by exact barcode-set matching
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+    hidx=f['obs/_index'][:].astype(str)
+    hcodes=f['obs/sampleID/codes'][:]
+    hcats=f['obs/sampleID/categories'][:].astype(str)
+site_sets={s:set(g['Cells'].astype(str).str.rsplit('_',n=1).str[-1]) for s,g in m.groupby('SampleID',sort=False)}
+map_patient_to_sample={}
+h5_orig=[]
+for i,p in enumerate(hcats):
+    vals=hidx[hcodes==i]
+    bare={v.split('_',2)[2] for v in vals}
+    cand=[s for s,ss in site_sets.items() if len(bare&ss)==len(bare) and len(ss)==len(bare)]
+    assert len(cand)==1
+    map_patient_to_sample[p]=cand[0]
+    h5_orig.extend([cand[0]+'_'+v.split('_',2)[2] for v in vals])
+h5_orig=set(h5_orig)
+# annotation mapping
+sub=m[m.SampleID.isin(map_patient_to_sample.values())].copy()
+assert len(sub)==len(h5_orig)
+print('all h5ad cells',len(h5_orig))
+immune={'B','CD4','CD8','DC','Gran','Mast','Mo','NK','Tregs'}
+non=sub[~sub.CellName.isin(immune)]
+print('nonimmune',len(non))
+# first question
+for p in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+ s=map_patient_to_sample[p]; g=sub[sub.SampleID==s]
+ print(p, s, g.PatientID.iloc[0], g.Disease.iloc[0], 'n=',len(g), 'DC=',(g.CellName=='DC').sum(), 'prop=',round((g.CellName=='DC').mean()*100,6))
+# API malignant basal list
+x=json.load(open('coord_cell_Basal_disease_LUSC_coord_umap_group_cluster.json'))
+mal=[z[3] for v in x['data'].values() for z in v]
+mal_orig=set(mal)
+print('malignant basal source list',len(mal_orig),'intersect h5ad',len(mal_orig&h5_orig),'missing source',len(mal_orig-h5_orig))
+print('malignant basal / all nonimmune',len(mal_orig&h5_orig),len(mal_orig&h5_orig)/len(non)*100,'nearest20',round((len(mal_orig&h5_orig)/len(non)*100)/20)*20)
+# breakdown by h5ad sample
+rev={s:p for p,s in map_patient_to_sample.items()}
+ids=mal_orig&h5_orig
+from collections import Counter
+c=Counter(x.split('_',1)[0] for x in ids)
+print('malignant basal by h5ad sample')
+for p in h5cats:
+ if map_patient_to_sample[p] in c:
+  print(p,map_patient_to_sample[p],c[map_patient_to_sample[p]])
+PY"

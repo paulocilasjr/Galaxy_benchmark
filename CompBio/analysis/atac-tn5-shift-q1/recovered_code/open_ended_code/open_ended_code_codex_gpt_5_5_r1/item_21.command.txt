@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, random, collections
+seq=''.join(l.strip().upper() for l in open('hg38_chr1.fa') if not l.startswith('>'))
+L=len(seq)
+starts=[]; ends=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        c,s,e,*_=line.split('\\t')
+        if c=='chr1': starts.append(int(s)); ends.append(int(e))
+comp=str.maketrans('ACGT','TGCA')
+def getk(p,k,orient='plus'):
+    a=p-k//2; b=a+k
+    if a<0 or b>L: return None
+    mer=seq[a:b]
+    if set(mer)-set('ACGT'): return None
+    if orient=='minus': mer=mer.translate(comp)[::-1]
+    return mer
+# background at uniform random genome positions with valid ACGT
+random.seed(1)
+bgpos=[]
+while len(bgpos)<200000:
+    p=random.randrange(20,L-20)
+    if set(seq[p-10:p+10])<=set('ACGT'):
+        bgpos.append(p)
+for k in [4,5,6,7,8,9,10,12]:
+    bg=collections.Counter(getk(p,k) for p in bgpos)
+    bg={m:c for m,c in bg.items() if m}
+    total_bg=sum(bg.values())
+    # pseudocount per possible from bg
+    print('\\nk',k)
+    for orient_name, pts, orient in [('start',starts,'plus'),('endrc',ends,'minus')]:
+        scores=[]
+        for d in range(-12,13):
+            obs=collections.Counter()
+            n=0
+            for p0 in pts:
+                # for end, p0 is BED end boundary. correct centered coordinate? try p0+d for sequence around boundary, no -1 here; orient just rc mer.
+                m=getk(p0+d,k,orient)
+                if m: obs[m]+=1; n+=1
+            # log likelihood ratio / n, chi-ish
+            ll=0.0; chi=0.0; ent=0.0
+            for m,c in obs.items():
+                q=(bg.get(m,0)+0.5)/(total_bg+0.5*4**k)
+                p=c/n
+                ll += c*math.log(p/q)
+                ent -= p*math.log(p,2)
+            # total variation weighted, KL bits
+            scores.append((ll/n/math.log(2), d, n, ent))
+        best=sorted(scores, reverse=True)[:8]
+        print(orient_name, 'best KLbits d:', ' '.join(f'{d}:{sc:.3f}' for sc,d,n,e in best))
+PY"

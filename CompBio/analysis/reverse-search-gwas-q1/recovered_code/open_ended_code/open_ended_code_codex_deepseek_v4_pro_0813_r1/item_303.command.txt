@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, urllib.request, urllib.parse, concurrent.futures, time, math
+base='https://www.ebi.ac.uk/gwas/rest/api/studies'
+# get accession list
+with urllib.request.urlopen('https://www.ebi.ac.uk/gwas/rest/api/studies/search/findByPublicationIdPubmedId?pubmedId=40593539&size=400', timeout=60) as r:
+    d=json.load(r)
+accs=[s['accessionId'] for s in d['_embedded']['studies']]
+print('accessions', len(accs), flush=True)
+targets=[7.81024e-23,4.85572e-19,1.4221e-16,9.31382e-23,1.07244e-22,1.09094e-22]
+
+def close(a,b):
+    if a==0 and b==0: return True
+    return abs(math.log10(a)-math.log10(b))<0.02
+
+def get_assoc(acc):
+    url=f'{base}/{acc}/associations?size=1000'
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            data=json.load(r)
+        ass=data.get('_embedded',{}).get('associations',[])
+        out=[]
+        for x in ass:
+            p=x.get('pvalue')
+            if p is None: continue
+            alleles=[]
+            for l in x.get('loci',[]):
+                for a in l.get('strongestRiskAlleles',[]):
+                    alleles.append(a.get('riskAlleleName'))
+            # may include snp links; skip
+            out.append((p,alleles))
+        return acc,out
+    except Exception as e:
+        return acc,[] # error
+
+results=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+    futs={ex.submit(get_assoc,a):a for a in accs}
+    for fut in concurrent.futures.as_completed(futs):
+        acc,out=fut.result()
+        if out:
+            sp=sorted(out,key=lambda t:t[0])
+            results.append((acc,sp))
+
+print('studies with assoc',len(results), flush=True)
+# print studies whose any assoc pvalue close to any target
+for acc,sp in results:
+    flags=[t for t in sp if any(close(t[0],tg) for tg in targets)]
+    if flags:
+        print('MATCH', acc, flags[:10], 'min', sp[0])
+print('Top pvalue per study with assoc:')
+for acc,sp in sorted(results, key=lambda x:x[1][0][0])[:80]:
+    print(acc, sp[0][0], sp[0][1], 'n=',len(sp))
+PY"

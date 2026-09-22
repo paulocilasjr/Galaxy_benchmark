@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, anndata as ad
+from sklearn.preprocessing import StandardScaler
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from scipy.spatial.distance import pdist
+adata=ad.read_h5ad('covid.patients.q1.h5ad'); names=list(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); sums=D['sum']; cats=D['cats']; cc=D['cell_counts']
+libs=sums.sum(axis=0,keepdims=True); log=np.log1p(sums/libs*1e6)
+def score(gs):
+ idx=[names.index(g) for g in gs if g in names]
+ z=(log[idx,:]-log[idx,:].mean(axis=1,keepdims=True))/(log[idx,:].std(axis=1,keepdims=True)+1e-9)
+ return z.mean(axis=0)
+F=pd.DataFrame({
+ 'IFN':score(['ISG15','IFI27','IFI44L','IFIT1','IFIT2','IFIT3','IFIT5','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI6','IFIH1','IFI44','IFI35','IFITM1','IFITM2','IFITM3','ISG20']),
+ 'Myeloid':score(['S100A8','S100A9','LYZ','CD14','IL1B','FCGR3A','CSF1R','MS4A7']),
+ 'Lymphoid':score(['CD3D','CD3E','CD8A','NKG7','GNLY','MS4A1','CD19','CD79A','JCHAIN','IGHG1']),
+ 'HLA':score(['HLA-DRA','HLA-DRB1','HLA-DQA1','HLA-DPA1','HLA-DPB1']),
+ 'Platelet':score(['PPBP','PF4','GP9','ITGA2B']),
+},index=cats)
+X=StandardScaler().fit_transform(F)
+Z=linkage(X,method='ward')
+# print dendrogram in text? use fcluster with k
+for k in range(2,6):
+ lab=fcluster(Z,k,criterion='maxclust')
+ print('\\nK',k)
+ for l in range(1,k+1):
+  members=cats[lab==l]
+  print(' ',l,len(members),sorted(members))
+  print('   mean features',F.loc[members].mean().round(2).to_dict())
+PY"

@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import urllib.parse, urllib.request, time, re, json, sys
+query=open('sample300.fa').read()
+params={'CMD':'Put','PROGRAM':'blastn','DATABASE':'nt','MEGABLAST':'on','QUERY':query,'FORMAT_TYPE':'JSON2_S','HITLIST_SIZE':'3','DESCRIPTIONS':'3','ALIGNMENTS':'0'}
+data=urllib.parse.urlencode(params).encode()
+print('submitting...',len(data),flush=True)
+resp=urllib.request.urlopen(urllib.request.Request('https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi',data=data),timeout=180)
+text=resp.read().decode()
+print('submit response len',len(text),flush=True)
+m=re.search(r'RID = (\\S+)', text)
+if not m:
+    m=re.search(r'value=\"([A-Z0-9]{11,13})\"', text)
+print('rid_match',m.group(1) if m else None,flush=True)
+rid=m.group(1)
+open('sample300_rid.txt','w').write(rid)
+# poll
+for i in range(60):
+    time.sleep(10)
+    try:
+        url='https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?'+urllib.parse.urlencode({'CMD':'Get','FORMAT_TYPE':'JSON2_S','RID':rid})
+        txt=urllib.request.urlopen(url,timeout=60).read().decode()
+        status='unknown'
+        if 'Status=READY' in txt or txt.lstrip().startswith('{'):
+            status='READY'
+        elif 'Status=WAITING' in txt or 'Status=FAILED' in txt:
+            mstat=re.search(r'Status=(\\w+)',txt)
+            status=mstat.group(1) if mstat else status
+        elif 'QBlastInfo' in txt:
+            ms=re.search(r'Status=(\\w+)',txt)
+            status=ms.group(1) if ms else 'HTML'
+        print('poll',i+1,'status',status,'len',len(txt),flush=True)
+        if status=='READY':
+            open('sample300_blast.json','w').write(txt)
+            print('DONE',flush=True)
+            sys.exit(0)
+        if status=='FAILED' or status=='UNKNOWN':
+            print(txt[:1000],flush=True)
+            sys.exit(2)
+    except Exception as e:
+        print('poll error',repr(e),flush=True)
+print('TIMEOUT',flush=True)
+PY"

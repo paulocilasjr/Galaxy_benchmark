@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > work/validate.py <<'PY'
+import pysam,collections
+reads=[];refs=[]
+for n in [1,2]:
+ d=collections.defaultdict(list)
+ for r in pysam.AlignmentFile('work/hap'+str(n)+'.sam'):
+  if not r.is_secondary and not r.is_supplementary:d[r.query_name].append(r)
+ reads.append(d);refs.append(''.join(open('work/hap'+str(n)+'.fa').read().splitlines()[1:]))
+assign=collections.Counter();bases=[collections.defaultdict(collections.Counter) for i in [0,1]];indels=collections.Counter();nm=collections.Counter()
+for name in reads[0]:
+ scores=[sum(r.get_tag('AS') for r in d[name]) for d in reads]
+ chosen=[i for i in [0,1] if scores[i]==max(scores)]
+ assign[tuple(chosen)]+=1
+ nm[min(sum(r.get_tag('NM') for r in d[name]) for d in reads)]+=1
+ if len(chosen)>1:continue
+ i=chosen[0]
+ for r in reads[i][name]:
+  for q,p in r.get_aligned_pairs():
+   if q is not None and p is not None:bases[i][p][r.query_sequence[q]]+=1
+  for op,n in r.cigartuples:
+   if op in [1,2,4]:indels[i,op,n]+=1
+print('Assignments',assign,'NM',nm,'indels/clips',indels)
+for i in [0,1]:
+ residual=[]
+ for p,c in sorted(bases[i].items()):
+  depth=sum(c.values());nonref=depth-c[refs[i][p]]
+  if depth>=20 and nonref/depth>.1:residual.append((p+1,refs[i][p],dict(c)))
+ print('hap',i+1,'residual >10%',residual)
+PY
+python3 work/validate.py"

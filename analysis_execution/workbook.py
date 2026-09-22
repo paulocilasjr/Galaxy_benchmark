@@ -18,8 +18,16 @@ R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 P = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 URL = re.compile(r"https?://[^\s<>\])]+")
 REP = re.compile(r"(?:replicate[ _-]*)?(\d+)$", re.I)
-TASK = re.compile(r"^(?:bix[-_]\d+[-_]q\d+|[a-z][a-z0-9_-]*[-_]q\d+|wf[_-]\d+[_a-z0-9-]*)$", re.I)
-KNOWN = {"bixbench": "bixbench", "bix": "bixbench", "bixbench-verified-50": "bixbench", "compbio": "compbio", "compbiobench": "compbio", "iwc": "iwc"}
+TASK = re.compile(r"^(?:bix[-_]\d+[-_]q\d+|[a-z0-9][a-z0-9_-]*[-_]q\d+|wf[_-]\d+[_a-z0-9-]*)$", re.I)
+KNOWN = {
+    "bixbench": "bixbench",
+    "bix": "bixbench",
+    "bixbench-verified-50": "bixbench",
+    "compbio": "compbio",
+    "compbiobench": "compbio",
+    "compbiobench v1": "compbio",
+    "iwc": "iwc",
+}
 
 
 @dataclass(frozen=True)
@@ -106,7 +114,7 @@ def read_rows(path: Path):
 
 def _condition(value: str) -> str | None:
     x = re.sub(r"[^a-z]", "", value.lower())
-    if x in {"galaxyapi", "galaxy", "galaxystrictskills", "galaxyskills", "galaxyapicodewithskills"}:
+    if x in {"galaxyapi", "galaxy", "galaxystrictskills", "galaxyskills", "galaxyapicode", "galaxyapicodewithskills"}:
         return "galaxy"
     if x in {"opencoded", "openendedcode", "openendedcodewithskills", "anycode", "anycodenongalaxyskills", "unconstrainedcode"}:
         return "open_ended_code"

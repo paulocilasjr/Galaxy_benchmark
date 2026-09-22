@@ -1,0 +1,26 @@
+/bin/bash -lc "cat > validate_model.py <<'PY'
+import os,json,time
+os.environ['TF_CPP_MIN_LOG_LEVEL']='1'
+import numpy as np,tensorflow as tf,h5py
+from basenji import rnann
+class SavedShift(tf.keras.layers.Layer):
+ def __init__(self,shift_max=0,symmetric=True,pad='uniform',**kwargs):super().__init__(**kwargs)
+ def call(self,x,training=None):return x
+p='models/f1_c1/train/model0_best.h5'
+with h5py.File(p) as f:config=f.attrs['model_config']
+a=tf.keras.models.model_from_json(config,custom_objects={'StochasticShift':SavedShift})
+a.load_weights(p)
+b=rnann.RnaNN(json.load(open('models/params.json'))['model']);b.restore(p)
+s='GCCGCCACCATGGTGAGCAAGGGCGAGTAGTGTACATAATAAGGACT'
+x=np.zeros((3,12288,6),np.float32)
+for i,seq in enumerate([s,s[:30]+'A'+s[31:],s[:-1]+'A']):
+ x[i,np.arange(len(seq)),['ACGT'.index(n) for n in seq]]=1
+ x[i,9:30:3,4]=1
+with tf.device('/GPU:0'):ya=a(x,training=False).numpy();yb=b.model(x,training=False).numpy()
+with tf.device('/CPU:0'):yc=a(x,training=False).numpy()
+np.testing.assert_allclose(ya,yb,atol=1e-5,rtol=1e-5)
+np.testing.assert_allclose(ya,yc,atol=1e-5,rtol=1e-5)
+result={'saved_model_GPU':ya.tolist(),'rnann_GPU':yb.tolist(),'saved_model_CPU':yc.tolist(),'max_abs_error':float(np.max(np.abs(ya-yc)))}
+open('validation.json','w').write(json.dumps(result,indent=2));print(result,flush=True)
+PY
+PYTHONPATH=\""'$PWD/basenji" TMPDIR="$PWD/tmp" XDG_CACHE_HOME="$PWD/cache" native/python/bin/python3 -u validate_model.py > validate_model.log 2>&1'

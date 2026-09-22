@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+# Compact independent recheck of allele states and phase using hg38 reference
+import gzip,urllib.request,edlib,re,collections,itertools
+from Bio.Seq import Seq
+b=urllib.request.urlopen('https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz').read();ls=gzip.decompress(b).decode().splitlines();chrom=''.join(ls[1:]).upper();lo=27070000;ref=chrom[lo:27090000]
+sites=[27079306,27079366,27079666,27079826,27080076,27080276,27080279,27080526]
+def rr(fn):
+ with gzip.open(fn,'rt') as f:
+  while 1:
+   h=f.readline().strip()
+   if not h:return
+   s=f.readline().strip();f.readline();f.readline();yield h,s
+def best(s):
+ a=[]
+ for o,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+  x=edlib.align(q,ref,mode='HW',task='path',k=-1);a.append((x['editDistance'],o,q,x['locations'][0],x['cigar']))
+ return min(a,key=lambda x:(x[0],x[3][0]))
+def obs(s):
+ d,o,q,(st,en),c=best(s);t=st;qi=0;m={}
+ for op,n in re.findall(r'(\\d+)([=XID])',c):
+  n=int(n)
+  if op in '=X':
+   for j in range(n):m[lo+t+1]=q[qi];t+=1;qi+=1
+  elif op=='I':
+   if lo+t+1 in sites:m[lo+t+1]='I'
+   qi+=n
+  else:
+   for j in range(n):m[lo+t+1]='D';t+=1
+ return m
+r1=dict(rr('phase.chain.q1.R1.fq.gz'));r2=dict(rr('phase.chain.q1.R2.fq.gz'))
+# pair consensus; keep only agreeing/one present
+patterns=collections.Counter();
+for h in r1:
+ a,b=obs(r1[h]),obs(r2[h]);p=[]
+ for s in sites:
+  x=[z for z in [a.get(s),b.get(s)] if z]
+  p.append(x[0] if x and len(set(x))==1 else None)
+ patterns[tuple(p)]+=1
+print('pair patterns top:')
+for p,n in patterns.most_common(12): print(n,' '.join(x or '?' for x in p))
+print('strong linkage edges:')
+for i,j in itertools.combinations(range(8),2):
+ c=collections.Counter()
+ for p,n in patterns.items():
+  if p[i] and p[j]:c[(p[i],p[j])]+=n
+ if len(c)>=2 and max(c.values())>=5: print(sites[i],sites[j],c)
+PY"

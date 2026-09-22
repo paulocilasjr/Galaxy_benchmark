@@ -1,0 +1,47 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from sklearn.metrics import r2_score
+from scipy.stats import pearsonr
+with gzip.open('cell.proportions.q1.mtx.gz','rt') as f:
+ for line in f:
+  if line.startswith('%'): continue
+  g,n=map(int,line.split()); break
+ v=np.fromiter((float(x) for line in f for x in line.split()),np.float64); X=v.reshape((g,n),order='F')
+# exact blocks based on expression clustering
+blocks=[slice(0,2500),slice(2500,4250),slice(4250,5000),slice(5000,5100),slice(5100,5150),slice(5150,5350)]
+lib=X.sum(0); Y=np.log1p(X/lib*1e4)
+C=np.array([Y[:,b].mean(1) for b in blocks])
+print('block sizes',[b.stop-b.start for b in blocks])
+print('pairwise centroid Pearson corr (log-normalized)')
+print(np.round(np.corrcoef(C),3))
+print('pairwise centroid cosine')
+Cn=C/np.linalg.norm(C,axis=1,keepdims=True); print(np.round(Cn@Cn.T,3))
+# fit small block centroid as affine or nonnegative mixtures of first 3 in raw proportions/normalized expression
+from sklearn.linear_model import LinearRegression
+for j in range(3,6):
+ y=C[j]
+ A=np.column_stack([np.ones(g),C[0],C[1],C[2]])
+ lr=LinearRegression(fit_intercept=False).fit(A,y)
+ pred=lr.predict(A)
+ print('mixed',j,'coeff intercept,types',np.round(lr.coef_,4),'R2',round(r2_score(y,pred),4),'corr',round(np.corrcoef(y,pred)[0,1],4),'relrmse',round(np.linalg.norm(y-pred)/np.linalg.norm(y),4))
+# expression marker contrast: for each small group correlations to pair average
+for j,pair in zip(range(3,6),[(0,2),(0,1),(1,2)]):
+ pred=(C[pair[0]]+C[pair[1]])/2
+ print('small',j,'pair',pair,'corr avg',round(np.corrcoef(C[j],pred)[0,1],4),'corr sum raw',round(np.corrcoef(X[:,blocks[j]].mean(1),X[:,blocks[pair[0]]].mean(1)+X[:,blocks[pair[1]]].mean(1))[0,1],4))
+# high marker genes per base vs small; top fold differences
+for j in range(3):
+ others=[k for k in range(3) if k"'!=j]
+ score=C[j]-(C[others].mean(0))
+ print('"'base',j,'top marker indices',np.argsort(score)[-20:][::-1].tolist(),'scores',np.round(score[np.argsort(score)[-10:][::-1]],2))
+# correlation of each cell with base profiles and whether mixed groups score high on two
+for j,b in enumerate(blocks):
+ ix=np.arange(b.start,b.stop); q=Y[:,ix].T
+ q=q/q.std(1,keepdims=True); cc=q@(C[:3]-C[:3].mean(1,keepdims=True)).T
+ # actually center q and c
+ cc=np.corrcoef(np.vstack([Y[:,ix],C[:3]])) # no
+ scores=[]
+ for row in Y[:,ix].T:
+  scores.append([np.corrcoef(row,C[k])[0,1] for k in range(3)])
+ scores=np.array(scores)
+ print('block',j,'cell-to-base corr mean',np.round(scores.mean(0),3),'minmax mean max corr',np.round([scores.max(1).mean(),scores.max(1).min(),scores.max(1).max()],3))
+PY"

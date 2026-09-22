@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+# compact repeat, print all top matches and Hungarian for raw effect correlations
+import h5py,numpy as np
+from scipy.sparse import csc_matrix
+from scipy.optimize import linear_sum_assignment
+
+def ld(f):
+ with h5py.File(f) as h:
+  X=csc_matrix((h['X/data'][:].astype('float32'),h['X/indices'][:],h['X/indptr'][:]),shape=tuple(h['X'].attrs['shape'])).tocsr(); g=np.array([x.decode() for x in h['var/_index'][:]]); c=np.array([x.decode() for x in h['obs/guide/categories'][:]]); z=h['obs/guide/codes'][:]
+ sf=1e4/np.asarray(X.sum(1)).ravel(); X.data*=np.repeat(sf,np.diff(X.indptr)); np.log1p(X.data,out=X.data)
+ m=np.vstack([np.asarray(X[z==i].mean(0)).ravel() for i in range(len(c))])
+ return g,c,z,m
+rg,rc,rz,rm=ld('perturb.seq.align.q1.ref.h5ad'); qg,qc,qz,qm=ld('perturb.seq.align.q1.query.h5ad')
+common=np.intersect1d(rg,qg); rid=np.searchsorted(rg,common) if False else np.array([np.where(rg==x)[0][0] for x in common]); qid=np.array([np.where(qg==x)[0][0] for x in common])
+rn=np.char.startswith(rc,'NT'); qn=np.char.startswith(qc,'NT'); R=rm[~rn][:,rid]-rm[rn][:,rid].mean(0); Q=qm[~qn][:,qid]-qm[qn][:,qid].mean(0); rr=rc[~rn]; qq=qc[~qn]
+mask=((rm[rn][:,rid].mean(0)>.05)|(qm[qn][:,qid].mean(0)>.05)) & ~np.char.startswith(common,'MT-')
+def cor(A,B):
+ A=A-A.mean(1,keepdims=True);B=B-B.mean(1,keepdims=True);return (A/np.linalg.norm(A,axis=1,keepdims=True))@(B/np.linalg.norm(B,axis=1,keepdims=True)).T
+C=cor(R[:,mask],Q[:,mask]); rows,cols=linear_sum_assignment(-C)
+for i,n in enumerate(rr):
+ o=np.argsort(C[i])[::-1][:3]; hu=cols[np.where(rows==i)[0][0]] if i in rows else None
+ print(f'{n:12s} top '+ ' '.join(f'{qq[j]}:{C[i,j]:.3f}' for j in o) + (f'  H={qq[hu]}:{C[i,hu]:.3f}' if hu is not None else ' H=UNMATCHED'))
+PY"

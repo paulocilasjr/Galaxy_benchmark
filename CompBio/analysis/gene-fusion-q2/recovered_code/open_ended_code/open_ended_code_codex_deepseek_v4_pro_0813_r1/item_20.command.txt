@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict, Counter
+import subprocess, re
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip(); tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'): trans_gene[tid]=part.split(':',1)[1]; break
+
+def cigar_bounds(cigar,pos):
+    m=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    refpos=pos; covered=[]
+    for ln,op in m:
+        ln=int(ln)
+        if op in 'MDN=X':
+            covered.append((refpos,refpos+ln-1)); refpos+=ln
+        elif op in 'ISHP':
+            pass
+    if not covered: return None
+    return (covered[0][0],covered[-1][1])
+
+clusters=defaultdict(set)
+proc=subprocess.Popen(['samtools','view','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+    p=line.rstrip('\\n').split('\\t'); flag=int(p[1]); rname=p[2]
+    tags={}
+    for f in p[11:]:
+        if ':' in f:
+            k,t,v=f.split(':',2); tags[k]=v
+    sa=tags.get('SA')
+    if not sa: continue
+    g1=trans_gene.get(rname,'')
+    strand1='-' if flag&16 else '+'
+    b1=cigar_bounds(p[5],int(p[3]))
+    if not b1: continue
+    m=re.findall(r'(\\d+)([MIDNSHP=X])',p[5])
+    if m and m[0][1] in 'SH': bp1=b1[0]
+    elif m and m[-1][1] in 'SH': bp1=b1[1]
+    else: continue
+    for entry in sa.rstrip(';').split(';'):
+        if not entry: continue
+        parts=entry.split(',')
+        if len(parts)<6: continue
+        rt=parts[0]
+        try: spos=int(parts[1])
+        except: continue
+        strand2=parts[2]; cigar=parts[3]
+        g2=trans_gene.get(rt,'')
+        b2=cigar_bounds(cigar,spos)
+        if not b2: continue
+        m2=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+        if m2 and m2[0][1] in 'SH': bp2=b2[0]
+        elif m2 and m2[-1][1] in 'SH': bp2=b2[1]
+        else: continue
+        if g1 and g2 and g1"'!=g2:
+            clusters[(rname,bp1,strand1,rt,bp2,strand2)].add(p[0])
+proc.wait()
+print('"'clusters',len(clusters))
+gene_cluster=defaultdict(list)
+for k,reads in clusters.items():
+    g1=trans_gene[k[0]]; g2=trans_gene[k[3]]
+    gene_cluster[(g1,g2)].append((len(reads),k,reads))
+top=sorted(gene_cluster.items(), key=lambda kv:-max(x[0] for x in kv[1]))[:80]
+for gp,cl in top:
+    cl=sorted(cl, key=lambda x:-x[0])
+    print('\\nGENEPAIR',gp,'best clusters:')
+    for cnt,k,reads in cl[:5]:
+        print('  support',cnt,'cluster',k,'genes',trans_gene[k[0]],trans_gene[k[3]])
+        print('   read examples',sorted(reads)[:8])
+PY"

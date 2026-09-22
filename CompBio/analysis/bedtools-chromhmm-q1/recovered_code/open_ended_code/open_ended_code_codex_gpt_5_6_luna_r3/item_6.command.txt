@@ -1,0 +1,69 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from bisect import bisect_right
+from collections import defaultdict
+
+ann = defaultdict(list)
+with gzip.open('E055_15_coreMarks_dense.bed.gz', 'rt') as f:
+    for line in f:
+        if not line.strip() or line.startswith('track') or line.startswith('#'):
+            continue
+        p=line.rstrip('\\n').split('\\t')
+        ann[p[0]].append((int(p[1]), int(p[2]), p[3]))
+starts={c:[x[0] for x in xs] for c,xs in ann.items()}
+for c,xs in ann.items():
+    assert all(xs[i][1] <= xs[i+1][0] for i in range(len(xs)-1)), c
+
+def overlaps(c,s,e):
+    xs=ann.get(c,())
+    st=starts.get(c,())
+    i=bisect_right(st,s)-1
+    if i<0: i=0
+    while i<len(xs) and xs[i][0] < e:
+        a,b,state=xs[i]
+        lo=max(s,a); hi=min(e,b)
+        if hi>lo:
+            yield hi-lo,state
+        i+=1
+
+sum_peak=0; denom=0; numer=0; n_unannot=0; n_peaks=0
+peaks=defaultdict(list)
+with gzip.open('ENCFF333TAT.bed.gz','rt') as f:
+    for line in f:
+        if not line.strip() or line.startswith('#') or line.startswith('track'):
+            continue
+        p=line.rstrip('\\n').split('\\t'); c=p[0];s=int(p[1]);e=int(p[2])
+        n_peaks+=1; sum_peak += e-s; peaks[c].append((s,e))
+        d=0;n=0
+        for l,state in overlaps(c,s,e):
+            d+=l
+            if state=='14_ReprPCWk': n+=l
+        denom+=d; numer+=n
+        if d==0:n_unannot+=1
+print('records',n_peaks)
+print('sum_peak_bases',sum_peak)
+print('annotated_bases_row_weighted',denom)
+print('reprpcwk_bases_row_weighted',numer)
+print('unannotated_records',n_unannot)
+print('pct_row_weighted',100*numer/denom)
+
+# Merge peak intervals per chromosome and calculate union-weighted result.
+merged={}
+for c, xs in peaks.items():
+    xs.sort(); out=[]
+    for s,e in xs:
+        if out and s<=out[-1][1]:
+            if e>out[-1][1]: out[-1]=(out[-1][0],e)
+        else: out.append((s,e))
+    merged[c]=out
+ud=un=0
+for c,xs in merged.items():
+    for s,e in xs:
+        for l,state in overlaps(c,s,e):
+            ud+=l
+            if state=='14_ReprPCWk': un+=l
+print('merged_intervals',sum(map(len,merged.values())))
+print('annotated_bases_union',ud)
+print('reprpcwk_bases_union',un)
+print('pct_union',100*un/ud)
+PY"

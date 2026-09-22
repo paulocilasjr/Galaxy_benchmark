@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, collections, re, os, json
+fn='finding.geo.q1.h5ad'
+def decode_arr(a, n=None):
+    if n is not None: a=a[:n]
+    return [x.decode() if isinstance(x,bytes) else str(x) for x in a]
+with h5py.File(fn,'r') as f:
+    obs=decode_arr(f['obs/_index'][:])
+    var=decode_arr(f['var/_index'][:])
+    cats=decode_arr(f['var/gene_symbols/categories'][:])
+    codes=f['var/gene_symbols/codes'][:]
+    syms=[cats[c] if c>=0 else '' for c in codes]
+    indptr=f['X/indptr'][:]
+    data=f['X/data'][:]
+    row_nnz=np.diff(indptr)
+    row_sum=np.add.reduceat(data, indptr[:-1])
+    print('shape', len(obs), len(var), 'nnz', len(data))
+    print('obs first20')
+    print('\\n'.join(obs[:20]))
+    print('obs last20')
+    print('\\n'.join(obs[-20:]))
+    print('unique obs prefixes before _/- sample?', collections.Counter([re.split(r'[-_:.]',x)[0] for x in obs]).most_common(20))
+    print('barcode lens', collections.Counter(map(len, obs)).most_common())
+    print('suffixes', collections.Counter([x[-3:] for x in obs]).most_common(20))
+    print('var first20')
+    for a,b in list(zip(var,syms))[:20]: print(a,b)
+    print('var last20')
+    for a,b in list(zip(var,syms))[-20:]: print(a,b)
+    print('ensembl prefix counts', collections.Counter([v[:4] for v in var]).most_common(20))
+    print('row sum min/quant/max', row_sum.min(), np.quantile(row_sum,[0,.01,.05,.1,.25,.5,.75,.9,.95,.99]), row_sum.max())
+    print('row nnz min/quant/max', row_nnz.min(), np.quantile(row_nnz,[0,.01,.05,.1,.25,.5,.75,.9,.95,.99]), row_nnz.max())
+    print('total counts', int(row_sum.sum()))
+    print('top genes by counts')
+    col_sum=np.zeros(len(var), dtype=np.int64)
+    indices=f['X/indices'][:]
+    np.add.at(col_sum, indices, data)
+    for i in np.argsort(col_sum)[-30:][::-1]: print(i, var[i], syms[i], int(col_sum[i]))
+PY"

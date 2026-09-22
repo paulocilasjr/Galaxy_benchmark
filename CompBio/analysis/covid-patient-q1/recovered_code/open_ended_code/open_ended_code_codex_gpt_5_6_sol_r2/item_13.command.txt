@@ -1,0 +1,33 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -u - <<'PY'
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans,AgglomerativeClustering
+from sklearn.preprocessing import StandardScaler
+z=np.load('donor_aggregates.npz'); D=z['donor_names'];G=z['gene_names'];C=z['count_sum'];n=np.array([int(x[5:]) for x in D]);
+# TMM-ish pseudobulk: log CPM, restrict reasonably expressed and variable
+L=np.log2(1+C/C.sum(1)[:,None]*1e6)
+keep=(C>0).sum(0)>=20
+X=L[:,keep]; genes=G[keep]
+# center genes; scale only cap low variance to prevent composition genes alone dominating
+X-=X.mean(0)
+var=X.var(0); sel=var>np.quantile(var,.5)
+X=X[:,sel]
+p=PCA(n_components=10).fit_transform(X)
+print('PCA variance and coordinates')
+print(PCA(n_components=10).fit(X).explained_variance_ratio_)
+for i in np.argsort(n):print(f'{n[i]:2d}', ' '.join(f'{v:8.2f}' for v in p[i,:5]))
+for dims in [2,3,5,10]:
+ for seed in [1,2,3,4,5]:
+  lab=KMeans(2,random_state=seed,n_init=20).fit_predict(p[:,:dims]); groups=[]
+  for x in [0,1]:groups.append(sorted(n[lab==x].tolist()))
+  groups.sort(key=len)
+  print('KM',dims,seed,groups)
+for link in ['ward','complete','average']:
+ lab=AgglomerativeClustering(2,linkage=link).fit_predict(p[:,:10]);groups=[sorted(n[lab==x].tolist()) for x in [0,1]];groups.sort(key=len);print('AG',link,groups)
+# provisional differential healthy set
+H=np.isin(n,[1,5,11,12,17,21,24,27,29,32]); diff=L[~H].mean(0)-L[H].mean(0)
+print('\\nTop COVID enriched')
+for j in np.argsort(diff)[-80:][::-1]:print(G[j],round(diff[j],3),round(L[H,j].mean(),2),round(L[~H,j].mean(),2))
+print('\\nTop healthy enriched')
+for j in np.argsort(diff)[:50]:print(G[j],round(diff[j],3))
+PY"

@@ -1,0 +1,76 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections,numpy as np
+# parse annotation names and gene positions
+pos={}; names={}; rank={}
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.clean.gtf.gz','rt') as f:
+ for l in f:
+  if l.startswith('#'): continue
+  x=l.rstrip().split('\\t'); a=x[8]
+  m=re.search(r'gene_id \"(["'^"]+)"'"',a)
+  if not m: continue
+  gid=m.group(1); gm=re.search(r'gene_name \"(["'^"]+)"'"',a)
+  val=gm.group(1) if gm else gid
+  # parse candidates separated pipe, rank human > nr > generic; ignore version ids
+  cs=[]
+  for z in val.split('|'):
+   z=z.strip(); tag=0
+   if '[hs]' in z: tag=3
+   elif '[nr]' in z: tag=2
+   elif '[' not in z: tag=1
+   z=re.sub(r'\\s*\\[["'^]]+'"\\]','',z).strip()
+   if z: cs.append((tag,z))
+  if cs:
+   best=max(cs,key=lambda z:(z[0],-len(z[1])))
+   if best[0]>=rank.get(gid,-1): names[gid]=best[1];rank[gid]=best[0]
+  if x[2]=='gene' and x[0].startswith('chr'):
+   st,en=int(x[3]),int(x[4]); pos[gid]=(x[0],st if x[6]=='+' else en,x[6])
+print('genes with pos/name',len(pos),len(names))
+# matrix
+coords=[]; rows=[]
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+ sn=f.readline().rstrip().split('\\t')[3:]
+ for l in f:
+  x=l.rstrip().split('\\t'); coords.append((x[0],int(x[1]))); rows.append([int(v) for v in x[3:]])
+a=np.asarray(rows,dtype=np.float32); lib=a.sum(0); norm=a/lib*1e6
+# chunks offsets
+by=collections.defaultdict(list)
+for l in open('sample.swap.atac.q1.chrom.sizes'):
+ n,v=l.split();by[re.sub(r'_\\d+"'$'"','',n)].append((n,int(v)))
+off={}
+for b,it in by.items():
+ cur=0
+ for n,v in sorted(it,key=lambda z:int(z[0].rsplit('_',1)[1]) if '_' in z[0] else 0):off[n]=cur;cur+=v
+idx={(re.sub(r'_\\d+"'$'"','',c),off[re.sub(r'_\\d+"'$'"','',c)] if False else 0):0 for c,s in []}
+idx={}
+for i,(c,s) in enumerate(coords): idx[(re.sub(r'_\\d+"'$'"','',c),off[c]+s)]=i
+# promoter aggregate sum +-20kb
+rec=[]
+for gid,(c,tss,strand) in pos.items():
+ if c not in by: continue
+ # if an original contig has no rows? global coordinate
+ local=tss-1; cur=0
+ for cn,sz in sorted(by[c],key=lambda z:int(z[0].rsplit('_',1)[1]) if '_' in z[0] else 0):
+  if local<cur+sz:
+   gp=off[cn]+(local-cur);break
+  cur+=sz
+ else: continue
+ bs=(gp//10000)*10000; ii=[idx.get((c,bs+d)) for d in range(-20000,30000,10000)]; ii=[i for i in ii if i is not None]
+ if not ii:continue
+ rec.append((gid,names.get(gid,gid),norm[ii].sum(0)))
+# group by gid no duplicate
+byid={g:(n,v) for g,n,v in rec}
+G=np.stack([v for g,(n,v) in byid.items()]); GN=[n for g,(n,v) in byid.items()]; GI=list(byid)
+# remove weird IDs if human ortholog name exists; all genes retained but names can duplicate; top
+L=np.log2(G+1)
+for j,s in enumerate(sn):
+ score=L[:,j]-np.delete(L,j,axis=1).mean(1)
+ order=np.argsort(score)[::-1]
+ print('\\n',s)
+ k=0
+ for i in order:
+  nm=GN[i]
+  if nm.startswith('AMEX') or nm.startswith('LOC') or nm.startswith('C0') or nm.startswith('D9') or nm.startswith('XEL') or nm.startswith('EOD') or nm.startswith('AB') or nm.startswith('PARPI') or nm.startswith('N337') or nm.startswith('DR999') or nm.startswith('SMAX') or nm.startswith('GW7') or nm.startswith('D4764') or nm.startswith('PHYPO') or nm.startswith('CB1') or nm.startswith('H355') or nm.startswith('ASZ') or nm.startswith('FQN') or nm.startswith('Y1Q'): continue
+  print(f'{nm}={score[i]:.2f}({G[i,j]:.1f})',end=' ');k+=1
+  if k>=50:break
+ print()
+PY"

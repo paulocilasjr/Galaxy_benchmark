@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess, re, collections
+bam='variant.status.q1.bam'; chrom='chrX'; pos=154398500
+sam=subprocess.check_output(['samtools','view',bam,f'{chrom}:{pos}-{pos}'], text=True)
+counts=collections.Counter(); quals=collections.defaultdict(list); strands=collections.defaultdict(collections.Counter); rows=[]
+for line in sam.splitlines():
+    fields=line.split('\\t')
+    qname,flag,rname,start,mapq,cigar,seq,qual=fields[0],int(fields[1]),fields[2],int(fields[3]),int(fields[4]),fields[5],fields[9],fields[10]
+    ref=start; read=0; base=None; bq=None
+    for n,op in re.findall(r'(\\d+)([MIDNSHP=X])', cigar):
+        n=int(n)
+        if op in 'M=X':
+            if ref <= pos < ref+n:
+                read += pos-ref
+                base=seq[read]
+                bq=ord(qual[read])-33
+                break
+            ref += n; read += n
+        elif op in 'DN':
+            if ref <= pos < ref+n:
+                base='-' if op=='D' else 'N_SKIP'; bq=None; break
+            ref += n
+        elif op in 'IS':
+            read += n
+        elif op in 'HP':
+            pass
+    if base:
+        counts[base]+=1; quals[base].append(bq if bq is not None else -1); strands[base]['rev' if flag & 16 else 'fwd']+=1
+        rows.append((qname, flag, start, cigar, mapq, base, bq, 'rev' if flag&16 else 'fwd'))
+print('counts', counts)
+for b in sorted(quals):
+    qs=quals[b]
+    print(b, 'n=',len(qs),'minQ=',min(qs),'meanQ=',sum(qs)/len(qs),'strand=',dict(strands[b]))
+print('\\nrows')
+for r in rows:
+    print('\\t'.join(map(str,r)))
+PY"

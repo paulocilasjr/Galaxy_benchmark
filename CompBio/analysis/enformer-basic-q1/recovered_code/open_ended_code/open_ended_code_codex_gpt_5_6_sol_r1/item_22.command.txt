@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import io,pickle,math,collections
+b=open('model_head.bin','rb').read()[64:91307]
+class U(pickle.Unpickler):
+ def find_class(self,m,n):
+  if m=='torch._utils' and n.startswith('_rebuild_tensor'):
+   return lambda storage,offset,size,stride,*rest: {'s':storage,'shape':size}
+  if m=='torch' and n.endswith('Storage'):return type(n,(),{})
+  return super().find_class(m,n)
+ def persistent_load(self,pid):return pid
+x=U(io.BytesIO(b)).load()
+groups=collections.defaultdict(list)
+for k,v in x.items():groups[v['s'][2]].append((k,v))
+print(len(groups))
+train=[]; buffers=[]
+for sid,items in groups.items():
+ names=[k for k,v in items]
+ shape=items[0][1]['shape']
+ n=math.prod(shape)
+ if all(any(z in k for z in ('running_mean','running_var','num_batches_tracked')) for k in names):buffers.append((sid,n,names))
+ else:train.append((sid,n,names))
+print('train',len(train),sum(n for _,n,_ in train),'buffers',len(buffers),sum(n for _,n,_ in buffers))
+for sid,n,names in train[-5:]:print(sid,n,names)
+print('duplicates',sum(len(v)-1 for v in groups.values()))
+PY"

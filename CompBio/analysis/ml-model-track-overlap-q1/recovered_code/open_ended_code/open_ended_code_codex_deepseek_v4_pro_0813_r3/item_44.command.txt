@@ -1,0 +1,63 @@
+/bin/bash -lc "cat > fetch_sei_cistrome.py <<'PY'
+import requests, json, time, sys, math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import OrderedDict
+
+ids=[]
+for l in open('sei-framework/model/target.names'):
+    p=[x.strip() for x in l.rstrip('\\n').split('|')]
+    if len(p)>=3 and p[2].startswith('ID:'):
+        ids.append((p[2][3:], p[0], p[1]))
+
+uniq_ids=list(dict.fromkeys(x[0] for x in ids))
+print('tracks',len(ids),'unique ids',len(uniq_ids))
+# chunk such that URL < ~1900 chars
+chunks=[]; cur=[]
+for i in uniq_ids:
+    cur.append(i)
+    if len(','.join(cur)) > 1500:
+        cur.pop(); chunks.append(cur[:]); cur=[i]
+if cur: chunks.append(cur)
+print('chunks',len(chunks), 'max', max(len(c) for c in chunks))
+
+def fetch(chunk, idx):
+    url='https://db3.cistrome.org/cistrome/samples'
+    params={'ids':','.join(chunk),'fields':'series'}
+    last=None
+    for attempt in range(5):
+        try:
+            r=requests.get(url,params=params,timeout=60)
+            if r.status_code==200:
+                data=r.json()
+                return idx, data.get('samples',[])
+            last=(r.status_code,r.text[:200])
+        except Exception as e:
+            last=repr(e)
+        time.sleep(2*(attempt+1))
+    print('FAILED',idx,last,file=sys.stderr)
+    return idx, []
+
+results=[None]*len(chunks)
+with ThreadPoolExecutor(max_workers=8) as ex:
+    futs={ex.submit(fetch,c,i):i for i,c in enumerate(chunks)}
+    for fut in as_completed(futs):
+        i=futs[fut]
+        try:
+            idx, samples=fut.result()
+            results[idx]=samples
+        except Exception as e:
+            print('future error',i,e,file=sys.stderr)
+            results[i]=[]
+
+out=[]
+for samples in results:
+    for s in samples or []:
+        gse=[]
+        for ser in s.get('series',[]) or []:
+            if ser.get('external_id'):
+                gse.append(ser['external_id'])
+        out.append({'id':s.get('id'), 'external_id':s.get('external_id'), 'external_id_type':s.get('external_id_type'), 'series':','.join(gse), 'title':s.get('title')})
+json.dump(out,open('sei_cistrome_meta.json','w'))
+print('saved',len(out))
+PY
+python3 fetch_sei_cistrome.py"

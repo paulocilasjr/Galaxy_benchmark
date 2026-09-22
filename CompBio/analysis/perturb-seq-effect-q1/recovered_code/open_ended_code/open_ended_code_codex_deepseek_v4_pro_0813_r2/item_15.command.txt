@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+from scipy.stats import ttest_ind
+mat=scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+g2gene=dict(zip(ref.id,ref.target_gene_name))
+bc['pos']=np.arange(len(bc)); calls=calls.merge(bc,left_on='cell_barcode',right_on='barcode')
+totals=np.asarray(mat.sum(axis=0)).ravel()
+cpm=mat.multiply(1.0/totals).tocsr()*10000
+logcpm=cpm.copy(); logcpm.data=np.log1p(logcpm.data)
+nt=calls[calls.feature_call.str.startswith('guide_00')]
+ntv=logcpm[:,nt.pos.values]
+for guide,gene in [('guide_011','STAT1'),('guide_012','ISG15'),('guide_019','IL6')]:
+    grp=calls[calls.feature_call==guide]
+    m=logcpm[:,grp.pos.values].mean(axis=1).A1
+    nm=ntv.mean(axis=1).A1
+    diff=m-nm
+    p=[]
+    for i in range(logcpm.shape[0]):
+        a=logcpm[i,grp.pos.values].toarray().ravel(); b=ntv[i,:].toarray().ravel()
+        p.append(ttest_ind(a,b,equal_var=False).pvalue)
+    p=np.array(p)
+    df=pd.DataFrame({'gene':feat['name'],'idx':np.arange(len(feat)),'diff':diff,'p':p})
+    df['is_path']=df.idx<20
+    print('\\n###',guide,gene,'n',len(grp),'mean total',totals[grp.pos].mean())
+    print('pathway mean diff',df.loc[df.is_path,'diff'].mean())
+    print('nonpath mean diff',df.loc[~df.is_path,'diff'].mean())
+    print('num pathway sig p<.05 down',((df.is_path)&(df.p<.05)&(df.diff<0)).sum())
+    print('num nonpath sig p<.05 down',((~df.is_path)&(df.p<.05)&(df.diff<0)).sum(),'up',((~df.is_path)&(df.p<.05)&(df.diff>0)).sum())
+    print('Top 15 down all:')
+    print(df.sort_values('diff').head(15).to_string(index=False))
+    print('Top 15 up all:')
+    print(df.sort_values('diff',ascending=False).head(15).to_string(index=False))
+PY"

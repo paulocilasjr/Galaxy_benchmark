@@ -1,0 +1,50 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4e1f39245f2f9a7c6ca6323c/workspace && PYTHONUNBUFFERED=1 python - <<'PY'
+import os, sys, time, math
+sys.path.insert(0, os.getcwd())
+import torch
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+
+seq = open('sequence.txt').read().strip()
+L = len(seq)
+print('L', L, flush=True)
+tok = AutoTokenizer.from_pretrained('model_files', trust_remote_code=True)
+model = AutoModelForMaskedLM.from_pretrained('model_files', trust_remote_code=True)
+model.eval()
+base_ids = tok(''.join(seq), add_special_tokens=False).input_ids
+assert len(base_ids) == L
+base_t = torch.tensor(base_ids)
+mask_id = tok.mask_token_id
+acgt = torch.tensor([7,8,9,10])
+
+B = 16
+entropy_acgt = np.zeros(L, dtype=np.float64)
+entropy_full = np.zeros(L, dtype=np.float64)
+n_batches = math.ceil(L / B)
+start_all = time.time()
+for bi in range(n_batches):
+    positions = list(range(bi*B, min((bi+1)*B, L)))
+    nb = len(positions)
+    masked = base_t.unsqueeze(0).repeat(nb, 1).clone()
+    pos_t = torch.tensor(positions)
+    masked[torch.arange(nb), pos_t] = mask_id
+    with torch.no_grad():
+        logits = model(masked).logits
+    diag = logits[torch.arange(nb), pos_t]
+    probs_all = torch.softmax(diag, dim=-1).float().numpy()
+    probs_acgt = torch.softmax(diag[:, acgt], dim=-1).float().numpy()
+    e_full = -np.sum(probs_all * np.log2(np.maximum(probs_all, 1e-300)), axis=1)
+    e_acgt = -np.sum(probs_acgt * np.log2(np.maximum(probs_acgt, 1e-300)), axis=1)
+    for j, pos in enumerate(positions):
+        entropy_acgt[pos] = e_acgt[j]
+        entropy_full[pos] = e_full[j]
+    if bi % 10 == 0 or bi == n_batches - 1:
+        np.save('entropy_acgt.npy', entropy_acgt)
+        np.save('entropy_full.npy', entropy_full)
+        print('batch', bi, '/', n_batches, 'range', positions[0], positions[-1], 'elapsed', round(time.time()-start_all,1), flush=True)
+    del masked, logits, diag, probs_all, probs_acgt
+
+print('done', time.time()-start_all, flush=True)
+print('min/max entropy acgt', entropy_acgt.min(), entropy_acgt.max(), 'under .5 count', int((entropy_acgt < 0.5).sum()), flush=True)
+print('min/max entropy full', entropy_full.min(), entropy_full.max(), 'under .5 count', int((entropy_full < 0.5).sum()), flush=True)
+PY"

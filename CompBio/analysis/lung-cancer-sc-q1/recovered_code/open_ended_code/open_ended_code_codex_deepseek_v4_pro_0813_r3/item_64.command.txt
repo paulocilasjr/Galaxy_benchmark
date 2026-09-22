@@ -1,0 +1,61 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+X=a.X
+lib=np.asarray(X.sum(axis=1)).ravel(); med=np.median(lib)
+Xn=X.multiply(1.0/lib[:,None]).tocsr()*med
+Xn.data=np.log1p(Xn.data)
+sym=a.var.symbol.values
+sym_to_idx=pd.Series(np.arange(a.n_vars),index=sym)
+sets={
+'LUAD':['NKX2-1','NAPSA','SFTPA1','SFTPA2','SFTPB','SFTPC','AGER','SCGB1A1','SCGB3A2','MUC1','KRT7'],
+'LUSC_basal':['KRT5','KRT6A','KRT6B','KRT13','KRT14','KRT17','TP63','DSC3','DSG3','SOX2','SERPINB3','SERPINB4'],
+'epithelial':['EPCAM','KRT18','KRT8','CDH1'],
+'immune_CD45':['PTPRC'],
+'Tcell':['CD3D','CD3E','CD3G','CD2','TRAC','TRBC1','CD4','CD8A','CD8B'],
+'NK':['NKG7','GNLY','KLRD1','KLRB1','NCAM1','NCR1','FCGR3A','PRF1'],
+'Bcell':['CD19','MS4A1','CD79A','CD79B','BANK1','MZB1'],
+'myeloid':['LYZ','CD14','FCGR3A','CD68','CSF1R','ITGAM','MARCO','MRC1'],
+'Mast':['TPSAB1','TPSB2','CPA3','KIT','MS4A2'],
+'cDC1':['CLEC9A','XCR1','BATF3','IRF8','CADM1','THBD','CLNK','WDFY4'],
+'cDC2':['CD1C','CLEC10A','FCER1A','CD1E','SIRPA','ITGAX','FCGR2B'],
+'pDC':['LILRA4','IL3RA','CLEC4C','IRF7','TCF4','GZMB','SPIB'],
+'DC_mature':['LAMP3','CCR7','FSCN1','CD83','CD40','IDO1','CD80','CD86'],
+'endothelial':['VWF','PECAM1','CDH5','CLDN5','FLT1','KDR','ENG'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','PDGFRA','PDGFRB','FBLN1'],
+'smooth_muscle':['ACTA2','MYH11','TAGLN','RGS5','DES'],
+'neutrophil':['FCGR3B','CSF3R','S100A8','S100A9','CXCR2'],
+}
+def score(genes):
+ idx=[sym_to_idx[g] for g in genes if g in sym_to_idx.index]
+ return np.asarray(Xn[:,idx].mean(axis=1)).ravel()
+S=pd.DataFrame({k:score(g) for k,g in sets.items()},index=a.obs.index)
+S['sampleID']=a.obs.sampleID.values
+# classify samples
+rows=[]
+for s,sub in S.groupby('sampleID',sort=False):
+ cand=sub[(sub.epithelial>0.05)|(sub.LUAD>0.2)|(sub.LUSC_basal>0.2)]
+ if len(cand)>=10:
+  luad=cand.LUAD.mean(); lusc=cand.LUSC_basal.mean()
+  typ='LUSC' if lusc>luad else 'LUAD'
+ else:
+  # use top 10 epithelial
+  top=sub.nlargest(min(10,len(sub)),'epithelial')
+  typ='LUSC' if top.LUSC_basal.mean()>top.LUAD.mean() else 'LUAD'
+ rows.append((s,len(sub),typ,luad if len(cand)>=10 else np.nan,lusc if len(cand)>=10 else np.nan,len(cand)))
+subtype=pd.DataFrame(rows,columns=['sample','n','subtype','luad_mean','lusc_mean','cand'])
+print(subtype.to_string())
+print('\\nSubtype counts',subtype.subtype.value_counts())
+print('\\nTargets')
+print(subtype[subtype.sample.isin(['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040'])].to_string())
+# Save subtype and scores for later
+S.to_pickle('cell_scores.pkl')
+subtype.to_csv('sample_subtype.csv',index=False)
+# Counts of broad categories with simple thresholds for each threshold set
+for t_epi in [0.05,0.1,0.2]:
+ for t_lusc in [0.1,0.2,0.3,0.5]:
+  mal=S[(S.LUSC_basal>t_lusc)&(S.epithelial>t_epi)]
+  mal_lusc=mal[mal.sampleID.isin(subtype.loc[subtype.subtype=='LUSC','sample'])]
+  nonimmune=S[(S.immune_CD45<0.1)&((S.epithelial>t_epi)|(S.endothelial>0.1)|(S.fibroblast>0.1)|(S.smooth_muscle>0.1))]
+  print('epi',t_epi,'lusc',t_lusc,'num',len(mal_lusc),'den',len(nonimmune),'pct',100*len(mal_lusc)/max(len(nonimmune),1))
+PY"

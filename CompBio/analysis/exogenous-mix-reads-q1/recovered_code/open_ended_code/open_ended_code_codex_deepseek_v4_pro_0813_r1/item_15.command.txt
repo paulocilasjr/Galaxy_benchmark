@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, numpy as np
+from scipy.optimize import minimize
+from scipy.stats import multinomial
+samples=['mix','exo','endo']
+starts={}
+for n in samples:
+    b=pysam.AlignmentFile(f'exogenous.mix.reads.q1.{n}.bam'); starts[n]=np.array([r.reference_start for r in b if not r.is_unmapped]); b.close()
+# various bins
+for width in [20,50,100,200]:
+    edges=np.arange(0,3000+width,width)
+    h={n:np.histogram(starts[n],bins=edges)[0] for n in samples}
+    p_exo=h['exo']/h['exo'].sum(); p_endo=h['endo']/h['endo'].sum(); h_mix=h['mix']
+    # NNLS alpha,beta counts
+    A=np.column_stack([h['exo']/h['exo'].sum(), h['endo']/h['endo'].sum()])
+    # scale coefficients in probability; mix sum 1
+    from scipy.optimize import nnls
+    y=h_mix/h_mix.sum()
+    coef,res=nnls(A,y)
+    alpha=coef[0]/coef.sum() if coef.sum() else np.nan
+    print('width',width,'coef',coef,'alpha',alpha)
+    # ML alpha only (beta=1-alpha), multinomial log likelihood
+    def negll(a):
+        a=np.clip(a,1e-6,1-1e-6)
+        q=a*p_exo+(1-a)*p_endo
+        return -np.sum(h_mix*np.log(q))
+    res=minimize(negll,0.3,bounds=[(0,1)],method='Nelder-Mead')
+    print(' ML alpha',res.x[0], 'll',-res.fun)
+PY"

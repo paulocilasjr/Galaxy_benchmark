@@ -1,0 +1,43 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, numpy as np, pandas as pd, scipy.sparse as sp, time
+from sklearn.decomposition import PCA
+p='covid.patients.q1.h5ad'
+with h5py.File(p,'r') as f:
+ cats=f['obs/donor_id/categories'].asstr()[:]
+ codes=f['obs/donor_id/codes'][:]
+ n=f['X/indptr'].shape[0]-1; g=f['X/_index'].shape[0] if 'X/_index' in f else f['var/_index'].shape[0]
+ genes=f['var/feature_name/categories'].asstr()[:]
+ var_codes=f['var/feature_name/codes'][:]
+ names=genes[var_codes]
+ ip=f['X/indptr'][:]
+ donor_sum=np.zeros((len(cats),g),dtype=np.float64)
+ donor_cells=np.bincount(codes,minlength=len(cats))
+ lib=np.zeros(n,dtype=np.int64); ng=np.zeros(n,dtype=np.int32)
+ t=time.time(); block=2000
+ data=f['X/data']; inds=f['X/indices']
+ for jj,r0 in enumerate(range(0,n,block)):
+  r1=min(n,r0+block)
+  a=ip[r0:r1+1]; s,e=int(a[0]),int(a[-1])
+  mat=sp.csr_matrix((data[s:e], inds[s:e], a-s), shape=(r1-r0,g))
+  oh=sp.csr_matrix((np.ones(r1-r0,dtype=np.float32),(np.arange(r1-r0),codes[r0:r1])),shape=(r1-r0,len(cats)))
+  donor_sum += (mat.T @ oh).T.toarray()
+  lib[r0:r1]=np.asarray(mat.sum(axis=1)).ravel()
+  ng[r0:r1]=np.diff(mat.indptr)
+  if jj%20==0: print('block',jj,'/',(n+block-1)//block,'sec',round(time.time()-t,1),flush=True)
+ print('aggregate seconds',time.time()-t,'nnz',int(ip[-1]),flush=True)
+ print('cell lib quantiles',np.percentile(lib,[0,1,5,25,50,75,95,99,100]),flush=True)
+ print('cell genes quantiles',np.percentile(ng,[0,1,5,25,50,75,95,99,100]),flush=True)
+ markers=['ISG15','IFIT1','IFIT2','IFIT3','IFITM1','IFITM3','MX1','OAS1','OAS2','OAS3','OASL','IFI6','IFI27','IFI44','IFI44L','IRF7','RSAD2','BST2','LY6E','CXCL10','CCL2','CCL3','CCL4','IL7R','CCR7','LST1','S100A8','S100A9','FCGR3A','MS4A1','CD79A','CD3D','CD3E','NKG7','GNLY','MALAT1','GAPDH','RPLP0','HLA-DRA','HLA-DPA1','HLA-DPB1','B2M','JUN','FOS']
+ idx={}
+ for i,x in enumerate(names): idx.setdefault(x,i)
+ found=[m for m in markers if m in idx]
+ print('found',found,flush=True)
+ cpm=donor_sum/donor_sum.sum(axis=1,keepdims=True)*1e6
+ df=pd.DataFrame({'donor':cats,'cells':donor_cells,'lib_total':donor_sum.sum(axis=1)})
+ for m in found: df[m+'_cpm']=cpm[:,idx[m]]
+ print(df.to_string(index=False,float_format=lambda x:f'{x:.3f}'),flush=True)
+ z=np.log1p(cpm*100)
+ pp=PCA(n_components=5).fit_transform(z-z.mean(0))
+ print('PCA',flush=True)
+ print(pd.DataFrame(pp[:,:5],index=cats,columns=[f'PC{i+1}' for i in range(5)]).to_string(float_format=lambda x:f'{x:.3f}'),flush=True)
+PY"

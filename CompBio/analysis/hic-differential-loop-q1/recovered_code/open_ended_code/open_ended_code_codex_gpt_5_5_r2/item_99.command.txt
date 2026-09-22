@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests,base64,numpy as np,math
+H1='JfVtzAhFSCS-j6tNALioCQ'; HFF='3e8b4161-556e-4722-bcef-88265a3436a1'; server='https://higlass.4dnucleome.org/api/v1/tiles/'
+offset=1943767673; win=(7629950,7809597); z=12; res=1000; cache={}
+def fetch(uid,x,y):
+ key=f'{uid}.{z}.{x}.{y}'
+ if key not in cache:
+  j=requests.get(server,params={'d':key},timeout=60).json()[key]; dt='<f2' if j.get('dtype')=='float16' else '<f4'
+  cache[key]=np.frombuffer(base64.b64decode(j['dense']),dtype=dt).astype('f4').reshape(256,256)
+ return cache[key]
+def mosaic(uid):
+ gs=offset+win[0]; ge=offset+win[1]; tw=256*res; x0=gs//tw; x1=(ge-1)//tw
+ mat=np.full(((x1-x0+1)*256,(x1-x0+1)*256),np.nan,'f4')
+ for x in range(x0,x1+1):
+  for y in range(x0,x1+1): mat[(y-x0)*256:(y-x0+1)*256,(x-x0)*256:(x-x0+1)*256]=fetch(uid,x,y)
+ a=(gs//res)-x0*256; b=math.ceil(ge/res)-x0*256
+ return mat[a:b,a:b]
+h1=mosaic(H1); hff=mosaic(HFF); diff=h1-hff; n=h1.shape[0]; coords=np.arange(n)*res+win[0]+500
+# simple local background ratio: obs / median in 21x21 around pixel excluding 5x5 center and diagonal stripe
+for name,A in [('H1',h1),('HFF',hff),('H1-HFF',diff),('HFF-H1',-diff)]:
+ scores=[]
+ for iy in range(n):
+  for ix in range(n):
+   x=coords[ix]; y=coords[iy]
+   if y<=x+40000: continue
+   v=A[iy,ix]
+   if not np.isfinite(v) or v<=0: continue
+   if name in ['H1','HFF']:
+    r=12; c=3
+    sub=A[max(0,iy-r):min(n,iy+r+1), max(0,ix-r):min(n,ix+r+1)]
+    yy,xx=np.ogrid[max(0,iy-r):min(n,iy+r+1), max(0,ix-r):min(n,ix+r+1)]
+    m=np.ones(sub.shape,bool)
+    m &= ~((abs(yy-iy)<=c)&(abs(xx-ix)<=c))
+    vals=sub[m & np.isfinite(sub) & (sub>0)]
+    bg=np.median(vals) if vals.size else np.nan
+    score=v/(bg+1e-6) if np.isfinite(bg) else 0
+   else:
+    score=v
+   scores.append((score,v,int(x),int(y)))
+ scores=sorted(scores, reverse=True)
+ # non max suppress 10kb
+ out=[]
+ for sc,v,x,y in scores:
+  if any(abs(x-x0)<=10000 and abs(y-y0)<=10000 for _,_,x0,y0 in out): continue
+  out.append((sc,v,x,y))
+  if len(out)>=15: break
+ print('\\n'+name)
+ for sc,v,x,y in out:
+  print(f'score={sc:.3g} val={v:.4g} {x};{y} round={round(x/20000)*20000};{round(y/20000)*20000}')
+PY"

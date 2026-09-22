@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,pyBigWig,numpy as np,collections,time,concurrent.futures,traceback
+N=76275859
+# exact target chr1 raw counts
+T={}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.split()
+ if c=='chr1':T[int(s)]=round(float(v)*N/1e6)
+L=248956422; target=np.array([T[i*10000] for i in range(24896)],float)
+bws=json.load(open('encode_alpha_bw_urls.json'))['@graph']
+bwby=collections.defaultdict(list)
+for x in bws:
+ if x.get('status')=='released':bwby[x['dataset']].append(x['cloud_metadata']['url'])
+# selected groups from BAM metric
+p=json.load(open('encode_alpha_bams.json'))['@graph']
+def m(x):
+ vals=[]
+ for q in x.get('quality_metrics',[]):
+  if 'reads mapped' in q:vals.append(q['reads mapped'])
+  if 'mapped' in q and isinstance(q['mapped'],int):vals.append(q['mapped'])
+ return max(vals)
+by=collections.defaultdict(list)
+for x in p:by[x['dataset']].append(x)
+groups=[]
+for d,xs in by.items():
+ s=sum(m(x) for x in xs)
+ if 75e6<=s<=82e6: groups.append((d,s))
+
+def one(item):
+ d,s=item;out=[]
+ for u in bwby[d]:
+  try:
+   t=time.time();bw=pyBigWig.open(u); z=np.array(bw.stats('chr1',0,L,nBins=24896,type='sum'),dtype=float); bw.close();z=np.nan_to_num(z)
+   # compare ranks/corr, normalized, only positive regions
+   out.append((u,z,np.corrcoef(target,z)[0,1],np.corrcoef(np.log1p(target),np.log1p(z))[0,1],time.time()-t))
+  except Exception as e:out.append((u,None,str(e),None,0))
+ return d,s,out
+with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+ for d,s,out in ex.map(one,groups):
+  for u,z,c,lc,dt in out:
+   print(f'{d} m={s} bw={u.rsplit(\"/\",1)[-1]} corr={c} logcorr={lc} time={dt:.1f} sum={z.sum() if z is not None else None}',flush=True)
+PY"

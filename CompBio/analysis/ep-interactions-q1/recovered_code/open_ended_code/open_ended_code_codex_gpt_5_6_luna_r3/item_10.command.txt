@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, statistics
+from collections import defaultdict
+hic=[]
+with open('ep.interactions.q1.hic.csv') as f:
+    for row in csv.DictReader(f):
+        row['distance_bp']=int(row['distance_bp']); row['mean'] = sum(int(row[f'count_rep{i}']) for i in (1,2,3))/3
+        hic.append(row)
+bg=[r for r in hic if r['set']=='background']
+can=[r for r in hic if r['set']=='candidate']
+# fit log mean contact vs log distance with OLS on background, with pseudocount for zero
+xs=[math.log(r['distance_bp']) for r in bg]; ys=[math.log(r['mean']+0.5) for r in bg]
+mx=sum(xs)/len(xs); my=sum(ys)/len(ys)
+beta=sum((x-mx)*(y-my) for x,y in zip(xs,ys))/sum((x-mx)**2 for x in xs); alpha=my-beta*mx
+print('HIC log-linear residuals')
+for r in can:
+    pred=math.exp(alpha+beta*math.log(r['distance_bp']))-0.5
+    print(r['pair_id'], 'mean',round(r['mean'],2),'dist',r['distance_bp'],'pred',round(pred,2),'ratio',round(r['mean']/pred,2),'resid',round(math.log(r['mean']+0.5)-(alpha+beta*math.log(r['distance_bp'])),2))
+# nearest local residual: 20 nearest backgrounds to candidate distance
+for r in can:
+    near=sorted(bg,key=lambda q:abs(q['distance_bp']-r['distance_bp']))[:30]
+    vals=[q['mean'] for q in near]
+    mu=statistics.mean(vals); sd=statistics.stdev(vals)
+    print('local',r['pair_id'],'cand',round(r['mean'],2),'bg30',round(mu,2),'z',round((r['mean']-mu)/sd,2))
+# expr
+expr=defaultdict(lambda: defaultdict(list))
+with open('ep.interactions.q1.expr.csv') as f:
+    for row in csv.DictReader(f): expr[row['pair_id']][row['condition']].append(int(row['rna_count']))
+print('Expression')
+for i in range(1,8):
+    id=f'EP{i}'; c=expr[id]['control'];p=expr[id]['perturbed']; cm=statistics.mean(c);pm=statistics.mean(p)
+    # log fold ratio per all aggregate; paired by guide/replicate? condition measurements groups
+    # use per guide means and log2 fold
+    guide=defaultdict(lambda:defaultdict(list))
+    with open('ep.interactions.q1.expr.csv') as f:
+      for row in csv.DictReader(f):
+       if row['pair_id']==id: guide[row['guide_id']][row['condition']].append(int(row['rna_count']))
+    fs=[]; ds=[]
+    for g,x in guide.items():
+      f=sum(x['perturbed'])/len(x['perturbed'])/(sum(x['control'])/len(x['control']))
+      fs.append(math.log2(f)); ds.append(sum(x['perturbed'])/len(x['perturbed'])-sum(x['control'])/len(x['control']))
+    print(id,'fold',round(pm/cm,3),'log2',round(math.log2(pm/cm),3),'guide log2', [round(x,3) for x in fs], 'delta',round(pm-cm,1))
+PY"

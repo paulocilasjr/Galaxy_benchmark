@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import cross_val_score, roc_auc_score
+from sklearn.pipeline import make_pipeline
+
+# our features
+D=np.load('cell_scores.npz',allow_pickle=True); cats=D['cats']; df={}
+for k in D.keys():
+ if k"'!='"'cats': df[k]=D[k]
+df=pd.DataFrame(df,index=cats)
+for k in ['type_CD14_Mono','type_CD16_Mono','type_T','type_NK','type_B','type_Plasma','type_cDC','type_pDC','type_Platelet','type_RBC']:
+ df[k+'_prop']=df[k]/df['total_cells']
+our=pd.DataFrame(index=cats)
+our['T']=df['type_T_prop'].values; our['NK']=df['type_NK_prop'].values; our['B']=(df['type_B_prop']+df['type_Plasma_prop']).values; our['Mono']=(df['type_CD14_Mono_prop']+df['type_CD16_Mono_prop']).values; our['DC']=(df['type_cDC_prop']+df['type_pDC_prop']).values; our['Plasma']=df['type_Plasma_prop'].values; our['Platelet']=df['type_Platelet_prop'].values; our['RBC']=df['type_RBC_prop'].values
+feats=['T','NK','B','Mono','DC','Plasma','Platelet','RBC']
+# Ahern
+meta=pd.read_csv('ahern_donor_celltypes.csv')
+a=pd.DataFrame(index=meta['donor']); a['disease']=meta['disease'].values
+a['T']=meta[['CD4-positive, alpha-beta T cell','CD8-positive, alpha-beta T cell','gamma-delta T cell','mucosal invariant T cell','double-positive, alpha-beta thymocyte','double negative T regulatory cell']].sum(axis=1).values
+a['NK']=meta['natural killer cell'].values; a['B']=meta['B cell'].values; a['Mono']=meta[['classical monocyte','non-classical monocyte']].sum(axis=1).values; a['DC']=meta['dendritic cell'].values; a['Plasma']=meta['plasmablast'].values; a['Platelet']=0; a['RBC']=meta[['enucleated reticulocyte','megakaryocyte-erythroid progenitor cell']].sum(axis=1).values
+# include only normal/covid
+a=a[a.disease.isin(['normal','COVID-19'])].copy()
+a['y']=(a.disease=='normal').astype(int)
+# normalize within sample proportions of known categories (sum might be <1 but fine)
+known=a[feats].sum(axis=1)
+Xa=a[feats].div(known,axis=0).values; ya=a.y.values
+known_our=our[feats].sum(axis=1); Xo=(our[feats].div(known_our,axis=0)).values
+for model_name,model in [
+ ('lr',make_pipeline(StandardScaler(),LogisticRegression(class_weight='balanced',max_iter=1000))),
+ ('rf',RandomForestClassifier(n_estimators=500,class_weight='balanced',random_state=0)),
+]:
+ model.fit(Xa,ya)
+ pred=model.predict(Xo)
+ proba=model.predict_proba(Xo)[:,1]
+ print('\\n',model_name)
+ print('CV AUC', cross_val_score(model,Xa,ya,cv=5,scoring='roc_auc').mean())
+ print('our predicted healthy', [int(cats[i][5:]) for i in np.where(pred==1)[0]])
+ print('probas')
+ print(pd.Series(proba,index=[int(c[5:]) for c in cats]).sort_values(ascending=False).round(3).to_string())
+PY"

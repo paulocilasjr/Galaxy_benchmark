@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import re,subprocess,zlib
+entries=[]
+for line in open('GIA_Vitals_toc.txt'):
+ m=re.match(r'([-d])\\S+\\s+\\S+\\s+(\\d+)\\s+\\S+\\s+\\S+\\s+(.*)"'$'"', line.strip())
+ if m: entries.append((m.group(1),int(m.group(2)),m.group(3).strip()))
+off=0; pos={}; sizes={}
+for typ,size,name in entries:
+    if len(name.encode())>100: off += 512 + ((len(name.encode())+511)//512)*512
+    pos[name]=off+512; sizes[name]=size
+    off += 512 + ((size+511)//512)*512
+base='https://ftp.ncbi.nlm.nih.gov/dbgap/studies/phs002453/phs002453.v1.p1/analyses/GIA/phs002453.MVP_R4.1000G_AGR.GIA.Surveys_Vitals_Quantitative.analysis-PI.MULTI.tar'
+target='MVP_R4.1000G_AGR.GIA.Surveys_Vitals_Quantitative/MVP_R4.1000G_AGR.Height_Mean_INT.AFR.GIA.dbGaP.txt.gz'
+start=pos[target]; size=sizes[target]
+chunk=20_000_000
+data=subprocess.check_output(['curl','-L','--max-time','120','-s','-r',f'{start}-{start+chunk-1}',base])
+print('got',len(data))
+out=bytearray(); d=zlib.decompressobj(16+zlib.MAX_WBITS); buf=data
+while buf:
+    try:
+        out += d.decompress(buf)
+        buf=d.unused_data
+        if buf:
+            d=zlib.decompressobj(16+zlib.MAX_WBITS)
+        else:
+            # need more data to complete member; but for now maybe current member finished
+            # if d.eof false, need more input; but chunk may end mid member; try flush?
+            out += d.flush()
+            break
+    except zlib.error as e:
+        print('err',e); out += d.flush(); break
+print('decompressed bytes',len(out))
+text=out.decode(errors='replace')
+print(text[:500])
+idx=text.find('rs9435734')
+print('rs index',idx)
+if idx"'!=-1: print(text[max(0,idx-200):idx+500])
+PY'

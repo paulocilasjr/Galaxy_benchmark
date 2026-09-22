@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, numpy as np, math
+from collections import Counter
+
+def counts(bam):
+ out=subprocess.check_output(f'samtools view {bam}',shell=True,text=True).splitlines()
+ c=Counter()
+ for line in out:
+  parts=line.split('\\t'); c[int(parts[3])-1]+=1
+ return c
+ex=counts('exogenous.mix.reads.q1.exo.mrna.bam'); en=counts('exogenous.mix.reads.q1.endo.mrna.bam'); mx=counts('exogenous.mix.reads.q1.mix.mrna.bam')
+Nx=sum(ex.values()); Nn=sum(en.values()); Nm=sum(mx.values())
+L=2903
+# positions with exo support
+exo_pos=set(ex)
+print('Nx,Nn,Nm',Nx,Nn,Nm,'exo pos range',min(ex),max(ex),'exo unique',len(exo_pos),'endo unique',len(set(en)),'mix unique',len(set(mx)))
+# outside observed exo support: reads with start outside min/max? and outside coverage envelope
+out_mix=sum(v for p,v in mx.items() if p not in exo_pos)
+print('mix reads at positions never in exo', out_mix)
+# But exo sample may not cover all exo support, so outside by min/max better
+for lo,hi in [(min(ex),max(ex)),(min(ex)-10,max(ex)+10),(548,1937),(548,1937+50)]:
+ out=sum(v for p,v in mx.items() if p<lo or p>=hi)
+ print('outside range',lo,hi,'mix',out,'endo training outside',sum(v for p,v in en.items() if p<lo or p>=hi))
+# fit p using binned hist
+for w in [10,20,50,100,200]:
+ bins=[(i,min(i+w,L)) for i in range(0,L,w)]
+ bx=[]; bn=[]; bm=[]
+ for a,b in bins:
+  bx.append(sum(v for p,v in ex.items() if a<=p<b))
+  bn.append(sum(v for p,v in en.items() if a<=p<b))
+  bm.append(sum(v for p,v in mx.items() if a<=p<b))
+ fx=np.array(bx,float)/Nx; fn=np.array(bn,float)/Nn; fm=np.array(bm,float)/Nm
+ best=(None,None)
+ for i in range(10001):
+  p=i/10000
+  d=np.sum((p*fx+(1-p)*fn-fm)**2)
+  if best[0] is None or d<best[1]: best=(p,d)
+ # multinomial likelihood
+ bestml=(None,None)
+ for i in range(1001):
+  p=i/1000
+  v=p*fx+(1-p)*fn
+  v=np.clip(v,1e-12,None); ll=sum(bm[j]*math.log(v[j]) for j in range(len(v)) if bm[j]>0)
+  if bestml[0] is None or ll>bestml[1]: bestml=(p,ll)
+ print('w',w,'L2 p',best[0],'ML p',bestml[0])
+PY"

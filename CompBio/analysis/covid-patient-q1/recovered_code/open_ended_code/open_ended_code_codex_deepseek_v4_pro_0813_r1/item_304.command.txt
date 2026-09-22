@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd,numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestCentroid
+orig=pd.read_csv('orig_coarse_freq.csv',index_col=0)
+work=pd.read_csv('celltype_freq.csv',index_col=0)
+# align features: B,T,NK,pDC,Monocyte? original has B,Myeloid,NK,Other,T,pDC; work has Monocyte,T,NK,B,pDC,Platelet,Erythroid,Unknown
+W=pd.DataFrame(index=work.index)
+W['B']=work['B']; W['Myeloid']=work['Monocyte']; W['NK']=work['NK']; W['T']=work['T']; W['pDC']=work['pDC']; W['Other']=work[['Platelet','Erythroid','Unknown']].sum(axis=1)
+O=orig[['B','Myeloid','NK','Other','T','pDC']]
+labels=orig['Class'].values
+# nearest centroid distance ratio
+for standardize in [False,True]:
+ X=O.values.astype(float); Y=W[O.columns].values.astype(float)
+ if standardize:
+  from sklearn.preprocessing import StandardScaler
+  sc=StandardScaler().fit(X); X=sc.transform(X); Y=sc.transform(Y)
+ means={}
+ for c in ['HC','COVID']:
+  means[c]=X[labels==c].mean(axis=0)
+ rows=[]
+ for i,d in enumerate(W.index):
+  dh=np.linalg.norm(Y[i]-means['HC']); dc=np.linalg.norm(Y[i]-means['COVID']); rows.append((int(d[5:]),dh,dc,dc-dh))
+ df=pd.DataFrame(rows,columns=['donor','dh','dc','margin_covid']).sort_values('margin_covid')
+ print('\\nstandardize',standardize,'top healthy')
+ print(df.to_string(index=False))
+ print('top14',','.join(map(str,df.head(14).donor.tolist())))
+PY"

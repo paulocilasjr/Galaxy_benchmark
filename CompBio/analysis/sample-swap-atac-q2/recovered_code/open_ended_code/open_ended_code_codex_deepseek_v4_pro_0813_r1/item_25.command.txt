@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, struct, time
+url='https://ftp.ncbi.nlm.nih.gov/geo/series/GSE196nnn/GSE196235/suppl/GSE196235_RAW.tar'
+s=requests.Session()
+# get size
+r=s.head(url, timeout=30, allow_redirects=True)
+print('head',r.status_code,r.headers.get('Content-Length'),r.url)
+size=int(r.headers.get('Content-Length','0'))
+print('size',size)
+files=[]
+off=0
+while off < size:
+    resp=s.get(url, headers={'Range':f'bytes={off}-{off+511}'}, timeout=60)
+    if resp.status_code not in (206,200):
+        print('err',resp.status_code,resp.text[:200]);break
+    hdr=resp.content
+    if len(hdr)<512: break
+    name=hdr[0:100].rstrip(b'\\x00').decode(errors='replace')
+    if not name: break
+    # parse size octal field bytes 124-135
+    size_str=hdr[124:136].rstrip(b'\\x00 ').decode(errors='replace')
+    fsize=int(size_str or '0',8)
+    typeflag=chr(hdr[156])
+    # prefix bytes 345:500
+    prefix=hdr[345:500].rstrip(b'\\x00').decode(errors='replace')
+    full=(prefix+'/'+name if prefix else name).lstrip('/')
+    files.append((full,off+512,fsize,typeflag))
+    # next header offset: data rounded to 512
+    data_pad=(fsize+511)//512*512
+    off += 512 + data_pad
+    print(full,fsize,off)
+    if typeflag in ('5',):
+        pass
+    if off>=size: break
+print('done',len(files))
+import json
+json.dump(files,open('tar_index.json','w'))
+PY"

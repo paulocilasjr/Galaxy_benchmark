@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY' > count_minimap_gene_mapq.py
+import collections, sys
+threshold = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+counts=collections.Counter(); primary=0; kept=0
+for line in sys.stdin:
+    if line.startswith('@'): continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<5: continue
+    flag=int(f[1]); mapq=int(f[4])
+    if flag & (4|256|2048): continue
+    primary += 1
+    if mapq < threshold: continue
+    kept += 1
+    parts=f[2].split('|')
+    gene=parts[5] if len(parts)>=6 else f[2]
+    counts[gene]+=1
+print(f'__PRIMARY__\\t{primary}')
+print(f'__KEPT__\\t{kept}')
+for g,c in counts.most_common(): print(f'{g}\\t{c}')
+PY
+for q in 1 10 20 30; do
+  minimap2 -ax sr -t 4 gencode.v48.transcripts.mmi deg.simple.q1.sampleA.fq.gz 2>/dev/null | python3 count_minimap_gene_mapq.py \""'$q" > sampleA.mapq${q}.counts.tsv
+  minimap2 -ax sr -t 4 gencode.v48.transcripts.mmi deg.simple.q1.sampleB.fq.gz 2>/dev/null | python3 count_minimap_gene_mapq.py "$q" > sampleB.mapq${q}.counts.tsv
+  python3 - "$q" <<'"'PY'
+import sys, pathlib, math
+q=sys.argv[1]
+def load(fn):
+ d={}; meta={}
+ for line in pathlib.Path(fn).read_text().splitlines():
+  g,c=line.split('\\t'); c=int(c)
+  (meta if g.startswith('__') else d)[g]=c
+ return d,meta
+A,Am=load(f'sampleA.mapq{q}.counts.tsv'); B,Bm=load(f'sampleB.mapq{q}.counts.tsv')
+TA=Am['__KEPT__']; TB=Bm['__KEPT__']
+rows=[]
+for g in set(A)|set(B):
+ a=A.get(g,0); b=B.get(g,0)
+ if max(a,b)>=10:
+  rows.append((abs(math.log2((a/TA*1e6+1)/(b/TB*1e6+1))), g, a, b, math.log2((a/TA*1e6+1)/(b/TB*1e6+1))))
+print('MAPQ', q, 'kept', TA, TB, 'top', sorted(rows, reverse=True)[:5])
+PY
+done"

@@ -1,0 +1,44 @@
+/bin/bash -lc "cat > scan_moods.py <<'PY'
+import json, os, tempfile
+from pathlib import Path
+from Bio.Seq import Seq
+import MOODS.scan as ms
+import MOODS.tools as mt
+import MOODS.parsers as mp
+
+seq=''.join(l.strip() for l in Path('dna_with_secret_motif.fasta').read_text().splitlines() if not l.startswith('>'))
+seq_rc=str(Seq(seq).reverse_complement())
+allm=json.loads(Path('motifs.json').read_text())
+
+# Write PFM files in workspace/temp_pfms
+pfmdir=Path('pfms'); pfmdir.mkdir(exist_ok=True)
+paths=[]
+for m in allm:
+    mid=m['matrix_id']; name=m['name']; ver=m['version']
+    fn=pfmdir/f'{mid}.pfm'
+    if not fn.exists():
+        lines=[f'>{mid} {name}']
+        for a in 'ACGT':
+            lines.append('\\t'.join(str(int(x)) for x in m['pfm'][a]))
+        fn.write_text('\\n'.join(lines)+'\\n')
+    paths.append((fn,m))
+print('files',len(paths))
+
+bg=mt.flat_bg(4)
+# read all log odds
+for pval in [1e-3,1e-4,1e-5]:
+    mats=[]; names=[]; thresholds=[]
+    for fn,m in paths:
+        mat=mp.pfm_to_log_odds(str(fn), bg, 1)
+        thr=mt.threshold_from_p(mat,bg,pval)
+        mats.append(mat); names.append(f'{m[\"matrix_id\"]} {m[\"name\"]} v{m[\"version\"]}'); thresholds.append(thr)
+    scanner=ms.Scanner(7)
+    scanner.set_motifs(mats,bg,thresholds)
+    r_plus=scanner.scan(seq)
+    r_minus=scanner.scan(seq_rc)
+    counts=[len(r_plus[i])+len(r_minus[i]) for i in range(len(mats))]
+    print(f'\\n--- p={pval:g} ---')
+    for n,c in sorted(zip(names,counts), key=lambda x:x[1], reverse=True):
+        print(f'{c:8d}  {n}')
+PY
+python3 scan_moods.py"

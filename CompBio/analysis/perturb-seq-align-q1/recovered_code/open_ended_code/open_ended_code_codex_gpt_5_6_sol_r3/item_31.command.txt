@@ -1,0 +1,22 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 python -u - <<'PY'
+import anndata as ad,numpy as np
+common=None; ads=[]
+for f in ['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']:
+ a=ad.read_h5ad(f);ads.append(a); common=set(a.var_names) if common is None else common&set(a.var_names)
+common=np.array(sorted(common)); out=[]
+for a in ads:
+ X=a.X[:,a.var_names.get_indexer(common)].tocsr().astype(float)
+ labs=np.asarray(a.obs.guide.astype(str),dtype=str); cats=np.array([g for g in a.obs.guide.cat.categories if not g.startswith('NT-')]);nt=np.char.startswith(labs,'NT-')
+ # Aggregate raw counts, normalize pseudobulks to proportions; alpha is 0.25 expected count at median group depth.
+ sums=np.vstack([np.asarray(X[labs==g].sum(0)).ravel() for g in cats]); nts=np.asarray(X[nt].sum(0)).ravel()
+ depth=sums.sum(1); ntdepth=nts.sum(); alpha=.25/np.median(depth)
+ eff=np.log2((sums/depth[:,None]+alpha)/(nts/ntdepth+alpha)); base=nts/ntdepth
+ out.append((cats,eff,base))
+rg,R,rb=out[0];qg,Q,qb=out[1]
+for expr in [0,1e-6,1e-5,5e-5,1e-4]:
+ m=(rb>expr)&(qb>expr)
+ A=R[:,m];B=Q[:,m];A-=A.mean(1)[:,None];B-=B.mean(1)[:,None];A/=np.sqrt((A*A).sum(1))[:,None];B/=np.sqrt((B*B).sum(1))[:,None];C=A@B.T
+ print('threshold',expr,'genes',m.sum())
+ for t in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+  i=np.where(rg==t)[0][0];o=np.argsort(C[i])[::-1][:5];print(t,[(qg[j],round(C[i,j],3)) for j in o])
+PY"

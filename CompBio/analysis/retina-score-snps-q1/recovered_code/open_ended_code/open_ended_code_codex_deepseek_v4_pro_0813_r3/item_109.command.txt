@@ -1,0 +1,43 @@
+/bin/bash -c "python -u - <<'PY'
+import pandas as pd, numpy as np, torch, h5py, time, os
+out=pd.read_pickle('work/snps_final_hg38_with_seq.pkl')
+INP_LEN=2114; HALF=1056
+ref_seqs=[]; alt_seqs=[]
+for _,r in out.iterrows():
+    seq=r['seq']; ref=r['ref']; alt=r['alt']
+    if ref "'!= seq[HALF:HALF+len(ref)]:
+        refseq=seq[:HALF]+ref+seq[HALF+len(ref):]
+    else: refseq=seq
+    altseq=refseq[:HALF]+alt+refseq[HALF+len(ref):]
+    ref_seqs.append(refseq); alt_seqs.append(altseq)
+def one_hot(seqs):
+    m={'"'A':0,'C':1,'G':2,'T':3}; a=np.zeros((len(seqs),4,INP_LEN),np.float32)
+    for i,s in enumerate(seqs):
+        for j,ch in enumerate(s):
+            if ch in m: a[i,m[ch],j]=1
+    return a
+print('build')
+ref_x=torch.from_numpy(one_hot(ref_seqs)); alt_x=torch.from_numpy(one_hot(alt_seqs)); print('built',ref_x.shape)
+torch.set_num_threads(1)
+def load_model(path):
+    f=h5py.File(path,'r')
+    def ds(p): return torch.from_numpy(np.array(f[p]))
+    w1=ds('model_weights/conv1d/conv1d/kernel:0').permute(2,1,0).contiguous(); b1=ds('model_weights/conv1d/conv1d/bias:0').contiguous()
+    ws=[]
+    for i in range(1,9): ws.append((ds(f'model_weights/conv1d_{i}/conv1d_{i}/kernel:0').permute(2,1,0).contiguous(),ds(f'model_weights/conv1d_{i}/conv1d_{i}/bias:0').contiguous()))
+    wct=ds('model_weights/logcounts/logcounts/kernel:0').reshape(1,512,1).contiguous(); bct=ds('model_weights/logcounts/logcounts/bias:0').reshape(1).contiguous(); f.close()
+    return w1,b1,ws,wct,bct
+print('loading')
+params=load_model('work/Rod_fold0.h5'); print('loaded')
+w1,b1,ws,wct,bct=params
+@torch.no_grad()
+def forward(x):
+    out=torch.relu(torch.nn.functional.conv1d(x,w1,b1))
+    for i,(w,b) in enumerate(ws,1):
+        y=torch.relu(torch.nn.functional.conv1d(out,w,b,dilation=2**i)); xlen=out.shape[2]; ylen=y.shape[2]; crop=(xlen-ylen)//2; out=y+out[:,:,crop:crop+ylen]
+    return torch.nn.functional.linear(out.mean(dim=2),wct.reshape(1,512),bct).reshape(-1)
+print('predict batch 4')
+print(forward(ref_x[:4]))
+print('predict batch 32')
+print(forward(ref_x[:32]))
+PY"

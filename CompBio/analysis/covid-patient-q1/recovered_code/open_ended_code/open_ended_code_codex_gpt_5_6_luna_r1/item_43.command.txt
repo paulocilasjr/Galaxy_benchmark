@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csr_matrix
+z=np.load('donor_aggregate.npz',allow_pickle=True); donors=z['donor_names'].astype(str); genes=z['gene_names'].astype(str); cell_umis=z['cell_umis'];
+with h5py.File('covid.patients.q1.h5ad','r') as f:
+ ip=f['X/indptr'][:]; codes=f['obs/donor_id/codes'][:].astype(int); n=len(codes); ng=len(genes)
+# first occurrence index for genes
+gix={x:int(np.where(genes==x)[0][0]) for x in set(genes)}
+markers={
+'T':['CD3D','CD3E','TRBC1','TRBC2','IL7R','CCR7','LTB','MALAT1','MALAT1','LST1'],
+'NK':['NKG7','GNLY','CCL5','PRF1','GZMB','GZMH','FCGR3A','KLRD1','TRAC'],
+'B':['MS4A1','CD79A','CD79B','CD74','HLA-DRA','CD37','CD22','CD83','CD52'],
+'Mono':['LST1','LYZ','LILRB1','CTSS','FCN1','S100A8','S100A9','S100A12','LGALS3','TYMP','CTSD','FCGR1A'],
+'pDC':['GZMB','GZMB','GZMB','IRF7','GZMB','LILRA4','GZMB','CLEC4C','SERPINF1','PLD4','TCF4'],
+'cDC':['FCER1A','CLEC10A','CD1C','CST3','HLA-DPA1','HLA-DPB1','DNASE1L3'],
+'Mega':['PPBP','PF4','NRGN','GNG11'],
+'Eryth':['HBB','HBA1','HBA2','HBD','ALAS2'],
+}
+# filter genes, target positions
+used=[]; pos={}
+for typ,gs in markers.items():
+ for q in gs:
+  if q in gix and gix[q] not in pos: pos[gix[q]]=len(used); used.append(gix[q])
+used=np.array(used); typ_ix={typ:np.array([pos[gix[q]] for q in gs if q in gix],int) for typ,gs in markers.items()}
+# signatures
+ifn=['ISG15','IFIT1','IFIT2','IFIT3','IFI6','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI44','IFI44L','RSAD2','IRF7','STAT1','IFITM1','IFITM2','IFITM3','DDX58','IFIH1','USP18','SAMD9L','BST2','EPSTI1','RTP4','XAF1','IFIT5','PARP9','CMPK2']
+infl=['S100A8','S100A9','S100A12','LYZ','FCGR3A','MS4A7','LGALS3','CTSD','LILRB1','HLA-DRA','HLA-DPA1','HLA-DPB1','TYMP','CTSS','FCN1','CTSD']
+ifpos=np.array([pos[gix[q]] for q in ifn if q in gix],int); inflpos=np.array([pos[gix[q]] for q in infl if q in gix],int)
+target=np.concatenate([used,])
+# aggregate per donor/type
+nd=len(donors); nt=len(markers)
+tnames=list(markers)
+counts=np.zeros((nd,nt),int); score_sum=np.zeros((nd,nt)); ifn_sum=np.zeros((nd,nt)); infl_sum=np.zeros((nd,nt)); total_cells=np.bincount(codes,minlength=nd)
+# also donor overall cell scores and type label counts
+cell_type=np.full(n,-1,int); cell_scores=np.zeros((n,nt)); cell_ifn=np.zeros(n); cell_infl=np.zeros(n)
+with h5py.File('covid.patients.q1.h5ad','r') as f:
+ for r0 in range(0,n,4000):
+  r1=min(n,r0+4000); s0=int(ip[r0]); s1=int(ip[r1]);
+  dat=f['X/data'][s0:s1].astype(np.float32); idx=f['X/indices'][s0:s1]; ib=(ip[r0:r1+1]-s0).astype(np.int64)
+  M=csr_matrix((dat,idx,ib),shape=(r1-r0,ng))[:,target].toarray().astype(np.float32)
+  norm=np.log1p(M/(cell_umis[r0:r1,None]+1e-9)*1e4)
+  ss=np.stack([norm[:,typ_ix[t]].mean(1) for t in tnames],1)
+  # conservative assignment: highest marker score
+  lab=ss.argmax(1)
+  # check ambiguous/low? keep all
+  cell_type[r0:r1]=lab; cell_scores[r0:r1]=ss
+  cell_ifn[r0:r1]=norm[:,ifpos].mean(1); cell_infl[r0:r1]=norm[:,inflpos].mean(1)
+  for j in range(nt):
+   m=lab==j; counts[:,j]+=np.bincount(codes[r0:r1][m],minlength=nd)
+   score_sum[:,j]+=np.bincount(codes[r0:r1][m],weights=ss[m,j],minlength=nd)
+   ifn_sum[:,j]+=np.bincount(codes[r0:r1][m],weights=cell_ifn[r0:r1][m],minlength=nd)
+   infl_sum[:,j]+=np.bincount(codes[r0:r1][m],weights=cell_infl[r0:r1][m],minlength=nd)
+np.savez_compressed('cell_scores.npz',cell_type=cell_type,cell_ifn=cell_ifn,cell_infl=cell_infl,counts=counts,score_sum=score_sum,ifn_sum=ifn_sum,infl_sum=infl_sum,tnames=np.array(tnames),donors=donors)
+print('cell type proportions / donor')
+for i,d in enumerate(donors): print(d,' '.join(f'{tnames[j]}:{counts[i,j]/total_cells[i]:.3f}' for j in range(nt)), 'IFN',f'{cell_ifn[codes==i].mean():.3f}','infl',f'{cell_infl[codes==i].mean():.3f}')
+print('type counts total',dict(zip(tnames,counts.sum(0))))
+PY"

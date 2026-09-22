@@ -1,0 +1,62 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad
+import numpy as np, pandas as pd
+from scipy import sparse
+adata=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+obs=adata.obs.copy(); donors=sorted(obs['donor_id'].astype(str).unique(), key=lambda s:int(s.replace('donor',''))); ids=[int(d.replace('donor','')) for d in donors]
+donor_to_i={d:i for i,d in enumerate(donors)}; codes=np.array([donor_to_i[x] for x in obs['donor_id'].astype(str)], dtype=np.int32)
+names=np.array(adata.var['feature_name'].astype(str).values); idx={g:i for i,g in enumerate(names)}
+markers={
+ 'T_naive':['CD3D','CD3E','IL7R','CCR7','LTB','TCF7','LEF1'],
+ 'T_cyto_NK':['NKG7','GNLY','GZMB','PRF1','KLRD1','CD3D'],
+ 'Mono_inflam':['LYZ','S100A8','S100A9','FCN1','LST1','CTSS','LGALS3','CD14'],
+ 'B':['MS4A1','CD79A','CD79B','BANK1'],
+ 'Plasma':['MZB1','JCHAIN','XBP1','DERL3'],
+ 'Platelet':['PPBP','PF4','NRGN'],
+ 'Cycling':['MKI67','TOP2A','STMN1','UBE2C','PCNA'],
+ 'ISG':['IFI27','IFI6','ISG15','MX1','OAS1','IFIT1','IFIT3','RSAD2','SIGLEC1','LY6E'],
+}
+marker_idx={k:[idx[g] for g in v if g in idx] for k,v in markers.items()}
+# classify by marker score among cell types, plus flags for ISG/cycling per cell
+classes=['T_naive','T_cyto_NK','Mono_inflam','B','Plasma','Platelet']
+counts=np.zeros((len(donors), len(classes)), dtype=np.int64)
+flags=np.zeros((len(donors),3), dtype=np.int64) # ISG, cycling, plasma strong
+cell_counts=np.bincount(codes, minlength=len(donors))
+block=5000
+for start in range(0, adata.n_obs, block):
+    end=min(start+block, adata.n_obs)
+    cols=sorted(set(sum(marker_idx.values(), [])))
+    X=adata.X[start:end, cols]
+    if hasattr(X,'to_memory'): X=X.to_memory()
+    X=X.tocsr()
+    pos={c:j for j,c in enumerate(cols)}
+    score=np.zeros((end-start, len(classes)), dtype=np.float32)
+    for ci,cl in enumerate(classes):
+        ps=[pos[j] for j in marker_idx[cl]]
+        if ps: score[:,ci]=np.asarray(X[:,ps].sum(axis=1)).ravel()/len(ps)
+    assigned=score.argmax(axis=1)
+    maxscore=score.max(axis=1)
+    # require any marker expression; else no assignment
+    for local_i,(a,ms) in enumerate(zip(assigned,maxscore)):
+        if ms>0:
+            counts[codes[start+local_i], a]+=1
+    # flags raw avg expression > thresholds roughly any strong marker
+    for fi,cl in enumerate(['ISG','Cycling','Plasma']):
+        ps=[pos[j] for j in marker_idx[cl]]
+        if ps:
+            vals=np.asarray(X[:,ps].sum(axis=1)).ravel()
+            # >=1 total marker UMI
+            for local_i,val in enumerate(vals):
+                if val>=1: flags[codes[start+local_i], fi]+=1
+props=counts/cell_counts[:,None]
+flagp=flags/cell_counts[:,None]
+df=pd.DataFrame({'id':ids,'cells':cell_counts})
+for i,c in enumerate(classes): df[c]=props[:,i]
+for i,c in enumerate(['ISG_any','Cycling_any','Plasma_any']): df[c]=flagp[:,i]
+print(df.sort_values('id').to_string(index=False, float_format=lambda x:f'{x:.3f}'))
+print('\\nhealthy candidate means vs rest')
+healthy={1,5,11,12,17,21,24,27,29,32}
+for group,name in [(healthy,'cand'),(set(ids)-healthy,'rest')]:
+    sub=df[df.id.isin(group)]
+    print(name, sub[['T_naive','T_cyto_NK','Mono_inflam','B','Plasma','Platelet','ISG_any','Cycling_any','Plasma_any']].mean().to_string())
+PY"

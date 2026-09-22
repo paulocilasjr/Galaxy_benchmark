@@ -1,0 +1,20 @@
+/bin/bash -lc "python -u - <<'PY'
+# Recompute lightweight score and report fraction over candidate LUSC sets and thresholds
+import anndata as ad,numpy as np,h5py
+A=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r'); sy=np.asarray(A.var['symbol'].astype(str))
+bs=['KRT5','KRT14','KRT17','TP63','SOX2','KRT6A','KRT13','KRT15','KRT16','S100A2','S100A7','SFN','CLCA2','TRIM29','DSC3','DSG3','SERPINB13','GPC1','FSCN1','GPNMB','HOXA1','FGFBP1','PERP','SLC6A8'];ls=['NAPSA','NKX2-1','SFTPB','SFTPA1','SFTPA2','SFTPC','SFTPD','SCGB1A1','SCGB3A2','AQP5','MUC1','WFDC2','FOLR1','SLC34A2','EPCAM','KRT8','KRT18','KRT19']; ep=['EPCAM','KRT8','KRT18','KRT19','KRT5','KRT14','KRT17','KRT6A','KRT13','KRT15','KRT16','MUC1','SFN']; gs=list(dict.fromkeys(bs+ls+ep+['PTPRC']));idx=[int(np.flatnonzero(sy==g)[0]) for g in gs];mi={g:i for i,g in enumerate(gs)};X=A.X[:,idx].toarray().astype(np.float32)
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ ip=np.asarray(f['X/indptr']); data=f['X/data']; rows=np.diff(ip);tot=np.zeros(len(rows),np.int64)
+ for st in range(0,len(rows),10000):
+  en=min(len(rows),st+10000);a=int(ip[st]);b=int(ip[en]);nz=np.flatnonzero(rows[st:en]);tot[st:en][nz]=np.add.reduceat(np.asarray(data[a:b],np.int64),ip[st:en][nz]-a,dtype=np.int64)
+Z=np.log1p(X/tot[:,None]*1e4);B=Z[:,[mi[g] for g in bs]].mean(1);L=Z[:,[mi[g] for g in ls]].mean(1);E=Z[:,[mi[g] for g in ep]].mean(1);s=np.asarray(A.obs['sampleID'].astype(str)); non=X[:,mi['PTPRC']]==0
+sets={'A11':['Patient_013','Patient_014','Patient_015','Patient_018','Patient_026','Patient_027','Patient_028','Patient_029','Patient_030','Patient_031','Patient_040'], 'B18':['Patient_010','Patient_013','Patient_014','Patient_015','Patient_018','Patient_026','Patient_027','Patient_028','Patient_029','Patient_030','Patient_031','Patient_040','Patient_045','Patient_046','Patient_047','Patient_048','Patient_063','Patient_064','Patient_065','Patient_066','Patient_067'], 'C_basal_gt_luad':['Patient_'+f'{i:03d}' for i in range(1,68) if ((B[s=='Patient_'+f'{i:03d}']>L[s=='Patient_'+f'{i:03d}']).mean()>.05)]}
+print({k:len(v) for k,v in sets.items()});
+for k,ss in sets.items():
+ m=np.isin(s,ss)
+ print('\\n',k,ss,'non',int(non.sum()),'cells')
+ for t in [.1,.2,.3,.4,.5,.6,.7,.8,1.0]:
+  base=m&non&(E>.3)&(B>L)&(B>t)
+  print(t,int(base.sum()),round(100*base.sum()/non.sum(),2),end='; ')
+ print()
+PY"

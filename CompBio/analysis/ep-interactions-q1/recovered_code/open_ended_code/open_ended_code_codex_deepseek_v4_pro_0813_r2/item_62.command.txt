@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import poisson
+import statsmodels.api as sm
+hic=pd.read_csv('ep.interactions.q1.hic.csv'); expr=pd.read_csv('ep.interactions.q1.expr.csv')
+bg=hic[hic.set=='background'].copy(); cand=hic[hic.set=='candidate'].copy()
+bg['mean']=bg[['count_rep1','count_rep2','count_rep3']].mean(axis=1)
+X=sm.add_constant(np.log(bg.distance_bp)); glm=sm.GLM(bg['mean'],X,family=sm.families.Poisson()).fit()
+def lam(d):
+    # predict for scalar; statsmodels add_constant weird
+    import warnings
+    with warnings.catch_warnings(): warnings.simplefilter('ignore')
+    return glm.predict([1,np.log(d)])[0]
+high=['EP1','EP2','EP3','EP4']
+r_est=np.mean([cand[cand.pair_id==p][['count_rep1','count_rep2','count_rep3']].values.mean() for p in high]) / np.mean([lam(cand[cand.pair_id==p]['distance_bp'].iloc[0]) for p in high])
+print('r_est',r_est)
+hic_bf={}
+for _,r in cand.iterrows():
+    total=r.count_rep1+r.count_rep2+r.count_rep3
+    mu0=lam(r.distance_bp)*3; mu1=mu0*r_est
+    ll0=poisson.logpmf(total,mu0); ll1=poisson.logpmf(total,mu1)
+    hic_bf[r.pair_id]=ll1-ll0
+    print(r.pair_id,'mu0',mu0,'mu1',mu1,'total',total,'hic_logBF',ll1-ll0)
+
+print('\\nExpr BF')
+for p,g in expr.groupby('pair_id'):
+    y=[]; v=[]
+    for guide,gg in g.groupby('guide_id'):
+        c=gg[gg.condition=='control'].rna_count.values.astype(float)
+        t=gg[gg.condition=='perturbed'].rna_count.values.astype(float)
+        lfc=np.log2(t.mean()/c.mean())
+        var=(t.var(ddof=1)/len(t)/(t.mean()**2) + c.var(ddof=1)/len(c)/(c.mean()**2)) / (np.log(2)**2)
+        y.append(lfc); v.append(var)
+    y=np.array(y); v=np.array(v)
+    tau0=0.03; tau1=0.02; sig_delta=0.8
+    def logmv(y,V):
+        sign,logdet=np.linalg.slogdet(V)
+        if sign<=0: return -1e9
+        d=len(y)
+        Vinv=np.linalg.inv(V)
+        return -0.5*(d*np.log(2*np.pi)+logdet+y@Vinv@y)
+    V0=np.diag(v+tau0**2); V1=np.diag(v+tau1**2)+sig_delta**2
+    bf=logmv(y,V1)-logmv(y,V0)
+    print(p,'logFC per guide',np.round(y,3),'BFexpr',bf,'totalBF',hic_bf[p]+bf)
+PY"

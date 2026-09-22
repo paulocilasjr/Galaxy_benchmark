@@ -1,0 +1,38 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+D=pd.read_csv('single_cell_dynamics_question.csv'); v=D[['enh_x','enh_y','enh_z']].to_numpy()-D[['prom_x','prom_y','prom_z']].to_numpy(); C=(np.sqrt((v*v).sum(1))<=260).astype(np.int8).reshape(600,250); T=D.transcription.to_numpy().astype(np.int8).reshape(600,250)
+for name,X in [('C',C),('T',T)]:
+ lens=[]
+ for row in X:
+  z=np.diff(np.r_[0,row,0]); st=np.where(z==1)[0]; en=np.where(z==-1)[0]; lens += (en-st).tolist()
+ print(name,'ones',X.sum(),'runs',len(lens),'mean',np.mean(lens),'median',np.median(lens),'max',np.max(lens),'freq',pd.Series(lens).value_counts().sort_index().head(20).to_dict(),flush=True)
+# all 2-variable 2x2 sequences at t, t+1 to see changes
+for label,X in [('C',C),('T',T)]:
+ a=X[:,:-1].ravel(); b=X[:,1:].ravel()
+ print(label,'transition counts 0->0,0->1,1->0,1->1', [int(((a==i)&(b==j)).sum()) for i,j in [(0,0),(0,1),(1,0),(1,1)]])
+# condition next target on current states plus previous target maybe, target future with both target history and source history
+# calculate direct conditional probabilities by current state and previous target/source all combos
+for targname,Y,srcname,X in [('T',T,'C',C),('C',C,'T',T)]:
+ y0=Y[:,:-1]; y1=Y[:,1:]; x0=X[:,:-1];
+ # source effect conditional current target and previous target/source? regress via cells aggregated
+ print('\\n',srcname,'current ->',targname,'next: conditional probabilities')
+ for ytprev in [None,0,1]:
+  print(' target previous',ytprev)
+  for yt in [0,1]:
+   for xt in [0,1]:
+    # previous time index t-1, use t from 1 to 248
+    if ytprev is None:
+     mask=(y0==yt)&(x0==xt)
+    else:
+     mask=(Y[:,:-2]==ytprev)&(y0[:,1:]==yt)&(x0[:,1:]==xt)
+     yy=y1[:,1:]
+     z=yy[mask]
+     print(' yprev',ytprev,'yt',yt,'xt',xt,'n',z.size,'rate',z.mean())
+     continue
+    z=y1[mask]; print(' yt',yt,'xt',xt,'n',z.size,'rate',z.mean())
+# Cross table of C,T at neighboring times, maybe mark if no same time overlap
+for orient in ['CT','TC']:
+ if orient=='CT': x0=C[:,:-1];y1=T[:,1:]
+ else: x0=T[:,:-1];y1=C[:,1:]
+ print(orient, pd.crosstab(x0.ravel(),y1.ravel()).to_string())
+PY"

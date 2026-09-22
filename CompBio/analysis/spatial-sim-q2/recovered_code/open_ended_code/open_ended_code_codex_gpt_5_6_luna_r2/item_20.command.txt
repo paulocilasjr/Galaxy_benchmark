@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import numpy as np,csv
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=np.loadtxt('data/spatial_q_sc_counts.csv',delimiter=',',skiprows=1,usecols=range(1,1001))
+with open('data/spatial_q_sc_metadata.csv') as f: rows=list(csv.reader(f))[1:]
+labels=np.array([r[1] for r in rows]); types=sorted(set(labels)); S=np.array([sc[labels==t].mean(0) for t in types])
+sp=mmread('data/matrix.mtx.gz').toarray(); coef=np.array([nnls(S.T,sp[:,j])[0] for j in range(sp.shape[1])]);
+for i,t in enumerate(types):
+ x=coef[:,i]
+ print('\\n',t,'nonzero thresholds',[(th,int((x>th).sum())) for th in [1e-6,.01,.05,.1,.2,.5,.8]])
+ vals,cts=np.unique(np.round(x,2),return_counts=True)
+ print('rounded values',list(zip(vals.tolist(),cts.tolist()))[:30], '... nvals',len(vals))
+# residual and total coefficient
+print('\\nresid stats unavailable recompute')
+rerr=[]
+for j in range(900):
+ pred=S.T@coef[j]; rerr.append(np.linalg.norm(sp[:,j]-pred)/np.linalg.norm(sp[:,j]))
+print(min(rerr),np.median(rerr),max(rerr))
+# tumor positions all > .1
+with open('data/tissue_positions.csv') as f: pos=list(csv.DictReader(f))
+r=np.array([int(p['array_row']) for p in pos]); c=np.array([int(p['array_col']) for p in pos])
+i=types.index('Tumor_Core')
+print('\\ntumor > thresholds coords')
+for th in [.05,.1,.2,.5,.8]:
+ ids=np.where(coef[:,i]>th)[0]
+ print(th,len(ids),[(int(r[j]),int(c[j]),round(float(coef[j,i]),2),types[int(np.argmax(coef[j]))]) for j in ids])
+PY"

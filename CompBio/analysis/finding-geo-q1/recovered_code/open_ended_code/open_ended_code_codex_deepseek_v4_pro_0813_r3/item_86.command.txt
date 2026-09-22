@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import json,requests,re,time,concurrent.futures
+S=json.load(open('broad_summaries.json'))
+items=[]
+for uid,x in S.items():
+    supp=(x.get('suppfile') or '').upper()
+    if not any(k in supp for k in ['MTX','TSV','TAR','H5']): continue
+    low=(x.get('title','')+' '+(x.get('summary') or '')).lower()
+    score=0
+    terms=['develop','embry','spinal','neural tube','hindbrain','midbrain','forebrain','retina','cortex','progenitor','neur','cns','brain','nervous system','e9','e10','e11','e12','e13','e14','e15','temporal','spatial']
+    for t in terms:
+        if t in low: score+=1
+    exclude=['als','amyotrophic','multiple sclerosis','injur','ischem','alzheimer','parkinson','tumor','glioma','leukemia','cancer','microglia','macrophage','t cell','b cell','immune','lymph','blood','bone marrow','schwann','pain','sensory neuron','adult','postnatal','p0','p7','p14','p30','aging']
+    ex=sum(1 for w in exclude if w in low)
+    if score>=4 and ex<=3:
+        items.append((score,uid,x))
+items.sort(key=lambda t:-t[0])
+print('items',len(items))
+# write accessions
+accs=[]
+for score,uid,x in items:
+    accs.append(x.get('accession'))
+open('candidate_accs_devneural.txt','w').write('\\n'.join(a for a in accs if a))
+print('accs',len(accs))
+
+def fetch(acc):
+    prefix=acc[:6]+'nnn'
+    url=f'https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/{acc}/suppl/filelist.txt'
+    try:
+        r=requests.get(url,timeout=15)
+        if r.status_code"'!=200: return (acc,None,r.status_code)
+        return (acc,r.text,r.status_code)
+    except Exception as e:
+        return (acc,None,str(e))
+
+results=[]
+# sequential to avoid rate
+for acc in accs:
+    results.append(fetch(acc))
+    # print progress every 20
+    if len(results)%20==0: print('"'fetched',len(results))
+open('candidate_filelists.json','w').write(json.dumps([{'acc':a,'status':s,'text':t} for a,t,s in results]))
+print('done')
+PY"

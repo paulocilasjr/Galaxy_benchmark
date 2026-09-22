@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam,json,urllib.request
+ref=json.load(urllib.request.urlopen('https://api.genome.ucsc.edu/getData/sequence?genome=hg38;chrom=chrX;start=154398450;end=154398700'))['dna']
+def rb(pos1): return ref[pos1-154398451]
+bam=pysam.AlignmentFile('variant.status.q1.bam','rb')
+pos=154398500
+from collections import Counter
+c=Counter(); details=[]
+for read in bam.fetch('chrX',pos-500,pos+500):
+    # get qpos at pos
+    pairs=read.get_aligned_pairs(matches_only=False)
+    qpos=None
+    for q,r in pairs:
+        if r==pos-1:
+            qpos=q;break
+    if qpos is None: continue
+    # Determine trim length k by comparing read prefix to ref from start; find max k (0..qpos?) such that bases q0..q_{k-1} are all T? 
+    # More principled: k = length of leading query bases that do not match reference at start..start+k-1 and are T, until first match or non-T.
+    start=read.reference_start+1
+    k=0
+    while k<read.query_length and start+k<=pos:
+        qb=read.query_sequence[k]
+        if qb=='T' and rb(start+k)"'!=qb:
+            k+=1
+        else:
+            break
+    # Now biological qpos = qpos - k if qpos>=k; genomic pos covered only if k<=qpos (because trimming k leading bases shifts)
+    covered = qpos>=k
+    if covered:
+        base=read.query_sequence[qpos]
+        c[base]+=1
+        details.append((read.query_name,start,read.cigarstring,qpos,k,base,'"'COV'))
+    else:
+        details.append((read.query_name,start,read.cigarstring,qpos,k,read.query_sequence[qpos],'OVERHANG'))
+print('after trim leading T mismatch overhang:',c)
+for d in details:
+    print(d)
+PY"

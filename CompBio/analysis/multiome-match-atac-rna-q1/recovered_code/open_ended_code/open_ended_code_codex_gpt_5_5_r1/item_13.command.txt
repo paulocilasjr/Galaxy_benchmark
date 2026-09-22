@@ -1,0 +1,84 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, itertools, os
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata
+
+rna_fn='multiome.match.atac.rna.q1.rna.tsv.gz'
+atac_fn='multiome.match.atac.rna.q1.atac.tsv.gz'
+gtf='gencode.v44.annotation.gtf.gz'
+
+rna=pd.read_csv(rna_fn, sep='\\t', compression='gzip', index_col=0)
+atac=pd.read_csv(atac_fn, sep='\\t', compression='gzip', index_col=0)
+print('loaded', rna.shape, atac.shape)
+
+# parse GENCODE gene records by gene_name
+attr_re=re.compile(r'(\\S+) \"(["'^"]+)"'"')
+genes=[]
+with gzip.open(gtf,'rt') as f:
+    for line in f:
+        if not line or line[0]=='#': continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2] "'!= '"'gene': continue
+        chrom, start, end, strand, attrs = parts[0], int(parts[3]), int(parts[4]), parts[6], parts[8]
+        d=dict(attr_re.findall(attrs))
+        name=d.get('gene_name')
+        if not name: continue
+        tss = start-1 if strand=='+' else end-1  # 0-based coordinate
+        genes.append((name, chrom, tss))
+print('gtf genes', len(genes))
+
+rna_genes=set(rna.index)
+atac_index=set(atac.index)
+
+def make_pairs(window=0, agg='sum'):
+    rows=[]; peaks=[]; seen=set()
+    for name, chrom, tss in genes:
+        if name not in rna_genes: continue
+        base=(tss//10000)*10000
+        peak_names=[]
+        for off in range(-window, window+1):
+            s=base+off*10000
+            if s<0: continue
+            p=f'{chrom}_{s}_{s+10000}'
+            if p in atac_index:
+                peak_names.append(p)
+        if not peak_names: continue
+        key=(name, tuple(peak_names))
+        if key in seen: continue
+        seen.add(key)
+        rows.append(name); peaks.append(peak_names)
+    R=np.log1p(rna.loc[rows].to_numpy(float))
+    if window==0:
+        A=np.log1p(atac.loc[[ps[0] for ps in peaks]].to_numpy(float))
+    else:
+        # aggregate raw counts over window, then log1p
+        mats=np.stack([atac.loc[ps].to_numpy(float).sum(axis=0) for ps in peaks])
+        A=np.log1p(mats)
+    # filter informative pairs
+    mask=(R.var(axis=1)>0)&(A.var(axis=1)>0)&(R.mean(axis=1)>0)&(A.mean(axis=1)>0)
+    return R[mask], A[mask], np.array(rows)[mask]
+
+def pearson_cols(R,A):
+    Rz=(R-R.mean(axis=0))/R.std(axis=0)
+    Az=(A-A.mean(axis=0))/A.std(axis=0)
+    return (Rz.T@Az)/(R.shape[0]-1)
+
+def spearman_cols(R,A):
+    Rr=np.apply_along_axis(rankdata,0,R)
+    Ar=np.apply_along_axis(rankdata,0,A)
+    return pearson_cols(Rr,Ar)
+
+for window in [0,1,2,5,10]:
+    R,A,names=make_pairs(window)
+    print('\\nwindow',window,'pairs',len(names))
+    for label,func in [('pearson',pearson_cols),('spearman',spearman_cols)]:
+        C=func(R,A)
+        print(label)
+        print(np.array2string(C, precision=4, suppress_small=True))
+        print('row argmax', ';'.join(map(str,C.argmax(axis=1))))
+        print('col argmax', ';'.join(map(str,C.argmax(axis=0))))
+        # assignment max sum
+        best=max(itertools.permutations(range(8)), key=lambda p: sum(C[i,p[i]] for i in range(8)))
+        print('best assign', ';'.join(map(str,best)), 'sum', sum(C[i,best[i]] for i in range(8)))
+PY"

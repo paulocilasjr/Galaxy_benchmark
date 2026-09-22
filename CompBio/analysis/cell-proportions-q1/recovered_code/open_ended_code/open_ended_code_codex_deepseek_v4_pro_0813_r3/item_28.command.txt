@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import scipy.io,gzip,numpy as np
+from sklearn.mixture import GaussianMixture
+from scipy.stats import ttest_ind
+Z=np.load('pca_standardized.npy')
+with gzip.open('cell.proportions.q1.mtx.gz','rb') as f:A=scipy.io.mmread(f)
+A=np.asarray(A).astype(np.float64)
+lib=A.sum(0)
+X=np.log1p(A/lib*1e4)
+g=GaussianMixture(n_components=6,covariance_type='full',random_state=42,n_init=50,max_iter=500).fit(Z[:,:2])
+lab=g.predict(Z[:,:2])
+print('counts',np.bincount(lab))
+# order main? labels mapping from prior: 0 A2500,1 F100,2 C750,3 D200,4 E50,5 B1750
+means=[]
+for c in range(6):
+    means.append(X[:,lab==c].mean(1))
+means=np.array(means) # 6 x 1000
+# for each cluster, top genes where its mean highest and maybe logFC vs max of other main? 
+# differential expression between main A(0),B(5),C(2) and small D(3),F(1),E(4)
+for c,name in [(0,'A'),(5,'B'),(2,'C'),(3,'D(A+C?)'),(1,'F(A+B?)'),(4,'E(B+C?)')]:
+    scores=means[c]-np.max(np.delete(means,c,axis=0),axis=0)
+    top=np.argsort(-scores)[:15]
+    print('\\ncluster',name,'n',np.sum(lab==c),'top genes scores')
+    print([(int(i),round(scores[i],2),round(means[c][i],2)) for i in top])
+# Also print means for selected marker genes top from A/B/C in all clusters
+mark=[]
+for c in [0,5,2]:
+    scores=means[c]-np.max(np.delete(means,c,axis=0),axis=0)
+    mark += list(np.argsort(-scores)[:10])
+mark=sorted(set(mark))
+print('\\nmarker means rows = clusters A,F,C,D,E,B; cols marker genes', mark)
+for c in range(6): print(c, np.round(means[c,mark],1))
+PY"

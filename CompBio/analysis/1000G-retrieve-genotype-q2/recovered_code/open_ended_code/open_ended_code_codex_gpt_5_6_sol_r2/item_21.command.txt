@@ -1,0 +1,24 @@
+/bin/bash -lc 'PYTHONPATH="$PWD/deps" python3 - <<'"'PY'
+import pysam
+base='https://ftp-trace.ncbi.nlm.nih.gov/1000genomes/ftp/1000G_2504_high_coverage/working/20201028_3202_raw_GT_with_annot/'
+url=base+'20201028_CCDG_14151_B01_GRM_WGS_2020-08-05_chr1.recalibrated_variants.annotated.vcf.gz'
+cand={(x[0],int(x[1])) for x in map(lambda s:s.rstrip().split('\\t'),open('candidate_sites.tsv'))}
+ivs=[(x[0],int(x[1]),int(x[2])) for x in map(lambda s:s.rstrip().split('\\t'),open('top1000_chr1_intervals.bed'))]
+v=pysam.VariantFile(url); found={}; all_at={}
+for chrom,start,end in ivs:
+ for r in v.fetch(chrom,start,end):
+  if (r.chrom,r.pos) in cand:
+   all_at.setdefault((r.chrom,r.pos),set()).add((r.ref,tuple(r.alts or ())))
+   if len(r.ref)==1 and r.ref in 'ACGT' and r.alts and len(r.alts)==1 and len(r.alts[0])==1 and r.alts[0] in 'ACGT':
+    found[(r.chrom,r.pos,r.ref,r.alts[0])]=1
+out=set()
+with open('chr1_common_top1000_encode_1000G.tsv') as f:
+ next(f)
+ for line in f:
+  x=line.split('\\t',4); out.add((x[0],int(x[1]),x[2],x[3]))
+print('annotated_eligible',len(found),'raw_output',len(out),'same',set(found)==out)
+print('candidate_no_record',sum(k not in all_at for k in cand),'candidate_noneligible',sum(k in all_at and not any(z[:2]==k for z in found) for k in cand))
+for k in sorted(cand-all_at.keys(),key=lambda z:z[1]): print('absent',k)
+for k in sorted(all_at,key=lambda z:z[1]):
+ if not any(z[:2]==k for z in found): print('noneligible',k,all_at[k])
+PY"

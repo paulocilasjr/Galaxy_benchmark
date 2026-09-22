@@ -1,0 +1,19 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+sc=pd.read_csv('extracted/spatial_q_sc_counts.csv',index_col=0); meta=pd.read_csv('extracted/spatial_q_sc_metadata.csv',index_col=0);sp=mmread('extracted/matrix.mtx.gz').tocsr().toarray().T;pos=pd.read_csv('extracted/tissue_positions.csv');types=sorted(meta.cell_type.unique())
+ref=meta.join(sc.div(sc.sum(1),axis=0)).groupby('cell_type')[sc.columns].mean().loc[types].T.values;ref/=ref.sum(0,keepdims=True); co=np.array([nnls(ref,x)[0] for x in sp/sp.sum(1,keepdims=True)]); co/=co.sum(1,keepdims=True); n=np.rint(sp.sum(1)/sc.sum(1).mean()).astype(int);cnt=np.rint(co*n[:,None]).astype(int)
+xy=pos[['array_row','array_col']].values;D=cdist(xy,xy);tm=cnt[:,types.index('Tumor_Core')]>0;d=D[:,tm].min(1)
+print('distance bins spot presence and cell weighted rate')
+for lo,hi in [(0,0),(1,1.01),(1.01,1.42),(1.42,2.01),(2.01,3.01),(3.01,4.01),(4.01,5.01),(5.01,7),(7,99)]:
+ m=(d>=lo)&(d<hi)
+ print(f'{lo}-{hi}: spots {m.sum()}',' '.join(f'{t}:{cnt[m,j].sum()}/{cnt[jj,j].sum() if False else cnt[:,j].sum():.3f}' for j,t in enumerate(types)))
+ # mean per spot not total
+ print(' means',' '.join(f'{t} {cnt[m,j].mean():.3f}' for j,t in enumerate(types)))
+# center weighted
+print('\\ncenters')
+for t,j in zip(types,range(6)):
+ w=cnt[:,j]; print(t,'center',np.average(xy,axis=0,weights=w),'rad mean from [15,15]',np.average(np.linalg.norm(xy-[14.5,14.5],axis=1),weights=w),'tumordist',np.average(d,weights=w))
+PY"

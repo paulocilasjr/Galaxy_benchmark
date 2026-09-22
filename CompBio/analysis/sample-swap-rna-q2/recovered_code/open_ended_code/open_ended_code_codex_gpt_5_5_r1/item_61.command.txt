@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,math,statistics,urllib.parse,urllib.request,time,os
+# select top variable/high expression genes from local matrix
+rows=[]
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t')
+    header=next(r)[1:]
+    for row in r:
+        vals=[float(x) for x in row[1:]]
+        if max(vals) <= 0: continue
+        logs=[math.log1p(v) for v in vals]
+        mean=sum(logs)/len(logs)
+        sd=(sum((x-mean)**2 for x in logs)/len(logs))**0.5
+        rows.append((sd, max(vals), row[0], vals))
+rows.sort(reverse=True)
+# use top variable genes, limited enough for endpoint
+sel=[g for sd,m,g,vals in rows[:1200]]
+print('selected', len(sel), 'header', header)
+os.makedirs('dotplot_batches', exist_ok=True)
+base='https://wheatomics.sdau.edu.cn/scRNA/download_dotplot_data.php?genome=Chinese_Spring&folder=root&genes='
+for bi in range(0,len(sel),80):
+    genes=sel[bi:bi+80]
+    out=f'dotplot_batches/batch_{bi//80:02d}.tsv'
+    if os.path.exists(out) and os.path.getsize(out)>1000:
+        continue
+    url=base+urllib.parse.quote(','.join(genes), safe='')
+    print('fetch', out, len(genes), flush=True)
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        data=resp.read()
+    open(out,'wb').write(data)
+    time.sleep(0.2)
+print('done')
+PY"

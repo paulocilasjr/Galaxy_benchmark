@@ -1,0 +1,61 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad
+import numpy as np, pandas as pd
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+
+r=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+common=r.var_names.intersection(q.var_names)
+ridx=r.var_names.get_indexer(common); qidx=q.var_names.get_indexer(common)
+
+def normlog(X, idx):
+ X=X[:,idx].tocsr().astype(np.float64)
+ totals=np.asarray(X.sum(axis=1)).ravel()
+ X=sparse.diags(1e4/np.maximum(totals,1))@X
+ X.data=np.log1p(X.data)
+ return X
+R=normlog(r.X,ridx); Q=normlog(q.X,qidx)
+
+def group_sigs(X, guides):
+ cats=[x for x in guides.cat.categories if not str(x).startswith('NT-')]
+ ctrl=np.flatnonzero(guides.astype(str).str.startswith('NT-').to_numpy())
+ cm=np.asarray(X[ctrl].mean(axis=0)).ravel()
+ means=[]
+ for c in cats:
+  ii=np.flatnonzero((guides==c).to_numpy())
+  means.append(np.asarray(X[ii].mean(axis=0)).ravel()-cm)
+ return cats,np.vstack(means),cm
+rg,RS,rc=group_sigs(R,r.obs.guide)
+qg,QS,qc=group_sigs(Q,q.obs.guide)
+# only moderately expressed in both controls / overall; center each signature across genes for pearson
+expr=(np.asarray(R.mean(axis=0)).ravel()>0.02)&(np.asarray(Q.mean(axis=0)).ravel()>0.02)
+print('features',expr.sum())
+
+def corrmat(A,B,mask):
+ A=A[:,mask]; B=B[:,mask]
+ A=A-A.mean(1,keepdims=True);B=B-B.mean(1,keepdims=True)
+ A=A/np.maximum(np.linalg.norm(A,axis=1,keepdims=True),1e-12)
+ B=B/np.maximum(np.linalg.norm(B,axis=1,keepdims=True),1e-12)
+ return A@B.T
+C=corrmat(RS,QS,expr)
+row,col=linear_sum_assignment(-C)
+assign={rg[i]:qg[j] for i,j in zip(row,col)}
+print('\\nHungarian all genes requested', {x:assign[x] for x in ['PABPC1-I1','NUDT21-I3','LEO1-I2']})
+for name in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+ i=rg.index(name); order=np.argsort(-C[i])[:10]
+ print('\\n',name,'all gene ranks',[(qg[j],round(float(C[i,j]),4), '*' if assign[name]==qg[j] else '') for j in order])
+# top abs signature features separately; match each independently and global matrices setting pair correlations on union top N per ref
+for n in [25,50,100,200,500,1000,2000]:
+ CT=np.zeros((len(rg),len(qg)))
+ for i in range(len(rg)):
+  inds=np.flatnonzero(expr)
+  top=inds[np.argsort(-np.abs(RS[i,inds]))[:min(n,len(inds))]]
+  CT[i]=corrmat(RS[i:i+1],QS,np.isin(np.arange(RS.shape[1]),top))[0]
+ rr,cc=linear_sum_assignment(-CT); aa={rg[i]:qg[j] for i,j in zip(rr,cc)}
+ print('\\nTOP',n,'hungarian',[(x,aa[x],round(float(CT[rg.index(x),qg.index(aa[x])]),3)) for x in ['PABPC1-I1','NUDT21-I3','LEO1-I2']])
+ for name in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+  i=rg.index(name); oo=np.argsort(-CT[i])[:5]
+  print(name,[(qg[j],round(float(CT[i,j]),3)) for j in oo])
+PY"

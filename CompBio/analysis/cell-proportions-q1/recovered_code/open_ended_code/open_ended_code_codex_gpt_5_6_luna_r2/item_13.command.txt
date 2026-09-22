@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from scipy.spatial.distance import cdist
+with gzip.open('cell.proportions.q1.mtx.gz','rt') as f:
+ for line in f:
+  if line.startswith('%'): continue
+  nr,nc=map(int,line.split()); break
+vals=np.fromiter((float(line) for line in f),dtype=np.float32,count=nr*nc)
+X=vals.reshape((nr,nc),order='F').T
+lib=X.sum(1); Y=np.log1p(X/lib[:,None]*1e4)
+var=Y.var(0); idx=np.argsort(var)[-500:]
+pca=PCA(n_components=20,random_state=0); Z=pca.fit_transform(Y[:,idx])
+km=KMeans(n_clusters=6,n_init=30,random_state=42).fit(Z[:,:15]); lab=km.labels_; sizes=np.bincount(lab)
+order=np.argsort(-sizes)
+print('cluster sizes and centers')
+for c in order:
+ sel=lab==c
+ print(c, sel.sum(), 'fraction',round(sel.mean(),5), 'PCmeans',np.round(Z[sel,:6].mean(0),2),'PCstd',np.round(Z[sel,:6].std(0),2),'lib',np.round(lib[sel].mean(),1),np.round(lib[sel].std(),1),'nnz',(X[sel]>0).sum(1).mean(), 'dist',np.mean(np.linalg.norm(Z[sel,:15]-km.cluster_centers_[c,:15],axis=1)))
+# average normalized counts per cluster and top marker fold changes vs rest; expression all genes
+A=np.zeros((6,nr))
+for c in range(6): A[c]=Y[lab==c].mean(0)
+# top pairwise marker scores standardized by rest mean (log difference)
+print('\\ntop markers log-expression differences vs rest')
+for c in order:
+ rest=lab"'!=c
+ score=A[c]-Y[rest].mean(0)
+ top=np.argsort(score)[::-1][:15]
+ print('"'\\ncluster',c,'n',sizes[c], 'top',[(int(i+1),round(float(score[i]),2),round(float(A[c,i]),2),round(float(A[lab"'!=c,i].mean()),2)) for i in top])
+# cluster pairwise center distances in top PCA
+print('"'\\ncentroid dists')
+print(np.round(cdist(km.cluster_centers_[:, :15],km.cluster_centers_[:, :15]),1))
+# print PC distributions quantiles and correlations
+print('\\nPC quantiles')
+for j in range(6): print(j+1, np.round(np.percentile(Z[:,j],[0,1,5,25,50,75,95,99,100]),2))
+PY"

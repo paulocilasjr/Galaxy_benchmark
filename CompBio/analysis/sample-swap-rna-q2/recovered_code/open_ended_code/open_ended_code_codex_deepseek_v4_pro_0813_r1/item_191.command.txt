@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import gzip, pandas as pd, numpy as np
+# load sample
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    sample=pd.read_csv(f, sep='\\t', index_col=0)
+print('sample shape', sample.shape, sample.columns.tolist())
+for fn in ['seurat_pseudobulk_sum_counts.tsv','seurat_pseudobulk_mean_counts.tsv','seurat_pseudobulk_mean_data.tsv']:
+    ref=pd.read_csv(fn, sep='\\t', index_col=0)
+    # align on common genes
+    common=sample.index.intersection(ref.index)
+    print('\\n',fn,'ref shape',ref.shape,'common',len(common))
+    s=sample.loc[common]
+    r=ref.loc[common]
+    # correlation matrix sample columns vs ref columns
+    for metric in ['pearson','spearman']:
+      corr=s.corrwith(r, axis=0, method=metric) if False else None
+    # compute full corr: sample columns rows, ref cols columns
+    c=pd.DataFrame(index=s.columns, columns=r.columns, dtype=float)
+    for sc in s.columns:
+      for rc in r.columns:
+        if metric=='pearson':
+          c.loc[sc,rc]=np.corrcoef(s[sc].values, r[rc].values)[0,1]
+        else:
+          from scipy.stats import spearmanr
+          c.loc[sc,rc]=spearmanr(s[sc].values, r[rc].values)[0]
+    for sc in s.columns:
+      best=c.loc[sc].sort_values(ascending=False)
+      print(sc, ' -> ', ', '.join(f'{k}:{v:.3f}' for k,v in best.head(5).items()))
+PY
+python3 [REDACTED LOCAL PATH]"

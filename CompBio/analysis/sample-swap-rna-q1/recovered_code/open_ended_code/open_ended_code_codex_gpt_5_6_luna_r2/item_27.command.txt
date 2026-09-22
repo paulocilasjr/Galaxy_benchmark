@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import pandas as pd, gzip, numpy as np
+D=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+M=pd.read_csv('metacell.tsv.gz',sep='\\t',index_col=0)
+A=pd.read_csv('annotations.tsv.gz',sep='\\t')
+print('D',D.shape,'M',M.shape,'A',A.shape)
+print('row overlap',len(D.index.intersection(M.index)), 'D only',len(D.index.difference(M.index)), 'M only',len(M.index.difference(D.index)))
+print('M labels',A.cell_type.unique().tolist())
+# metacell to cell_type unique
+am=A[['metacell','cell_type']].drop_duplicates()
+print('mapping duplicates?',am.metacell.duplicated().sum(),'n',len(am))
+# reference average per cell type over metacell columns
+# use means by annotation mapping, not cells (unique metacell likely)
+mt={r.metacell:r.cell_type for r in am.itertuples()}
+refs={}
+for ct in sorted(set(mt.values())):
+ ids=[str(i) for i,v in mt.items() if v==ct]
+ refs[ct]=M[[i for i in ids if i in M.columns]].mean(axis=1)
+R=pd.DataFrame(refs)
+print(R.shape)
+# correlate log D with log reference; profiles with same label and all mapping scores
+L=np.log1p(D)
+LR=np.log1p(R)
+C=pd.DataFrame(index=D.columns,columns=R.columns,dtype=float)
+for dc in D.columns:
+ for rc in R.columns:
+  C.loc[dc,rc]=L[dc].corr(LR[rc])
+print(C.round(3).to_string())
+print('best')
+for c in D.columns:
+ print(c, C.loc[c].nlargest(4).round(3).to_dict())
+PY"

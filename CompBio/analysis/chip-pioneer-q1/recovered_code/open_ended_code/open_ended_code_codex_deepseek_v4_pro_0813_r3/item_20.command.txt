@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, re, numpy as np
+rows=[]
+for line in open('overlap_counts.tsv'):
+    f,r,n,a=line.strip().split('\\t')
+    n=int(n); a=int(a)
+    m=re.search(r'TF(\\d+)\\.(rep\\d|control\\d?)', f)
+    tf=m.group(1); typ=m.group(2)
+    reg=re.search(r'(hotspots|peaks)_union',r).group(1)
+    rows.append((tf,typ,reg,n,a,n-a))
+df=pd.DataFrame(rows,columns=['TF','sample','region','total','access','closed'])
+# fraction access
+df['fa']=df['access']/df['total']
+df['fc']=df['closed']/df['total']
+print(df.pivot_table(index=['TF','sample'],columns='region',values=['fa','fc']))
+# average reps for each TF/type
+for typ in ['rep1','rep2','control1','control2','control']:
+    pass
+# combine controls by TF, reps mean (or total)
+df2=df.copy()
+# make type group: chip reps (rep1, rep2) vs control all controls
+df2['kind']=df2['sample'].str.startswith('rep').map({True:'chip',False:'control'})
+for region in ['hotspots','peaks']:
+    print('\\nREGION',region)
+    sub=df2[df2.region==region]
+    # per TF chip combine reps by sum (or mean), controls combine by sum
+    chip=sub[sub.kind=='chip'].groupby('TF').agg(total=('total','sum'), access=('access','sum'), fa=('fa','mean'))
+    ctrl=sub[sub.kind=='control'].groupby('TF').agg(total=('total','sum'), access=('access','sum'), fa=('fa','mean'))
+    allc=chip.rename(columns={'total':'chip_total','access':'chip_access','fa':'chip_fa'}).join(ctrl.rename(columns={'total':'ctrl_total','access':'ctrl_access','fa':'ctrl_fa'}))
+    allc['chip_fc']=1-allc['chip_fa']
+    allc['ctrl_fc']=1-allc['ctrl_fa']
+    allc['log2_closed_enrich']=np.log2(allc['chip_fc']/allc['ctrl_fc'])
+    allc['log2_open_enrich']=np.log2(allc['chip_fa']/allc['ctrl_fa'])
+    allc['closed_diff']=allc['chip_fc']-allc['ctrl_fc']
+    allc['chiplike_closed_ratio'] = (allc['chip_access']/allc['chip_total']) / (allc['ctrl_access']/allc['ctrl_total'])
+    print(allc)
+    print('ranking by log2_closed_enrich:', allc['log2_closed_enrich'].sort_values(ascending=False))
+    print('ranking by closed_diff:', allc['closed_diff'].sort_values(ascending=False))
+PY"

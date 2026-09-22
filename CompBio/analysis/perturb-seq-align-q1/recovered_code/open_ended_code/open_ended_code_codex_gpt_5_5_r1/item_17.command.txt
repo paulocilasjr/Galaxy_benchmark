@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, collections
+from scipy import sparse
+
+def dec(a): return np.array([x.decode() if isinstance(x,(bytes,bytearray)) else str(x) for x in a])
+def read(fn):
+    with h5py.File(fn,'r') as f:
+        X=sparse.csc_matrix((f['X/data'][()].astype(np.float32), f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape']))
+        var=dec(f['var/_index'][()])
+        gc=dec(f['obs/guide/categories'][()]); labels=gc[f['obs/guide/codes'][()]]
+        return X,var,gc,labels
+
+def lognorm(X):
+    totals=np.asarray(X.sum(axis=1)).ravel().astype(np.float32); totals[totals==0]=1
+    coo=X.tocoo(copy=True); coo.data=np.log1p(coo.data/totals[coo.row]*1e4).astype(np.float32)
+    return coo.tocsr()
+def mean_col_by_group(Xcsr, labels, groups, col):
+    x=np.asarray(Xcsr[:,col].todense()).ravel()
+    return [(g, float(x[labels==g].mean()), int((labels==g).sum())) for g in groups]
+Xr,vr,grc,gr=read('perturb.seq.align.q1.ref.h5ad')
+Xq,vq,gqc,gq=read('perturb.seq.align.q1.query.h5ad')
+Xql=lognorm(Xq); Xrl=lognorm(Xr)
+q_non=[g for g in gqc if not g.startswith('NT-')]
+q_nt=[g for g in gqc if g.startswith('NT-')]
+for gene in ['PABPC1','NUDT21','LEO1']:
+    idx=int(np.where(vr==gene)[0][0])
+    print('\\n',gene,'ref idx',idx,'query name at same idx',vq[idx])
+    qvals=mean_col_by_group(Xql,gq,q_non,idx)
+    print('query lowest same-index', sorted(qvals,key=lambda x:x[1])[:10])
+    ntmean=np.mean([v for g,v,n in mean_col_by_group(Xql,gq,q_nt,idx)])
+    print('query NT mean same-index', ntmean)
+    rvals=mean_col_by_group(Xrl,gr,[g for g in grc if not g.startswith('NT-')],idx)
+    print('ref lowest', sorted(rvals,key=lambda x:x[1])[:5])
+PY"

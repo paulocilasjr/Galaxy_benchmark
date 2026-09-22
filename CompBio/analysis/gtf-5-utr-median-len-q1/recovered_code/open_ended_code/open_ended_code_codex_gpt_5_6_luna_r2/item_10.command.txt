@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections
+p='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'; std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+rx=re.compile(r'(\\w+) \"(["'^"]*)"'"')
+cds=collections.defaultdict(list); stops=collections.defaultdict(list); strands={}; tids=set()
+for ln in gzip.open(p,'rt'):
+ if ln.startswith('#'):continue
+ f=ln.rstrip().split('\\t');
+ if f[0] not in std:continue
+ a=dict(rx.findall(f[8])); tid=a.get('transcript_id','')
+ if f[2]=='transcript' and 'tag \"MANE Select\"' in f[8]: tids.add(tid);strands[tid]=f[6]
+ if tid in tids or tid: # just collect then filter later
+  if f[2]=='CDS':cds[tid].append((int(f[3]),int(f[4])))
+  elif f[2]=='stop_codon':stops[tid].append((int(f[3]),int(f[4])))
+# parse issue tids discovered after features but all order transcript before feats; okay
+ov=[]; badmod=[]; stoplen=collections.Counter()
+for tid in tids:
+ c=cds[tid]; s=stops[tid]
+ for a,b in c:
+  for x,y in s:
+   if max(a,x)<=min(b,y): ov.append((tid,(a,b),(x,y)))
+ stoplen[sum(y-x+1 for x,y in s)]+=1
+ if sum(y-x+1 for x,y in c)%3: badmod.append((tid,sum(y-x+1 for x,y in c)))
+print('transcripts',len(tids),'overlaps',len(ov),'bad CDS mod3',len(badmod),'stop lens',stoplen)
+print('overlap examples',ov[:3]); print('mod examples',badmod[:3])
+PY"

@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, pickle, json, numpy as np
+from scipy.stats import spearmanr
+cell=pd.read_csv('axolotl_cellColData.csv', index_col=0)
+samples=['Bladder','Brain','Cloaca','GallBladder','Gill','Heart','Intestine','Kidney','Limb','Liver','Lung','Pancreas','Prostate','Spleen','Stomach']
+lineages=sorted(cell['subanno'].unique())
+counts=cell.groupby(['Sample','subanno']).size().unstack(fill_value=0).reindex(index=samples,columns=lineages,fill_value=0)
+props=counts.div(counts.sum(axis=1),axis=0).values
+d=pickle.load(open('cluster_exp_dict.pkl','rb'))
+gene_indices=json.load(open('selected_gene_indices.json'))
+names=list(gene_indices.keys())
+acc=np.load('promoter_acc.npy')
+# totals from saved? recompute from previous? Use total columns from count file; we already have not saved. recompute quickly
+import gzip
+tot=np.zeros(15)
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    f.readline()
+    for line in f:
+        p=line.split('\\t'); tot += np.array([int(x) for x in p[3:]],dtype=float)
+P=np.zeros((len(names),15),dtype=float)
+for gi,name in enumerate(names):
+    idxs=gene_indices[name]
+    vals=acc[idxs].sum(axis=0)
+    P[gi,:]=vals
+# normalize per tissue counts per million then log2
+P_norm=np.log2(P/tot*1e6 + 1)
+# E
+E=np.zeros((len(names),15),dtype=float)
+missing=[]
+for gi,name in enumerate(names):
+    vals=d.get(name)
+    if vals is None:
+        missing.append(name); continue
+    arr=np.array([vals.get(L,0.0) for L in lineages],dtype=float)
+    E[gi,:]=props.dot(arr)
+print('missing',len(missing))
+# drop missing rows? none probably
+valid=~np.any(E==0,axis=1) # keep all? Use all names.
+# Spearman correlation matrix actual column P vs expected tissue E
+corr=np.zeros((15,15))
+for i in range(15):
+    for j in range(15):
+        corr[i,j]=spearmanr(P_norm[:,i], E[:,j]).correlation
+print('Rows=actual P columns (sample labels); Cols=expected tissue E')
+print('\\t'.join(['P\\\\E']+samples))
+for i in range(15):
+    print('\\t'.join([samples[i]]+[f'{corr[i,j]:.3f}' for j in range(15)]))
+# best expected for each actual
+for i in range(15):
+    order=np.argsort(-corr[i,:])
+    print(samples[i], '->', [(samples[j],round(corr[i,j],3)) for j in order[:5]])
+PY"

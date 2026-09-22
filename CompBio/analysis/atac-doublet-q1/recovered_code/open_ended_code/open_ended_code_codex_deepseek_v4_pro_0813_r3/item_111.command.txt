@@ -1,0 +1,28 @@
+/bin/bash -c "cat > scrublet_multi.py <<'PY'
+import numpy as np, snapatac2 as snap, scrublet as scr
+from scipy.sparse import csr_matrix
+# load peak matrix
+adata=snap.read('atac_peaks_scrub.h5ad')
+X=adata.X[:].tocsr().astype(np.float32)
+names=np.array(adata.obs_names)
+freq=np.asarray((X>0).sum(axis=0)).ravel(); keep=np.where((freq>=5)&(freq<=700))[0]
+X=X[:,keep]
+# tile matrix selected
+at=snap.read('atac.snap.h5ad')
+feat=np.array(at.var['selected']); Xt=at.X[:,feat]
+names_t=np.array(at.obs_names)
+print('matrices',X.shape,Xt.shape)
+allres={}
+for mat, tag, nm in [(X,'peak',names),(Xt,'tile',names_t)]:
+    top_counts={}
+    for seed in [0,1,2]:
+        scrub=scr.Scrublet(mat, expected_doublet_rate=0.06, sim_doublet_ratio=2.0)
+        scores,pred=scrub.scrub_doublets(min_counts=1,min_cells=2,min_gene_variability_pctl=85,use_approx_neighbors=False,n_prin_comps=30, random_state=seed)
+        idx=np.argsort(-scores)[:20]
+        for b in nm[idx]: top_counts[b]=top_counts.get(b,0)+1
+        np.savetxt(f'scrub_{tag}_seed{seed}.txt',np.c_[nm,scores,pred.astype(int)],fmt='%s')
+    print(tag,'cells top20 in >=2 seeds:')
+    for b,c in sorted(top_counts.items(),key=lambda kv:-kv[1]):
+        if c>=2: print(' ',b,c)
+PY
+python3 scrublet_multi.py"

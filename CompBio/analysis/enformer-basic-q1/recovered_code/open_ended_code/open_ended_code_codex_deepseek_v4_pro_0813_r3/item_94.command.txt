@@ -1,0 +1,68 @@
+/bin/bash -c "cd tf_protos && python - <<'PY'
+import sys, struct, snappy, math, os
+sys.path.insert(0,'.')
+import tensor_bundle_pb2 as tb
+# load index
+data=open('../enformer_saved/variables/variables.index','rb').read()
+footer=data[-48:]
+def read_varint(buf,pos):
+    shift=0; result=0
+    while True:
+        b=buf[pos]; pos+=1
+        result |= (b & 0x7f) << shift
+        if not (b & 0x80): return result,pos
+        shift+=7
+pos=0
+meta_off,pos=read_varint(footer,pos); meta_size,pos=read_varint(footer,pos)
+idx_off,pos=read_varint(footer,pos); idx_size,pos=read_varint(footer,pos)
+# parse index block to get data block handle(s)
+def parse_block(content):
+    num_restarts=struct.unpack('<I',content[-4:])[0]
+    restart_base=len(content)-4-4*num_restarts
+    pos=0; prev=b''; out=[]
+    while pos < restart_base:
+        shared,pos=read_varint(content,pos)
+        nonshared,pos=read_varint(content,pos)
+        vlen,pos=read_varint(content,pos)
+        key=prev[:shared]+content[pos:pos+nonshared]; pos+=nonshared
+        val=content[pos:pos+vlen]; pos+=vlen
+        prev=key
+        out.append((key,val))
+    return out
+# index block content is raw bytes (type 0). size idx_size
+idx_content=data[idx_off:idx_off+idx_size]
+idx_entries=parse_block(idx_content)
+print('idx entries',idx_entries)
+# read data block handle from first index entry? key b't'
+# val is block handle; parse varints
+bh_bytes=idx_entries[0][1]
+p=0; data_off,p=read_varint(bh_bytes,p); data_size,p=read_varint(bh_bytes,p)
+print('data block',data_off,data_size)
+stored=data[data_off:data_off+data_size]
+trailer=data[data_off+data_size:data_off+data_size+5]
+print('trailer',trailer.hex())
+if trailer[0]==1:
+    content=snappy.decompress(stored)
+elif trailer[0]==0:
+    content=stored
+else:
+    raise Exception('unknown compression')
+entries=parse_block(content)
+print('entries',len(entries))
+
+def shape_numel(shape):
+    dims=[d.size for d in shape.dim]
+    n=1
+    for d in dims:
+        n*=d
+    return n,dims
+rows=[]
+for key,val in entries:
+    if not key: continue
+    be=tb.BundleEntryProto(); be.ParseFromString(val)
+    n,dims=shape_numel(be.shape)
+    name=key.decode('utf-8','replace')
+    rows.append((name,be.dtype,n,dims,len(val)))
+for name,dt,n,dims,vlen in rows:
+    print(f'{n:12d}  dt={dt:2d} dims={str(dims):20s} vlen={vlen:3d} {name}')
+PY"

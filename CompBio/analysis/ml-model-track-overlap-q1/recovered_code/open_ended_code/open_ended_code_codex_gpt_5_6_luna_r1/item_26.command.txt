@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import re,json,time,urllib.request,urllib.parse
+from collections import Counter,defaultdict
+from concurrent.futures import ThreadPoolExecutor,as_completed
+sei=open('sei-framework/model/target.names').read().splitlines()
+ids=[int(re.search(r'\\| ID:(\\d+)"'$'"',x).group(1)) for x in sei if re.search(r'\\| ID:(\\d+)"'$'"',x)]
+
+def get(batch):
+    q=','.join(map(str,batch))
+    u='https://db3.cistrome.org/cistrome/samples?ids='+urllib.parse.quote(q,safe=',')
+    for attempt in range(4):
+      try:
+        with urllib.request.urlopen(u,timeout=60) as f: return json.load(f).get('samples',[])
+      except Exception as e:
+        if attempt==3: return {'error':str(e),'batch':batch}
+        time.sleep(1+attempt)
+results=[]
+batches=[ids[i:i+75] for i in range(0,len(ids),75)]
+with ThreadPoolExecutor(max_workers=12) as ex:
+  fs=[ex.submit(get,b) for b in batches]
+  for n,f in enumerate(as_completed(fs),1):
+    x=f.result()
+    if isinstance(x,dict): print('ERROR',x); raise SystemExit(1)
+    results.extend(x)
+    if n%50==0: print('completed',n,'/',len(batches),flush=True)
+print('records returned',len(results),'unique IDs',len({x['id'] for x in results}))
+types=Counter(x.get('external_id_type') for x in results)
+print('external ID types',types)
+print('species',Counter(x.get('species') for x in results))
+print('experiment types',Counter(x.get('experiment_type') for x in results))
+print('external prefixes',Counter(re.match(r'[A-Za-z]+',x.get('external_id','')).group(0) if re.match(r'[A-Za-z]+',x.get('external_id','')) else '' for x in results))
+# Borzoi identifier sets and source IDs
+bor=open('borzoi/examples/targets_human.txt').read().splitlines()[1:]
+bor_ids={x.split('\\t')[1].rstrip('+-') for x in bor}
+bor_gsm={x for x in bor_ids if x.startswith('GSM')}
+bor_enc={x for x in bor_ids if x.startswith('ENCFF')}
+sei_by_ext=defaultdict(list)
+for x in results: sei_by_ext[x.get('external_id')].append(x['id'])
+print('direct overlap all Borzoi identifiers:')
+for s,name in [(bor_ids,'all'),(bor_gsm,'GSM'),(bor_enc,'ENCFF')]:
+  hits=[x for x in results if x.get('external_id') in s]
+  print(name,'bor unique',len(s),'sei rows',len(hits),'sei IDs',len({x['id'] for x in hits}))
+print('GSM hit details',[(x['id'],x['external_id'],x['title']) for x in results if x.get('external_id') in bor_gsm][:30])
+# unmatched/returned missing
+print('missing',len(set(ids)-{x['id'] for x in results}),sorted(set(ids)-{x['id'] for x in results})[:20])
+PY"

@@ -1,0 +1,50 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp
+from scipy.sparse import issparse
+p='lung.cancer.sc.h5ad'
+a=ad.read_h5ad(p)
+X=a.X
+# normalize library size to median and log1p
+lib=np.asarray(X.sum(axis=1)).ravel()
+med=np.median(lib)
+# efficient per row multiply
+if sp.issparse(X):
+    Xn=X.multiply(1.0/lib[:,None]).tocsr()*med
+    Xn.data=np.log1p(Xn.data)
+else:
+    Xn=np.log1p(X/ lib[:,None]*med)
+# marker genes
+markers={
+'LUAD_epi':['NKX2-1','NAPSA','SFTPA1','SFTPA2','SFTPB','SFTPC','AGER','SCGB1A1','SCGB3A2','MUC1','KRT7','CEACAM5'],
+'LUSC_basal':['KRT5','KRT6A','KRT6B','KRT13','KRT14','KRT17','TP63','DSC3','DSG3','SOX2','SERPINB3','SERPINB4'],
+'immune':['PTPRC','CD3D','CD3E','CD4','CD8A','CD19','MS4A1','CD79A','NKG7','GNLY','LYZ','CD68','CD14','FCGR3A','CLEC4C','LILRA4','CD1C','CLEC10A','FCER1A','TPSAB1','CPA3'],
+'stromal':['COL1A1','COL1A2','DCN','LUM','VWF','PECAM1','ACTA2','MYH11','RGS5'],
+'malign':['MKI67','TOP2A','EPCAM','KRT18','KRT8'],
+}
+sym_to_idx=pd.Series(np.arange(a.n_vars), index=a.var.symbol.values)
+# duplicate symbols? 
+def sample_scores(genes, name):
+    idx=[]
+    missing=[]
+    for g in genes:
+        if g in sym_to_idx.index:
+            idx.append(sym_to_idx[g])
+        else: missing.append(g)
+    sub=Xn[:,idx]
+    means=np.asarray(sub.mean(axis=1)).ravel()
+    out=pd.Series(means,index=a.obs.index).groupby(a.obs.sampleID).mean()
+    return out, missing
+scores={}
+for name,genes in markers.items():
+    s,miss=sample_scores(genes,name)
+    scores[name]=s
+    print(name,'missing',miss)
+df=pd.DataFrame(scores)
+print('\\nTargets')
+print(df.loc[['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']].round(3).to_string())
+print('\\nTop LUAD_LUSC ratio all samples')
+ratio=(df['LUAD_epi']+0.01)/(df['LUSC_basal']+0.01)
+print(ratio.sort_values().round(3).to_string())
+print('\\nAll markers for target')
+print(df.loc[['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']].round(3).to_string())
+PY"

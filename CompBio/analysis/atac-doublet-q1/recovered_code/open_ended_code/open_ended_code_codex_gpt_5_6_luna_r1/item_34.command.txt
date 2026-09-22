@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip, numpy as np
+chroms=['chr'+str(i) for i in range(1,23)]+['chrX','chrY']; cmap={x:i for i,x in enumerate(chroms)}
+bmap={}; bcs=[]; cc=np.zeros((1000,25),np.int32); lh=np.zeros((1000,20),np.int32); total=np.zeros(1000,np.int32)
+with gzip.open('atac.doublet.q1.bed.gz','rt') as f:
+ for l in f:
+  a=l.rstrip().split('\\t'); bc=a[3]
+  if bc not in bmap:bmap[bc]=len(bmap);bcs.append(bc)
+  i=bmap[bc]; total[i]+=1; cc[i,cmap[a[0]]]+=1
+  le=int(a[2])-int(a[1]); lh[i,min(le//100,19)]+=1
+print('cells',len(bcs))
+# z scores for each chrom, show max abs and candidate
+for j,ch in enumerate(chroms):
+ z=(cc[:,j]-cc[:,j].mean())/cc[:,j].std()
+ if np.max(np.abs(z))>3: print(ch,'range',cc[:,j].min(),cc[:,j].max(),'z',[(bcs[i],int(cc[i,j]),round(float(z[i]),2)) for i in np.argsort(np.abs(z))[-8:][::-1]])
+# overall Mahalanobis-ish PCA on normalized chr + length proportions
+features=np.concatenate([cc/total[:,None],lh/total[:,None]],axis=1)
+features=(features-features.mean(0))/np.maximum(features.std(0),1e-9)
+U,S,V=np.linalg.svd(features,full_matrices=False)
+score=np.sum(U[:,:10]**2,axis=1) # not outlier score
+print('chrom+length top PC coords')
+for k in range(5): print(k,[(bcs[i],round(float(U[i,k]*S[k]),3)) for i in np.argsort(U[:,k]*S[k])[-5:][::-1]],[(bcs[i],round(float(U[i,k]*S[k]),3)) for i in np.argsort(U[:,k]*S[k])[:5]])
+print('top norm feature distance')
+d=np.sqrt(np.sum(features**2,axis=1))
+for i in np.argsort(d)[-20:][::-1]: print(bcs[i],total[i],round(float(d[i]),2),cc[i,22:])
+print('top length fractions')
+for binx in [0,1,2,3,4,5,6,7,8,9,10,15,19]:
+ z=(lh[:,binx]/total - (lh[:,binx]/total).mean())/(lh[:,binx]/total).std()
+ print(binx*100,(bcs[np.argmax(z)],round(float(z.max()),2)),(bcs[np.argmin(z)],round(float(z.min()),2)))
+PY"

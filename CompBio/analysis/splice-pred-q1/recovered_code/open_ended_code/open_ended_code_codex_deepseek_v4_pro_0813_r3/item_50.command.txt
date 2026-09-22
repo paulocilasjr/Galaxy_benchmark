@@ -1,0 +1,25 @@
+/bin/bash -lc "cat > make_bed.py <<'PY'
+import os, torch
+from openspliceai.predict import predict as pm
+from openspliceai.constants import SL
+from Bio import SeqIO
+out='bed_out'
+os.makedirs(out, exist_ok=True)
+seq=str(next(SeqIO.parse('locus_minus.fa','fasta')).seq)
+X=pm.create_datapoints(seq, SL, 10000)
+X=torch.tensor(X,dtype=torch.float32).permute(0,2,1)
+device=torch.device('cpu')
+models, params=pm.load_pytorch_models(os.path.abspath('repo/models/openspliceai-mane/10000nt'), device, SL, 10000)
+# Use predict function? To get BED need names and LEN etc. Could simply write raw BED ourselves.
+# Instead call write_batch_to_bed with predictions and seq_name
+with torch.no_grad():
+    y=torch.mean(torch.stack([m(X).detach().cpu() for m in models]),axis=0)
+# y shape (1,3,5000); write_batch expects batch gene_predictions, flatten
+seq_name='chr12:120196699-120201111(-):+'  # get_sequences would append :+; but can use direct
+with open(out+'/acceptor_predictions.bed','w') as af, open(out+'/donor_predictions.bed','w') as df:
+    pm.write_batch_to_bed(seq_name, y, af, df, threshold=0.9, debug=False)
+print('files written')
+PY
+python make_bed.py
+echo acceptor; cat bed_out/acceptor_predictions.bed
+echo donor; cat bed_out/donor_predictions.bed"

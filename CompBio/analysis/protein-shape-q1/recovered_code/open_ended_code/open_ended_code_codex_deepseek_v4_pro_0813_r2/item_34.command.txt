@@ -1,0 +1,61 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, time
+from PIL import Image, ImageDraw, ImageFont
+from skimage.transform import rotate
+from scipy.ndimage import distance_transform_edt, gaussian_filter, binary_dilation, binary_closing
+from scipy.signal import fftconvolve
+# parse
+coords=[]; ca=[]
+for line in open('protein.shape.q1.pdb'):
+ if line.startswith('ATOM'):
+  x,y,z=map(float,[line[30:38],line[38:46],line[46:54]]); coords.append((x,y,z))
+  if line[12:16].strip()=='CA': ca.append((x,y,z))
+coords=np.array(coords); ca=np.array(ca)
+# CA connectivity for trace later maybe
+letters='BDFHJLNPRTVXZ'; N=96; fp='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+def make_template(ch):
+ im=Image.new('L',(N,N),0); d=ImageDraw.Draw(im); fs=100; f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; scale=.82*N/max(w,h); fs=max(1,int(fs*scale)); f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; d.text(((N-w)/2-bb[0],(N-h)/2-bb[1]),ch,font=f,fill=255); return (np.array(im)>40)
+def project_filled(pts,n,sigma=1.5,thresh=.03,dil=4):
+ n=np.asarray(n,float); n/=np.linalg.norm(n); a=np.array([0.,0.,1.]) if abs(n[2])<.9 else np.array([1.,0.,0.]); u=np.cross(n,a); u/=np.linalg.norm(u); v=np.cross(n,u); v/=np.linalg.norm(v); p=pts-pts.mean(0); x=p@u;y=p@v; margin=6; span=max(x.max()-x.min(),y.max()-y.min()); scale=(N-2*margin)/span; xi=((x-x.min())*scale+margin).astype(int); yi=((y-y.min())*scale+margin).astype(int); im=np.zeros((N,N),np.float32)
+ for xx,yy in zip(xi,yi):
+  if 0<=xx<N and 0<=yy<N: im[yy,xx]=1
+ im=gaussian_filter(im,sigma); im=im>thresh; im=binary_closing(im,iterations=dil)
+ return im.astype(np.uint8)
+# precompute template maps for each angle
+angles=np.arange(0,180,5)
+TEMPLATES={}
+for ch in letters:
+ base=make_template(ch)
+ maps=[]
+ for ang in angles:
+  r=rotate(base.astype(np.float32),ang,order=1,mode='constant',cval=0,preserve_range=True)>0.5
+  d=distance_transform_edt(~r)
+  maps.append((r,d))
+ TEMPLATES[ch]=maps
+
+def chamfer_scores(imgp):
+ Dp=distance_transform_edt(~(imgp>0))
+ area_p=imgp.sum()
+ fp=np.fft.rfft2(imgp); fdp=np.fft.rfft2(Dp)
+ scores=[]
+ for ch in letters:
+  best=1e9; bestang=0
+  for idx,(oq,dq) in enumerate(TEMPLATES[ch]):
+   cpq=np.fft.irfft2(fp*np.conj(np.fft.rfft2(dq.astype(np.float32))),s=imgp.shape).real
+   cqp=np.fft.irfft2(np.fft.rfft2(oq.astype(np.float32))*np.conj(fdp),s=imgp.shape).real
+   area_q=oq.sum()
+   score=(cpq.min()/area_p + cqp.min()/area_q)/2 if area_p and area_q else 999
+   if score<best: best=score; bestang=angles[idx]
+  scores.append((best,ch,bestang))
+ scores.sort()
+ return scores
+for mode, pts in [('all',coords),('ca',ca)]:
+ print('\\nMODE',mode)
+ c=pts.mean(0); U,S,Vt=np.linalg.svd(pts-c)
+ dirs={'PC0':Vt[0],'PC1':Vt[1],'PC2':Vt[2],'x':np.array([1.,0,0]),'y':np.array([0,1.,0]),'z':np.array([0,0,1.])}
+ for dname,n in dirs.items():
+  imgp=project_filled(pts,n)
+  sc=chamfer_scores(imgp)
+  print(dname,[(ch,round(s,3),int(a)) for s,ch,a in sc[:6]])
+PY
+python3 [REDACTED LOCAL PATH]"

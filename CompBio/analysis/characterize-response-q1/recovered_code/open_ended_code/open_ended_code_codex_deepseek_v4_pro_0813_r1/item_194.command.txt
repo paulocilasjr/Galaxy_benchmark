@@ -1,0 +1,83 @@
+/bin/bash -lc "python3 - <<'PY'
+# multiset overlap for candidate datasets, no dedup
+import GEOparse,pandas as pd,re,os,collections
+q=[g.upper() for g in open('characterize.response.q1.txt').read().split()]
+qc=collections.Counter(q)
+
+def get_symbol(gpl):
+ cols=list(gpl.table.columns)
+ for c in cols:
+  if c.upper() in ['GENE_SYMBOL','SYMBOL','GENE SYMBOL','GENE_SYMBOL_1'] or c.upper().startswith('GENE_SYMBOL'):
+   return gpl.table.set_index('ID')[c].to_dict()
+ for c in cols:
+  if c.upper()=='GENE': return gpl.table.set_index('ID')[c].to_dict()
+ if 'gene_assignment' in gpl.table.columns:
+  d={}
+  for pid,v in gpl.table.set_index('ID')['gene_assignment'].items():
+   if isinstance(v,str):
+    parts=v.split('//'); s=parts[1].strip() if len(parts)>1 else ''
+    if s:d[pid]=s
+  return d
+ return None
+
+def parse(f):
+ g=GEOparse.get_GEO(filepath=f,silent=True); sym=None
+ for gn,gpl in g.gpls.items():
+  s=get_symbol(gpl)
+  if s: sym=s;break
+ mats={}
+ for n,gsm in g.gsms.items():
+  t=gsm.table; idcol='ID_REF' if 'ID_REF' in t.columns else 'ID'
+  if idcol in t.columns and 'VALUE' in t.columns: mats[n]=t.set_index(idcol)['VALUE']
+ mat=pd.DataFrame(mats); titles={n:gsm.metadata.get('title',[''])[0] for n,gsm in g.gsms.items()}
+ return g,sym,mat,titles
+
+def score(f,a,b,name):
+ g,sym,mat,titles=parse(f)
+ a=[x for x in a if x in mat.columns];b=[x for x in b if x in mat.columns]
+ if not a or not b: return
+ lfc=mat[b].mean(axis=1)-mat[a].mean(axis=1)
+ rows=[]
+ for pid,x in lfc.items():
+  s=sym.get(pid)
+  if not isinstance(s,str):continue
+  s=re.split(r'///|\\|',s)[0].strip()
+  if not s or s.lower()=='nan':continue
+  rows.append((s.upper(),x))
+ df=pd.DataFrame(rows,columns=['g','x']).sort_values('x',ascending=False)
+ for dir,dd in [('up',df.head(112)),('down',df.tail(112))]:
+  cc=collections.Counter(dd.g.tolist())
+  ov=sum(min(v,qc.get(k,0)) for k,v in cc.items())
+  print(f'{os.path.basename(f):30s} {name:20s} {dir} multiset_overlap={ov:3d}')
+  if ov>=8:
+   print('   common count',[(k,v,qc.get(k,0)) for k,v in cc.items() if qc.get(k,0)>0][:30])
+
+# manual groups from prior
+# GSE108289
+g,sym,mat,titles=parse('geo/GSE108289_family.soft.gz')
+score('geo/GSE108289_family.soft.gz',[n for n,t in titles.items() if 'immature' in t.lower()],[n for n,t in titles.items() if 'maturation' in t.lower()],'imm->mat')
+# GSE55068
+g,sym,mat,titles=parse('geo2/GSE55068_family.soft.gz')
+score('geo2/GSE55068_family.soft.gz',[n for n,t in titles.items() if t=='WT'],[n for n,t in titles.items() if t=='WT_LPS'],'WT->LPS')
+# GSE15718 timepoints
+g,sym,mat,titles=parse('geo/GSE15718_family.soft.gz')
+ctrl=[n for n,t in titles.items() if re.search(r'unstimulated"'$'"',t,re.I) and 'EGTA' not in t]
+for tp in ['2 hours','4 hours','6 hours','12 hours','24 hours']:
+ tr=[n for n,t in titles.items() if re.search(r'stimulated with LPS for '+tp+'"'$'"',t,re.I)]
+ if ctrl and tr: score('geo/GSE15718_family.soft.gz',ctrl,tr,tp)
+# GSE15721
+g,sym,mat,titles=parse('geo/GSE15721_family.soft.gz')
+score('geo/GSE15721_family.soft.gz',[n for n,t in titles.items() if 'unstimulated' in t.lower()],[n for n,t in titles.items() if re.search(r'stimulated with LPS for 6 hours"'$'"',t)],'6h')
+# GSE17721 1h,6h,24h
+g,sym,mat,titles=parse('geo/GSE17721_family.soft.gz')
+ctrl=[n for n,t in titles.items() if re.search(r'0_hours',t,re.I)]
+for tp in ['1_hours','6_hours','12_hours','24_hours']:
+ tr=[n for n,t in titles.items() if tp in t]
+ score('geo/GSE17721_family.soft.gz',ctrl,tr,tp)
+# GSE69076
+g,sym,mat,titles=parse('geo/GSE69076_family.soft.gz')
+ctrl=[n for n,t in titles.items() if 'Unstimulated' in t]
+for tp in ['1hr','6hr','24hr']:
+ tr=[n for n,t in titles.items() if re.search(r'LPS\\s+'+tp,t,re.I)]
+ score('geo/GSE69076_family.soft.gz',ctrl,tr,tp)
+PY"

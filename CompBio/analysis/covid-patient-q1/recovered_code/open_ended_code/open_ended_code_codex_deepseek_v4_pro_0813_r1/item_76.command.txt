@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, anndata as ad
+from scipy.stats import spearmanr, pearsonr
+# our data
+adata=ad.read_h5ad('covid.patients.q1.h5ad')
+our_names=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); our_sums=D['sum']; our_cats=D['cats']; our_cc=D['cell_counts']
+our_libs=our_sums.sum(axis=0, keepdims=True)
+our_cpm=our_sums/our_libs*1e6
+our_log=np.log1p(our_cpm)
+
+def match_original(path):
+    orig=pd.read_csv(path,index_col=0)
+    orig.index=orig.index.astype(str)
+    # match by our_names unique; if duplicates in our, average? use first.
+    common=[g for g in our_names if g in orig.index]
+    if len(common)<1000:
+        print('too few',path,len(common)); return
+    # build our matrix for common (if duplicate our names, take first)
+    idx=[]
+    seen=set()
+    for g in common:
+        if g not in seen:
+            seen.add(g)
+            idx.append(np.where(our_names==g)[0][0])
+    idx=np.array(idx)
+    A=our_log[idx,:] # genes x 33
+    B_genes=common if False else [our_names[i] for i in idx]
+    B=orig.loc[B_genes] # genes x groups
+    B=np.log1p(B.values / B.values.sum(axis=0, keepdims=True)*1e6)
+    # zscore genes across columns (samples) combined? standardize each gene across donors and orig groups together maybe better.
+    # We'll compute pearson on raw logcpm for now.
+    C=np.corrcoef(A.T, B.T)[:len(our_cats), len(our_cats):] # donors x orig groups
+    # Also spearman maybe
+    # Find best per donor
+    best=C.argmax(axis=1)
+    print('\\nPATH',path,'common genes',len(idx))
+    for i,c in enumerate(our_cats):
+        j=best[i]
+        # top 3
+        tops=np.argsort(C[i])[::-1][:5]
+        print(c, 'best', B.columns[j], round(C[i,j],3), 'tops', [(B.columns[t], round(C[i,t],3)) for t in tops])
+    return C, B.columns
+for path in ['group_sums_Donor.csv','group_sums_sample_id.csv','group_sums_sample_name.csv','group_sums_Subject.csv','group_sums_sample.csv']:
+    match_original(path)
+PY"

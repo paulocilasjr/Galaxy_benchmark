@@ -1,0 +1,27 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, collections
+from scipy import sparse
+
+def dec(a): return np.array([x.decode() if isinstance(x,(bytes,bytearray)) else str(x) for x in a])
+def read(fn):
+    with h5py.File(fn,'r') as f:
+        X=sparse.csc_matrix((f['X/data'][()].astype(np.float32), f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape']))
+        var=dec(f['var/_index'][()]); gc=dec(f['obs/guide/categories'][()]); lab=gc[f['obs/guide/codes'][()]]
+        tar=None
+        if 'target_gene' in f['obs']:
+            tc=dec(f['obs/target_gene/categories'][()]); tar=tc[f['obs/target_gene/codes'][()]]
+        return X,var,gc,lab,tar
+def lognorm(X):
+    tot=np.asarray(X.sum(1)).ravel().astype(np.float32); tot[tot==0]=1
+    coo=X.tocoo(copy=True); coo.data=np.log1p(coo.data/tot[coo.row]*1e4).astype(np.float32); return coo.tocsr()
+def means(X,labels,groups): return np.vstack([np.asarray(X[labels==g].mean(0)).ravel() for g in groups])
+Xq,vq,gqc,gq,_=read('perturb.seq.align.q1.query.h5ad'); Xql=lognorm(Xq); Mq=means(Xql,gq,gqc)
+non=[i for i,g in enumerate(gqc) if not g.startswith('NT-')]; nts=[i for i,g in enumerate(gqc) if g.startswith('NT-')]
+for gene in ['CDC73','CPSF3L']:
+    print('\\n',gene,'idx',np.where(vq==gene)[0])
+    if np.any(vq==gene):
+        gi=np.where(vq==gene)[0][0]
+        vals=[(gqc[i], float(Mq[i,gi]), int((gq==gqc[i]).sum())) for i in non]
+        print('lowest', sorted(vals,key=lambda x:x[1])[:15])
+        print('nt mean', float(Mq[nts,gi].mean()))
+PY"

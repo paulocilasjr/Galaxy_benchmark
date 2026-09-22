@@ -1,0 +1,39 @@
+/bin/bash -lc "python -u - <<'PY'
+import subprocess, numpy as np
+from collections import Counter
+seqs={}
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'): h=line[1:].split()[0]; seqs[h]=''
+    else: seqs[h]+=line.upper()
+cs=list(seqs); L=len(seqs[cs[0]]); bases='ACGT'; bi={b:i for i,b in enumerate(bases)}
+counts=np.zeros((L,4),dtype=int)
+p=subprocess.Popen(['bwa','samse','-n','20','read.proportions.q1.fa','read.proportions.q1.sai','read.proportions.q1.fq.gz'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+used=0
+for line in p.stdout:
+    if line.startswith('@'): continue
+    f=line.rstrip().split('\\t')
+    if int(f[1])&4 or f[5]"'!='"'36M': continue
+    pos=int(f[3])-1
+    for j,b in enumerate(f[9].upper()):
+        if b in bi and 0<=pos+j<L: counts[pos+j,bi[b]]+=1
+    used+=1
+p.wait()
+rows=[]; ys=[]; vars=0
+pat=Counter()
+for i in range(L):
+    alleles=tuple(seqs[c][i] for c in cs); pat[alleles]+=1
+    if len(set(alleles))==1 or counts[i].sum()==0: continue
+    vars+=1; freq=counts[i]/counts[i].sum()
+    for b in bases:
+        rows.append([1.0 if alleles[k]==b else 0.0 for k in range(4)])
+        ys.append(freq[bi[b]])
+A=np.asarray(rows); y=np.asarray(ys)
+# sum constraint included already per site but append precision constraint
+A2=np.vstack([A, np.ones((20,4))]); y2=np.r_[y,np.ones(20)]
+pi=np.linalg.lstsq(A2,y2,rcond=None)[0]
+print('used',used,'variable sites',vars,'pi percent',pi*100,'sum',pi.sum())
+print('genome allele patterns')
+for x,n in pat.most_common():
+    if len(set(x))>1: print(''.join(x),n)
+PY"

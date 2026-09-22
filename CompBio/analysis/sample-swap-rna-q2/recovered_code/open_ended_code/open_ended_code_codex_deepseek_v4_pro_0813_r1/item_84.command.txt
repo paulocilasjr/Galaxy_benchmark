@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,re
+m=json.load(open('genehub_old_to_03.json'))
+fixed={}
+for k,v in m.items():
+    ids=[]
+    for s in v:
+        clean=re.sub(r'<["'^>]+>'"',' ',s)
+        ids += re.findall(r'TraesCS\\S*03G\\S*', clean)
+    ids=[re.sub(r'\\.\\d+"'$'"','',x) for x in ids]
+    fixed[k]=list(dict.fromkeys(ids))
+json.dump(fixed,open('genehub_old_to_03_fixed.json','w'),indent=2)
+print('old nonempty',sum(bool(v) for v in fixed.values()))
+for k,v in list(fixed.items())[:10]: print(k,v)
+PY
+python3 - <<'PY'
+import gzip,csv,json,openpyxl,collections,numpy as np,re
+genes=[]; data=[]
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+ r=csv.reader(f,delimiter='\\t'); h=next(r)
+ for row in r:
+  genes.append(row[0]); data.append(list(map(float,row[1:])))
+A=np.array(data); cols=h[1:]
+gidx={g:i for i,g in enumerate(genes)}
+mapping=json.load(open('genehub_old_to_03_fixed.json'))
+# inspect overlap
+print('mapped ids in file',sum(1 for v in mapping.values() if any(g in gidx for g in v)))
+wb=openpyxl.load_workbook('additional_file2.xlsx', read_only=True, data_only=True)
+ws=wb['Table S2']
+cluster_genes=collections.defaultdict(set); rowmapped=collections.Counter(); missing=0
+for row in ws.iter_rows(min_row=4, values_only=True):
+ cl=row[0]; old=row[1]
+ if not old: continue
+ v03s=[g for g in mapping.get(old,[]) if g in gidx]
+ if v03s: rowmapped[cl]+=1
+ else: missing+=1
+ cluster_genes[cl].update(v03s)
+print('mapped rows',sum(rowmapped.values()),'missing',missing)
+for cl in range(22):
+ gs=list(cluster_genes[cl])
+ if not gs: print(cl,'no'); continue
+ idx=[gidx[g] for g in gs]
+ means=A[idx].mean(axis=0)
+ order=sorted(range(len(cols)),key=lambda i:means[i],reverse=True)
+ print(f'cluster {cl:2d} n={len(gs):3d} top: ' + ', '.join(f'{cols[i]}:{means[i]:.1f}' for i in order[:6]))
+PY"

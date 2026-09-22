@@ -1,0 +1,38 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, json, collections, concurrent.futures, csv
+# get all ATAC cell-line experiments
+url='https://www.encodeproject.org/search/?type=Experiment&assay_title=ATAC-seq&replicates.library.biosample.organism.scientific_name=Homo%20sapiens&assembly=GRCh38&format=json&limit=all'
+exps=requests.get(url,timeout=120).json()['@graph']
+cells=[]
+for exp in exps:
+ if exp.get('biosample_ontology',{}).get('classification')=='cell line':
+  cells.append((exp['accession'], exp['biosample_ontology']['term_name']))
+print('exps',len(cells))
+def get_peak(item):
+ acc,cell=item
+ r=requests.get(f'https://www.encodeproject.org/search/?type=File&dataset=/experiments/{acc}/&format=json&limit=all',timeout=60)
+ files=r.json().get('@graph',[])
+ # preference list
+ best=None
+ for pref in ['IDR thresholded peaks','pseudoreplicated peaks','replicated peaks','conservative IDR thresholded peaks','peaks']:
+  for f in files:
+   if f.get('file_format')=='bed' and f.get('file_type')=='bed narrowPeak' and f.get('output_type')==pref:
+    best=f; break
+  if best: break
+ if not best:
+  for f in files:
+   if f.get('file_format')=='bed' and 'narrowPeak' in f.get('file_type',''):
+    best=f; break
+ return acc,cell,best
+rows=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+ for acc,cell,best in ex.map(get_peak,cells):
+  if best:
+   rows.append((acc,cell,best['accession'],best.get('file_size'),best.get('output_type'),best.get('file_type')))
+print('got peaks',len(rows))
+with open('atac_peaks.tsv','w') as f:
+ f.write('experiment\\tcell\\tfile\\tfile_size\\toutput_type\\tfile_type\\n')
+ for r in rows: f.write('\\t'.join(map(str,r))+'\\n')
+print('unique cells',len(set(r[1] for r in rows)))
+print(rows[:10])
+PY"

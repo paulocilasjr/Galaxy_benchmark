@@ -1,0 +1,28 @@
+/bin/bash -lc "cd work && python3 - <<'PY'
+import numpy as np
+from collections import Counter, defaultdict
+bc_list=[]
+with open('read_barcodes.tsv') as f:
+    for l in f: bc_list.append(l.rstrip().split('\\t')[1])
+barcodes=sorted(set(bc_list)); bidx={b:i for i,b in enumerate(barcodes)}; ridx=np.array([bidx[b] for b in bc_list],dtype=np.int32)
+h=np.load('human_scores.npy');m=np.load('mouse_scores.npy');p=np.load('pig_scores.npy')
+S=np.vstack([h,m,p]).T; order=np.argsort(-S,axis=1); best=S[np.arange(len(S)),order[:,0]]; second=S[np.arange(len(S)),order[:,1]]
+# choose margin 2, min score 20
+assign=np.full(len(S),-1,dtype=np.int8); ok=(best>=20)&(best-second>=2); assign[ok]=order[ok,0]
+counts=np.zeros((len(barcodes),3),dtype=np.int32); valid=assign>=0; np.add.at(counts,(ridx[valid],assign[valid]),1)
+total=counts.sum(axis=1); top=counts.argmax(axis=1); topc=counts.max(axis=1)
+conf=(total>=100)&(topc/total>=0.9)
+print('conf',conf.sum(),Counter(top[conf]))
+# load gene counts per species
+for sp,file in [(0,'human_run_human_gene_by_bc.tsv'),(1,'mouse_run2_mouse_gene_by_bc.tsv'),(2,'pig_combined_pig_gene_by_bc.tsv')]:
+    gene=defaultdict(Counter)
+    with open(file) as f:
+        for l in f:
+            b,g,c=l.rstrip().split('\\t'); gene[b][g]+=int(c)
+    sel=[barcodes[i] for i in np.where(conf & (top==sp))[0]]
+    agg=Counter()
+    for b in sel: agg.update(gene[b])
+    print('\\nSpecies',sp,'n',len(sel),'top genes:')
+    print(agg.most_common(60))
+    print('sel top barcodes',sel[:20])
+PY"

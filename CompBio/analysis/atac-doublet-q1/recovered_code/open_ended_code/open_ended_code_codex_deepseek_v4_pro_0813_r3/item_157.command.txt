@@ -1,0 +1,51 @@
+/bin/bash -c "cat > archr_like.py <<'PY'
+import numpy as np, snapatac2 as snap, time
+from scipy.sparse import csr_matrix, vstack
+from sklearn.decomposition import TruncatedSVD
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import normalize
+
+adata=snap.read('atac_peaks_scrub.h5ad'); X=adata.X[:].tocsr().astype(np.float32); names=np.array(adata.obs_names)
+# Use binary? raw counts maybe; keep raw for sim and TF-IDF for embedding.
+def tfidf(M):
+    M=M.astype(np.float32).tocsr(); M.data=np.log1p(M.data); return normalize(M, norm='l2', axis=1, copy=False)
+Xobs=tfidf(X.copy())
+n=X.shape[0]; n_sim=2*n; rng=np.random.default_rng(0); pairs=np.column_stack([rng.integers(0,n,n_sim),rng.integers(0,n,n_sim)])
+# simulate doublets no downsampling and half downsampling (for half use sparse random binomial)
+def sim(p, seed):
+    rng=np.random.default_rng(seed); rows=[]
+    for a,b in pairs:
+        r=X[a]+X[b]
+        if p<1:
+            r=r.tocsr(); r.data=np.random.binomial(r.data.astype(np.int64), p); r.eliminate_zeros()
+        rows.append(r)
+    return vstack(rows)
+def pipeline(p, seed, combined=True):
+    S=sim(p,seed)
+    if combined:
+        M=vstack([X, S]); M=tfidf(M)
+        svd=TruncatedSVD(n_components=50, algorithm='randomized', random_state=0).fit(M)
+        Z=svd.transform(M)
+    else:
+        svd=TruncatedSVD(n_components=50, algorithm='randomized', random_state=0).fit(Xobs)
+        Z=np.vstack([svd.transform(Xobs), svd.transform(tfidf(S.copy()))])
+    Zobs=Z[:n]; Zsim=Z[n:]
+    # compute Bayesian doublet score from SnapATAC2 formula
+    manifold=np.vstack([Zobs,Zsim]); labels=np.array([0]*n+[1]*n_sim)
+    nn=NearestNeighbors(n_neighbors=30, metric='cosine', n_jobs=-1).fit(manifold)
+    k_adj=30
+    inds=nn.kneighbors(Zobs, n_neighbors=k_adj, return_distance=False)
+    # for each row, count sim and obs neighbors
+    nd=(labels[inds]==1).sum(1).astype(float); ns=k_adj-nd
+    rho=0.06; r=n_sim/float(n); N=k_adj
+    q=(nd+1)/(N+2)
+    Ld=q*rho/r/(1-rho-q*(1-rho-rho/r))
+    return Ld
+for p,seed,label in [(1.0,1,'nod'),(0.5,2,'half')]:
+    Ld=pipeline(p,seed)
+    idx=np.argsort(-Ld)
+    print('\\n',label,'top30')
+    for i in idx[:30]: print(names[i], Ld[i])
+    np.savetxt(f'archr_like_{label}.txt', np.c_[names,Ld], fmt='%s')
+PY
+python3 archr_like.py"

@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, pysam, numpy as np
+p='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-0bb2941c0318233f7b766bc0/workspace/gwas.ancestry.q1.tsv'
+df=pd.read_csv(p,sep='\\t')
+df=df[pd.to_numeric(df['P'],errors='coerce').notna()].copy()
+sample=df.sample(n=100,random_state=42).sort_values('POS')
+url='https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/ALL.chr1.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz'
+vf=pysam.VariantFile(url)
+pop_af={'AFR':[],'AMR':[],'EAS':[],'EUR':[],'SAS':[]}
+panel=pd.read_csv('[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-0bb2941c0318233f7b766bc0/workspace/1kg_panel.tsv',sep='\\t')
+sp=dict(zip(panel['sample'],panel['super_pop']))
+for _,r in sample.iterrows():
+    pos=r['POS']; eff=r['EFFECT_ALLELE']; other=r['OTHER_ALLELE']
+    recs=[rec for rec in vf.fetch('1',pos-1,pos+1) if rec.pos==pos]
+    if not recs:
+        print('absent',pos); continue
+    # try find allele match
+    counts={p:0 for p in pop_af}; n={p:0 for p in pop_af}
+    for rec in recs:
+        alleles=[rec.ref]+list(rec.alts or [])
+        if eff not in alleles: continue
+        idx=alleles.index(eff)
+        for sample in vf.header.samples:
+            gt=rec.samples[sample]['GT']
+            if gt is None or any(a is None or a<0 for a in gt): continue
+            pp=sp.get(sample)
+            if pp not in counts: continue
+            n[pp]+=2
+            for a in gt:
+                if a==idx: counts[pp]+=1
+    for pp in pop_af:
+        if n[pp]: pop_af[pp].append(counts[pp]/n[pp])
+for pp in pop_af:
+    vals=pop_af[pp]
+    print(pp,'n',len(vals),'zero',sum(v==0 for v in vals),'mean',np.mean(vals) if vals else None)
+PY"

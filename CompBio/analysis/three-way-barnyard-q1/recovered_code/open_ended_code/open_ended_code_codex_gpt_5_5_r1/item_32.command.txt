@@ -1,0 +1,98 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, collections, re, math, statistics
+from pathlib import Path
+work=Path('work')
+# read -> barcode, UMI
+read_info={}
+with gzip.open('three.way.barnyard.q1.R1.fq.gz','rt') as f:
+    rec=0
+    while True:
+        h=f.readline().strip()
+        if not h: break
+        seq=f.readline().strip(); f.readline(); f.readline()
+        rec += 1
+        name=h[1:].split()[0]
+        base=name.rsplit('/',1)[0]
+        read_info[base]=(seq[:16],seq[16:28])
+print('read_info',len(read_info), 'barcodes', len(set(b for b,u in read_info.values())))
+
+def parse_paf(mode='unique_top', min_s1=0, max_nm=None):
+    # collect per read align species scores
+    per=collections.defaultdict(list)
+    with open(work/'r2_vs_cdna.paf') as f:
+        for line in f:
+            parts=line.rstrip().split('\\t')
+            q=parts[0].rsplit('/',1)[0]
+            sp=parts[5].split('|',1)[0]
+            nmatch=int(parts[9]); alen=int(parts[10]); mapq=int(parts[11])
+            tags={}
+            for p in parts[12:]:
+                # tag:type:value
+                bits=p.split(':',2)
+                if len(bits)==3: tags[bits[0]]=bits[2]
+            s1=int(tags.get('s1', nmatch))
+            nm=int(tags.get('NM', alen-nmatch)) if 'NM' in tags else alen-nmatch
+            if s1<min_s1: continue
+            if max_nm is not None and nm>max_nm: continue
+            per[q].append((s1,nmatch,alen,mapq,sp))
+    read_call={}
+    amb=0
+    for q,lst in per.items():
+        if not lst: continue
+        # sort by score tuple
+        best=max((x[0],x[1],-x[2]) for x in lst)
+        tops=[x for x in lst if (x[0],x[1],-x[2])==best]
+        sps=set(x[4] for x in tops)
+        if mode=='first':
+            # PAF lines are usually best first; choose max tuple first occurrence
+            for x in lst:
+                if (x[0],x[1],-x[2])==best:
+                    read_call[q]=x[4]; break
+        elif mode=='unique_top':
+            if len(sps)==1:
+                read_call[q]=next(iter(sps))
+            else:
+                amb += 1
+        elif mode=='vote_top':
+            # among all hits with max s1 only, choose species with most hits if unique
+            bests1=max(x[0] for x in lst)
+            c=collections.Counter(x[4] for x in lst if x[0]==bests1)
+            if c:
+                (sp,n),(sp2,n2)= (c.most_common(2)+[(None,0)])[:2]
+                if n>n2: read_call[q]=sp
+                else: amb += 1
+    return read_call, amb, len(per)
+
+for mode in ['first','unique_top','vote_top']:
+    for min_s1 in [0,40,60,75]:
+        rc,amb,naln=parse_paf(mode,min_s1=min_s1)
+        # read counts
+        rcounts=collections.Counter(rc.values())
+        # cell read counts
+        cell_counts=collections.defaultdict(collections.Counter)
+        cell_umis=collections.defaultdict(lambda: collections.defaultdict(set))
+        for q,sp in rc.items():
+            if q not in read_info: continue
+            bc,umi=read_info[q]
+            cell_counts[bc][sp]+=1
+            cell_umis[bc][sp].add(umi)
+        cell_call={}
+        for bc,c in cell_counts.items():
+            if not c: continue
+            top=c.most_common(2)
+            if len(top)==1 or top[0][1]>top[1][1]:
+                cell_call[bc]=top[0][0]
+        cc=collections.Counter(cell_call.values())
+        # umi-based cell call
+        umi_call={}
+        for bc,d in cell_umis.items():
+            c=collections.Counter({sp:len(umis) for sp,umis in d.items()})
+            top=c.most_common(2)
+            if top and (len(top)==1 or top[0][1]>top[1][1]):
+                umi_call[bc]=top[0][0]
+        uc=collections.Counter(umi_call.values())
+        print('\\nMODE',mode,'min_s1',min_s1,'aligned_reads',naln,'called_reads',len(rc),'amb',amb)
+        print('read_counts',rcounts)
+        print('cell_read_call',cc,'n',sum(cc.values()))
+        print('cell_umi_call ',uc,'n',sum(uc.values()))
+PY"

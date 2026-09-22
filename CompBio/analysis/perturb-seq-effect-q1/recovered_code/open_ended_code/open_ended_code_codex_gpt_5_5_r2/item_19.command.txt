@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, pandas as pd, numpy as np
+from scipy.io import mmread
+features=pd.read_csv('data/filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+barcodes=pd.read_csv('data/filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+Xraw=mmread('data/filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+lib=np.asarray(Xraw.sum(axis=0)).ravel()
+nfeat=np.diff(Xraw.indptr)
+X=Xraw.astype(float)
+X.data *= np.repeat(1e4/lib, np.diff(X.indptr)); X.data=np.log1p(X.data)
+calls=pd.read_csv('data/protospacer_calls_per_cell.csv')
+fr=pd.read_csv('data/feature_reference.csv')
+targets=barcodes.barcode.map(calls.assign(target=calls.feature_call.map(fr.set_index('id').target_gene_name)).set_index('cell_barcode').target).to_numpy()
+nt=targets=='Non-Targeting'
+path_idx=list(range(20))
+nonpath_idx=list(range(20,1000))
+path=X[path_idx,:].toarray().T.mean(1)
+nonpath=X[nonpath_idx,:].toarray().T.mean(1)
+# z vs NT
+for name, score in [('lib',lib),('nfeat',nfeat),('path',path),('nonpath',nonpath),('path_minus_nonpath',path-nonpath)]:
+ rows=[]
+ nm=score[nt].mean(); ns=score[nt].std(ddof=1)
+ for target in ['STAT1','ISG15','Non-Targeting','CD39','MAPK1']:
+  m=targets==target
+  rows.append((target,m.sum(),score[m].mean(),(score[m].mean()-nm)/ns,np.median(score[m])))
+ print('\\n',name,'NT mean/sd',nm,ns)
+ print(pd.DataFrame(rows,columns=['target','n','mean','z_delta','median']).to_string(index=False))
+# top by path-specific (path - nonpath) all target n >=10
+score=path-nonpath
+rows=[]
+for t in sorted(set(targets)):
+ m=targets==t
+ if m.sum()<10: continue
+ rows.append((t,m.sum(),score[m].mean()-score[nt].mean(),score[m].mean(),np.median(score[m])))
+print('\\ntop path-specific depletion')
+print(pd.DataFrame(rows,columns=['target','n','delta','mean','median']).sort_values('delta').head(10).to_string(index=False))
+PY"

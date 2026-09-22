@@ -1,0 +1,75 @@
+/bin/bash -lc "cat > calculate.py <<'PY'
+import gzip
+from collections import defaultdict
+from bisect import bisect_left
+
+def read_bed(path):
+    with gzip.open(path, 'rt') as handle:
+        for line in handle:
+            if line.strip() and not line.startswith(('#', 'track', 'browser')):
+                yield line.rstrip().split('\\t')
+
+peaks = defaultdict(list)
+count = 0
+for row in read_bed('ENCFF333TAT.bed.gz'):
+    offset = int(row[9])
+    assert offset >= 0, 'Undefined summit'
+    assert offset < int(row[2]) - int(row[1]), 'Summit outside peak'
+    summit = int(row[1]) + offset
+    assert summit >= 250, 'Centered interval extends below zero'
+    peaks[row[0]].append((summit - 250, summit + 250))
+    count += 1
+
+merged = defaultdict(list)
+with open('centered_500bp.bed', 'w') as centered, open('merged.bed', 'w') as output:
+    for chrom in sorted(peaks):
+        for start, end in sorted(peaks[chrom]):
+            centered.write(f'{chrom}\\t{start}\\t{end}\\n')
+            if merged[chrom] and start <= merged[chrom][-1][1]:
+                merged[chrom][-1][1] = max(merged[chrom][-1][1], end)
+            else:
+                merged[chrom].append([start, end])
+        for start, end in merged[chrom]:
+            output.write(f'{chrom}\\t{start}\\t{end}\\n')
+
+blacklist = defaultdict(list)
+for row in read_bed('ENCFF356LFX.bed.gz'):
+    blacklist[row[0]].append((int(row[1]), int(row[2])))
+for intervals in blacklist.values():
+    intervals.sort()
+
+retained = []
+removed = 0
+with open('final.bed', 'w') as output:
+    for chrom in sorted(merged):
+        exclusions = blacklist[chrom]
+        index = 0
+        for start, end in merged[chrom]:
+            while index < len(exclusions) and exclusions[index][1] <= start:
+                index += 1
+            overlap = index < len(exclusions) and exclusions[index][0] < end
+            if overlap:
+                removed += 1
+            else:
+                retained.append((chrom, start, end))
+                output.write(f'{chrom}\\t{start}\\t{end}\\n')
+
+# Independently verify exclusion using binary search with prefix maximum ends.
+verified = []
+for chrom in sorted(merged):
+    starts, prefix_ends = [], []
+    for start, end in blacklist[chrom]:
+        starts.append(start)
+        prefix_ends.append(max(end, prefix_ends[-1] if prefix_ends else end))
+    for start, end in merged[chrom]:
+        index = bisect_left(starts, end) - 1
+        if index < 0 or prefix_ends[index] <= start:
+            verified.append((chrom, start, end))
+assert retained == verified
+answer = sum(end - start for _, start, end in retained)
+with open('answer.txt', 'w') as output:
+    output.write(f'{answer}\\n')
+print(f'Peaks: {count}; merged: {sum(map(len, merged.values()))}; excluded: {removed}; retained: {len(retained)}')
+print(answer)
+PY
+python3 calculate.py"

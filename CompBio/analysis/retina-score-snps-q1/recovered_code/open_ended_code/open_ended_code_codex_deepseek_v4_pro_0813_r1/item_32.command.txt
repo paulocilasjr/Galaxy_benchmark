@@ -1,0 +1,54 @@
+/bin/bash -lc "cat > fetch_seqs.py <<'PY'
+import pandas as pd, requests, time, os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+INP_LEN=2114
+BUFFER=500
+snp=pd.read_csv('retina.score.snps.q1.tsv',sep='\\t')
+print(snp.shape)
+print(snp.head())
+# Check chromosomes
+print(snp['chr'].unique())
+url='https://api.genome.ucsc.edu/getData/sequence'
+session=requests.Session()
+
+def fetch(i,row):
+    p=int(row['start'])
+    s=p-INP_LEN//2
+    e=p+INP_LEN//2+BUFFER
+    params={'genome':'hg38','chrom':row['chr'],'start':s,'end':e}
+    for attempt in range(5):
+        try:
+            r=session.get(url,params=params,timeout=60)
+            if r.status_code==200:
+                dna=r.json()['dna']
+                if len(dna)"'!=e-s:
+                    raise ValueError(f'"'len {len(dna)} expected {e-s}')
+                return i, dna
+            print('status',r.status_code,params, 'attempt',attempt)
+        except Exception as ex:
+            print('err',ex,'attempt',attempt)
+        time.sleep(1+2*attempt)
+    raise RuntimeError(f'failed {row}')
+
+seqs=[None]*len(snp)
+with ThreadPoolExecutor(max_workers=8) as ex:
+    futs=[ex.submit(fetch,i,row) for i,row in snp.iterrows()]
+    for fut in as_completed(futs):
+        i,dna=fut.result()
+        seqs[i]=dna
+        if i%50==0: print('got',i)
+assert all(x is not None for x in seqs)
+snp['seq']=seqs
+snp.to_pickle('snp_seqs.pkl')
+# verify ref/alt at center
+mism=0
+for i,row in snp.iterrows():
+    s=row['seq']
+    pos=INP_LEN//2-1
+    if s[pos:pos+len(row['ref'])].upper()"'!=row['"'ref'].upper():
+        mism+=1
+        print('mismatch',i,row['chr'],row['start'],row['ref'],s[pos:pos+len(row['ref'])])
+print('mismatches',mism)
+print('saved',len(snp))
+PY
+python fetch_seqs.py"

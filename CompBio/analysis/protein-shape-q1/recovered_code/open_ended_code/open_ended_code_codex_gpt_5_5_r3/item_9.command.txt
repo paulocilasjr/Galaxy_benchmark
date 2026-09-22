@@ -1,0 +1,44 @@
+/bin/bash -lc "mkdir -p outputs && python3 - <<'PY'
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import defaultdict
+atoms=[]; ca_by_chain=defaultdict(list); all_by_chain=defaultdict(list)
+with open('protein.shape.q1.pdb') as f:
+    for line in f:
+        if line.startswith(('ATOM  ','HETATM')):
+            name=line[12:16].strip(); chain=line[21]
+            xyz=np.array([float(line[30:38]),float(line[38:46]),float(line[46:54])])
+            atoms.append(xyz); all_by_chain[chain].append(xyz)
+            if name=='CA': ca_by_chain[chain].append(xyz)
+atoms=np.array(atoms)
+# PCA basis
+cen=atoms.mean(0); X=atoms-cen
+w,V=np.linalg.eigh(np.cov(X.T)); V=V[:,np.argsort(w)[::-1]]
+coords={
+ 'xy': (np.array([1,0,0.]),np.array([0,1,0.])),
+ 'xz': (np.array([1,0,0.]),np.array([0,0,1.])),
+ 'yz': (np.array([0,1,0.]),np.array([0,0,1.])),
+ 'pc12': (V[:,0],V[:,1]),
+ 'pc13': (V[:,0],V[:,2]),
+ 'pc23': (V[:,1],V[:,2]),
+}
+colors=dict(zip(sorted(ca_by_chain),plt.rcParams['axes.prop_cycle'].by_key()['color']))
+for name,(u,v) in coords.items():
+    fig,ax=plt.subplots(figsize=(12,6),dpi=160)
+    for ch,pts in sorted(ca_by_chain.items()):
+        A=np.array(pts)-cen
+        px=A@u; py=A@v
+        ax.plot(px,py,lw=1.1,color=colors[ch],label=ch,alpha=.9)
+        ax.scatter(px,py,s=3,color=colors[ch],alpha=.4)
+    ax.set_aspect('equal','box'); ax.axis('off'); ax.legend(loc='upper right',ncol=6,fontsize=8)
+    fig.savefig(f'outputs/proj_{name}_ca.png',bbox_inches='tight',pad_inches=.05)
+    plt.close(fig)
+    # all atom silhouette
+    fig,ax=plt.subplots(figsize=(12,6),dpi=160)
+    A=atoms-cen; ax.scatter(A@u,A@v,s=.4,c='black',alpha=.20)
+    ax.set_aspect('equal','box'); ax.axis('off')
+    fig.savefig(f'outputs/proj_{name}_all.png',bbox_inches='tight',pad_inches=.05)
+    plt.close(fig)
+print('wrote', len(coords)*2, 'images')
+PY
+ls outputs"

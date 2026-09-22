@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.parse,urllib.request,edlib,re,collections,itertools
+from Bio.Seq import Seq
+u='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'+urllib.parse.urlencode({'db':'nuccore','id':'AL008638.1','seq_start':'60000','seq_stop':'70000','rettype':'fasta','strand':'1','retmode':'text'})
+o=urllib.request.urlopen(u).read().decode();ref=''.join(x.strip() for x in o.splitlines() if not x.startswith('>'))
+# coordinate positions selected after correcting segment origin
+sites=[63763,63823,64123,64283,64533,64733,64736,64983]
+def reads(p):
+ with gzip.open(p,'rt') as f:
+  while 1:
+   h=f.readline().strip()
+   if not h:return
+   s=f.readline().strip();f.readline();f.readline();yield h,s
+def parse(c):return [(op,int(n)) for n,op in re.findall(r'(\\d+)([=XID])',c)]
+def best(s):
+ a=[]
+ for ori,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+  x=edlib.align(q,ref,mode='HW',task='path',k=-1)
+  a.append((x['editDistance'],ori,q,x['locations'][0],x['cigar']))
+ return min(a,key=lambda z:(z[0],z[3][0]))
+def obs(s):
+ d,ori,q,(st,en),c=best(s); t=st;qi=0;mp={}
+ for op,n in parse(c):
+  if op in '=X':
+   for j in range(n):mp[60000+t]=q[qi];t+=1;qi+=1
+  elif op=='I':
+   # store insertion at 0-based target coordinate, if unique
+   mp.setdefault(('I',60000+t),'I');qi+=n
+  else:
+   for j in range(n):mp[60000+t]='D';t+=1
+ return {p:(mp.get(p) or mp.get(('I',p))) for p in sites},(d,ori,60000+st,60000+en,c)
+r1=dict(reads('phase.chain.q1.R1.fq.gz')); r2=dict(reads('phase.chain.q1.R2.fq.gz'))
+ro={};
+for h in r1:
+ ro[h]=[obs(r1[h])[0],obs(r2[h])[0]]
+for j,p in enumerate(sites):
+ c=collections.Counter()
+ for h,(a,b) in ro.items():
+  for x in (a[p],b[p]):
+   if x is not None:c[x]+=1
+ print(p,'ref',ref[p-60000],c)
+print('\\nPAIR allele combos (only pairs with >=2 calls)')
+for i,j in itertools.combinations(range(len(sites)),2):
+ c=collections.Counter()
+ for h,(a,b) in ro.items():
+  z=[]
+  for p in (sites[i],sites[j]):
+   vals=[x for x in (a[p],b[p]) if x is not None]
+   # if disagreement keep "'!
+   z.append(vals[0] if vals and len(set(vals))==1 else ('"'?' if not vals else '"'!'"'+''.join(vals)))
+  if all(x not in ('?',) and not str(x).startswith('"'!'"') for x in z):c[tuple(z)]+=1
+ if len(c)>1:
+  print(sites[i],sites[j],c)
+PY"

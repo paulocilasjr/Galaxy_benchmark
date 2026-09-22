@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+from Bio import SeqIO
+import gzip, edlib, time, pickle
+from collections import Counter
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+names=list(seqs); comp=str.maketrans('ACGT','TGCA'); L=36
+rev={n:s.translate(comp)[::-1] for n,s in seqs.items()}
+reads=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    for i in range(40000):
+        h=f.readline(); seq=f.readline().strip().upper(); f.readline(); f.readline(); reads.append(seq)
+all_d=[]; all_n=[]; start=time.time()
+for idx,r in enumerate(reads):
+    ds=[]; ns=[]
+    for n in names:
+        best=99; total_loc=0
+        for t in (seqs[n], rev[n]):
+            res=edlib.align(r,t,mode='HW',task='locations')
+            d=res['editDistance']; locs=res['locations']
+            if d<best:
+                best=d; total_loc=len(locs)
+            elif d==best:
+                total_loc+=len(locs)
+        ds.append(best); ns.append(total_loc)
+    all_d.append(ds); all_n.append(ns)
+    if (idx+1)%10000==0: print('done',idx+1,'elapsed',time.time()-start)
+with open('edit_dn.pkl','wb') as f: pickle.dump({'d':all_d,'n':all_n},f)
+print('saved',time.time()-start)
+# simple unique
+unique=Counter()
+for ds in all_d:
+    md=min(ds); ns=[names[j] for j,d in enumerate(ds) if d==md]
+    if len(ns)==1: unique[ns[0]]+=1
+print(unique)
+PY"

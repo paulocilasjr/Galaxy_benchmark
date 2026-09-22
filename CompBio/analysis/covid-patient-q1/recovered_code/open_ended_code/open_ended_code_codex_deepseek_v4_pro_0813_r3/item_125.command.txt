@@ -1,0 +1,74 @@
+/bin/bash -c "cat > classify_with_annotated.py <<'PY'
+import numpy as np, pandas as pd
+import h5py, scipy.sparse as sp
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_predict, LeaveOneGroupOut
+from sklearn.metrics import accuracy_score
+
+# load annotated raw X and metadata
+with h5py.File('GSE180578_annotated.h5ad','r') as f:
+    data=f['raw/X/data'][:]; indices=f['raw/X/indices'][:]; indptr=f['raw/X/indptr'][:]
+    ann_var=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['raw/var/_index'][:]])
+    pid=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/patient_id'][:]])
+    disease=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/disease'][:]])
+ann_raw=sp.csr_matrix((data,indices,indptr),shape=(len(pid),len(ann_var)))
+print('ann raw',ann_raw.shape, ann_raw.sum())
+# our data
+PB=np.load('pb_dense.npy')
+donors=np.load('donor_names.npy',allow_pickle=True)
+genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy',allow_pickle=True)])
+# common genes
+ann_up=np.array([g.upper() for g in ann_var])
+our_up=np.array([g.upper() for g in genes])
+common, ann_idx, our_idx=np.intersect1d(ann_up, our_up, return_indices=True)
+print('common',len(common))
+# annotated patient-level sums
+patients=np.unique(pid)
+ann_counts=np.zeros((len(patients),len(common)),dtype=np.float64)
+ann_disease=[]
+ann_patient=[]
+for i,p in enumerate(patients):
+    mask=pid==p
+    ann_counts[i]=np.asarray(ann_raw[mask][:,ann_idx].sum(axis=0)).ravel()
+    ann_disease.append(disease[mask][0]); ann_patient.append(p)
+ann_counts=np.array(ann_counts)
+# normalize log cpm
+def norm_cpm_log(M):
+    lib=M.sum(axis=1,keepdims=True); lib[lib==0]=1
+    return np.log2(M/lib*1e6+1)
+ann_log=norm_cpm_log(ann_counts)
+our_log=norm_cpm_log(PB[our_idx,:].T) # donors x genes
+# filter training to healthy/covid PBMC only, exclude ards/TA and ALIR? disease labels healthy/covid
+mask=np.isin(np.array(ann_disease), ['healthy','covid'])
+# exclude patients with sample_type? no metadata here, but patient ids with ETA maybe covid; still okay? Use disease only.
+X=ann_log[mask]
+y=np.array(ann_disease)[mask]
+groups=np.array(ann_patient)[mask]
+# Map healthy=0, covid=1
+ybin=(y=='covid').astype(int)
+print('train',X.shape,'healthy',sum(ybin==0),'covid',sum(ybin==1),'patients',len(set(groups)))
+# cross validation leave one patient out
+from sklearn.linear_model import LogisticRegression
+clf=LogisticRegression(max_iter=2000, C=1.0)
+# fit on all and predict our
+scaler=StandardScaler().fit(X); Xs=scaler.transform(X); ours=scaler.transform(our_log)
+clf.fit(Xs,ybin)
+proba=clf.predict_proba(ours)[:,1]
+print('logreg prob covid per donor')
+for j,d in enumerate(donors):
+    print(d, f'{proba[j]:.3f}', 'pred', 'COVID' if proba[j]>=0.5 else 'HEALTHY')
+print('healthy predicted IDs', [int(d[5:]) for j,d in enumerate(donors) if proba[j]<0.5])
+# CV accuracy LOPO
+from sklearn.model_selection import LeaveOneGroupOut
+pred=[]
+for train_idx,test_idx in LeaveOneGroupOut().split(Xs,ybin,groups):
+    clf=LogisticRegression(max_iter=2000,C=1.0).fit(Xs[train_idx],ybin[train_idx])
+    pred.append(clf.predict(Xs[test_idx]))
+pred=np.concatenate(pred)
+print('LOPO accuracy',accuracy_score(ybin,pred))
+PY
+python classify_with_annotated.py"

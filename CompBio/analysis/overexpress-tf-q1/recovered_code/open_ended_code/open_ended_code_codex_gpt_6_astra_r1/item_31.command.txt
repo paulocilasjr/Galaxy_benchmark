@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np,pandas as pd
+from scipy.stats import norm
+s=pd.read_csv('results/motif_scores.tsv',sep='\\t')
+s=s[(s.group=='stable')|((s.group=='gain')&(s['rank']<3000))].copy()
+s['gcbin']=(s.gc/0.025).astype(int)
+rows=[]
+for col in [c for c in s.columns if '_MA' in c]:
+ threshold=s.loc[s.group=='stable',col].quantile(.9)
+ deviations=0; variance=0; num=0; den=0
+ for _,g in s.groupby('gcbin'):
+  fg=(g.group=='gain').values; hit=(g[col]>=threshold).values
+  a=np.sum(fg&hit);b=np.sum(fg&~hit);c=np.sum(~fg&hit);d=np.sum(~fg&~hit); n=a+b+c+d
+  if min(a+b,c+d)==0 or n<2: continue
+  deviations+=a-(a+b)*(a+c)/n
+  variance+=(a+b)*(c+d)*(a+c)*(b+d)/(n*n*(n-1))
+  num+=a*d/n;den+=b*c/n
+ z=deviations/np.sqrt(variance)
+ rows.append([col,num/den,z,norm.sf(z)])
+out=pd.DataFrame(rows,columns=['motif','gc_stratified_odds','z','p'])
+out=out.sort_values('gc_stratified_odds',ascending=False)
+out.to_csv('results/gc_stratified_enrichment.tsv',sep='\\t',index=False)
+print(out.to_string(index=False))
+PY"

@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections,math
+import numpy as np
+p='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'; std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+def get(attrs,k):
+ m=re.search(r'(?:"'^|;'"\\s*)'+re.escape(k)+r'\\s+\"(["'^"]*)"'"',attrs); return m.group(1) if m else None
+def add_union(xs):
+ out=[]
+ for a,b in sorted(xs):
+  if out and a<=out[-1][1]+1: out[-1]=(out[-1][0],max(out[-1][1],b))
+  else: out.append((a,b))
+ return out
+g={}
+with gzip.open(p,'rt') as fh:
+ for line in fh:
+  if line.startswith('#'):continue
+  q=line.rstrip('\\n').split('\\t'); a=q[8]
+  if q[0] not in std or get(a,'tag')"'!='"'MANE Select':continue
+  tid=get(a,'transcript_id'); d=g.setdefault(tid,{'s':q[6],'e':[],'c':[],'z':[]})
+  x=(int(q[3]),int(q[4]))
+  if q[2]=='exon': d['e'].append(x)
+  elif q[2]=='CDS': d['c'].append(x)
+  elif q[2]=='stop_codon': d['z'].append(x)
+def L(xs): return sum(b-a+1 for a,b in add_union(xs))
+vals=[]; n_bad=0; stop_lens=[]
+for tid,d in g.items():
+ cod=add_union(d['c']+d['z']); c0=min(a for a,b in cod); c1=max(b for a,b in cod)
+ if d['s']=='+':
+  u5=sum(max(0,min(b,c0-1)-a+1) for a,b in d['e'])
+  u3=sum(max(0,b-max(a,c1+1)+1) for a,b in d['e'])
+ else:
+  u5=sum(max(0,b-max(a,c1+1)+1) for a,b in d['e'])
+  u3=sum(max(0,min(b,c0-1)-a+1) for a,b in d['e'])
+ vals.append((u5,L(cod),u3))
+ stop_lens.append(L(d['z']))
+ if u5+L(cod)+u3 "'!= L(d['"'e']):n_bad+=1
+arr=np.array(vals,dtype=np.int64)
+med=np.median(arr,axis=0)
+print('n',len(vals),'median',med,'floor',np.floor(med).astype(int),'central sorted values')
+for j,name in enumerate(['5utr','cds','3utr']):
+ s=np.sort(arr[:,j]); k=len(s)//2; print(name,s[k-2:k+2].tolist())
+print('stop lengths',collections.Counter(stop_lens),'sum-vs-union overlaps',sum(L(d['c'])+L(d['z'])"'!=L(d['"'c']+d['z']) for d in g.values()),'bad partition',n_bad)
+# cross-check using exon total minus coding; all coding starts/stops are inside exons
+print('all stop 3?',set(stop_lens),'all medians finite',np.isfinite(med).all())
+PY"

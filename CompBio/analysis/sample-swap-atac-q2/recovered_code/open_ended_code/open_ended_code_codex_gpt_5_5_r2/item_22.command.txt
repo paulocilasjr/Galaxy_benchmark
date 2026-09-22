@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,pandas as pd,numpy as np
+counts=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t')
+cols=list(counts.columns[3:])
+lib=counts[cols].sum(); log=np.log1p(counts[cols].div(lib,axis=1)*1e6)
+best={}
+with gzip.open('refGene.hg38.txt.gz','rt') as f:
+    for row in csv.reader(f,delimiter='\\t'):
+        if len(row)<13: continue
+        chrom,strand,txStart,txEnd,gene=row[2],row[3],int(row[4]),int(row[5]),row[12]
+        if '_' in chrom: continue
+        if gene not in best or txEnd-txStart > best[gene][3]-best[gene][2]: best[gene]=(chrom,strand,txStart,txEnd)
+idx_by_chr={c:np.where(counts['chrom'].values==c)[0] for c in counts['chrom'].unique()}
+starts=counts['start'].values; ends=counts['end'].values
+
+def sc(g, flank=20000):
+    if g not in best: return None
+    chrom,strand,a,b=best[g]
+    tss=a if strand=='+' else b
+    ii=idx_by_chr.get(chrom,[])
+    ii=ii[(ends[ii]>tss-flank)&(starts[ii]<tss+flank)]
+    if len(ii)==0: return None
+    return log.iloc[ii].mean(axis=0).sort_values(ascending=False)
+for g in ['SLC6A9','GRIK1','GRIK2','GJD2','DAB1','SYNDIG1','GAD1','GAD2','SLC32A1','DLX1','DLX2','TFAP2A']:
+    s=sc(g)
+    print(g, {k:round(v,3) for k,v in s.head(5).items()})
+PY"

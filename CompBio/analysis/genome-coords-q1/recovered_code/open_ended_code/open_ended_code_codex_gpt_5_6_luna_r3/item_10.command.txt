@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import csv,math
+from collections import defaultdict,Counter
+A=defaultdict(list)
+with open('single_cell_dynamics_question.csv') as f:
+ for x in csv.DictReader(f):
+  ex=[float(x[k]) for k in ('enh_x','enh_y','enh_z')]; px=[float(x[k]) for k in ('prom_x','prom_y','prom_z')]
+  d=math.sqrt(sum((a-b)**2 for a,b in zip(ex,px)))
+  A[int(x['cell_id'])].append((int(x['time']),int(d<=260),int(x['transcription']),d))
+for v in A.values(): v.sort()
+# tables: P(Y_t | Cprev,Yprev), P(C_t | Cprev,Yprev)
+for target,idx in [('Y',2),('C',1)]:
+ print('\\ntarget',target)
+ n=Counter()
+ for v in A.values():
+  for i in range(1,len(v)):
+   cp,yp=v[i-1][1:3]; ct,yt=v[i][1:3]
+   n[(cp,yp,v[i][idx])]+=1
+ for cp in [0,1]:
+  for yp in [0,1]:
+   vals=[n[(cp,yp,z)] for z in [0,1]]; tot=sum(vals)
+   print('prev C,Y',cp,yp,'n',tot,'target1',vals[1]/tot,'counts',vals)
+# linear/continuous distance at t vs tx previous, and tx at t vs distance prev
+print('\\ncontinuous lag effects')
+def mean(xs): return sum(xs)/len(xs)
+for lag in [1,2,3]:
+ for pred in ['Y','C']:
+  groups=[[],[]]
+  for v in A.values():
+   for i in range(lag,len(v)):
+    groups[v[i-lag][2 if pred=='Y' else 1]].append(v[i][3])
+  print('lag',lag,'prior',pred,'distance now means 0/1',*[mean(x) for x in groups], 'n',*[len(x) for x in groups])
+ for pred in ['D']:
+  # prior distance low versus high quartile; target Y
+  allprev=[]; allnow=[]
+  for v in A.values():
+   for i in range(lag,len(v)):
+    allprev.append(v[i-lag][3]); allnow.append(v[i][2])
+  q=sorted(allprev); med=q[len(q)//2]
+  lo=[y for d,y in zip(allprev,allnow) if d<=med]; hi=[y for d,y in zip(allprev,allnow) if d>med]
+  print('lag',lag,'prior D <=median',med,'Y rates low/high',mean(lo),mean(hi))
+PY"

@@ -1,0 +1,54 @@
+/bin/bash -c "python3 - <<'PY'
+import scipy.io, collections, numpy as np, math
+M=scipy.io.mmread('kallisto_countoutput.mtx').tocsr()
+genes=[l.strip() for l in open('kallisto_countoutput.genes.txt')]
+barcodes=[l.strip() for l in open('kallisto_countoutput.barcodes.txt')]
+# cell species by threshold 0.8
+assigned={}
+for i,bc in enumerate(barcodes):
+    row=M.getrow(i)
+    counts=collections.Counter()
+    for j,v in zip(row.indices,row.data):
+        counts[genes[j].split('|')[0]] += int(v)
+    tot=sum(counts.values()); sp,n=counts.most_common(1)[0]
+    if tot and n/tot>=0.8: assigned[i]=sp
+print('assigned',collections.Counter(assigned.values()))
+# aggregate gene umi per species
+gene_counts={sp:collections.Counter() for sp in ['hs','mm','ss']}
+for i,sp in assigned.items():
+    row=M.getrow(i)
+    for j,v in zip(row.indices,row.data):
+        gene_counts[sp][genes[j]] += int(v)
+markers={
+'liver':['ALB','APOA1','APOA2','APOC3','APOH','TF','HP','SERPINA1','FGB','FGG','FGA','AGXT','ASGR1','CYP2E1','CYP3A4','TAT','HNF4A','CPS1','OTC','ARG1','HAL','SDS','BHMT','FBP1','PCK1','G6PC'],
+'heart':['TNNT2','TNNI3','TNNI1','TNNC1','MYH7','MYH6','MYL2','MYL3','MYL4','ACTC1','NPPA','NPPB','PLN','CSRP3','TTN','RYR2','ATP2A2','SCN5A','NKX2-5','TBX20'],
+'testis':['PRM1','PRM2','TNP1','TNP2','ACTRT2','ODF1','ODF2','SPATA3','SPATA6','SPAG6','SYCP3','SYCP1','TEX101','DAZL','DDX4','PIWIL1','TDRD5','GGN','LELP1','DMRT1'],
+'kidney':['UMOD','SLC12A1','SLC12A3','AQP2','AQP1','NPHS1','NPHS2','SLC34A1','HAVCR1','KCNJ1','CALB1','MIOX','SLC22A6','SLC22A8','SLC5A2','SLC13A1','CLDN16','PTH1R','AQP3'],
+'bone_marrow':['HBB','HBA1','HBA2','MPO','ELANE','CTSG','LYZ','CD34','CD19','CD79A','MS4A1','CD3D','CD4','CD8A','NKG7','GNLY','GYPA','ALAS2','AHSP','PRTN3'],
+'spleen':['MS4A1','CD19','CD79A','CD3D','CD4','CD8A','NKG7','GNLY','GZMB','LYZ','FCGR3B','CD14','CD68','HBB','HBA1','IGKC','IGHG1','S100A8','S100A9'],
+'cortex':['SNAP25','SYT1','MBP','GFAP','RBFOX3','GAD1','GAD2','GRIA1','GRIA2','GRIN1','MAP2','NEFL','NEFM','OLIG1','OLIG2','SOX10','SLC17A7','DLG4','CAMK2A','THY1'],
+'retina':['RHO','PDE6A','PDE6B','ARR3','GNAT1','GNB1','RBP3','CRX','VSX2','NRL','OPN1SW','OPN1MW','OPN1LW','GUCA1A','GUCA1B','SAG','ROM1','RP1','NR2E3'],
+'lung':['SFTPA1','SFTPB','SFTPC','SFTPD','SCGB1A1','SCGB3A1','AGER','MUC1','HOPX','NKX2-1','AQP5','SLC34A2','PGC','FOXJ1','DNAH5','TPPP3'],
+'skin':['KRT1','KRT2','KRT5','KRT10','KRT14','KRT15','FLG','LOR','IVL','DSG1','DSC1','KRTDAP','SBSN','ALOX12B','CDSN','COL17A1','DST','SPRR1A','SPRR2A']}
+for sp in ['hs','mm','ss']:
+    # map symbol keys with species prefix
+    counts=gene_counts[sp]
+    total=sum(counts.values())
+    print('\\nSP',sp,'total',total,'genes',len(counts))
+    scores=[]
+    for tissue,mlist in markers.items():
+        s=0; detected=[]
+        for m in mlist:
+            key=f'{sp}|{m}'
+            c=counts.get(key,0)
+            if c: detected.append((m,c))
+            s+=c
+        cpm=s/total*1e6 if total else 0
+        scores.append((cpm,tissue,len(detected),s,detected[:8]))
+    for row in sorted(scores,reverse=True)[:5]:
+        print(row)
+    print('top genes:')
+    for g,c in counts.most_common(30):
+        print(g,c,end='; ')
+    print()
+PY"

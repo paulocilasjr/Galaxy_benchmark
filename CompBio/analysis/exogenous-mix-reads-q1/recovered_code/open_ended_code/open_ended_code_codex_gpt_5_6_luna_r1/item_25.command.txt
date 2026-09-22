@@ -1,0 +1,32 @@
+/bin/bash -lc "python -u - <<'PY'
+# Fit source mixture from reference-transcript coordinates, using broad bins and fuzzy mapping.
+from urllib.request import urlopen
+from pathlib import Path
+from collections import Counter
+import math
+ref=''.join(urlopen('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.6&rettype=fasta&retmode=text',timeout=30).read().decode().splitlines()[1:]).upper(); comp=str.maketrans('ACGTN','TGCAN')
+def rc(s):return s.translate(comp)[::-1]
+def rr(n):return Path(f'exogenous.mix.reads.q1.{n}.fq').read_text().splitlines()[1::4]
+def pos(s):
+ f=ref.find(s); r=ref.find(rc(s))
+ if f>=0:return f
+ if r>=0:return r
+ bd=100;bp=None
+ for t in (s,rc(s)):
+  for i in range(len(ref)-49):
+   d=sum(a"'!=b for a,b in zip(t,ref[i:i+50]))
+   if d<bd:bd,bp=d,i
+ return bp
+ps={n:[pos(s) for s in rr(n)] for n in ('"'exo','endo','mix')}
+for width in [50,100,200,400,600]:
+ edges=list(range(0,len(ref)+width,width)); bins=[(edges[i],edges[i+1]) for i in range(len(edges)-1)]
+ def h(a):return [sum(lo<=p<hi for p in a) for lo,hi in bins]
+ hs={n:h(ps[n]) for n in ps}
+ ns={n:sum(hs[n]) for n in hs}
+ pe=[x/ns['exo'] for x in hs['exo']]; pd=[x/ns['endo'] for x in hs['endo']]; ym=hs['mix'];
+ # least squares f; p_mix=f*pe +(1-f)*pd weighted equal bins
+ # grid likelihood, avoiding zero with pseudocount? controls have zero where biologically exo absent, okay.
+ bestls=min(((sum((ym[i]/ns['mix']-(f*pe[i]+(1-f)*pd[i]))**2 for i in range(len(bins))),f) for f in [i/10000 for i in range(10001)]))[1]
+ bestll=max((sum(ym[i]*math.log(max(f*pe[i]+(1-f)*pd[i],1e-300)) for i in range(len(bins))),f) for f in [i/10000 for i in range(10001)])[1]
+ print('width',width,'ls',bestls,'ll',bestll,'counts exo',hs['exo'],'endo',hs['endo'],'mix',hs['mix'])
+PY"

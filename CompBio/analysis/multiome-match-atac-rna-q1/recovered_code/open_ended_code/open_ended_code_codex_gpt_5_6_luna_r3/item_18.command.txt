@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,numpy as np,itertools
+
+def load(f):
+ with gzip.open(f,'rt') as h:
+  h.readline(); return np.loadtxt(h,delimiter='\\t',dtype=np.float64,usecols=range(1,9))
+r=load('multiome.match.atac.rna.q1.rna.tsv.gz'); print('rna',r.shape,flush=True)
+a=load('multiome.match.atac.rna.q1.atac.tsv.gz'); print('atac',a.shape,flush=True)
+perms=np.array(list(itertools.permutations(range(8))),dtype=np.int8)
+pairs=[(i,j) for i in range(8) for j in range(i+1,8)]
+def proc(x,kind):
+ if kind=='raw': return x
+ if kind=='log': return np.log1p(x)
+ if kind=='sqrt': return np.sqrt(x)
+ y=x-x.mean(1,keepdims=True)
+ if kind=='center': return y
+ if kind=='z':
+  sd=x.std(1,keepdims=True)
+  return np.divide(y,sd,out=np.zeros_like(y),where=sd>1e-12)
+def best(cr,ca):
+ rv=np.array([cr[i,j] for i,j in pairs]); av=np.stack([ca[perms[:,i],perms[:,j]] for i,j in pairs],axis=1)
+ score=np.mean((av-rv)**2,axis=1); inds=np.argsort(score)[:5]
+ return [(round(float(score[k]),8),tuple(perms[k])) for k in inds]
+for kind in ['raw','log','sqrt','center','z']:
+ print('processing',kind,flush=True)
+ cr=np.corrcoef(proc(r,kind).T); ca=np.corrcoef(proc(a,kind).T)
+ print(kind,best(cr,ca),flush=True)
+PY"

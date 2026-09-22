@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+h1=np.load('H1_1kb_raw.npy').astype(float); hff=np.load('HFF_1kb_raw.npy').astype(float)
+w1=np.load('H1_1kb_weights.npy'); w2=np.load('HFF_1kb_weights.npy')
+# balances; normalize each by median diagonal / overall scale as appropriate
+b1=h1*w1[:,None]*w1[None,:]; b2=hff*w2[:,None]*w2[None,:]
+# coordinates cell centers / starts
+coords=np.arange(7620000,7820000,1000)
+# aggregate counts by block width
+for bs in [1,2,5,10,20]:
+ n=200//bs
+ a1=h1[:n*bs,:n*bs].reshape(n,bs,n,bs).sum((1,3))
+ a2=hff[:n*bs,:n*bs].reshape(n,bs,n,bs).sum((1,3))
+ c=coords[::bs]
+ # total normalize; pseudocount
+ ratio=np.log2((a1+0.5)/(a2+0.5)*a2.sum()/a1.sum())
+ # restrict lower triangle, distance >= 2 bins; both reasonable counts
+ pairs=[]
+ for i in range(n):
+  for j in range(i+2,n):
+   if a1[i,j]+a2[i,j]>=10:
+    pairs.append((ratio[i,j],i,j,a1[i,j],a2[i,j],c[i],c[j]))
+ print('\\nBLOCK',bs,'kb top H1/HFF')
+ for x in sorted(pairs,reverse=True)[:20]: print('%+.2f %d %d %d %d %d;%d'%x)
+ print('BLOCK',bs,'kb top HFF/H1')
+ for x in sorted(pairs)[:20]: print('%+.2f %d %d %d %d %d;%d'%x)
+# balance ratio with scale matching median diagonal
+scale=np.nanmedian(np.diag(b2))/np.nanmedian(np.diag(b1))
+ratio=np.log2((b1+1e-8)/(b2+1e-8)*scale)
+print('\\nscale bal',scale)
+pairs=[]
+for i in range(200):
+ for j in range(i+5,200):
+  if np.isfinite(b1[i,j]) and np.isfinite(b2[i,j]) and h1[i,j]+hff[i,j]>=5:
+   pairs.append((ratio[i,j],i,j,h1[i,j],hff[i,j],coords[i],coords[j],b1[i,j],b2[i,j]))
+for title,arr in [('top H1',sorted(pairs,reverse=True)[:50]),('top HFF',sorted(pairs)[:50])]:
+ print(title)
+ for x in arr: print('%+.2f i%d j%d raw%d/%d %d;%d bal%.3g/%.3g'%x)
+PY"

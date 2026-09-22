@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, glob, os, concurrent.futures, sys
+files=sorted(glob.glob('chip.pioneer.q1/*.bed.gz'))
+peaks=os.path.abspath('dnase/dnase_peaks.merged.bed')
+out='open_counts.tsv'
+
+def run(f):
+    p=subprocess.Popen(['gzip','-cd',f], stdout=subprocess.PIPE)
+    p2=subprocess.Popen(['bedtools','intersect','-a','-','-b',peaks,'-wa','-u'], stdin=p.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    p.stdout.close()
+    # wc -l via python read to avoid extra process
+    count=0
+    buf=p2.stdout
+    while True:
+        chunk=buf.read(1024*1024)
+        if not chunk:
+            break
+        count += chunk.count(b'\\n')
+    p2.wait()
+    return os.path.basename(f), count
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    futs={ex.submit(run,f):f for f in files}
+    results={}
+    for fut in concurrent.futures.as_completed(futs):
+        f=futs[fut]
+        name,c=fut.result()
+        results[name]=c
+        print(name,c,flush=True)
+with open(out,'w') as o:
+    o.write('file\\tlines\\topen_lines\\n')
+    for f in files:
+        name=os.path.basename(f)
+        o.write(f'{name}\\t{name}\\t{results[name]}\\n')
+print('done',out)
+PY
+cat open_counts.tsv | head"

@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+path='10x_pbmc68k_reduced.h5ad'
+with h5py.File(path,'r') as f:
+    obs_bulk=f['obs']['bulk_labels'][:]
+    mito=f['obs']['percent_mito'][:]
+    X=f['X'][:]
+    var_names=[x.decode() for x in f['var']['index'][:]]
+    # raw sparse
+    raw_data=f['raw.X']['data'][:]
+    raw_indices=f['raw.X']['indices'][:]
+    raw_indptr=f['raw.X']['indptr'][:]
+    raw_names=[x.decode() for x in f['raw.var']['index'][:]]
+
+mask = (obs_bulk==6) & (mito<0.04)
+print('n CD19 B all', np.sum(obs_bulk==6), 'with mito<.04', mask.sum(), 'mito range', mito[mask].min(), mito[mask].max())
+si=var_names.index('SRM')
+mi=var_names.index('MRPS21')
+for label, vals_s, vals_m in [('X', X[mask,si], X[mask,mi])]:
+    d=vals_s-vals_m
+    n_h=((d)>1.0).sum()
+    n_l=((d)<-1.0).sum()
+    n_r=((d>=-1.0)&(d<=1.0)).sum()
+    print(label, 'SRM stats', vals_s.min(), vals_s.max(), vals_s.mean(), 'MRPS21', vals_m.min(), vals_m.max(), vals_m.mean())
+    print('d stats', d.min(), d.max())
+    print(n_h,n_l,n_r, 'total',n_h+n_l+n_r, 'counts?',len(d))
+    print('strict h', (vals_s-vals_m>1).sum(), 'strict l', (vals_s-vals_m < -1).sum())
+# raw expression extraction
+from scipy.sparse import csr_matrix
+raw_csr=csr_matrix((raw_data, raw_indices, raw_indptr), shape=(700,len(raw_names)))
+vals_s=raw_csr[mask, raw_names.index('SRM')].toarray().ravel()
+vals_m=raw_csr[mask, raw_names.index('MRPS21')].toarray().ravel()
+d=vals_s-vals_m
+print('raw stats', vals_s.min(), vals_s.max(), vals_s.mean(), vals_m.min(), vals_m.max(), vals_m.mean(), 'd', d.min(), d.max())
+print('raw', ((d)>1.0).sum(), ((d)<-1.0).sum(), ((d>=-1.0)&(d<=1.0)).sum(), 'total', len(d))
+# compare raw to X roughly
+print('sample first 5 X s,m,d; raw s,m,d')
+for i in range(5):
+    print(i, X[mask,si][i], X[mask,mi][i], X[mask,si][i]-X[mask,mi][i], vals_s[i], vals_m[i], vals_s[i]-vals_m[i])
+PY"

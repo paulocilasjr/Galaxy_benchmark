@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, gzip, collections, csv
+# annotation tx2gene
+annot='Homo_sapiens.GRCh38.113.gtf.gz'
+tx2gene={}; gene2tx=collections.defaultdict(set)
+with gzip.open(annot,'rt') as fh:
+    for line in fh:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        a=dict(re.findall(r'(\\S+?)\\s+\"(["'^"]*)"'"', p[8]))
+        tid=a.get('transcript_id'); gn=a.get('gene_name')
+        if tid and gn and tid not in tx2gene:
+            tx2gene[tid]=gn; gene2tx[gn].add(tid)
+def base(ref): return re.sub(r'\\.\\d+"'$'"','',ref)
+def readk(path):
+    d={}
+    with open(path) as fh:
+        r=csv.DictReader(fh,delimiter='\\t')
+        for row in r:
+            b=base(row['target_id'])
+            d[b]=(float(row['tpm']),float(row['est_counts']))
+    return d
+A=readk('kallisto_A/abundance.tsv'); B=readk('kallisto_B/abundance.tsv')
+# restrict to genes present in kallisto target list? we can iterate only genes with any tpm
+present=set(A)|set(B)
+genes_present=collections.defaultdict(set)
+for t in present:
+    g=tx2gene.get(t)
+    if g: genes_present[g].add(t)
+print('genes present',len(genes_present))
+rows=[]
+for gene,txs in genes_present.items():
+    ta=sum(A.get(t,(0,0))[0] for t in txs)
+    tb=sum(B.get(t,(0,0))[0] for t in txs)
+    if ta+tb < 10: continue
+    props=[]
+    for t in txs:
+        ta_t,tb_t=A.get(t,(0,0))[0],B.get(t,(0,0))[0]
+        if ta_t+tb_t >= 1:
+            props.append((t,ta_t,tb_t, ta_t/ta if ta>0 else 0, tb_t/tb if tb>0 else 0))
+    if len(props)<2: continue
+    maxd=max(abs(p[3]-p[4]) for p in props)
+    rows.append((maxd,ta,tb,gene,len(props),sorted(props,key=lambda x:-abs(x[3]-x[4]))))
+rows.sort(reverse=True)
+for maxd,ta,tb,gene,n,props in rows[:80]:
+    print(f'{gene:15s} TPM A={ta:.1f} B={tb:.1f} maxdiff={maxd:.3f} n={n}')
+    for t,ta_t,tb_t,pA,pB in props[:6]:
+        print(f'   {t:24s} tpmA={ta_t:9.1f} pA={pA:.3f} tpmB={tb_t:9.1f} pB={pB:.3f}')
+PY"

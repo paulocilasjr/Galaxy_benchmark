@@ -1,0 +1,68 @@
+/bin/bash -lc "cat > scripts/count_window_transitions.py <<'PY'
+from collections import defaultdict, Counter
+paf='results/windows35_to_gencode.paf'
+# q -> gene/strand best evidence
+hits=defaultdict(list)
+with open(paf) as f:
+    for line in f:
+        fields=line.rstrip('\\n').split('\\t')
+        q=fields[0]; qlen=int(fields[1]); qs=int(fields[2]); qe=int(fields[3]); strand=fields[4]
+        t=fields[5]; matches=int(fields[9]); blen=int(fields[10])
+        if blen < 28 or matches < 28 or matches/blen < 0.90:
+            continue
+        parts=t.split('|')
+        gene=parts[5] if len(parts)>5 else t
+        hits[q].append((matches, blen, qe-qs, gene, strand))
+assign={}
+for q, hs in hits.items():
+    if not hs: continue
+    # score by matches then aligned query span
+    best=max((h[0],h[2]) for h in hs)
+    top=[h for h in hs if (h[0],h[2])==best]
+    genes={h[3] for h in top}
+    strands={h[4] for h in top}
+    # If all equally good top hits are same gene and strand, use it.
+    if len(genes)==1 and len(strands)==1:
+        assign[q]=(next(iter(genes)), next(iter(strands)), best[0])
+
+byread=defaultdict(dict)
+for q,(g,s,score) in assign.items():
+    rid,pos=q.rsplit('|',1)
+    byread[rid][int(pos)]=(g,s,score)
+
+pair_counts=Counter(); pair_reads=defaultdict(list)
+raw_trans=Counter()
+patterns=Counter()
+for rid,d in byread.items():
+    items=sorted(d.items())
+    # compress consecutive same gene/strand blocks
+    blocks=[]
+    for pos,(g,s,sc) in items:
+        if not blocks or blocks[-1][1]"'!=g or blocks[-1][2]!=s:
+            blocks.append([pos,g,s,sc])
+        else:
+            blocks[-1][3]=max(blocks[-1][3],sc)
+    if len(blocks)>1:
+        patterns[tuple((b[1],b[2]) for b in blocks)] += 1
+    for a,b in zip(blocks,blocks[1:]):
+        pos1,g1,s1,sc1=a; pos2,g2,s2,sc2=b
+        if g1==g2: continue
+        raw_trans[(g1,s1,g2,s2)] += 1
+        if s1==s2:
+            if s1=='"'+': pair=(g1,g2)
+            else: pair=(g2,g1)
+            pair_counts[pair]+=1
+            if len(pair_reads[pair])<10: pair_reads[pair].append(rid)
+print('assigned_windows',len(assign),'reads_with_assign',len(byread))
+print('top directed pairs')
+for (a,b),c in pair_counts.most_common(50):
+    print(c,a,b,','.join(pair_reads[(a,b)][:5]))
+print('top raw transitions')
+for k,c in raw_trans.most_common(30):
+    print(c,k)
+print('top patterns')
+for pat,c in patterns.most_common(30):
+    print(c,pat)
+PY
+python3 scripts/count_window_transitions.py > results/window_transitions.txt
+sed -n '1,120p' results/window_transitions.txt"

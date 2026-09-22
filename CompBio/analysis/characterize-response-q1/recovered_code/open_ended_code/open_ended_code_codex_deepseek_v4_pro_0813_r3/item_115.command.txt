@@ -1,0 +1,42 @@
+/bin/bash -lc "cat > analyze_c7.py <<'PY'
+import json, math
+mp=json.load(open('mouse_to_human3.json'))
+qs=set(mp.values())
+qorder=list(dict.fromkeys(mp.values()))
+terms=[]
+for line in open('c7.immunesigdb.v2024.1.Hs.symbols.gmt'):
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<3: continue
+    terms.append((p[0],p[1],p[2:]))
+rows=[]
+for name,desc,genes in terms:
+    s=set(genes)
+    ov=qs & s
+    # Fisher-like enrichment
+    n=112; k=len(s); x=len(ov)
+    # hypergeometric p upper tail
+    import math
+    pval=1.0
+    try:
+      pval=math.exp(math.lgamma(k+1)+math.lgamma(n-k+1)+math.lgamma(n-x+1)-math.lgamma(k-x+1)-math.lgamma(x+1)-math.lgamma(n+1))
+    except: pass
+    # rank positions of overlaps in query
+    pos=[qorder.index(g) for g in ov if g in qorder]
+    if not ov: continue
+    rows.append((x,pval,name,desc,genes,pos))
+rows.sort(key=lambda r:(-r[0], r[1]))
+print('TOP 80 BY OVERLAP')
+for x,p,name,desc,genes,pos in rows[:80]:
+    posstr=','.join(str(i+1) for i in sorted(pos))
+    print(f'{x:2d} p={p:.2e} {name}\\n   desc={desc}\\n   positions={posstr}')
+print('\\nBy keyword groups best:')
+groups=['LPS','EXHAUST','IL2','LUPUS','SLE','RHEUM','SEPSIS','AGE','MED12','LIF','IL39','COVID','ALDESLEUK']
+for grp in groups:
+  filt=[r for r in rows if grp.lower() in (r[2]+' '+r[3]).lower()]
+  print('\\nGROUP',grp,'count',len(filt))
+  for x,p,name,desc,genes,pos in sorted(filt,key=lambda r:(-r[0],r[1]))[:8]:
+    print(f'{x:2d} {name} | {desc}')
+PY
+python3 analyze_c7.py > c7_analysis.txt
+wc -l c7_analysis.txt
+sed -n '1,140p' c7_analysis.txt"

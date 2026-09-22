@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+# same names selection but read from original
+from collections import defaultdict
+
+def best(sam):
+    d={}
+    with open(sam) as f:
+        for line in f:
+            if line.startswith('@'): continue
+            p=line.rstrip().split('\\t')
+            name=p[0]; flag=int(p[1]);
+            if flag&4: continue
+            as_=None; nm=None
+            for x in p[11:]:
+                if x.startswith('AS:i:'): as_=int(x.split(':')[2])
+                if x.startswith('NM:i:'): nm=int(x.split(':')[2])
+            if name not in d or (as_ is not None and (d[name][0] is None or as_>d[name][0])):
+                d[name]=(as_,nm)
+    return d
+h=best('hg38.sam'); m=best('mouse.sam')
+names=[]
+for n,mv in m.items():
+    mas,mnm=mv
+    if mas is None or mas<100 or (mnm is not None and mnm>2): continue
+    hv=h.get(n)
+    if hv is None or hv[0] is None or mas-hv[0]>=30:
+        names.append((n,mas,mnm,hv[0] if hv else None))
+names=sorted(names, key=lambda x:-(x[1]-(x[3] or 0)))[:20]
+nameset={n for n,_,_,_ in names}
+out=open('mouse_confirm.fa','w')
+import gzip
+with gzip.open('contaminated.rna.q1.fq.gz','rt') as f:
+    while True:
+        hh=f.readline().strip(); ss=f.readline().strip(); p=f.readline().strip(); q=f.readline().strip()
+        if not hh: break
+        rid=hh[1:]
+        if rid in nameset: out.write('>'+rid+'\\n'+ss+'\\n')
+out.close()
+print(len(nameset))
+PY
+grep -c '"'^>'"' mouse_confirm.fa; wc -l mouse_confirm.fa; head -4 mouse_confirm.fa"

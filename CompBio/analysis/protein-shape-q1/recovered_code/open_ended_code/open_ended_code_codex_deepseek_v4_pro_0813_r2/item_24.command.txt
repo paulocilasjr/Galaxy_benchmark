@@ -1,0 +1,64 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, cv2, math, time
+from PIL import Image, ImageDraw, ImageFont
+from scipy.ndimage import gaussian_filter, binary_closing
+coords=[]; ca=[]
+for line in open('protein.shape.q1.pdb'):
+ if line.startswith('ATOM'):
+  x,y,z=map(float,[line[30:38],line[38:46],line[46:54]])
+  coords.append((x,y,z))
+  if line[12:16].strip()=='CA': ca.append((x,y,z))
+coords=np.array(coords); ca=np.array(ca)
+letters='BDFHJLNPRTVXZ'; N=128
+font_path='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+def template(ch):
+ img=Image.new('L',(N,N),0); d=ImageDraw.Draw(img)
+ fs=100; font=ImageFont.truetype(font_path,fs)
+ bb=d.textbbox((0,0),ch,font=font); w=bb[2]-bb[0]; h=bb[3]-bb[1]
+ target=0.82*N; scale=target/max(w,h); fs=max(1,int(fs*scale)); font=ImageFont.truetype(font_path,fs)
+ bb=d.textbbox((0,0),ch,font=font); w=bb[2]-bb[0]; h=bb[3]-bb[1]
+ d.text(((N-w)/2-bb[0],(N-h)/2-bb[1]),ch,font=font,fill=255)
+ a=(np.array(img)>40).astype(np.uint8)*255
+ cnts,_=cv2.findContours(a,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+ return max(cnts,key=cv2.contourArea)
+temps={ch:template(ch) for ch in letters}
+
+def project_contour(pts,n,sigma=1.5,thresh=0.03,dil=5):
+ n=np.asarray(n,float); n/=np.linalg.norm(n)
+ a=np.array([0.,0.,1.]) if abs(n[2])<0.9 else np.array([1.,0.,0.])
+ u=np.cross(n,a); u/=np.linalg.norm(u); v=np.cross(n,u); v/=np.linalg.norm(v)
+ p=pts-pts.mean(0); x=p@u; y=p@v
+ margin=8; span=max(x.max()-x.min(), y.max()-y.min()); scale=(N-2*margin)/span
+ xi=((x-x.min())*scale+margin).astype(np.int32); yi=((y-y.min())*scale+margin).astype(np.int32)
+ img=np.zeros((N,N),np.float32)
+ for xx,yy in zip(xi,yi):
+  if 0<=xx<N and 0<=yy<N: img[yy,xx]=1
+ img=gaussian_filter(img,sigma); img=(img>thresh)
+ img=binary_closing(img,iterations=dil)
+ cnts,_=cv2.findContours((img.astype(np.uint8)*255),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+ if not cnts: return None
+ return max(cnts,key=cv2.contourArea)
+
+def fib(k):
+ i=np.arange(k); z=1-(2*i+1)/k; phi=np.arccos(np.clip(z,-1,1)); theta=math.pi*(1+5**0.5)*i
+ return np.stack([np.sin(phi)*np.cos(theta),np.sin(phi)*np.sin(theta),z],axis=1)
+
+for mode,pts in [('all',coords),('ca',ca)]:
+ print('MODE',mode,flush=True)
+ dirs=fib(600)
+ best_by_letter={ch:[1e9,None,None] for ch in letters}
+ t0=time.time()
+ for k,n in enumerate(dirs):
+  cnt=project_contour(pts,n)
+  if cnt is None: continue
+  for ch,tc in temps.items():
+   d=cv2.matchShapes(cnt,tc,cv2.CONTOURS_MATCH_I2,0)
+   if d<best_by_letter[ch][0]: best_by_letter[ch]=[d,k,n.copy()]
+  if (k+1)%100==0:
+   print('k',k+1,'elapsed',time.time()-t0,flush=True)
+ print('BEST BY LETTER')
+ for ch,(d,k,n) in sorted(best_by_letter.items(), key=lambda kv:kv[1][0]):
+  print(ch,round(d,4),'dir',k,'n',np.round(n,3))
+ print('global best letter',min(best_by_letter.items(), key=lambda kv:kv[1][0])[0])
+PY
+python3 [REDACTED LOCAL PATH]"

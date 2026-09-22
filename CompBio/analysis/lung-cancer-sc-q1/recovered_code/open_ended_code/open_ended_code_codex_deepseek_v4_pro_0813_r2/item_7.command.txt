@@ -1,0 +1,39 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp, time
+A=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+# indices for markers
+var=A.var
+symbols=var['symbol'].astype(str).values
+# build dict last/first? check duplicates
+import collections
+cnt=collections.Counter(symbols)
+print('unique',len(cnt),'dups',sum(v>1 for v in cnt.values()), 'top dups', [x for x in cnt if cnt[x]>1][:20])
+markers=['KRT5','KRT6A','KRT14','TP63','SOX2','DSC3','NKX2-1','NAPSA','SFTPB','SFTPC','SFTPA1','KRT7','PTPRC','CD3D','CD3E','CD68','CD79A','MS4A1','FCER1A','CD1C','CLEC9A','LILRA4','EPCAM','VWF','PECAM1','DCN','COL1A1','ACTA2','MZB1','JCHAIN','TPSAB1','KIT']
+pos={g:np.where(symbols==g)[0] for g in markers if g in cnt}
+print('markers found', pos.keys())
+# Load sparse full
+t=time.time()
+X=A.X[:].tocsr() if not sp.isspmatrix_csr(A.X) else A.X[:]
+print('loaded', time.time()-t, X.shape, X.nnz)
+# libsize
+lib=np.asarray(X.sum(1)).ravel()
+# log cpm
+# For each marker mean log1p(CPM*1e4?) Use sum counts maybe
+obs=A.obs['sampleID'].values
+res={}
+for g,idx in pos.items():
+    vals=np.asarray(X[:,idx].sum(1)).ravel()
+    # compute mean of normalized log expression per sample in bulk: log1p( sum counts / total counts * 1e4 ) perhaps per-cell means
+    df={}
+    for s in np.unique(obs):
+        m=obs==s
+        # arithmetic mean per cell of log1p(cpm*10) / use log normalized
+        expr=np.log1p(vals[m]/(lib[m]+1)*10000)
+        df[s]=expr.mean()
+    res[g]=df
+import pandas as pd
+r=pd.DataFrame(res)
+print(r.to_string())
+# save r
+r.to_csv('marker_means.csv')
+PY"

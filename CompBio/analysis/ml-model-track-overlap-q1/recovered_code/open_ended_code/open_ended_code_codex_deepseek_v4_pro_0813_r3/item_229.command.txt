@@ -1,0 +1,70 @@
+/bin/bash -lc "cat > fetch_geo_gsm_lib.py <<'PY'
+import requests,json,time,re,sys
+from concurrent.futures import ThreadPoolExecutor,as_completed
+gsms=json.load(open('matched_sei_borzoi_gsms.json'))
+print('gsms',len(gsms))
+
+def chunks(lst,n):
+ for i in range(0,len(lst),n): yield lst[i:i+n]
+chunks_list=list(chunks(gsms,50))
+print('chunks',len(chunks_list))
+
+def fetch_search(chunk):
+ term=' OR '.join(f'{g}[ACCN]' for g in chunk)
+ params={'db':'gds','term':term,'retmax':len(chunk)+10,'retmode':'json'}
+ last=None
+ for attempt in range(6):
+  try:
+   r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',params=params,timeout=60)
+   if r.status_code==200:
+    d=r.json().get('esearchresult',{})
+    return d.get('idlist',[])
+   last=(r.status_code,r.text[:200])
+   time.sleep(1.2*(attempt+1))
+  except Exception as e:
+   last=repr(e); time.sleep(1.2)
+ print('FAIL search',chunk[0],last,file=sys.stderr); return []
+
+def fetch_summary(uids):
+ if not uids: return {}
+ params={'db':'gds','id':','.join(uids),'retmode':'json'}
+ last=None
+ for attempt in range(6):
+  try:
+   r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi',params=params,timeout=120)
+   if r.status_code==200:
+    return r.json().get('result',{})
+   last=(r.status_code,r.text[:200])
+   time.sleep(1.2*(attempt+1))
+  except Exception as e:
+   last=repr(e); time.sleep(1.2)
+ print('FAIL summary',uids[:2],last,file=sys.stderr); return {}
+
+uid_to_gsm={}
+# first searches sequential to be gentle (esearch batch OR)
+for ci,chunk in enumerate(chunks_list):
+ uids=fetch_search(chunk)
+ for uid in uids:
+  # cannot know mapping without accession, store uid list and use summary accession->uid
+  pass
+ time.sleep(0.4)
+# redo with mapping: we need accession for each uid. Do esearch chunk then esummary chunk, map accession.
+mapping={}
+for ci,chunk in enumerate(chunks_list):
+ uids=fetch_search(chunk)
+ if not uids:
+  continue
+ time.sleep(0.4)
+ res=fetch_summary(uids)
+ for uid,data in res.items():
+  if uid=='uids': continue
+  acc=data.get('accession') if isinstance(data,dict) else None
+  if acc:
+   mapping[acc]=data.get('title','')
+ time.sleep(0.4)
+ if (ci+1)%10==0:
+  print('done chunk',ci+1,'mapped',len(mapping),flush=True)
+json.dump(mapping,open('geo_gsm_lib_map.json','w'))
+print('saved',len(mapping),'missing',len(gsms)-len(set(gsms)&set(mapping)))
+PY
+python3 fetch_geo_gsm_lib.py"

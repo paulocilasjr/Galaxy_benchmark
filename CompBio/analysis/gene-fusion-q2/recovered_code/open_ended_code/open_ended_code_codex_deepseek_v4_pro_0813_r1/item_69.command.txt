@@ -1,0 +1,106 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, subprocess, re as regex, collections
+gene_iv={}
+with gzip.open('hs.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'):continue
+        p=line.rstrip().split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene':continue
+        chrom=p[0]; start=int(p[3]); end=int(p[4]); strand=p[6]
+        attrs={}
+        for kv in [x.strip() for x in p[8].split(';') if x.strip()]:
+            if ' ' in kv:
+                k,v=kv.split(' ',1); attrs[k]=v.strip('\"')
+            else: attrs[kv]=''
+        gname=attrs.get('gene_name','')
+        if chrom in ['1','8','12','13']:
+            gene_iv.setdefault(chrom,[]).append((start,end,strand,gname))
+read_len={}
+with gzip.open('gene.fusion.q2.fq.gz','rt') as f:
+    while True:
+        h=f.readline().strip()
+        if not h:break
+        s=f.readline().strip();f.readline();f.readline()
+        n=h[1:] if h.startswith('@') else h
+        read_len[n]=len(s)
+
+def gene_at(chrom,pos):
+    for start,end,strand,gname in gene_iv.get(chrom,[]):
+        if start<=pos<=end:return gname
+    return None
+
+def qint(c):
+ m=regex.findall(r'(\\d+)([MIDNSHP=X])',c);q=0;qs=None;qe=None
+ for ln,op in m:
+  ln=int(ln)
+  if op in 'SH':q+=ln
+  elif op in 'M=X':
+   if qs is None:qs=q
+   q+=ln;qe=q
+  elif op=='I':q+=ln
+ return (qs,qe)
+
+def orig_interval(q,L,strand):return q if strand=='+' else (L-q[1],L-q[0])
+
+def bp_for(cigar,pos):
+    m=regex.findall(r'(\\d+)([MIDNSHP=X])',cigar); ref=pos; cov=[]
+    for ln,op in m:
+        ln=int(ln)
+        if op in 'MDN=X': cov.append((ref,ref+ln-1)); ref+=ln
+        elif op in 'ISHP': pass
+    if not cov:return None
+    b=(cov[0][0],cov[-1][1])
+    if m and m[0][1] in 'SH': return b[0]
+    if m and m[-1][1] in 'SH': return b[1]
+    return None
+
+pair_reads=collections.defaultdict(set); seen=set(); cluster=collections.defaultdict(set)
+proc=subprocess.Popen(['samtools','view','-F','0x900','reads_candchrs_sr.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+ p=line.rstrip().split('\\t');flag=int(p[1]);chrom=p[2];pos=int(p[3]);cigar=p[5]
+ tags={}
+ for f in p[11:]:
+  if ':' in f:
+   k,t,v=f.split(':',2);tags[k]=v
+ sa=tags.get('SA')
+ if not sa:continue
+ g1=gene_at(chrom,pos); q1=qint(cigar); s1='-' if flag&16 else '+'; L=read_len.get(p[0])
+ if not g1 or not q1 or q1[0] is None or not L:continue
+ o1=orig_interval(q1,L,s1)
+ for entry in sa.rstrip(';').split(';'):
+  if not entry:continue
+  parts=entry.split(',')
+  if len(parts)<6:continue
+  rt=parts[0];spos=int(parts[1]);s2=parts[2];sc=parts[3]
+  g2=gene_at(rt,spos)
+  if not g2 or g1==g2:continue
+  q2=qint(sc)
+  if not q2 or q2[0] is None:continue
+  o2=orig_interval(q2,L,s2)
+  ov=max(0,min(o1[1],o2[1])-max(o1[0],o2[0]))
+  if ov>8:continue
+  key=(p[0],tuple(sorted((g1,g2))))
+  if key in seen:continue
+  seen.add(key)
+  if o1[0]<=o2[0]:
+   left_g,right_g=g1,g2;left_s,right_s=s1,s2
+   left_chrom,left_pos,left_cig=chrom,pos,cigar
+   right_chrom,right_pos,right_cig=rt,spos,sc
+  else:
+   left_g,right_g=g2,g1;left_s,right_s=s2,s1
+   left_chrom,left_pos,left_cig=rt,spos,sc
+   right_chrom,right_pos,right_cig=chrom,pos,cigar
+  if left_s==right_s=='+':bio=(left_g,right_g)
+  elif left_s==right_s=='-':bio=(right_g,left_g)
+  else:continue
+  pair_reads[bio].add(p[0])
+  lbp=bp_for(left_cig,left_pos); rbp=bp_for(right_cig,right_pos)
+  cluster[(bio,left_chrom,lbp,right_chrom,rbp)].add(p[0])
+proc.wait()
+print('unique chimeric reads',sum(len(v) for v in pair_reads.values()))
+for k,v in sorted(pair_reads.items(), key=lambda kv:-len(kv[1]))[:50]:print(len(v),k)
+print('\\nCandidate clusters:')
+for k,v in sorted(cluster.items(), key=lambda kv:-len(kv[1])):
+ if k[0] in [('MYC','SP1'),('SP1','CATSPER4'),('ZIC2','SP1'),('SP1','ZIC2')]:
+  print(len(v),k, sorted(v)[:3])
+PY"

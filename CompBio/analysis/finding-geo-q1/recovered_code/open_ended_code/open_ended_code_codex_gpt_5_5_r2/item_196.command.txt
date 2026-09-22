@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from pathlib import Path
+fn='geo_check/gse114176/GSM3578982_raw_gene_bc_matrices_h5.h5'
+ours=Path('geo_check/fingerprints/obs.txt').read_text().splitlines()
+local_genes=[line.split('\\t')[0] for line in open('geo_check/fingerprints/genes.tsv')]
+with h5py.File(fn,'r') as f:
+    g=f['output_genome2']
+    shape=tuple(g['shape'][:]) # maybe genes x barcodes
+    print('shape ds', shape)
+    bars=[x.decode() for x in g['barcodes'][:]]
+    genes=[x.decode() for x in g['genes'][:]]
+    names=[x.decode() for x in g['gene_names'][:]]
+    indptr=g['indptr'][:]
+    data=g['data'][:]
+print('bars', len(bars), bars[:5], bars[-5:])
+print('genes', len(genes), genes[:10], names[:10], genes[-5:], names[-5:])
+print('local genes equal after exclude?', genes[:len(local_genes)]==local_genes, len(set(local_genes)-set(genes)), len(set(genes)-set(local_genes)))
+extra=[(i,g,n) for i,(g,n) in enumerate(zip(genes,names)) if g not in set(local_genes)]
+print('extra', extra[:20])
+counts=np.diff(indptr) # Wait 10x h5 csc? indptr length barcodes+1, data grouped by barcode -> nonzero counts? not sum
+sums=np.add.reduceat(data, indptr[:-1])
+print('sums stats', sums.min(), np.quantile(sums,[.5,.9,.99]), sums.max(), sums.sum())
+for th in [1,100,200,273,274,275,300,500,1000]:
+    sel=[bars[i] for i,s in enumerate(sums) if s>=th]
+    print('th',th,'n',len(sel),'first',sel[:5],'equal',sel==ours,'overlap',len(set(sel)&set(ours)))
+# local compare counts total if selected ours
+idx={b:i for i,b in enumerate(bars)}
+print('ours subset', set(ours).issubset(idx.keys()))
+if set(ours).issubset(idx.keys()):
+    osums=np.array([sums[idx[b]] for b in ours])
+    print('ours stats', osums.min(), osums.max(), osums.sum(), np.quantile(osums,[0,.5,1]))
+PY"

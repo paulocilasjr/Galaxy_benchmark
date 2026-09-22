@@ -1,0 +1,48 @@
+/bin/bash -lc "cat > analysis/compare.py <<'PY'
+import numpy as np,pandas as pd
+from scipy import sparse,stats
+G=pd.read_csv('subtype.inflammation.q1.genes.txt.gz',sep='\\t').gene_symbols.values
+N=sparse.load_npz('analysis/lognorm.npz')
+obs=pd.read_csv('analysis/obs.csv')
+sets={
+'IFN':'ISG15 IFIT1 IFIT2 IFIT3 IFITM1 IFITM2 IFITM3 MX1 MX2 OAS1 OAS2 OAS3 OASL STAT1 STAT2 IRF1 IRF7 IRF9 RSAD2 BST2 GBP1 GBP2 GBP4 GBP5 USP18 DDX58 IFIH1',
+'inflammatory':'IL1B IL1A IL6 TNF CCL2 CCL3 CCL4 CCL5 CXCL1 CXCL2 CXCL3 CXCL8 CXCL9 CXCL10 CXCL11 NFKBIA NFKBIZ TNFAIP3 PTGS2 ICAM1 VCAM1 C3 CFB SAA1 SAA2 LCN2',
+'presentation':'B2M HLA-A HLA-B HLA-C HLA-DRA HLA-DRB1 HLA-DPA1 HLA-DPB1 HLA-DQA1 HLA-DQB1 CD74 TAP1 TAP2 PSMB8 PSMB9',
+'glia':'RLBP1 GLUL SLC1A3 SOX9 AQP4 VIM CLU APOE',
+'microglia':'C1QA C1QB C1QC AIF1 TYROBP CSF1R P2RY12 TMEM119 CX3CR1',
+'rod':'RHO GNAT1 PDE6A PDE6B NRL NR2E3 SAG CNGA1',
+'cone':'ARR3 GNAT2 PDE6C PDE6H OPN1LW OPN1MW OPN1SW',
+'RPE':'RPE65 BEST1 LRAT RGR RDH5 PMEL TYR',
+'bipolar':'VSX2 OTX2 TRPM1 GRM6 VSX1 CABP5 PRKCA',
+'RGC':'RBPMS SNCG NEFL NEFM POU4F1 POU4F2 THY1',
+'endo':'VWF PECAM1 KDR CLDN5 EMCN RAMP2',
+'peri':'RGS5 PDGFRB CSPG4 MCAM ACTA2 NOTCH3',
+'astro':'GFAP ALDH1L1 AQP4 SLC1A2 PAX2',
+'horizontal':'ONECUT1 ONECUT2 LHX1 PROX1 CALB1',
+'T':'CD3D CD3E CD3G TRAC CD2',
+'B':'MS4A1 CD79A CD79B CD19 CD37',
+'fibro':'COL1A1 COL1A2 COL3A1 DCN LUM',
+'schwann':'MPZ PMP22 SOX10 PRX S100B',
+}
+for k,s in sets.items():
+ ix=np.flatnonzero(np.isin(G,s.split()))
+ obs[k]=np.asarray(N[:,ix].mean(axis=1)).ravel()
+print('MARKER SCORES')
+print(obs.groupby('cluster')[list(sets)[3:]].mean().round(2).to_string())
+print('INFLAMMATION SCORES')
+print(obs.groupby(['cluster','eye'])[['IFN','inflammatory','presentation','counts']].mean().round(3).to_string())
+obs.to_csv('analysis/scores.csv',index=False)
+rows=[]
+for cl in sorted(obs.cluster.unique()):
+ a=N[(obs.cluster==cl)&(obs.eye==1)]; b=N[(obs.cluster==cl)&(obs.eye==2)]
+ if min(a.shape[0],b.shape[0])<5:continue
+ m1=np.asarray(a.mean(axis=0)).ravel();m2=np.asarray(b.mean(axis=0)).ravel()
+ v1=np.asarray(a.power(2).mean(axis=0)).ravel()-m1**2;v2=np.asarray(b.power(2).mean(axis=0)).ravel()-m2**2
+ score=(m2-m1)/np.sqrt(v1/a.shape[0]+v2/b.shape[0]+1e-9)
+ print('\\nCLUSTER',cl,'eye1',a.shape[0],'eye2',b.shape[0])
+ for direction in [1,-1]:
+  order=np.argsort(score*direction)[::-1][:30]
+  print('up eye',2 if direction==1 else 1, '; '.join(f'{G[j]} {score[j]:.1f}({m1[j]:.2f},{m2[j]:.2f})' for j in order))
+ for j in np.flatnonzero(abs(score)>3):rows.append([cl,G[j],score[j],m1[j],m2[j]])
+pd.DataFrame(rows,columns=['cluster','gene','score','eye1','eye2']).to_csv('analysis/differential.csv',index=False)
+PY"

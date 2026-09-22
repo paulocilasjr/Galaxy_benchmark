@@ -1,0 +1,24 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy import sparse
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def agg(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  z=h['X']; x=sparse.csc_matrix((z['data'][()],z['indices'][()],z['indptr'][()]),shape=tuple(z.attrs['shape']))
+  genes=np.array([v.decode() if isinstance(v,bytes) else str(v) for v in h['var/_index'][()]],object)
+  cats=[v.decode() if isinstance(v,bytes) else str(v) for v in h['obs/guide/categories'][()]]
+  gids=np.array([cats[v] for v in h['obs/guide/codes'][()]])
+ groups=np.unique(gids); codes=np.searchsorted(groups,gids); M=np.zeros((len(gids),len(groups)),np.int8); M[np.arange(len(gids)),codes]=1
+ lib=np.asarray(x.sum(1)).ravel().astype(float); vals=np.log1p(x.data.astype(float)/lib[x.indices]*1e4)
+ lx=sparse.csc_matrix((vals,x.indices,x.indptr),shape=x.shape,copy=False)
+ means=np.asarray(lx.T.dot(M))/np.bincount(codes)[None,:]
+ nt=np.flatnonzero(np.char.startswith(groups,'NT-')); p=[i for i,s in enumerate(groups) if not s.startswith('NT-')]
+ return genes,groups[p],(means[:,p]-means[:,nt].mean(1)[:,None]).T
+rgenes,rg,R=agg('perturb.seq.align.q1.ref.h5ad'); qgenes,qg,Q=agg('perturb.seq.align.q1.query.h5ad')
+rm={s:i for i,s in enumerate(rgenes)};qm={s:i for i,s in enumerate(qgenes)};common=[s for s in rgenes if s in qm];ri=np.array([rm[s] for s in common]);qi=np.array([qm[s] for s in common]);A=R[:,ri];B=Q[:,qi]
+A=A-A.mean(1,keepdims=True);B=B-B.mean(1,keepdims=True);A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-12;B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-12;S=B@A.T
+for q in ['guide13','guide14','guide18','guide19','guide15','guide16']:
+ i=list(qg).index(q); order=np.argsort(S[i])[::-1][:15]; print('\\n',q,[(str(rg[j]),round(float(S[i,j]),3)) for j in order])
+for t in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+ j=list(rg).index(t); order=np.argsort(S[:,j])[::-1][:15]; print('\\n',t,[(str(qg[i]),round(float(S[i,j]),3)) for i in order])
+PY"

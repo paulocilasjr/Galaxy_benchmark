@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+# Cross-check several common interpretation variants.
+import gzip, re, math
+from collections import defaultdict
+import numpy as np
+path='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)";'"')
+def attrs(s):
+    d=defaultdict(list)
+    for k,v in attr_re.findall(s): d[k].append(v)
+    return d
+records=[]
+with gzip.open(path,'rt') as fh:
+    for line in fh:
+        if line.startswith('#') or not line.strip(): continue
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<9: continue
+        a=attrs(f[8])
+        records.append((f,a))
+
+def calc(std=None, stop=True, filter_select=True):
+    selected={}; data=defaultdict(lambda:{'exon':[],'cds':[],'stop':[],'strand':None})
+    for f,a in records:
+        chrom,_,feat,start,end,_,strand,_,_=f; tid=a.get('transcript_id',[''])[0]
+        if not tid: continue
+        key=(chrom,tid); data[key]['strand']=strand
+        if feat=='transcript' and (not filter_select or 'MANE Select' in a.get('tag',[])) and (std is None or chrom in std): selected[key]=strand
+        if feat=='exon': data[key]['exon'].append((int(start),int(end)))
+        elif feat=='CDS': data[key]['cds'].append((int(start),int(end)))
+        elif feat=='stop_codon': data[key]['stop'].append((int(start),int(end)))
+    vals=[[],[],[]]
+    for key,strand in selected.items():
+        ex=data[key]['exon']; coding=data[key]['cds']+(data[key]['stop'] if stop else [])
+        if not ex or not coding: continue
+        cs=min(s for s,e in coding); ce=max(e for s,e in coding)
+        merged=[]
+        for s,e in sorted(coding):
+            if not merged or s>merged[-1][1]+1: merged.append([s,e])
+            else: merged[-1][1]=max(merged[-1][1],e)
+        clen=sum(e-s+1 for s,e in merged)
+        def ov(iv,lo,hi):
+            s,e=iv; return max(0,min(e,hi)-max(s,lo)+1)
+        if strand=='+':
+            f5=sum(ov(x,-10**18,cs-1) for x in ex); f3=sum(ov(x,ce+1,10**18) for x in ex)
+        else:
+            f5=sum(ov(x,ce+1,10**18) for x in ex); f3=sum(ov(x,-10**18,cs-1) for x in ex)
+        vals[0].append(f5); vals[1].append(clen); vals[2].append(f3)
+    return len(vals[0]), [float(np.median(v)) for v in vals], ';'.join(str(math.floor(np.median(v))) for v in vals)
+std_y={f'chr{i}' for i in range(1,23)}|{'chrX','chrY','chrM'}
+std_no_y={f'chr{i}' for i in range(1,23)}|{'chrX','chrM'}
+print('std incl Y stop', calc(std_y, True))
+print('std no Y stop', calc(std_no_y, True))
+print('std incl Y no stop', calc(std_y, False))
+print('all contigs stop', calc(None, True))
+PY"

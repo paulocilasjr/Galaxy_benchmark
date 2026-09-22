@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse,numpy as np,pandas as pd,re
+from collections import defaultdict
+QFILE='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/characterize.response.q1.txt';DEST='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/geo'
+def comp(gse,condpat,ctrlpat,label):
+ obj=GEOparse.get_GEO(geo=gse,destdir=DEST,silent=True);df=obj.table.copy();desc=obj.columns;samples=[c for c in df.columns if c.startswith('GSM')]
+ cond=[];ctrl=[]
+ for s in samples:
+  row=desc.loc[s] if s in desc.index else None
+  txt=str(row.get('description','')) if row is not None else ''
+  if re.search(condpat,txt,re.I):cond.append(s)
+  elif re.search(ctrlpat,txt,re.I):ctrl.append(s)
+ print(gse,label,cond,ctrl)
+ if not cond or not ctrl:return
+ genes=df['IDENTIFIER'].astype(str).str.upper().tolist();mat=df[cond+ctrl].astype(float).values;m0=mat[:,:len(cond)].mean(axis=1);m1=mat[:,len(cond):].mean(axis=1);logfc=np.log2((m0+1)/(m1+1))
+ best=defaultdict(lambda:(0,0))
+ for i,g in enumerate(genes):
+  if g and abs(logfc[i])>best[g][0]:best[g]=(abs(logfc[i]),logfc[i])
+ ranked=sorted(best.items(),key=lambda kv:-kv[1][0]);top=[x for x,v in ranked[:112]];qlist=open(QFILE).read().split();q=set(x.upper() for x in qlist);inter=set(top)&q
+ print('overlap',len(inter), sorted(inter,key=lambda x:qlist.index(x.capitalize()) if x.capitalize() in qlist else 999));rank={x:i+1 for i,(x,v) in enumerate(ranked)};print([(x.capitalize(),rank.get(x.upper())) for x in qlist if x.upper() in rank][:40])
+comp('GDS883',r'LPS;',r'MEDIA;','IL10-/- DC LPS vs media')
+PY"

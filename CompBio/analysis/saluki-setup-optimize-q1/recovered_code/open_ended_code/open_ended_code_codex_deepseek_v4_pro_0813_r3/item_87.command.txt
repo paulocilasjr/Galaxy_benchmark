@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > inspect_tfr.py <<'PY'
+import tensorflow as tf
+import numpy as np, collections
+files=['train20.tfr']
+ds=tf.data.TFRecordDataset(files, compression_type='ZLIB')
+# parse raw
+features={'lengths':tf.io.FixedLenFeature((1,),tf.int64),
+ 'sequence':tf.io.FixedLenFeature([],tf.string),
+ 'coding':tf.io.FixedLenFeature([],tf.string),
+ 'splice':tf.io.FixedLenFeature([],tf.string),
+ 'targets':tf.io.FixedLenFeature([],tf.string)}
+def parse(x):
+ feats=tf.io.parse_single_example(x,features)
+ seq=tf.io.decode_raw(feats['sequence'],tf.uint8)
+ coding=tf.io.decode_raw(feats['coding'],tf.uint8)
+ splice=tf.io.decode_raw(feats['splice'],tf.uint8)
+ length=feats['lengths'][0]
+ return seq,coding,splice,length
+cnt=0
+for raw in ds:
+ seq,coding,splice,length=parse(raw)
+ seq=seq.numpy()[:length]; coding=coding.numpy()[:length]; splice=splice.numpy()[:length]
+ dna=''.join('ACGT'[i] for i in seq)
+ # find start/stop codons
+ starts=[]; stops=[]
+ for i in range(len(dna)-2):
+  if dna[i:i+3]=='ATG': starts.append(i)
+  if dna[i:i+3] in ('TAA','TAG','TGA'): stops.append(i)
+ cds_start=starts[0] if starts else None
+ cds_end=None
+ if cds_start is not None:
+  for j in range(cds_start+3,len(dna)-2,3):
+   if dna[j:j+3] in ('TAA','TAG','TGA'): cds_end=j+3; break
+ coding_pos=[i for i,v in enumerate(coding) if v]
+ splice_pos=[i for i,v in enumerate(splice) if v]
+ print('idx',cnt,'len',length,'cds',cds_start,cds_end,'coding_pos first20',coding_pos[:20],'last5',coding_pos[-5:],'splice_pos',splice_pos[:30], 'nsplice',len(splice_pos))
+ print('seq head/tail',dna[:80], '...', dna[-80:])
+ cnt+=1
+ if cnt>=10: break
+PY
+./tfenv_arm/bin/python inspect_tfr.py"

@@ -1,0 +1,25 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4e1f39245f2f9a7c6ca6323c/workspace && PYTHONUNBUFFERED=1 python - <<'PY'
+import os,sys
+sys.path.insert(0,os.getcwd())
+import torch
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+seq=open('sequence.txt').read().strip(); L=len(seq)
+tok=AutoTokenizer.from_pretrained('model_files', trust_remote_code=True)
+model=AutoModelForMaskedLM.from_pretrained('model_files', trust_remote_code=True); model.eval().to('mps')
+base_t=torch.tensor(tok(''.join(seq), add_special_tokens=False).input_ids,device='mps')
+B=8
+masked=base_t.unsqueeze(0).repeat(B,1).clone(); pos_t=torch.tensor(list(range(B)),device='mps'); masked[torch.arange(B,device='mps'),pos_t]=3
+with torch.no_grad():
+    logits=model(masked).logits
+print('logits nan', torch.isnan(logits).any().item(), 'inf', torch.isinf(logits).any().item())
+diag=logits[torch.arange(B,device='mps'),pos_t]
+print('diag nan', torch.isnan(diag).any().item(), diag[:2])
+p=torch.softmax(diag,dim=-1)
+print('p nan', torch.isnan(p).any().item(), p[:2])
+acgt=torch.tensor([7,8,9,10],device='mps')
+pa=torch.softmax(diag[:,acgt],dim=-1)
+print('pa',pa)
+e=-(pa*torch.log2(pa.clamp(min=1e-300))).sum(-1)
+print('e',e)
+PY"

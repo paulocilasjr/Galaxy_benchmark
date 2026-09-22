@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,numpy as np, requests, time, json
+path='sample.swap.atac.q2.tsv.gz'
+cols=None; data={}
+with gzip.open(path,'rt') as f:
+    r=csv.reader(f,delimiter='\\t'); header=next(r); cols=header[3:]
+    for row in r:
+        if len(row)<12: continue
+        data[(row[0],int(row[1]))]=np.array([float(x) for x in row[3:]],dtype=float)
+print('loaded')
+markers = {
+'AIIamacrine': ['GJD2','GJD3','PRKCA','TRPM1','GRM6','ISL1','TFAP2A','TFAP2B'],
+'Astrocyte': ['GFAP','S100B','AQP4','ALDH1L1','SLC1A3','GJA1','SOX9','VIM'],
+'Cone': ['PDE6H','GNAT2','OPN1SW','OPN1MW','PDE6C','ARR3','THRB','RXRG'],
+'GABAamacrine': ['GAD1','GAD2','SLC6A1','SLC32A1','TFAP2A','TFAP2B','ONECUT2','MEIS2'],
+'Horizontal': ['ONECUT1','ONECUT2','LHX1','CALB1','GABRA1','GABRG2','SEMA6A'],
+'Microglia': ['P2RY12','TMEM119','CX3CR1','CSF1R','AIF1','C1QA','C1QB','TYROBP'],
+'Mullerglia': ['RLBP1','GLUL','SOX9','APOE','CLU','SLC1A3','AQP4','DKK3'],
+'Retinalganglioncell': ['RBPMS','POU4F2','POU4F1','ISL1','SNCG','THY1','NEFL','SLC17A6'],
+'Rod': ['RHO','NRL','NR2E3','PDE6B','GNAT1','CNGA1','PDE6A','ROM1','CNGB1','SAG'],
+}
+allgenes=sorted(set(sum(markers.values(),[])))
+gene_tss={}
+for gene in allgenes:
+    try:
+        r=requests.get(f'https://rest.ensembl.org/lookup/symbol/homo_sapiens/{gene}?content-type=application/json',timeout=20)
+        if r.status_code==200:
+            j=r.json(); gene_tss[gene]=('chr'+j['seq_region_name'], int(j['start']), int(j['end']), int(j['strand']))
+    except Exception as e: pass
+    time.sleep(0.05)
+print('fetched',len(gene_tss))
+def promoter_vals(chrom,tss_start,tss_end,strand):
+    tss=tss_start if strand==1 else tss_end
+    lo=tss-2000; hi=tss+2000
+    b=(lo//10000)*10000; vals=[]
+    while b<=hi:
+        if (chrom,b) in data: vals.append(data[(chrom,b)])
+        b+=10000
+    return np.sum(vals,axis=0) if vals else np.zeros(len(cols))
+
+for ct,genes in markers.items():
+    scores=np.zeros(len(cols)); ng=0; per=[]
+    for gene in genes:
+        if gene not in gene_tss: continue
+        v=promoter_vals(*gene_tss[gene])
+        if v.sum()==0: continue
+        mx=v.max()
+        if mx==0: continue
+        scores += v/mx; ng+=1
+        per.append((gene,v/mx))
+    scores/=max(ng,1)
+    print('\\n',ct,'markers',ng)
+    order=np.argsort(-scores)
+    for idx in order:
+        print(f'  {cols[idx]:20s} {scores[idx]:.3f}')
+    for gene,sv in per[:3]:
+        print('   gene',gene, 'top', [(cols[i],round(x,2)) for i,x in sorted(enumerate(sv), key=lambda kv:-kv[1])[:3]])
+PY"

@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import sys, struct, numpy as np, torch, h5py
+sys.path.insert(0,'proto')
+from example_pb2 import Example
+from saluki_torch import Saluki, load_weights
+torch.set_num_threads(1)
+MAXLEN=12288
+
+def parse_records(path, n=5):
+    b=open(path,'rb').read(); i=0; out=[]
+    while len(out)<n and i+12<=len(b):
+        length=struct.unpack('<Q',b[i:i+8])[0]; i+=8
+        i+=4
+        data=b[i:i+length]; i+=length
+        i+=4
+        ex=Example(); ex.ParseFromString(data); f=ex.features.feature
+        out.append((f['sequence'].bytes_list.value[0], f['coding'].bytes_list.value[0], f['splice'].bytes_list.value[0], f['lengths'].int64_list.value[0]))
+    return out
+
+def encode(seqbytes,codingbytes,splicebytes):
+    L=len(seqbytes)
+    seq=np.frombuffer(seqbytes,dtype=np.uint8)
+    # bytes are codes 0..3 for A,C,G,T? From data first sample values 3,2,3,1... we assume mapping as TF one_hot same order A,C,G,T
+    one=np.eye(4,dtype=np.float32)[seq]
+    x=np.zeros((MAXLEN,6),dtype=np.float32)
+    x[:L,:4]=one
+    x[:L,4]=np.frombuffer(codingbytes,dtype=np.uint8).astype(np.float32)
+    x[:L,5]=np.frombuffer(splicebytes,dtype=np.uint8).astype(np.float32)
+    return x
+recs=parse_records('models/train_gru/f0_c0/test-0.tfr.dec',5)
+arr=np.stack([encode(*r[:3]) for r in recs])
+X=torch.from_numpy(arr).permute(0,2,1).contiguous()
+model=Saluki(); load_weights(model,'models/train_gru/f0_c0/train/model0_best.h5'); model.eval()
+with torch.no_grad(): pred=model(X).numpy().ravel()
+with h5py.File('models/train_gru/f0_c0/test0_preds.h5','r') as h:
+    ref=h['preds'][:5].ravel()
+print('pred',pred)
+print('ref',ref)
+print('diff',pred-ref)
+print('maxabs',np.max(np.abs(pred-ref)))
+PY"

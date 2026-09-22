@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.parse,urllib.request,edlib,re,collections
+from Bio.Seq import Seq
+u='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'+urllib.parse.urlencode({'db':'nuccore','id':'AL008638.1','seq_start':'60000','seq_stop':'70000','rettype':'fasta','strand':'1','retmode':'text'})
+o=urllib.request.urlopen(u).read().decode(); ref=''.join(x.strip() for x in o.splitlines() if not x.startswith('>'))
+def reads(p):
+ with gzip.open(p,'rt') as f:
+  while 1:
+   h=f.readline().strip()
+   if not h:return
+   s=f.readline().strip();f.readline();f.readline();yield h,s
+def best(s):
+ a=[]
+ for ori,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+  x=edlib.align(q,ref,mode='HW',task='path',k=-1)
+  a.append((x['editDistance'],ori,q,x['locations'][0],x['cigar']))
+ return min(a,key=lambda z:(z[0],z[3][0]))
+def parse(c):return [(op,int(n)) for n,op in re.findall(r'(\\d+)([=XID])',c)]
+def segment(q,st,c,lo,hi):
+ # emit aligned target/query chars only in target [lo,hi), insertions at boundary
+ t=st; qi=0; out=[]
+ for op,n in parse(c):
+  if op in '=X':
+   for j in range(n):
+    if lo<=t<hi: out.append((t,q[qi],ref[t]))
+    t+=1;qi+=1
+  elif op=='I':
+   if lo<=t<=hi: out.append((t,'+'+q[qi:qi+n],''))
+   qi+=n
+  else:
+   for j in range(n):
+    if lo<=t<hi:out.append((t,'-',ref[t]))
+    t+=1
+ return out
+allr=[]
+for fn in ['phase.chain.q1.R1.fq.gz','phase.chain.q1.R2.fq.gz']:
+ for h,s in reads(fn):
+  d,ori,q,(st,en),c=best(s)
+  if st<4300 and en>4050: # ref abs 64050-64300 maybe offsets 4050..4300
+   seg=segment(q,st,c,4050,4300)
+   allr.append((h,fn[-9:-8],d,ori,st,en,c,seg))
+print('n reads',len(allr))
+for x in allr[:25]:
+ h,fn,d,ori,st,en,c,seg=x
+ print(h,fn,'d',d,'ori',ori,'range',60000+st,60000+en,'cigar',c)
+ # create sequence for observed non-gap 64090-64170
+ print('  ',''.join(v if not v.startswith('+') else '['+v[1:]+']' for t,v,r in seg if 4090<=t<4170))
+PY"

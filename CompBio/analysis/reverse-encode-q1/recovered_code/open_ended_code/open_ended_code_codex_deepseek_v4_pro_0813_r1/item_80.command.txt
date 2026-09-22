@@ -1,0 +1,66 @@
+/bin/bash -lc "cat > run_exact_selected.py <<'PY'
+import json, math, random, time, sys, concurrent.futures
+import pyBigWig
+# selected bins
+lines=open('counts.tsv').read().splitlines(); vals=[]
+for line in lines:
+ c,s,e,v=line.split(); vals.append((float(v),c,int(s),int(e)))
+vals.sort(reverse=True)
+random.seed(777); rand=random.sample(vals,100)
+sel=vals[:100]+rand
+seen=set(); bins=[]; obs=[]
+for v,c,s,e in sel:
+ if (c,s,e) in seen: continue
+ seen.add((c,s,e)); bins.append((c,s,e)); obs.append(v)
+print('bins',len(bins), flush=True)
+
+def corr(a,b):
+ n=len(a); ma=sum(a)/n; mb=sum(b)/n
+ cov=va=vb=0.0
+ for x,y in zip(a,b):
+  cov+=(x-ma)*(y-mb); va+=(x-ma)**2; vb+=(y-mb)**2
+ return cov/math.sqrt(va*vb) if va>0 and vb>0 else 0.0
+
+def open_bw(url):
+ last=None
+ for i in range(4):
+  try: return pyBigWig.open(url)
+  except Exception as e: last=e; time.sleep(1+i)
+ raise last
+
+def work(cand):
+ try:
+  vec=[0.0]*len(bins)
+  for f in cand['files']:
+   bw=open_bw(f['url'])
+   for i,(ch,s,e) in enumerate(bins):
+    x=bw.stats(ch,s,e,nBins=1,type='sum',exact=True)
+    if x and x[0] is not None: vec[i]+=x[0]
+   bw.close()
+  return {'exp':cand['exp'],'corr':corr(obs,vec),'vec':vec,'error':None}
+ except Exception as e:
+  return {'exp':cand['exp'],'corr':None,'vec':None,'error':repr(e)}
+
+if __name__=='__main__':
+ cands_all=json.load(open('candidate_bw.json')); expmap={c['exp']:c for c in cands_all}
+ # top N from stage2
+ rows=[]
+ for line in open('stage2_top100.jsonl'):
+  d=json.loads(line)
+  if d['corr'] is not None: rows.append((d['spear'],d['corr'],d['exp']))
+ rows.sort(reverse=True)
+ top=rows[:int(sys.argv[1])]
+ subset=[expmap[e] for _,_,e in top]
+ outfile=f'exact_top{len(subset)}.jsonl'
+ t=time.time(); done=0
+ with open(outfile,'w') as out, concurrent.futures.ProcessPoolExecutor(max_workers=int(sys.argv[2])) as ex:
+  futs=[ex.submit(work,c) for c in subset]
+  for fut in concurrent.futures.as_completed(futs):
+   r=fut.result(); done+=1
+   # don't store full vec in final maybe store corr/error and first 10
+   r2={'exp':r['exp'],'corr':r['corr'],'error':r['error']}
+   out.write(json.dumps(r2)+'\\n'); out.flush()
+   print(done, r2, 'elapsed',time.time()-t, flush=True)
+ print('done',outfile,time.time()-t)
+PY
+python3 run_exact_selected.py 12 8"

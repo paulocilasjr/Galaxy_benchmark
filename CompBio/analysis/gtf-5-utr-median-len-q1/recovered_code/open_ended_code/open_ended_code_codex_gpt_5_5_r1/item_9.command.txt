@@ -1,0 +1,79 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, math
+from collections import defaultdict
+import numpy as np
+
+path = 'MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std = {f'chr{i}' for i in range(1,23)} | {'chrX','chrY','chrM'}
+attr_re = re.compile(r'(\\S+) \"(["'^"]*)";'"')
+
+def attrs(s):
+    d = defaultdict(list)
+    for k,v in attr_re.findall(s):
+        d[k].append(v)
+    return d
+
+transcripts = {}
+features = defaultdict(lambda: {'exon': [], 'CDS': [], 'stop_codon': []})
+all_feature_counts = defaultdict(int)
+select_nonstd = 0
+with gzip.open(path, 'rt') as fh:
+    for line in fh:
+        if not line or line.startswith('#'):
+            continue
+        cols = line.rstrip('\\n').split('\\t')
+        if len(cols) "'!= 9:
+            continue
+        chrom, source, feature, start, end, score, strand, frame, attr_s = cols
+        a = attrs(attr_s)
+        tid = a.get('"'transcript_id', [''])[0]
+        tags = a.get('tag', [])
+        if feature == 'transcript' and 'MANE Select' in tags:
+            if chrom in std:
+                transcripts[tid] = (chrom, strand, int(start), int(end))
+            else:
+                select_nonstd += 1
+        if chrom not in std or not tid:
+            continue
+        if feature in ('exon','CDS','stop_codon'):
+            features[tid][feature].append((int(start), int(end)))
+            all_feature_counts[feature] += 1
+
+five, cds_lens, three = [], [], []
+missing = []
+for tid, (chrom, strand, tstart, tend) in transcripts.items():
+    exons = features[tid]['exon']
+    cds_intervals = features[tid]['CDS'] + features[tid]['stop_codon']
+    if not exons or not cds_intervals:
+        missing.append(tid)
+        continue
+    coding_min = min(s for s,e in cds_intervals)
+    coding_max = max(e for s,e in cds_intervals)
+    cds_len = sum(e-s+1 for s,e in features[tid]['CDS']) + sum(e-s+1 for s,e in features[tid]['stop_codon'])
+    before = 0
+    after = 0
+    for s,e in exons:
+        # exonic bases strictly before first coding base
+        if s < coding_min:
+            before += max(0, min(e, coding_min-1) - s + 1)
+        # exonic bases strictly after last coding base
+        if e > coding_max:
+            after += max(0, e - max(s, coding_max+1) + 1)
+    if strand == '+':
+        five.append(before)
+        three.append(after)
+    elif strand == '-':
+        five.append(after)
+        three.append(before)
+    else:
+        raise ValueError((tid, strand))
+    cds_lens.append(cds_len)
+
+print('select transcripts std', len(transcripts))
+print('select transcripts nonstd', select_nonstd)
+print('used', len(cds_lens), 'missing', len(missing))
+print('median raw', np.median(five), np.median(cds_lens), np.median(three))
+print('answer', f'{math.floor(np.median(five))};{math.floor(np.median(cds_lens))};{math.floor(np.median(three))}')
+print('zeros', sum(x==0 for x in five), sum(x==0 for x in cds_lens), sum(x==0 for x in three))
+print('counts', dict(all_feature_counts))
+PY"

@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5e22cbaa644d90c95",
+  "history_id": "bbd44e69cb8906b50edb9c124c99cc15",
+  "tool_id": "match_rna_atac_populations",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-10T01:51:09.517757",
+  "update_time": "2026-08-10T01:52:13.851416",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "python - \"/jetstream2/scratch/main/jobs/79033807/inputs/dataset_8886a25f-3f70-43b6-866b-4a7002898850.dat\" \"/jetstream2/scratch/main/jobs/79033807/inputs/dataset_f718f054-520c-4dd5-b13c-9c8c785babdb.dat\" \"/jetstream2/scratch/main/jobs/79033807/inputs/dataset_20c2434e-07b8-4b02-8274-03d042fd2587.dat\" <<'PY'\n\nimport sys,csv,math,itertools,re\nrna_path,atac_path,gtf_path=sys.argv[1:4]\nN=8\n\ndef read_matrix(path):\n    out={}\n    with open(path,newline=\"\") as f:\n        rd=csv.reader(f,delimiter=\"\\t\")\n        hdr=next(rd)\n        if len(hdr)!=N+1: raise RuntimeError(\"RNA column count\")\n        for row in rd:\n            if len(row)<N+1: continue\n            try: vals=[float(x) for x in row[1:N+1]]\n            except ValueError: continue\n            out[row[0]]=vals\n    return out\n\nrna=read_matrix(rna_path)\nwindows={\"tss10\":{},\"tss50\":{},\"body20\":{}}\ngene_chr={}\nseen=set()\nwith open(gtf_path) as f:\n    for line in f:\n        if not line or line[0]==\"#\": continue\n        p=line.rstrip(\"\\n\").split(\"\\t\")\n        if len(p)<9 or p[2]!=\"gene\": continue\n        chrom=p[0]\n        if chrom not in [\"chr\"+str(i) for i in range(1,23)]+[\"chrX\",\"chrY\"]: continue\n        m=re.search(r'gene_name \"([^\"]+)\"',p[8])\n        if not m: continue\n        g=m.group(1)\n        if g not in rna or g in seen: continue\n        seen.add(g)\n        start=int(p[3])-1; end=int(p[4]); strand=p[6]\n        tss=start if strand==\"+\" else end-1\n        gene_chr[g]=chrom\n        defs={\"tss10\":(max(0,tss-10000),tss+10001),\n              \"tss50\":(max(0,tss-50000),tss+50001),\n              \"body20\":(max(0,start-20000),end+20000)}\n        for mode,(a,b) in defs.items():\n            mp=windows[mode]\n            for k in range(a//10000,(b-1)//10000+1):\n                mp.setdefault((chrom,k),[]).append(g)\n\nacts={mode:{g:[0.0]*N for g in gene_chr} for mode in windows}\nwith open(atac_path,newline=\"\") as f:\n    rd=csv.reader(f,delimiter=\"\\t\")\n    hdr=next(rd)\n    if len(hdr)!=N+1: raise RuntimeError(\"ATAC column count\")\n    for row in rd:\n        if len(row)<N+1: continue\n        try:\n            chrom,s,e=row[0].rsplit(\"_\",2)\n            k=int(s)//10000\n            vals=[float(x) for x in row[1:N+1]]\n        except (ValueError,IndexError): continue\n        key=(chrom,k)\n        for mode,mp in windows.items():\n            gs=mp.get(key)\n            if gs:\n                am=acts[mode]\n                for g in gs:\n                    a=am[g]\n                    for j,v in enumerate(vals): a[j]+=v\n\ndef centered_unit(v):\n    x=[math.log1p(max(0.0,z)) for z in v]\n    mu=sum(x)/N\n    x=[z-mu for z in x]\n    norm=math.sqrt(sum(z*z for z in x))\n    if norm<1e-12:return None\n    return [z/norm for z in x]\n\ndef ranks(v):\n    order=sorted(range(N),key=lambda i:v[i])\n    out=[0.0]*N\n    q=0\n    while q<N:\n        z=q+1\n        while z<N and v[order[z]]==v[order[q]]:z+=1\n        av=(q+z-1)/2.0\n        for k in range(q,z):out[order[k]]=av\n        q=z\n    mu=sum(out)/N\n    out=[x-mu for x in out]\n    norm=math.sqrt(sum(x*x for x in out))\n    if norm<1e-12:return None\n    return [x/norm for x in out]\n\ndef score(mode,metric,subset):\n    S=[[0.0]*N for _ in range(N)]; count=0\n    for g,av in acts[mode].items():\n        if subset==\"A\" and sum(ord(c) for c in g)%2: continue\n        if subset==\"B\" and sum(ord(c) for c in g)%2==0: continue\n        rv=rna[g]\n        zr=centered_unit(rv) if metric==\"pearson\" else ranks(rv)\n        za=centered_unit(av) if metric==\"pearson\" else ranks(av)\n        if zr is None or za is None: continue\n        count+=1\n        for i in range(N):\n            for j in range(N): S[i][j]+=zr[i]*za[j]\n    for i in range(N):\n        for j in range(N): S[i][j]/=count\n    return S,count\n\ndef bestperm(S):\n    vals=[]\n    for p in itertools.permutations(range(N)):\n        vals.append((sum(S[i][p[i]] for i in range(N)),p))\n    vals.sort(reverse=True)\n    return vals[0],vals[1]\n\nrows=[]\nfor mode in [\"tss10\",\"tss50\",\"body20\"]:\n    for metric in [\"pearson\",\"rank\"]:\n        for subset in [\"all\",\"A\",\"B\"]:\n            S,n=score(mode,metric,subset)\n            b,r=bestperm(S)\n            margins=[]\n            for i in range(N):\n                ordered=sorted(S[i],reverse=True)\n                margins.append(ordered[0]-ordered[1])\n            rows.append((mode,metric,subset,n,b[1],b[0],b[0]-r[0],min(margins),S))\nwith open(\"result.txt\",\"w\") as out:\n    out.write(\"mode\\tmetric\\tsubset\\tgenes\\tpermutation\\tobjective\\tglobal_gap\\tmin_row_gap\\n\")\n    for mode,metric,subset,n,p,obj,gap,mg,S in rows:\n        out.write(\"%s\\t%s\\t%s\\t%d\\t%s\\t%.8g\\t%.8g\\t%.8g\\n\"%(mode,metric,subset,n,\";\".join(map(str,p)),obj,gap,mg))\n    out.write(\"\\nscore_matrices_all\\n\")\n    for mode,metric,subset,n,p,obj,gap,mg,S in rows:\n        if subset!=\"all\":continue\n        out.write(\"%s/%s\\n\"%(mode,metric))\n        for rr in S: out.write(\"\\t\".join(\"%.6f\"%x for x in rr)+\"\\n\")\n\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "rna": {
+      "id": "f9cad7b01a4721351ea69ed60fdfbf20",
+      "src": "hda",
+      "uuid": "8886a25f-3f70-43b6-866b-4a7002898850"
+    },
+    "atac": {
+      "id": "f9cad7b01a4721355c657ff23eab6b73",
+      "src": "hda",
+      "uuid": "f718f054-520c-4dd5-b13c-9c8c785babdb"
+    },
+    "gtf": {
+      "id": "f9cad7b01a472135e804de369ad98058",
+      "src": "hda",
+      "uuid": "20c2434e-07b8-4b02-8274-03d042fd2587"
+    }
+  },
+  "outputs": {
+    "output1": {
+      "id": "f9cad7b01a47213531a426f808a06969",
+      "src": "hda",
+      "uuid": "cea00b3c-98c0-4583-b44c-ba18f4ddb0ed"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

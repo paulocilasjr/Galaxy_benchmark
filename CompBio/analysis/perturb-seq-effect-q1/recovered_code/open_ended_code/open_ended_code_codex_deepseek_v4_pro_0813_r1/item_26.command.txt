@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+calls['target']=calls.feature_call.map(dict(zip(ref.id, ref.target_gene_name)))
+bc2col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc2col)
+lib=np.asarray(mat.sum(axis=0)).ravel()
+ngenes=np.diff(mat.indptr) if False else np.asarray((mat>0).sum(axis=0)).ravel()
+df=pd.DataFrame({'cell':barcodes,'lib':lib,'ngenes':ngenes}).merge(calls[['cell_barcode','target','col']], left_on='cell', right_on='cell_barcode')
+print(df.groupby('target').agg(n=('cell','size'), lib=('lib','mean'), genes=('ngenes','mean')).sort_values('n').head(15).to_string())
+print('\\nAll targets n counts:', df.groupby('target').size().value_counts())
+print('\\nSTAT1 rows:')
+print(df[df.target=='STAT1'].to_string(index=False))
+PY"

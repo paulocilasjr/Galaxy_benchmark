@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, scipy.io, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+from scipy.stats import ttest_ind, mannwhitneyu
+mat = scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat = pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz', sep='\\t', header=None, names=['id','name','type'])
+bc = pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz', sep='\\t', header=None, names=['barcode'])
+calls = pd.read_csv('protospacer_calls_per_cell.csv')
+ref = pd.read_csv('feature_reference.csv')
+guide_to_gene = dict(zip(ref.id, ref.target_gene_name))
+# align calls to matrix columns
+bc['pos']=np.arange(len(bc))
+calls = calls.merge(bc, left_on='cell_barcode', right_on='barcode', how='inner')
+print('overlap', len(calls))
+# cell stats
+totals = np.asarray(mat.sum(axis=0)).ravel()
+nfeatures = np.asarray((mat>0).sum(axis=0)).ravel()
+path_genes_idx = list(range(20))
+path_counts = np.asarray(mat[path_genes_idx,:].sum(axis=0)).ravel()
+# log normalize
+# CPM log1p
+cpm = mat.multiply(1.0/totals).tocsr() * 10000
+logcpm = cpm.copy(); logcpm.data = np.log1p(logcpm.data)
+path_logmean = np.asarray(logcpm[path_genes_idx,:].mean(axis=0)).ravel()
+# first 20 mean, maybe pathway score
+calls['total'] = totals[calls.pos.values]
+calls['nfeatures'] = nfeatures[calls.pos.values]
+calls['path_counts'] = path_counts[calls.pos.values]
+calls['path_prop'] = path_counts/np.maximum(totals,1)
+calls['path_logmean'] = path_logmean[calls.pos.values]
+calls['gene'] = calls.feature_call.map(guide_to_gene)
+print(calls.groupby('gene').size().to_string())
+# Compare each guide to NT for path_logmean, path_prop, path_counts
+nt = calls[calls.gene=='Non-Targeting']
+print('NT stats', nt[['total','path_counts','path_prop','path_logmean']].describe().T.to_string())
+rows=[]
+for g,grp in calls.groupby('feature_call'):
+    gene=grp.gene.iloc[0]
+    if g in nt.feature_call.unique(): # non target guide? don't compare self? maybe all NT pooled
+        continue
+    # Welch t test
+    for metric in ['path_logmean','path_prop','path_counts','total']:
+        a=grp[metric].values; b=nt[metric].values
+        t,p=ttest_ind(a,b,equal_var=False)
+        # cohen's d using pooled
+        sd=np.sqrt(((len(a)-1)*a.var(ddof=1)+(len(b)-1)*b.var(ddof=1))/(len(a)+len(b)-2))
+        d=(a.mean()-b.mean())/sd if sd>0 else np.nan
+        rows.append(dict(feature_call=g, gene=gene, n=len(a), metric=metric, mean=a.mean(), nt_mean=b.mean(), diff=a.mean()-b.mean(), p=p, d=d))
+res=pd.DataFrame(rows)
+# pivot d and p for path_logmean
+piv=res[res.metric=='path_logmean'].set_index('gene')[['n','mean','nt_mean','diff','d','p']].sort_values('diff')
+print('\\nRanked by path_logmean diff vs NT (all):')
+print(piv.to_string())
+# robust use Mann Whitney maybe
+print('\\nTop by d negative:')
+print(piv.sort_values('d').head(20).to_string())
+# total maybe
+print('\\nTotal counts diff')
+print(res[res.metric=='total'].set_index('gene')[['n','mean','nt_mean','diff','d','p']].sort_values('diff').head(20).to_string())
+PY"

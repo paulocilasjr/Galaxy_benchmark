@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+with h5py.File('finding.geo.q1.h5ad','r') as f:
+ X=csr_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]),shape=tuple(f['X'].attrs['shape']))
+ cats=np.array([x.decode() for x in f['var/gene_symbols/categories'][:]]); syms=cats[f['var/gene_symbols/codes'][:]]
+ c=np.asarray(X.sum(1)).ravel(); X=X[c>3000]; n=X.shape[0]
+ # log norm
+ X=X.multiply(1e4/np.asarray(X.sum(1)).ravel()[:,None]).tocsr(); X.data=np.log1p(X.data)
+ # select variable via mean-var rough excluding mt/ribo
+ mean=np.asarray(X.mean(0)).ravel(); mean2=np.asarray(X.power(2).mean(0)).ravel(); var=mean2-mean**2
+ score=var/(mean+.05); ok=np.array([not s.startswith(('mt-','Rpl','Rps')) for s in syms]); inds=np.where(ok)[0][np.argsort(score[ok])[-3000:]]
+ Z=TruncatedSVD(30,random_state=1).fit_transform(X[:,inds]);
+ for k in [4,6,8,10]:
+  lab=KMeans(k,random_state=1,n_init=20).fit_predict(Z[:,1:])
+  print('\\nK=',k,np.bincount(lab))
+  for cl in range(k):
+   a=np.asarray(X[lab==cl].mean(0)).ravel(); b=np.asarray(X[lab"'!=cl].mean(0)).ravel(); fc=(a+.02)/(b+.02)
+   ids=np.argsort(fc)[-15:][::-1]
+   print(cl, '"' '.join(f'{syms[i]}:{fc[i]:.1f}' for i in ids))
+PY"

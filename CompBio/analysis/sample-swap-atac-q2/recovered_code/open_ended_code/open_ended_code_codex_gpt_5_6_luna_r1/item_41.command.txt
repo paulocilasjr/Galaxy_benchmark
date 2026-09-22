@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reuse fast saved-ish analysis, assess marker scores using differential subsets and bin de-duplication
+import gzip,csv,numpy as np,pandas as pd
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ rd=csv.reader(f,delimiter='\\t'); h=next(rd); names=h[3:]; keys=[]; vals=[]
+ for row in rd: keys.append((row[0],int(row[1]))); vals.append([int(x) for x in row[3:]])
+a=np.asarray(vals,dtype=float); cpm=a/a.sum(0)*1e6; logc=np.log1p(cpm); idx={k:i for i,k in enumerate(keys)}
+sheets=['Rod','Cone','GABA.amacrine','Horizontal','Retinal.ganglion.cell','AII.amacrine','Astrocyte','Microglia','Muller.glia']
+sets={}
+for s in sheets:
+ d=pd.read_excel('mmc4.xlsx',sheet_name=s,header=None,skiprows=1,usecols=[0,1,2]); d=d.dropna(); d[0]=d[0].astype(str).map(lambda x:x if x.startswith('chr') else 'chr'+x); d[1]=d[1].astype(int)//10000*10000
+ ks=list(dict.fromkeys(zip(d[0],d[1]))); sets[s]=np.array([idx[k] for k in ks if k in idx])
+# all marker sets score as aggregate top-k differential bins based on marker-specificity across all columns?
+# For each sheet and bin, score is count in each column relative to mean other, then use sum standardized.
+for k in [100,300,1000,3000,10000,None]:
+ print('\\nTOP',k)
+ S=[]
+ for s in sheets:
+  ix=sets[s]
+  # per-bin max? logCPM differential of each col to average other; choose bins with largest max specificity for any column, but retain top bins where marker set likely truly type-specific.
+  dif=logc[ix]-logc[ix].mean(1,keepdims=True)
+  # choose marker bins with highest across-column variance / max diff (not all ubiquitous)
+  var=dif.var(1)
+  jj=np.argsort(var)[::-1][:k] if k else np.arange(len(ix))
+  m=logc[ix[jj]].mean(0)
+  S.append(m)
+ S=np.array(S); Z=(S-S.mean(1,keepdims=True))/S.std(1,keepdims=True)
+ for i,s in enumerate(sheets):
+  o=np.argsort(-Z[i]); print(s, ' > '.join(names[j]+':'+f'{Z[i,j]:.2f}' for j in o[:3]))
+PY"

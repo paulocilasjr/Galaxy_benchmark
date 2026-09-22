@@ -1,0 +1,42 @@
+/bin/bash -lc "cat > fine_profiles.py <<'PY'
+import numpy as np,gzip,json
+from scipy.fft import rfft,irfft,next_fast_len
+from concurrent.futures import ProcessPoolExecutor
+
+def run(i):
+ plus=[];minus=[]
+ with gzip.open(f'odd.one.out.q1/{i}.tagAlign.gz','rt') as h:
+  for l in h:
+   a=l.split()
+   if a[0]"'!='"'chr1':break
+   (plus if a[5]=='+' else minus).append(int(a[1]) if a[5]=='+' else int(a[2])-1)
+ plus=np.sort(plus);minus=np.sort(minus)
+ # Cross-correlation of 5' ends in 2 Mb chunks from 2-42 Mb; positive lag means minus downstream of plus
+ n=2000000;fft_n=next_fast_len(2*n-1);power=None
+ for start in range(2000000,42000000,n):
+  p=plus[(plus>=start)&(plus<start+n)]-start;m=minus[(minus>=start)&(minus<start+n)]-start
+  vp=np.bincount(p,minlength=n).astype(np.float32);vm=np.bincount(m,minlength=n).astype(np.float32)
+  vp-=vp.mean();vm-=vm.mean()
+  q=np.conj(rfft(vp,fft_n))*rfft(vm,fft_n)
+  if power is None:power=q
+  else:power+=q
+ cc=irfft(power,fft_n);corr=np.concatenate([cc[-1000:],cc[:1001]])
+ tss=set()
+ with gzip.open('refGene.txt.gz','rt') as h:
+  for l in h:
+   a=l.split()
+   if a[2]=='chr1':tss.add((int(a[4]) if a[3]=='+' else int(a[5]),a[3]))
+ prof=np.zeros((2,1000))
+ for t,st in tss:
+  for j,vec in enumerate([plus,minus]):
+   vals=vec[np.searchsorted(vec,t-5000):np.searchsorted(vec,t+5000)]-t
+   if st=='-':vals=-vals-1
+   idx=(vals+5000)//10
+   prof[j if st=='+' else 1-j]+=np.bincount(idx,minlength=1000)
+ np.savez_compressed(f'fine_{i}.npz',corr=corr,profile=prof/len(tss))
+ pos=corr[1000:];smooth=np.convolve(pos,np.ones(11)/11,'same')
+ print(i,'corr peaks',sorted([(int(k),float(pos[k])) for k in np.argsort(pos[1:501])[-10:]+1]),'smoothpeak',np.argmax(smooth[10:501])+10,flush=True)
+if __name__=='__main__':
+ with ProcessPoolExecutor(max_workers=2) as ex:list(ex.map(run,range(1,11)))
+PY
+OPENBLAS_NUM_THREADS=1 python3 fine_profiles.py > fine_results.txt"

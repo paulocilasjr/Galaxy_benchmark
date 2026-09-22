@@ -1,0 +1,68 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, gzip, time
+from scipy.io import mmread
+from scipy.optimize import nnls
+from sklearn.linear_model import Lasso, ElasticNet, LinearRegression
+
+# Load
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+bar=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+mtx=mmread('matrix.mtx.gz').tocsc()
+idx=bar.index('Spot_710-1')
+y=np.asarray(mtx[:,idx].todense()).ravel().astype(float)
+print('target idx total nz', idx, y.sum(), np.count_nonzero(y), flush=True)
+types=sorted(meta.cell_type.unique())
+print('types', types, flush=True)
+# align
+assert list(sc.index)==list(meta.index)
+X=sc.values.astype(float)
+# per-type means and sums
+means=np.vstack([X[meta.cell_type.values==t].mean(axis=0) for t in types]).T # genes x types
+sums=np.vstack([X[meta.cell_type.values==t].sum(axis=0) for t in types]).T
+for name,A in [('raw_means',means),('type_sums',sums)]:
+    w,res=nnls(A,y)
+    pred=A@w
+    print('\\n',name,'res',res,'w',dict(zip(types,np.round(w,4))),'predsum',pred.sum(), flush=True)
+    print('nonzero >0.1', [t for t,v in zip(types,w) if v>0.1])
+# Normalize cell and spot to distributions, fit mixture fractions
+cell_lib=X.sum(axis=1)
+Xnorm=X/np.maximum(cell_lib[:,None],1)
+profiles=np.vstack([Xnorm[meta.cell_type.values==t].mean(axis=0) for t in types]).T
+ynorm=y/y.sum()
+w,res=nnls(profiles,ynorm)
+print('\\nnorm profiles nnls res',res,'w',dict(zip(types,np.round(w,6))),'sumw',w.sum(),'frac',dict(zip(types,np.round(w/w.sum(),4))), flush=True)
+# marker genes: top fold over other for each type
+marker_idx=set()
+mean_by_type=np.vstack([Xnorm[meta.cell_type.values==t].mean(axis=0) for t in types]) # type x gene
+for i,t in enumerate(types):
+    others=np.delete(mean_by_type,i,axis=0).mean(axis=0)
+    score=(mean_by_type[i]+1e-6)/(others+1e-6)
+    top=np.argsort(score)[-50:]
+    marker_idx.update(top.tolist())
+marker_idx=np.array(sorted(marker_idx))
+print('markers', len(marker_idx))
+for label,A,yy in [('marker_raw',means[marker_idx,:],y[marker_idx]),('marker_norm',profiles[marker_idx,:],ynorm[marker_idx])]:
+    w,res=nnls(A,yy)
+    print('\\n',label,'res',res,'w',dict(zip(types,np.round(w,6))),'sumw',w.sum())
+    if w.sum()>0: print('frac',dict(zip(types,np.round(w/w.sum(),4))))
+# Correlation/similarity to pure types
+for label,A,yy in [('raw',means,y),('norm',profiles,ynorm)]:
+    cors=[]
+    for j,t in enumerate(types):
+        c=np.corrcoef(A[:,j],yy)[0,1]
+        # cosine
+        cos=(A[:,j]@yy)/(np.linalg.norm(A[:,j])*np.linalg.norm(yy))
+        cors.append((t,c,cos))
+    print('\\n',label,'similarities')
+    for r in sorted(cors,key=lambda z:z[2], reverse=True): print(r[0], 'corr',round(r[1],4),'cos',round(r[2],4))
+# nearby target spots fit raw means to see spatial region
+positions=pd.read_csv('tissue_positions.csv', header=None, names=['barcode','in_tissue','array_row','array_col','pxl_col_in_fullres','pxl_row_in_fullres'])
+print('\\nposition', positions.iloc[idx].to_dict())
+for k in range(idx-35, idx+36):
+    if 0<=k<len(bar) and (abs(positions.iloc[k].array_row-20)<=1 and abs(positions.iloc[k].array_col-23)<=2):
+        yy=np.asarray(mtx[:,k].todense()).ravel().astype(float)
+        ww,_=nnls(means,yy)
+        present=[types[i] for i,v in enumerate(ww) if v>0.25]
+        print(k,bar[k], 'rowcol', (positions.iloc[k].array_row,positions.iloc[k].array_col), 'sum', yy.sum(), 'w', np.round(ww,2).tolist(), present)
+PY"

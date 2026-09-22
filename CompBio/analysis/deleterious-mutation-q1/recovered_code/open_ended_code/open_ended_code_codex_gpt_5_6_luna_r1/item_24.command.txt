@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, collections
+comp=str.maketrans('ACGTNacgtn','TGCANtgcan')
+with gzip.open('chr9.hg38.fa.gz','rt') as f:
+    f.readline(); genome=''.join(x.strip() for x in f)
+code={}
+for aa,cods in {'F':'TTT TTC','L':'TTA TTG CTT CTC CTA CTG','I':'ATT ATC ATA','M':'ATG','V':'GTT GTC GTA GTG','S':'TCT TCC TCA TCG AGT AGC','P':'CCT CCC CCA CCG','T':'ACT ACC ACA ACG','A':'GCT GCC GCA GCG','Y':'TAT TAC','*':'TAA TAG TGA','H':'CAT CAC','Q':'CAA CAG','N':'AAT AAC','K':'AAA AAG','D':'GAT GAC','E':'GAA GAC','C':'TGT TGC','W':'TGG','R':'CGT CGC CGA CGG AGA AGG','G':'GGT GGC GGA GGG'}.items():
+  for c in cods.split(): code[c]=aa
+# position -> coding transcript descriptions
+posmap=collections.defaultdict(list)
+with gzip.open('ncbiRefSeq.hg38.txt.gz','rt') as f:
+  for line in f:
+    a=line.rstrip('\\n').split('\\t')
+    if len(a)<16 or a[2]"'!='"'chr9' or a[6]==a[7]: continue
+    strand=a[3]; cds0=int(a[6]); cds1=int(a[7]); starts=[int(x) for x in a[9].rstrip(',').split(',') if x]; ends=[int(x) for x in a[10].rstrip(',').split(',') if x]
+    exons=list(zip(starts,ends));
+    if strand=='-': exons=exons[::-1]
+    inds=[]
+    for s,e in exons:
+      lo=max(s,cds0); hi=min(e,cds1)
+      if lo<hi:
+        z=list(range(lo,hi)); inds.extend(z if strand=='+' else z[::-1])
+    cds=''.join(genome[g] if strand=='+' else genome[g].translate(comp) for g in inds)
+    # only complete codons; store codon-oriented index
+    for i,g in enumerate(inds):
+      if i+1<=len(cds): posmap[g].append((a[12],a[1],strand,i,cds[i//3*3:i//3*3+3],cds))
+# parse VCF and identify stop gained
+stops=[]; coding=[]; total=0
+with gzip.open('q1.hg38.variants.vcf.gz','rt') as f:
+  for line in f:
+    if line.startswith('#'): continue
+    a=line.rstrip().split('\\t'); total+=1
+    if a[0]"'!='"'chr9' or len(a[3])"'!=1 or len(a[4])!=1: continue
+    d=dict(zip(a[8].split('"':'),a[9].split(':'))); dp=int(d.get('DP','0') or 0); ad=d.get('AD','.')
+    try:
+      aa=[int(x) for x in ad.split(',')]; af=aa[1]/dp if dp and len(aa)>1 else 0
+    except: af=0
+    p=int(a[1])-1; alt=a[4].upper(); ref=a[3].upper()
+    for gene,tr,strand,i,cod,cds in posmap.get(p,[]):
+      oa=alt if strand=='+' else alt.translate(comp)
+      rcod=cod; acod=cod[:i%3]+oa+cod[i%3+1:]
+      ra=code.get(rcod,'?'); va=code.get(acod,'?')
+      if va=='*' and ra"'!='"'*':
+        stops.append((int(a[1]),ref,alt,a[5],dp,af,gene,tr,strand,i//3+1,rcod,acod,ra,va))
+      if dp>=10 and af>=0.8: coding.append((int(a[1]),gene,tr,rcod,acod,ra,va,float(a[5]),dp,af))
+print('total records',total,'coding supported entries',len(coding),'stop-gain entries',len(stops))
+for x in stops:
+ print('\\t'.join(map(str,x)))
+print('\\nTop coding supported by quality/depth (unique site/transcript, non-synonymous):')
+seen=set(); out=[]
+for x in coding:
+  pos,gene,tr,rc,ac,ra,va,q,dp,af=x
+  if ra==va: continue
+  k=(pos,gene,tr)
+  if k in seen: continue
+  seen.add(k); out.append(x)
+for x in sorted(out,key=lambda z:(-z[7],-z[8]))[:200]: print('\\t'.join(map(str,x)))
+PY"

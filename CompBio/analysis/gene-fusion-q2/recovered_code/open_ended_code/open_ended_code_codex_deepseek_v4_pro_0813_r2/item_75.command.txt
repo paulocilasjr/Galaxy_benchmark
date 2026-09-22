@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import re,gzip
+from collections import defaultdict
+exons=defaultdict(list); trans_info={}
+with gzip.open('gencode.v47.annotation.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'exon': continue
+        d=dict(re.findall(r'(\\S+)\\s+\"(["'^"]*)"'"',p[8]))
+        tid=d.get('transcript_id',''); gname=d.get('gene_name',''); tname=d.get('transcript_name',''); en=d.get('exon_number','')
+        trans_info[tid]=(gname,tname)
+        exons[tid].append((int(p[3]),int(p[4]),p[6],en))
+
+def exon_at(tid, pos0):
+    ex=sorted(exons.get(tid,[]))
+    if not ex: return None
+    strand=ex[0][2]
+    ordered=ex if strand=='+' else list(reversed(ex))
+    cum=0
+    for i,(start,end,s,en) in enumerate(ordered,1):
+        L=end-start+1
+        if cum <= pos0 < cum+L:
+            return (i,en,cum,cum+L,start,end,s)
+        cum+=L
+    return None
+
+recs=[]
+for line in open('NODE_63_rc_bwa.sam'):
+    if line.startswith('@'): continue
+    p=line.rstrip().split('\\t')
+    if len(p)<11: continue
+    flag=int(p[1])
+    if flag & 4: continue
+    rna=p[2]; cigar=p[5]; pos=int(p[3])-1
+    q=0; r=pos; blocks=[]
+    for m in re.finditer(r'(\\d+)([MIDNSHP=X])',cigar):
+        n=int(m.group(1)); op=m.group(2)
+        if op in 'M=X':
+            blocks.append((q,q+n,r,r+n)); q+=n; r+=n
+        elif op=='I': q+=n
+        elif op in 'DN': r+=n
+        elif op=='S': q+=n
+        elif op in 'HP': pass
+    f=rna.split('|'); gene=f[5] if len(f)>5 else rna; tid=f[0]
+    gname,tname=trans_info.get(tid,(gene,''))
+    for qs,qe,rs,re2 in blocks:
+        recs.append((qs,qe,rs,re2,gene,tid,tname,flag))
+recs.sort(key=lambda x:(x[0], -x[3]))
+for qs,qe,rs,re2,gene,tid,tname,flag in recs:
+    ex=exon_at(tid,rs)
+    exinfo=''
+    if ex: exinfo=f'exon{ex[0]}({ex[1]}) transcript {ex[2]}-{ex[3]}'
+    print(f'query {qs:4}-{qe:4}  {gene:10} {tname or tid:12} ref {rs:5}-{re2:5} flag {flag} {exinfo}')
+PY"

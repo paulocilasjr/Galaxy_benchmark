@@ -1,0 +1,65 @@
+/bin/bash -lc "python - <<'PY'
+# Sensitivity analysis for basal LUSC proportion under several simple marker definitions.
+import h5py, numpy as np, scipy.sparse as sp, pandas as pd
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+    syms=np.array([x.decode() if isinstance(x,bytes) else x for x in f['var/symbol'][:]])
+    cats=np.array([x.decode() if isinstance(x,bytes) else x for x in f['obs/sampleID/categories'][:]])
+    sample=cats[f['obs/sampleID/codes'][:]]
+    X=sp.csr_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=tuple(f['X'].attrs['shape']))
+lib=np.asarray(X.sum(axis=1)).ravel().astype(float)
+g2i={g:i for i,g in enumerate(syms)}
+sets={
+ 'immune':['PTPRC','CD3D','CD3E','CD2','NKG7','MS4A1','CD79A','LYZ','HLA-DRA','CD74','LST1'],
+ 'epithelial':['EPCAM','KRT8','KRT18','KRT19','KRT7','MUC1'],
+ 'basal':['KRT5','KRT6A','KRT6B','KRT14','KRT17','TP63','DSG3','SERPINB5','S100A2'],
+ 'adeno':['SFTPA1','SFTPA2','SFTPB','SFTPC','NAPSA','NKX2-1','SLC34A2','MUC1','AGER','SCGB3A1'],
+ 'endo':['PECAM1','VWF','CLDN5','ENG','KDR'],
+ 'fibro':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA'],
+ 'mast':['TPSAB1','TPSB2','CPA3','KIT'],
+ 'dc':['FCER1A','CLEC10A','CD1C','CD1E','CLEC9A','XCR1','LILRA4','IL3RA','LAMP3','CCR7','FLT3','ITGAX'],
+ 't':['CD3D','CD3E','CD2','TRAC'], 'nk':['NKG7','GNLY','PRF1','KLRD1'], 'b':['MS4A1','CD79A','CD79B','BANK1'],
+ 'myeloid':['LYZ','S100A8','S100A9','FCGR3A','CD68','CSF1R','LST1']
+}
+genes=sorted({g for gs in sets.values() for g in gs if g in g2i})
+M=X[:,[g2i[g] for g in genes]].toarray().astype(float)
+N=np.log1p(M/lib[:,None]*1e4)
+pos={g:i for i,g in enumerate(genes)}
+def sc(name):
+    ids=[pos[g] for g in sets[name] if g in pos]
+    return N[:,ids].mean(1)
+S={k:sc(k) for k in sets}
+# Use previous LUSC set from basal > adeno at patient epithelial level, plus try stricter large-epi high-basal set.
+comp_names=['immune','epithelial','endo','fibro','mast']
+mat=np.vstack([S[k] for k in comp_names]).T
+comp=np.array(comp_names,object)[mat.argmax(1)]
+comp[mat.max(1)<0.15]='unknown'
+# patient-level summary under max-comp epithelial
+rows=[]
+for sid in cats:
+    m=sample==sid; epi=m&(comp=='epithelial')
+    rows.append((sid, epi.sum(), S['basal'][epi].mean() if epi.sum() else np.nan, S['adeno'][epi].mean() if epi.sum() else np.nan))
+df=pd.DataFrame(rows,columns=['sid','epi_n','basal','adeno'])
+sets_lusc={
+ 'all_basal_gt_adeno_ep20': set(df.loc[(df.epi_n>=20)&(df.basal>df.adeno),'sid']),
+ 'strict_ep100_basal1': set(df.loc[(df.epi_n>=100)&(df.basal>df.adeno)&(df.basal>0.8),'sid']),
+ 'large_ep500_basal': set(df.loc[(df.epi_n>=500)&(df.basal>df.adeno),'sid']),
+}
+# possible nonimmune definitions
+nonimmune_defs={
+ 'max_comp_no_unknown': (comp"'!='"'immune')&(comp"'!='"'unknown'),
+ 'max_comp_with_unknown': (comp"'!='"'immune'),
+ 'ptprc_less_1': S['immune']<1.0,
+ 'ptprc_less_0.8': S['immune']<0.8,
+ 'nonimmune_score_wins': np.maximum.reduce([S['epithelial'],S['endo'],S['fibro']]) > S['immune'],
+}
+# basal cell definitions
+for lname,lset in sets_lusc.items():
+    print('\\nLUSCDEF', lname, len(lset), sorted(lset))
+    for bth in [0.15,0.3,0.5,0.8,1.0]:
+        basal_lusc=np.isin(sample, list(lset)) & (comp=='epithelial') & (S['basal']>S['adeno']) & (S['basal']>bth)
+        vals=[]
+        for nd,mask in nonimmune_defs.items():
+            prop=basal_lusc.sum()/mask.sum()
+            vals.append(f'{nd}:{basal_lusc.sum()}/{mask.sum()}={prop*100:.1f}->r{round(prop*100/20)*20}')
+        print('basal_th',bth,' | '.join(vals))
+PY"

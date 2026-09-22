@@ -1,0 +1,65 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, csv, collections, os, math
+# local sample counts and first/last barcodes
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+    cats=[x.decode() for x in f['obs/sampleID/categories'][:]]
+    codes=f['obs/sampleID/codes'][:]
+    idx=[x.decode() for x in f['obs/_index'][:]]
+local=[]
+for i,cat in enumerate(cats):
+    inds=[j for j,c in enumerate(codes) if c==i]
+    local.append((cat,len(inds),idx[inds[0]],idx[inds[-1]]))
+print('local first few')
+for x in local[:10]: print(x)
+
+# read portal metadata Tumor LUAD/LUSC only, maintain order
+tumor=[]
+with open('portal_meta.csv', newline='') as fh:
+    r=csv.DictReader(fh)
+    for row in r:
+        if row['Tissue']=='Tumor' and row['Disease'] in ('LUAD','LUSC'):
+            tumor.append(row)
+print('tumor rows',len(tumor))
+# group contiguous by SampleID
+orig=[]
+start=0
+for sid, group in __import__('itertools').groupby(tumor, key=lambda x:x['SampleID']):
+    g=list(group)
+    orig.append((sid,len(g),g[0]['Cells'],g[-1]['Cells'],g[0]['PatientID'],g[0]['Disease'],collections.Counter(x['CellName'] for x in g)))
+print('orig groups',len(orig))
+for x in orig[:10]: print(x[:6])
+# compare counts with local
+mismatch=[]
+for a,b in zip(local,orig):
+    if a[1]"'!=b[1] or a[2].split('"'_',1)[1]"'!=b[2].split('"'_',1)[1] or a[3].split('_',1)[1]"'!=b[3].split('"'_',1)[1]:
+        mismatch.append((a,b[:6], a[2].split('_',1)[1], b[2].split('_',1)[1], a[3].split('_',1)[1], b[3].split('_',1)[1]))
+print('mismatches',len(mismatch))
+for x in mismatch[:5]: print(x)
+# map exact by group order
+mapping=[]
+for a,b in zip(local,orig):
+    mapping.append({'Patient':a[0], 'n':a[1], 'orig':b[0], 'patientid':b[4], 'disease':b[5], 'counts':b[6]})
+print('\\nselected:')
+for pat in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    m=[x for x in mapping if x['Patient']==pat][0]
+    dc=m['counts'].get('DC',0)
+    print(pat, m['orig'], m['patientid'], m['disease'], 'n',m['n'],'DC',dc,'prop',dc/m['n'], 'counts', m['counts'].most_common())
+# LUSC among selected highest DC proportion
+candidates=[]
+for pat in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    m=[x for x in mapping if x['Patient']==pat][0]
+    if m['disease']=='LUSC':
+        candidates.append((m['counts'].get('DC',0)/m['n'], pat, m))
+print('LUSC candidates sorted')
+for prop,pat,m in sorted(candidates, reverse=True): print(pat, prop)
+
+nonimmune={'AT1','AT2','Basal','Cilia','Club','EC','Fib','NE'}
+total_nonimmune=0
+lusc_basal=0
+for m in mapping:
+    for cn,n in m['counts'].items():
+        if cn in nonimmune:
+            total_nonimmune+=n
+            if m['disease']=='LUSC' and cn=='Basal': lusc_basal+=n
+print('total_nonimmune',total_nonimmune,'lusc_basal',lusc_basal,'pct',100*lusc_basal/total_nonimmune,'nearest20',round((100*lusc_basal/total_nonimmune)/20)*20)
+PY"

@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+import statsmodels.api as sm
+hic=pd.read_csv('ep.interactions.q1.hic.csv'); expr=pd.read_csv('ep.interactions.q1.expr.csv')
+bg=hic[hic.set=='background']; cand=hic[hic.set=='candidate'].copy(); cand['total']=cand[['count_rep1','count_rep2','count_rep3']].sum(axis=1)
+long=bg.melt(id_vars=['pair_id','distance_bp'], value_vars=['count_rep1','count_rep2','count_rep3'], var_name='rep', value_name='count'); long['logd']=np.log(long.distance_bp)
+pois=sm.GLM(long['count'], sm.add_constant(long[['logd']]), family=sm.families.Poisson()).fit()
+mu=pois.predict(sm.add_constant(np.log(cand.distance_bp)))
+cand['enrich']=np.log2((cand['total']/3)/mu)
+rows=[]
+for pair in expr.pair_id.unique():
+ d=expr[expr.pair_id==pair]; c=d[d.condition=='control'].sort_values(['guide_id','replicate']).rna_count.values; p=d[d.condition=='perturbed'].sort_values(['guide_id','replicate']).rna_count.values
+ fc=np.mean(np.log2(p/c)); _,pv=stats.ttest_rel(np.log2(p),np.log2(c)); rows.append((pair,abs(fc),pv,fc))
+ex=pd.DataFrame(rows,columns=['pair_id','absfc','p_expr','logFC'])
+cand=cand.merge(ex,on='pair_id')
+# regression absfc ~ enrich, residual
+for yname,y in [('absfc',cand.absfc),('neglogp_expr',-np.log10(cand.p_expr))]:
+ slope,intercept,r,pv,se=stats.linregress(cand.enrich,y)
+ pred=intercept+slope*cand.enrich
+ cand['res_'+yname]=y-pred
+ print('\\nRegression',yname,'slope',slope,'r',r,'pv',pv)
+ print(cand[['pair_id','enrich',yname,'res_'+yname]].sort_values('res_'+yname).to_string(index=False))
+# Spearman between enrich rank and effect ranks
+print('Spearman enrich vs absfc',stats.spearmanr(cand.enrich,cand.absfc))
+print('Spearman enrich vs -logp',stats.spearmanr(cand.enrich,-np.log10(cand.p_expr)))
+PY"

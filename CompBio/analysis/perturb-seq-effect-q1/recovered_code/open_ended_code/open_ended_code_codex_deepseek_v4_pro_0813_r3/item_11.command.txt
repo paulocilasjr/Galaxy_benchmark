@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+
+with gzip.open('filtered_feature_bc_matrix/matrix.mtx.gz','rb') as f:
+    X=mmread(f)
+X=X.tocsc()
+feat=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: feat.append(line.rstrip('\\n').split('\\t')[0])
+bc=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    for line in f: bc.append(line.rstrip('\\n'))
+calls={}
+with open('protospacer_calls_per_cell.csv','rt') as f:
+    r=csv.reader(f); next(r)
+    for row in r: calls[row[0]]=row[2]
+ref={}
+with open('feature_reference.csv','rt') as f:
+    r=csv.reader(f); next(r)
+    for row in r: ref[row[0]]=row[7]
+guides=[ref[calls[b]] for b in bc]
+u,cnt=np.unique(guides, return_counts=True)
+print('target counts')
+for a,b in zip(u,cnt): print(a,b)
+lib=np.asarray(X.sum(axis=0)).ravel()
+print('lib quantiles',np.quantile(lib,[0,.05,.5,.95,1]), 'mean',lib.mean())
+# per pathway first20 total
+idx=[feat.index(g) for g in feat[:20]]
+path_sums=np.asarray(X[idx,:].sum(axis=0)).ravel()
+print('pathway sum quantiles',np.quantile(path_sums,[0,.05,.5,.95,1]))
+# counts of nonzero genes per cell
+nnz=np.asarray((X>0).sum(axis=0)).ravel()
+print('nnz genes quantiles',np.quantile(nnz,[0,.05,.5,.95,1]))
+# top exp cells by total
+for i in np.argsort(lib)[-5:]:
+    print('top cell',bc[i],lib[i],calls[bc[i]])
+PY"

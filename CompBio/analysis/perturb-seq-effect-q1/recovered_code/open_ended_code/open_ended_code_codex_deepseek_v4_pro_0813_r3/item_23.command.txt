@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv,numpy as np
+from scipy.io import mmread
+from scipy import stats
+X=mmread(gzip.open('filtered_feature_bc_matrix/matrix.mtx.gz','rb')).tocsc()
+feat=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+ for line in f: feat.append(line.rstrip('\\n').split('\\t')[0])
+bc=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+ for line in f: bc.append(line.rstrip('\\n'))
+calls={}
+with open('protospacer_calls_per_cell.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: calls[row[0]]=row[2]
+ref={}
+with open('feature_reference.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: ref[row[0]]=row[7]
+guides=np.array([ref[calls[b]] for b in bc])
+lib=np.asarray(X.sum(axis=0)).ravel().astype(float)
+X=X.toarray().astype(float)
+logcpm=np.log1p(X*10000/lib[None,:])
+controls=guides=='Non-Targeting'
+# compute per-target median of per-cell pathway mean excluding own target
+rows=[]
+for t in np.unique(guides):
+ if t=='Non-Targeting': continue
+ # exclude target if in pathway
+ idx=[i for i,g in enumerate(feat[:20]) if g"'!=t]
+ score=np.median(logcpm[idx].mean(axis=0)[guides==t])
+ # effect as median diff
+ cm=np.median(logcpm[idx].mean(axis=0)[controls])
+ rows.append((t, np.sum(guides==t), score-cm, score, cm))
+for r in sorted(rows, key=lambda r:r[2])[:15]: print(r)
+# robust z among target effects excluding targets with n<10
+vals=[]
+for t in np.unique(guides):
+ if t=='"'Non-Targeting': continue
+ idx=[i for i,g in enumerate(feat[:20]) if g"'!=t]
+ score=logcpm[idx].mean(axis=0)
+ d=np.mean(score[guides==t])-np.mean(score[controls])
+ n=np.sum(guides==t)
+ if n>=10: vals.append((t,n,d))
+arr=np.array([v[2] for v in vals])
+med=np.median(arr); mad=np.median(np.abs(arr-med))*1.4826
+print('"'n>=10 median mad',med,mad)
+for v in sorted(vals,key=lambda x:x[2])[:10]: print(v,'z',(v[2]-med)/mad if mad else 0)
+PY"

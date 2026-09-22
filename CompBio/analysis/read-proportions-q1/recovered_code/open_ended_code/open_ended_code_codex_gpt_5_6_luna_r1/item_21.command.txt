@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+import gzip,math
+import numpy as np
+from scipy.optimize import minimize
+fa={}
+for l in open('read.proportions.q1.fa'):
+ l=l.strip()
+ if l.startswith('>'): n=l[1:].split()[0];fa[n]=''
+ else:fa[n]+=l
+keys=list(fa);L=36;M=2965
+comp=str.maketrans('ACGTN','TGCAN');rc=lambda s:s.translate(comp)[::-1]
+ix=defaultdict(set)
+for ci,c in enumerate(keys):
+ for p in range(M):ix[fa[c][p:p+L]].add(ci)
+def matchset(q): return tuple(sorted(ix.get(q,set())|ix.get(rc(q),set())))
+obs=Counter();
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while f.readline():
+  r=f.readline().strip();f.readline();f.readline(); S=matchset(r)
+  if S:obs[S]+=1
+print('exact',sum(obs.values()), 'classes',len(obs))
+for S,n in sorted(obs.items()):print(''.join(str(i+1 for i in S),),n)
+pred={}
+for ci,c in enumerate(keys):
+ cnt=Counter()
+ for p in range(M):cnt[matchset(fa[c][p:p+L])]+=1
+ pred[ci]=cnt
+ print('source',ci+1, {''.join(str(i+1 for i in S)):v for S,v in sorted(cnt.items())})
+classes=sorted(set(obs)|set().union(*(set(p) for p in pred.values())))
+A=np.array([[pred[ci][S]/M for ci in range(4)] for S in classes])
+y=np.array([obs[S]/sum(obs.values()) for S in classes])
+fun=lambda x:-sum(y[j]*math.log(max(1e-300,float(A[j]@x))) for j in range(len(classes)))
+for init in ([.25]*4,[.5,.2,.2,.1],[.2,.3,.3,.2]):
+ res=minimize(fun,init,bounds=[(0,1)]*4,constraints={'type':'eq','fun':lambda x:x.sum()-1},method='SLSQP',options={'ftol':1e-14,'maxiter':1000})
+ print('MLE',res.x,'objective',res.fun,res.success)
+print('lstsq',np.linalg.lstsq(A,y,rcond=None)[0])
+print('rows')
+for S,row,yy in zip(classes,A,y):print(''.join(str(i+1) for i in S),yy,row)
+PY"

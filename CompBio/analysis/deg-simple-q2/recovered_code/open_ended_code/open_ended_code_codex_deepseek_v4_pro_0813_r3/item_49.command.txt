@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+# use previous quick aggregation by loading quant, mapping, compute TV and sort by total
+import pandas as pd
+info={}
+for line in open('gencode.v47.transcripts.fa'):
+    if line.startswith('>'):
+        p=line[1:].rstrip().split('|'); info[p[0]]=(p[1],p[5] if len(p)>5 else '',p[7] if len(p)>7 else '')
+A=pd.read_csv('salmon_A/quant.sf',sep='\\t'); B=pd.read_csv('salmon_B/quant.sf',sep='\\t')
+for df in [A,B]:
+    df['tid']=df.Name.str.split('|').str[0]
+    df['gid']=df.tid.map(lambda x: info[x][0] if x in info else x)
+    df['sym']=df.tid.map(lambda x: info[x][1] if x in info else '')
+    df['type']=df.tid.map(lambda x: info[x][2] if x in info else '')
+gA=A.groupby('gid').agg(reads=('NumReads','sum'),sym=('sym','first'),type=('type','first'))
+gB=B.groupby('gid').agg(reads=('NumReads','sum'))
+# per gene TV based on TPM fractions
+merged=A[['Name','tid','gid','TPM']].merge(B[['Name','TPM']],on='Name',suffixes=('_A','_B'))
+merged['fA']=0.;merged['fB']=0.
+for gid,grp in merged.groupby('gid'):
+    ta=grp.TPM_A.sum(); tb=grp.TPM_B.sum()
+    if ta>0: merged.loc[grp.index,'fA']=grp.TPM_A/ta
+    if tb>0: merged.loc[grp.index,'fB']=grp.TPM_B/tb
+rows=[]
+for gid,grp in merged.groupby('gid'):
+    if len(grp)<2: continue
+    a=gA.loc[gid,'reads']; b=gB.loc[gid,'reads']
+    if a<10 or b<10: continue
+    tv=(grp.fA-grp.fB).abs().sum()/2
+    rows.append((tv,a+b,a,b,gid,gA.loc[gid,'sym'],gA.loc[gid,'type']))
+rows.sort(key=lambda x:(x[0],x[1]), reverse=True)
+print('Top 50 by TV then total counts')
+for r in rows[:50]:
+    print(f'{r[5]:12} {r[4]:20} total={r[1]:6.1f} A={r[2]:5.1f} B={r[3]:5.1f} TV={r[0]:.3f} {r[6]}')
+PY"

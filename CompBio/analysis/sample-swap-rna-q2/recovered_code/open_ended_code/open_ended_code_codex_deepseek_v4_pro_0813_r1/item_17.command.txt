@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,re
+from html.parser import HTMLParser
+# parse markers into gene->cluster (last duplicate)
+markers={}
+for f in ['markers_p1.html','markers_p2.html']:
+    txt=open(f).read()
+    for row in txt.split('<tr>')[1:]:
+        cells=[re.sub('<["'^>]+>'"','',c).strip() for c in re.findall(r'<td["'^>]*>(.*?)</td>'"', row, flags=re.S)]
+        cells=[re.sub(r'\\s+',' ',c).strip() for c in cells]
+        if len(cells)>=7:
+            g=cells[4]; cl=cells[5]
+            if g and g"'!='"'':
+                markers[g]=cl
+print('markers',len(markers),'unique genes',len(set(markers)))
+# read expression
+expr={}
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r)
+    for row in r:
+        if not row: continue
+        g=row[0]; vals=list(map(float,row[1:]))
+        expr[g]=vals
+print(len(expr),header)
+# for each marker cluster compute mean across genes expression per column (z-scored maybe)
+import numpy as np
+cols=header
+classes=['Cortex','Epidermis','Endodermis','Phloem','Provascular cells','Root cap','Xylem']
+for cl in classes:
+    genes=[g for g,c in markers.items() if c==cl]
+    mat=np.array([expr[g] for g in genes if g in expr])
+    print('\\n',cl,'genes',mat.shape)
+    if mat.size:
+        means=mat.mean(axis=0)
+        # z per col? print top
+        inds=np.argsort(means)[::-1]
+        print([(cols[i],round(means[i],1)) for i in inds[:5]])
+        print('min',[(cols[i],round(means[i],1)) for i in inds[-3:]])
+        # genes with max column
+        for g in genes:
+            if g in expr:
+                v=expr[g]
+                i=int(np.argmax(v)); print(' ',g,cols[i],round(v[i],1))
+PY"

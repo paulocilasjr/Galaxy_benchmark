@@ -1,0 +1,17 @@
+/bin/bash -lc "python - <<'PY'
+import torch
+from pure_caduceus import load_model,affine_prefix_scan
+m=load_model().eval().to('mps'); mm=m.layers[0].mixer.mamba_fwd; ids=torch.tensor([[7,8,9,10]*25]).to('mps')
+with torch.no_grad():
+ h=m.embeddings(ids); xz=mm.in_proj(h); x,z=xz.chunk(2,-1); print('xz',torch.isfinite(xz).all().item(),xz.min().item(),xz.max().item(),flush=True)
+ x=x.transpose(1,2); x=torch.nn.functional.conv1d(torch.nn.functional.pad(x,(3,0)),mm.conv1d.weight,mm.conv1d.bias,groups=512); x=mm.act(x); print('conv',torch.isfinite(x).all().item(),x.min().item(),x.max().item(),flush=True)
+ bd=x.transpose(1,2).reshape(100,512); xd=mm.x_proj(bd); print('xd',torch.isfinite(xd).all().item(),xd.min().item(),xd.max().item(),flush=True)
+ dt_raw,B,C=torch.split(xd,[16,16,16],-1); dt=torch.nn.functional.linear(dt_raw,mm.dt_proj.weight); dt=dt.reshape(1,100,512).transpose(1,2); B=B.reshape(1,100,16).transpose(1,2); C=C.reshape(1,100,16).transpose(1,2)
+ print('dt raw',dt.min().item(),dt.max().item(),'bias',mm.dt_proj.bias.min().item(),mm.dt_proj.bias.max().item(),flush=True)
+ delta=torch.nn.functional.softplus(dt+mm.dt_proj.bias.float()[None,:,None]); print('delta',torch.isfinite(delta).all().item(),delta.min().item(),delta.max().item(),flush=True)
+ A=-torch.exp(mm.A_log.float()); print('A',torch.isfinite(A).all().item(),A.min().item(),A.max().item(),flush=True)
+ a=torch.exp(delta.unsqueeze(-1)*A[None,:,None,:]); print('a',torch.isfinite(a).all().item(),a.min().item(),a.max().item(),flush=True)
+ xc=x.transpose(1,2); b=delta.unsqueeze(-1)*B.transpose(1,2).unsqueeze(1)*xc.transpose(1,2).unsqueeze(-1); print('b',torch.isfinite(b).all().item(),b.min().item(),b.max().item(),flush=True)
+ st=affine_prefix_scan(a,b); print('st',torch.isfinite(st).all().item(),st.min().item(),st.max().item(),flush=True)
+ y=(st*C.transpose(1,2).unsqueeze(1)).sum(-1); print('y',torch.isfinite(y).all().item(),y.min().item(),y.max().item(),flush=True)
+PY"

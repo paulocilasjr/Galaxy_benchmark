@@ -1,0 +1,13 @@
+/bin/bash -lc "python - <<'PY'
+import json,time,torch,numpy as np
+from pure_caduceus import load_model
+seq=json.load(open('interval_response.json'))['dna'].upper(); ids=torch.tensor([[{'A':7,'C':8,'G':9,'T':10}[b] for b in seq]])
+model=load_model().eval().to('mps'); batch=ids.expand(16,-1).clone();
+for i in range(16): batch[i,i]=3
+t=time.time()
+with torch.no_grad(): logits=model(batch.to('mps')); torch.mps.synchronize()
+ml=logits[torch.arange(16,device='mps'),torch.arange(16,device='mps')]
+for name,inds in [('base4',[7,8,9,10]),('vocab',list(range(16)))]:
+ p=torch.softmax(ml[:,inds],-1); e=-torch.where(p>0,p*torch.log2(p),torch.zeros_like(p)).sum(-1); print(name,e.cpu().numpy())
+print('elapsed',time.time()-t,'finite',bool(torch.isfinite(logits).all()))
+PY"

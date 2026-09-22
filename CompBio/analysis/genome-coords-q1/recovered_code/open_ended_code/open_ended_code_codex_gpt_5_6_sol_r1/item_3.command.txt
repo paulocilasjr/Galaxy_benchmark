@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import chi2_contingency
+p='single_cell_dynamics_question.csv'
+d=pd.read_csv(p).sort_values(['cell_id','time'])
+D=np.sqrt(((d[['enh_x','enh_y','enh_z']].to_numpy()-d[['prom_x','prom_y','prom_z']].to_numpy())**2).sum(1)).reshape(600,250)
+C=(D<=260).astype(np.int8)
+T=d.transcription.to_numpy(np.int8).reshape(600,250)
+print('distance mean median quantiles',D.mean(),np.median(D),np.quantile(D,[0,.1,.25,.5,.75,.9,1]))
+print('C rate T rate',C.mean(),T.mean())
+print('P(T|C),P(T|noC)',T[C==1].mean(),T[C==0].mean())
+print('P(C|T),P(C|noT)',C[T==1].mean(),C[T==0].mean())
+print('lag corr C_t with T_t+lag (positive C leads):')
+for lag in range(-30,31):
+    if lag>=0: x=C[:,:250-lag].ravel(); y=T[:,lag:].ravel()
+    else: x=C[:,-lag:].ravel(); y=T[:,:250+lag].ravel()
+    cor=np.corrcoef(x,y)[0,1]
+    if lag%2==0 or abs(lag)<=5: print(lag,round(cor,5),round(y[x==1].mean()-y[x==0].mean(),5))
+print('T transition by Tprev,Cprev')
+for tp in [0,1]:
+ for cp in [0,1]:
+  mask=(T[:,:-1]==tp)&(C[:,:-1]==cp)
+  print(tp,cp,mask.sum(),T[:,1:][mask].mean())
+print('C transition by Cprev,Tprev')
+for cp in [0,1]:
+ for tp in [0,1]:
+  mask=(C[:,:-1]==cp)&(T[:,:-1]==tp)
+  print(cp,tp,mask.sum(),C[:,1:][mask].mean())
+# onset-triggered means excluding already-on previous state; windows +/-15 and enough range
+for name,X,Y in [('contact onset->T',C,T),('T onset->C',T,C)]:
+ onset=(X[:,1:]==1)&(X[:,:-1]==0)
+ coords=np.argwhere(onset); coords[:,1]+=1
+ coords=coords[(coords[:,1]>=15)&(coords[:,1]<235)]
+ vals=[]
+ for lag in range(-15,16): vals.append(np.mean([Y[i,t+lag] for i,t in coords]))
+ print(name,'n',len(coords)); print(list(zip(range(-15,16),np.round(vals,4))))
+# distance by transcription relative lag / exact continuous associations
+print('mean D T/noT',D[T==1].mean(),D[T==0].mean())
+PY"

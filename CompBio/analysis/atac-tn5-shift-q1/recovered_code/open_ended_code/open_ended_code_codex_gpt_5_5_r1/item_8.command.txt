@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+seq=''.join(l.strip().upper() for l in open('hg38_chrM.fa') if not l.startswith('>'))
+L=len(seq)
+starts=[]; ends=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        c,s,e,*rest=line.split('\\t')
+        if c=='chrM':
+            starts.append(int(s)); ends.append(int(e))
+print('chrM len',L,'n',len(starts),'start range',min(starts),max(starts),'end range',min(ends),max(ends))
+comp=str.maketrans('ACGTN','TGCAN')
+# window positions relative to coordinate p, get base at p+r (0-based). End orientation uses reverse complement around p: base at p-1-r? Need try variants.
+def profile(points, orient='plus', half=20):
+    bases='ACGT'
+    counts={r:{b:0 for b in bases} for r in range(-half,half+1)}
+    n=0
+    for p in points:
+        ok=True
+        for r in range(-half,half+1):
+            idx=(p+r) if orient=='plus' else (p-1-r) # reverse complement coordinate around BED end boundary
+            if idx<0 or idx>=L: ok=False; break
+            b=seq[idx]
+            if orient"'!='"'plus': b=b.translate(comp)
+            if b not in bases: ok=False; break
+        if not ok: continue
+        n+=1
+        for r in range(-half,half+1):
+            idx=(p+r) if orient=='plus' else (p-1-r)
+            b=seq[idx]
+            if orient"'!='"'plus': b=b.translate(comp)
+            counts[r][b]+=1
+    return counts,n
+for orient, pts in [('start+',starts),('endrc',ends)]:
+    counts,n=profile(pts, 'plus' if orient=='start+' else 'minus', 20)
+    print('\\n',orient,'n',n)
+    for r in range(-10,11):
+        total=sum(counts[r].values())
+        freqs={b:counts[r][b]/total for b in 'ACGT'}
+        ic=2+sum(p*math.log2(p) for p in freqs.values() if p>0)
+        cons=max(freqs,key=freqs.get)
+        print(f'{r:3d} {cons} {freqs[cons]:.3f} IC {ic:.3f} A{freqs[\"A\"]:.2f} C{freqs[\"C\"]:.2f} G{freqs[\"G\"]:.2f} T{freqs[\"T\"]:.2f}')
+PY"

@@ -1,0 +1,58 @@
+/bin/bash -lc "cat > analyze_consensus.py <<'PY'
+import json
+from pathlib import Path
+from collections import Counter
+from Bio.motifs import matrix
+from Bio.Seq import Seq
+import re
+
+seq=''.join(l.strip() for l in Path('dna_with_secret_motif.fasta').read_text().splitlines() if not l.startswith('>'))
+allm=json.loads(Path('motifs.json').read_text())
+
+def pfm_to_consensus(pfm):
+    # columns
+    cols=zip(*(pfm[a] for a in 'ACGT'))
+    cons=[]
+    for col in cols:
+        total=sum(col)
+        best=max(col)
+        # IUPAC if second close? Use strict max
+        if best == 0:
+            cons.append('N')
+        else:
+            # max letters
+            letters=[a for a,n in zip('ACGT',col) if n==best]
+            if len(letters)==1:
+                cons.append(letters[0])
+            else:
+                # use IUPAC mapping sorted ACGT
+                cons.append(IUPAC.get(''.join(sorted(letters)),'N'))
+    return ''.join(cons)
+
+IUPAC={
+ 'AC':'M','AG':'R','AT':'W','CG':'S','CT':'Y','GT':'K',
+ 'ACG':'V','ACT':'H','AGT':'D','CGT':'B','ACGT':'N'
+}
+
+def count_overlap(s, pat):
+    # regex degenerates
+    mapping={'A':'A','C':'C','G':'G','T':'T','M':'[AC]','R':'[AG]','W':'[AT]','S':'[CG]','Y':'[CT]','K':'[GT]','V':'[ACG]','H':'[ACT]','D':'[AGT]','B':'[CGT]','N':'[ACGT]'}
+    regex=''.join(mapping.get(c,c) for c in pat)
+    return len(re.findall('(?='+regex+')', s, re.IGNORECASE))
+
+def rc(pat):
+    return str(Seq(pat).reverse_complement())
+
+rows=[]
+for m in allm:
+    pfm=m['pfm']
+    cons=pfm_to_consensus(pfm)
+    c_plus=count_overlap(seq,cons)
+    c_minus=count_overlap(seq,rc(cons))
+    rows.append((c_plus+c_minus,c_plus,c_minus,m['matrix_id'],m['name'],m['version'],cons,rc(cons),len(cons)))
+    print(f\"{m['matrix_id']:10s} {m['name']:6s} v{m['version']} len={len(cons):2d} cons={cons:20s} rc={rc(cons):20s} +={c_plus:5d} -={c_minus:5d} total={c_plus+c_minus:5d}\")
+print('\\nTop by total:')
+for r in sorted(rows, reverse=True)[:30]:
+    print(r)
+PY
+python3 analyze_consensus.py"

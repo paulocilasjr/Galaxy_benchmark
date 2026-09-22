@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import numpy as np
+from scipy import sparse
+from scipy.io import mmwrite
+z=np.load('allele_counts.npz'); keys=z['keys'];dp=z['dp'].astype(np.int64);ad=z['ad'].astype(np.int64);sites=z['sites'];cb=z['barcodes'];rows=keys>>16;cells=keys&65535;ns=len(sites)
+sp=np.bincount(rows,minlength=ns);sd=np.bincount(rows,weights=dp,minlength=ns);sa=np.bincount(rows,weights=ad,minlength=ns);f=sa/np.maximum(sd,1)
+base_keep=np.flatnonzero((sp>=50)&(sd>=50)&(f>=.05)&(f<=.5))
+for win in [100,1000,10000,100000]:
+ keep=[];last={}
+ for r in base_keep:
+  c,p=sites[r,0],int(sites[r,1])
+  if c not in last or p-last[c]>=win: keep.append(int(r));last[c]=p
+ keep=np.array(keep); rid={r:i for i,r in enumerate(keep)}; q=np.array([rid.get(int(r),-1) for r in rows]);ok=q>=0
+ out=f'cellSNP_50_ind{win}';os.makedirs(out,exist_ok=True)
+ mmwrite(out+'/cellSNP.tag.AD.mtx',sparse.coo_matrix((ad[ok],(q[ok],cells[ok])),shape=(len(keep),len(cb))))
+ mmwrite(out+'/cellSNP.tag.DP.mtx',sparse.coo_matrix((dp[ok],(q[ok],cells[ok])),shape=(len(keep),len(cb))))
+ open(out+'/cellSNP.samples.tsv','w').write('\\n'.join(map(str,cb.tolist()))+'\\n')
+ with open(out+'/cellSNP.base.vcf','w') as fh:
+  fh.write('##fileformat=VCFv4.2\\n##source=local_pileup\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\n')
+  for j,r in enumerate(keep):
+   c,p,ref,alt=sites[r];fh.write(f'{c}\\t{p}\\tS{r}\\t{ref}\\t{alt}\\t.\\tPASS\\t.\\n')
+ print(out,len(keep),ok.sum())
+PY
+for d in cellSNP_50_ind*; do gzip -c \""'$d/cellSNP.base.vcf" > "$d/cellSNP.base.vcf.gz"; done
+for d in cellSNP_50_ind*; do for n in 2 3 4 5 6; do vireo -c "$d" -N "$n" -o "${d}_N$n" --noPlot -M 15 --randSeed 1 -p 4 > "${d}_N$n.log" 2>&1; done; done
+python - <<'"'PY'
+import re,glob,os
+for d in sorted(glob.glob('cellSNP_50_ind*')):
+ if not os.path.isdir(d): continue
+ print(d)
+ for n in range(2,7):
+  s=open(f'{d}_N{n}.log').read();lb=re.findall(r'lower bound ranges \\[(["'^]]+)'"',s)[0]
+  lines=open(f'{d}_N{n}/summary.tsv').read().strip().splitlines()[1:]
+  print(n,'LB',lb,'sizes',','.join(x.split('\\t')[1] for x in lines))
+PY"

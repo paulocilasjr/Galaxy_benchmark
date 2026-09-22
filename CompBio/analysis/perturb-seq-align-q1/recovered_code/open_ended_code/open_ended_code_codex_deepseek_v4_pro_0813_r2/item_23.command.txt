@@ -1,0 +1,68 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import pearsonr, spearmanr
+from collections import defaultdict
+warnings.filterwarnings('ignore')
+
+def load_common():
+ files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+ for fn in files:
+  with h5py.File(fn,'r') as f:
+   n_obs,n_var=f['X'].attrs['shape']
+   X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+   gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+   gc=f['obs/guide/codes'][:]
+   g=np.array([gcats[i] for i in gc])
+   var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+   out.append((X,g,var))
+ (X1,g1,v1),(X2,g2,v2)=out
+ common=[x for x in v1 if x in set(v2)]
+ X1=X1[:,[v1.index(x) for x in common]]; X2=X2[:,[v2.index(x) for x in common]]
+ return X1,g1,X2,g2,common
+X1,g1,X2,g2,var=load_common()
+def norm(X):
+ X=X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4); return X.tocsr()
+X1=norm(X1); X2=norm(X2)
+nt1=np.array([g.startswith('NT-') for g in g1]); nt2=np.array([g.startswith('NT-') for g in g2])
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); mu2=np.asarray(X2[nt2].mean(0)).ravel()
+def sigs(X,guides,mu):
+ cats=[g for g in sorted(set(guides)) if not g.startswith('NT-')]
+ d={}
+ for g in cats:
+  d[g]=np.asarray(X[np.where(guides==g)[0]].mean(0)).ravel()-mu
+ return d
+rs=sigs(X1,g1,mu1); qs=sigs(X2,g2,mu2)
+rc=list(rs); qc=list(qs)
+def target(g): return re.sub(r'-I\\d+"'$'"','',g)
+rt={g:target(g) for g in rc}
+# For each target, top genes from ref target signature; compute query correlation. Use multiple ntop and metric.
+for ntop in [20,30,50,80,100,150]:
+ print('\\n=== ntop',ntop)
+ assignments={}
+ used=set()
+ # greedy by confidence across all target-guide pairs
+ pairs=[]
+ for r in rc:
+  sig=rs[r]; order=np.argsort(-np.abs(sig))[:ntop]
+  for q in qc:
+   corr=pearsonr(qs[q][order], sig[order])[0]
+   pairs.append((corr,r,q))
+ pairs.sort(reverse=True)
+ for corr,r,q in pairs:
+  if r not in assignments and q not in used:
+   assignments[r]=q; used.add(q)
+ if len(assignments)"'!=len(rc):
+  print('"'assigned',len(assignments),'of',len(rc))
+ # query->ref
+ q2r={q:r for r,q in assignments.items()}
+ print('targets requested:')
+ for t in ['PABPC1','NUDT21','LEO1']:
+  print(t, 'query', q2r.get([r for r in rc if rt[r]==t][0]), 'target guide', [r for r in rc if rt[r]==t][0])
+ # print full sorted by guide number
+ print('full mapping (guide -> target):')
+ for q in sorted(qc, key=lambda s:int(s[5:])):
+  r=q2r.get(q); print(q, rt[r] if r else None, end='; ')
+ print()
+PY
+python [REDACTED LOCAL PATH]"

@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import json, pyBigWig, time, math
+c=json.load(open('candidate_bw.json'))[0]
+chroms=['chr1','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrX','chrY']
+# target 1Mb bins
+from collections import defaultdict
+targ=defaultdict(float); keys=[]
+for line in open('counts.tsv'):
+ ch,s,e,v=line.split(); s=int(s)
+ idx=s//1000000
+ targ[(ch,idx)]+=float(v)
+# build in same order as bw stats per chrom
+vec=[]; obs=[]
+for f in c['files']:
+ bw=pyBigWig.open(f['url'])
+ add=[]
+ for ch in chroms:
+  L=bw.chroms(ch); n=(L+999999)//1000000
+  arr=bw.stats(ch,0,L,nBins=n,type='mean')
+  for i,val in enumerate(arr): add.append(val)
+ bw.close()
+ if not vec: vec=[0.0]*len(add)
+ for i,val in enumerate(add): vec[i]+=0.0 if val is None else val
+print('len',len(vec))
+# target keys matching generated: need construct from chrom lengths
+Ldict={ch: pyBigWig.open(c['files'][0]['url']).chroms(ch) for ch in chroms}
+obs=[]
+for ch in chroms:
+ n=(Ldict[ch]+999999)//1000000
+ for i in range(n): obs.append(targ[(ch,i)])
+def corr(a,b):
+ n=len(a); ma=sum(a)/n; mb=sum(b)/n
+ cov=sum((x-ma)*(y-mb) for x,y in zip(a,b)); va=sum((x-ma)**2 for x in a); vb=sum((y-mb)**2 for y in b)
+ return cov/math.sqrt(va*vb) if va and vb else 0
+print('corr',corr(obs,vec))
+print('sums',sum(obs),sum(vec))
+PY"

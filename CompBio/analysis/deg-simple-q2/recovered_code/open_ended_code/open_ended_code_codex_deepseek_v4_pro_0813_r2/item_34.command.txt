@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, re, gzip, collections, math
+# parse annotation
+annot='Homo_sapiens.GRCh38.113.gtf.gz'
+tx2gene={}; gene2tx=collections.defaultdict(set)
+with gzip.open(annot,'rt') as fh:
+    for line in fh:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        a=dict(re.findall(r'(\\S+?)\\s+\"(["'^"]*)"'"', p[8]))
+        tid=a.get('transcript_id'); gn=a.get('gene_name')
+        if tid and gn and tid not in tx2gene:
+            tx2gene[tid]=gn; gene2tx[gn].add(tid)
+def base(ref):
+    return re.sub(r'\\.\\d+"'$'"','',ref)
+A=pd.read_csv('kallisto_A/abundance.tsv',sep='\\t')
+B=pd.read_csv('kallisto_B/abundance.tsv',sep='\\t')
+A['base']=A.target_id.map(base); B['base']=B.target_id.map(base)
+A['gene']=A.base.map(tx2gene); B['gene']=B.base.map(tx2gene)
+print('A total tpm',A.tpm.sum(),'B',B.tpm.sum())
+# group by gene
+rows=[]
+for gene, txs in gene2tx.items():
+    a=A[A.gene==gene]; b=B[B.gene==gene]
+    if a.empty and b.empty: continue
+    # use TPM aggregated
+    ta=a.tpm.sum(); tb=b.tpm.sum()
+    if ta+tb < 10: continue
+    # merge transcripts total tpm >=1 maybe
+    m=a[['base','tpm','est_counts']].merge(b[['base','tpm','est_counts']],on='base',how='outer',suffixes=('_A','_B')).fillna(0)
+    m=m[(m.tpm_A+m.tpm_B)>=1]
+    if len(m)<2: continue
+    m['pA']=m.tpm_A/ta if ta>0 else 0
+    m['pB']=m.tpm_B/tb if tb>0 else 0
+    m['diff']=(m.pA-m.pB).abs()
+    maxd=m['diff'].max()
+    # total abs sum diff = 2 * DTE distance
+    rows.append((maxd, ta, tb, gene, len(m), m.sort_values('diff',ascending=False)))
+rows.sort(reverse=True)
+print('top 60 by max transcript TPM proportion difference')
+for maxd,ta,tb,gene,n,m in rows[:60]:
+    print(f'{gene:15s} TPM A={ta:.1f} B={tb:.1f} maxdiff={maxd:.3f} n={n}')
+    for _,r in m.head(8).iterrows():
+        print(f'   {r.base:24s} tpmA={r.tpm_A:8.1f} pA={r.pA:.3f} tpmB={r.tpm_B:8.1f} pB={r.pB:.3f} countsA={r.est_counts_A:.1f} countsB={r.est_counts_B:.1f}')
+PY"

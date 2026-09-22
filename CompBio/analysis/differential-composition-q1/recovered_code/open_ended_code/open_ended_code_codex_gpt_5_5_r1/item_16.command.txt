@@ -1,0 +1,44 @@
+/bin/bash -lc "cat > horizontal_cluster_check.py <<'PY'
+# Reproduce k=40 labels and print marker means for the high-confidence horizontal cluster.
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import MiniBatchKMeans
+
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+    next(f); genes=[line.rstrip('\\n').split('\\t')[1].upper() for line in f]
+idx={g:i for i,g in enumerate(genes)}
+with gzip.open('differential.composition.q1.1.mtx.gz','rb') as f: X1=mmread(f).tocsc().astype(np.float32)
+with gzip.open('differential.composition.q1.2.mtx.gz','rb') as f: X2=mmread(f).tocsc().astype(np.float32)
+n1=X1.shape[1]; n2=X2.shape[1]
+C=sparse.vstack([X1.T.tocsr(), X2.T.tocsr()], format='csr').astype(np.float32)
+lib=np.asarray(C.sum(axis=1)).ravel().astype(np.float32)
+C=sparse.diags(1e4/np.maximum(lib,1)).dot(C).tocsr(); C.data=np.log1p(C.data)
+mean=np.asarray(C.mean(axis=0)).ravel(); C2=C.copy(); C2.data**=2; var=np.asarray(C2.mean(axis=0)).ravel()-mean**2
+disp=np.zeros_like(mean); valid=mean>0.005; disp[valid]=var[valid]/(mean[valid]+1e-8)
+markers=['ONECUT1','ONECUT2','LHX1','PROX1','CALB1','CALB2','TFAP2A','RHO','NRL','GLUL','RBPMS','VSX2','TRPM1','ARR3']
+marker_idx=[idx[g] for g in markers if g in idx]
+cols=np.array(sorted(set(np.argsort(disp)[-3000:].tolist()+marker_idx)))
+Z=TruncatedSVD(n_components=50, random_state=1).fit_transform(C[:,cols])
+Z=StandardScaler().fit_transform(Z)
+lab=MiniBatchKMeans(n_clusters=40, random_state=2, n_init=20, batch_size=2048, max_iter=500).fit_predict(Z)
+# identify clusters by horizontal marker score
+hinds=[idx[g] for g in ['ONECUT1','ONECUT2','LHX1','PROX1','CALB1'] if g in idx]
+hscore=np.asarray(C[:,hinds].mean(axis=1)).ravel()
+print('cluster total s1 s2 hscore ONECUT1 ONECUT2 LHX1 PROX1 CALB1 rodscore')
+rodinds=[idx[g] for g in ['RHO','NRL','GNAT1','GNGT1','SAG'] if g in idx]
+rodscore=np.asarray(C[:,rodinds].mean(axis=1)).ravel()
+for cl in np.argsort([hscore[lab==c].mean() for c in range(40)])[::-1][:8]:
+    m=lab==cl
+    vals=[]
+    for g in ['ONECUT1','ONECUT2','LHX1','PROX1','CALB1']:
+        vals.append(np.asarray(C[m,idx[g]].mean(axis=0)).ravel()[0])
+    print(cl, int(m.sum()), int((m[:n1]).sum()), int((m[n1:]).sum()), f'{hscore[m].mean():.3f}', *[f'{v:.3f}' for v in vals], f'{rodscore[m].mean():.3f}')
+# High-confidence thresholds for horizontal marker score
+for t in [0.5,0.75,1.0,1.25,1.5,2.0]:
+    m=hscore>t
+    print('hscore>',t,'s1',int(m[:n1].sum()),m[:n1].mean(),'s2',int(m[n1:].sum()),m[n1:].mean())
+PY
+python3 horizontal_cluster_check.py"

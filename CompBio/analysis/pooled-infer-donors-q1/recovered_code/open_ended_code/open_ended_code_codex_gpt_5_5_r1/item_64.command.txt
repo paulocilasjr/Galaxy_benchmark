@@ -1,0 +1,31 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+import pandas as pd
+c=pd.read_csv('cell_snp.counts.tsv',sep='\\t')
+n_cells=3639; n_sites=1445
+site_minor=np.bincount(c.site, weights=c.minor, minlength=n_sites)
+site_total=np.bincount(c.site, weights=c.total, minlength=n_sites)
+p=np.clip(site_minor/site_total,0.02,0.98)
+rows=c.cell.values; cols=c.site.values; total=c.total.values; minor=c.minor.values
+vals=(minor-total*p[cols])/np.sqrt(total*p[cols]*(1-p[cols])+1e-6)
+# cap extreme high-depth entries from very deep loci/cells
+vals=np.clip(vals, -5, 5)
+X=sparse.csr_matrix((vals,(rows,cols)), shape=(n_cells,n_sites))
+# filter one nearly empty cell? keep all
+svd=TruncatedSVD(n_components=30, random_state=1)
+Z=svd.fit_transform(X)
+print('explained first10',np.round(svd.explained_variance_ratio_[:10],4), 'sum30',svd.explained_variance_ratio_.sum())
+for k in range(2,13):
+    km=KMeans(n_clusters=k, n_init=50, random_state=10).fit(Z[:,:20])
+    lab=km.labels_
+    counts=np.bincount(lab)
+    sil=silhouette_score(Z[:,:20],lab)
+    ch=calinski_harabasz_score(Z[:,:20],lab)
+    db=davies_bouldin_score(Z[:,:20],lab)
+    inertia=km.inertia_
+    print(k,'sizes',sorted(counts, reverse=True),'sil',round(sil,4),'CH',round(ch,1),'DB',round(db,3),'inertia',round(inertia,1))
+PY"

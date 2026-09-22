@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+p='protein.shape.q1.pdb'
+atoms=[]; ca=[]
+for line in open(p):
+    if line.startswith('ATOM'):
+        atom=line[12:16].strip(); chain=line[21]
+        x=float(line[30:38]); y=float(line[38:46]); z=float(line[46:54])
+        atoms.append((chain,atom,x,y,z))
+        if atom=='CA': ca.append((chain,x,y,z))
+
+def arr(sel=None, only_ca=True):
+    src=ca if only_ca else [(c,a,x,y,z) for c,a,x,y,z in atoms]
+    pts=[]; ch=[]
+    for rec in src:
+        if only_ca:
+            c,x,y,z=rec
+        else:
+            c,a,x,y,z=rec
+        if sel is None or c in sel:
+            pts.append([x,y,z]); ch.append(c)
+    return np.array(pts), np.array(ch)
+
+sets=[('ALL','ABCDEF'),('ABC','ABC'),('DEF','DEF'),('A','A'),('D','D'),('small','BCEF')]
+axes=[('XY',np.eye(3)[:,[0,1]]),('XZ',np.eye(3)[:,[0,2]]),('YZ',np.eye(3)[:,[1,2]])]
+colors={c:plt.cm.tab10(i) for i,c in enumerate('ABCDEF')}
+fig,axs=plt.subplots(len(sets),3,figsize=(12,18))
+for i,(name,sel) in enumerate(sets):
+    pts,ch=arr(sel)
+    for j,(an,mat) in enumerate(axes):
+        ax=axs[i,j]
+        uv=pts@mat
+        for c in sorted(set(ch)):
+            m=ch==c
+            ax.scatter(uv[m,0], uv[m,1], s=2, color=colors[c], alpha=.8, linewidths=0)
+            # connect CA in residue order by chain
+            uvc=uv[m]
+            ax.plot(uvc[:,0],uvc[:,1], color=colors[c], alpha=.3, lw=.7)
+        ax.set_title(f'{name} {an}')
+        ax.set_aspect('equal','box'); ax.axis('off')
+fig.tight_layout()
+fig.savefig('projection_axes.png', dpi=200)
+plt.close(fig)
+
+# PCA views for each set
+fig,axs=plt.subplots(len(sets),3,figsize=(12,18))
+for i,(name,sel) in enumerate(sets):
+    pts,ch=arr(sel)
+    X=pts-pts.mean(0)
+    _,_,vh=np.linalg.svd(X, full_matrices=False)
+    comps=vh.T
+    pairs=[(0,1),(0,2),(1,2)]
+    for j,pair in enumerate(pairs):
+        ax=axs[i,j]
+        uv=X@comps[:,pair]
+        for c in sorted(set(ch)):
+            m=ch==c; uvc=uv[m]
+            ax.scatter(uvc[:,0],uvc[:,1],s=2,color=colors[c],alpha=.8,linewidths=0)
+            ax.plot(uvc[:,0],uvc[:,1], color=colors[c], alpha=.3, lw=.7)
+        ax.set_title(f'{name} PC{pair[0]+1}{pair[1]+1}')
+        ax.set_aspect('equal','box'); ax.axis('off')
+fig.tight_layout(); fig.savefig('projection_pca.png', dpi=200); plt.close(fig)
+
+print('saved projection_axes.png projection_pca.png')
+PY"

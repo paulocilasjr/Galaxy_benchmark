@@ -1,0 +1,93 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import spearmanr, pearsonr, rankdata
+from scipy.optimize import linear_sum_assignment
+warnings.filterwarnings('ignore')
+
+def load_common():
+ files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+ for fn in files:
+  with h5py.File(fn,'r') as f:
+   n_obs,n_var=f['X'].attrs['shape']
+   X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+   gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+   gc=f['obs/guide/codes'][:]
+   g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+   out.append((X,g,var))
+ (X1,g1,v1),(X2,g2,v2)=out
+ common=[x for x in v1 if x in set(v2)]
+ X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr(); X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+ return X1,g1,X2,g2,common
+X1,g1,X2,g2,var=load_common()
+def norm(X):
+ X=X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4); return X.tocsr()
+X1=norm(X1); X2=norm(X2)
+nt1=np.array([g.startswith('NT-') for g in g1]); nt2=np.array([g.startswith('NT-') for g in g2])
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); mu2=np.asarray(X2[nt2].mean(0)).ravel()
+def prep(X,g,mu):
+ cats=[gg for gg in sorted(set(g)) if not gg.startswith('NT-')]
+ M=[]; T=[]
+ for gg in cats:
+  idx=g==gg; x=X[idx]; m=np.asarray(x.mean(0)).ravel()-mu
+  v1=np.asarray(x.power(2).mean(0)).ravel()-np.asarray(x.mean(0)).ravel()**2
+  v0=np.asarray(X[~np.isin(g,[gg])].power(2).mean(0)).ravel()-np.asarray(X[~np.isin(g,[gg])].mean(0)).ravel()**2
+  # v0 all non? not important; use NT var
+  denom=np.sqrt(v1/x.shape[0]+(np.asarray(X[nt].power(2).mean(0)).ravel()-mu**2)/nt.sum())
+  t=(m)/np.where(denom==0, np.inf, denom); t=np.where(np.isfinite(t),t,0)
+  M.append(m); T.append(t)
+ return cats,np.array(M),np.array(T)
+rc,rM,rT=prep(X1,g1,mu1); qc,qM,qT=prep(X2,g2,mu2)
+def target(g): return re.sub(r'-I\\d+"'$'"','',g)
+rt=[target(g) for g in rc]
+
+# gene variance from signatures
+stack=np.vstack([rM,qM]); gene_var=np.var(stack,axis=0)
+tstack=np.vstack([rT,qT]); tvar=np.nanvar(tstack,axis=0)
+
+def assign(S, method='max'):
+ # S rows query, cols ref; allow dummy col with 0? Query 32, ref 33
+ if method=='hungarian':
+  cost=-S
+  row,col=linear_sum_assignment(cost)
+  return row,col
+ else:
+  return np.arange(S.shape[0]),np.argmax(S,axis=1)
+
+def show(name,S, idx=None):
+ if idx is not None:
+  S=S[:,idx]
+ row,col=assign(S)
+ mp={qc[i]:rc[j] for i,j in zip(row,col)}
+ print('\\n',name)
+ for t in ['PABPC1','NUDT21','LEO1']:
+  qs=[q for q,r in mp.items() if target(r)==t]
+  print(t, qs, [r for r in mp.values() if target(r)==t])
+ # unassigned refs
+ assigned=set(col); print('unassigned ref:', [rc[j] for j in range(len(rc)) if j not in assigned])
+ print('full q->target:')
+ for q in sorted(qc,key=lambda s:int(s[5:])):
+  if q in mp: print(q,target(mp[q]),end='; ')
+ print()
+
+# Build similarity matrices
+# all genes pearson/spearman
+for idxname,idx in [('all',None),('var500',np.argsort(gene_var)[::-1][:500]),('var1000',np.argsort(gene_var)[::-1][:1000]),('var2000',np.argsort(gene_var)[::-1][:2000]),('tvar500',np.argsort(tvar)[::-1][:500]),('tvar1000',np.argsort(tvar)[::-1][:1000])]:
+ for use_t in [False, True]:
+  M=rT if use_t else rM; Q=qT if use_t else qM
+  base='T' if use_t else 'M'
+  if idx is not None: M=M[:,idx]; Q=Q[:,idx]
+  Sp=np.corrcoef(Q,M)[:len(qc),len(qc):]
+  # Spearman matrix
+  Ss=np.zeros((len(qc),len(rc)))
+  for i in range(len(qc)):
+   for j in range(len(rc)):
+    Ss[i,j]=spearmanr(Q[i],M[j]).correlation
+  # cosine on centered? already centered
+  Qn=Q/(np.linalg.norm(Q,axis=1,keepdims=True)+1e-9); Mn=M/(np.linalg.norm(M,axis=1,keepdims=True)+1e-9)
+  Sc=Qn@Mn.T
+  show(base+'-'+idxname+'-pearson',Sp)
+  show(base+'-'+idxname+'-spearman',Ss)
+  show(base+'-'+idxname+'-cosine',Sc)
+PY
+python [REDACTED LOCAL PATH]"

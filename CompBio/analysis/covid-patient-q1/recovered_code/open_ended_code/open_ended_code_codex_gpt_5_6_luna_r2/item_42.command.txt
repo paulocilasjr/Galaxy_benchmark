@@ -1,0 +1,31 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,pandas as pd,scipy.sparse as sp
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from scipy.stats import spearmanr
+with h5py.File('covid.patients.q1.h5ad','r') as f:
+ cats=f['obs/donor_id/categories'].asstr()[:]; codes=f['obs/donor_id/codes'][:]; n=f['X/indptr'].shape[0]-1; g=f['var/_index'].shape[0]
+ names=f['var/feature_name/categories'].asstr()[:][f['var/feature_name/codes'][:]]; idx={}
+ for i,x in enumerate(names): idx.setdefault(x,i)
+ ip=f['X/indptr'][:]; ds=np.zeros((33,g),float); data=f['X/data']; inds=f['X/indices']
+ for r0 in range(0,n,3000):
+  r1=min(n,r0+3000); a=ip[r0:r1+1]; s,e=int(a[0]),int(a[-1]); mat=sp.csr_matrix((data[s:e],inds[s:e],a-s),shape=(r1-r0,g)); oh=sp.csr_matrix((np.ones(r1-r0,np.float32),(np.arange(r1-r0),codes[r0:r1])),shape=(r1-r0,33)); ds+=(mat.T@oh).T.toarray()
+ cpm=ds/ds.sum(1,keepdims=True)*1e6; x=np.log1p(cpm*100)
+ H=['donor1','donor5','donor11','donor12','donor17','donor21','donor24','donor27','donor29','donor32']; hm=np.array([d in H for d in cats])
+ diff=x[hm].mean(0)-x[~hm].mean(0); ix=np.argsort(diff)[::-1]
+ print('H set',H)
+ print('UP healthy top')
+ for j in ix[:100]: print(names[j],round(diff[j],3),round(np.exp(diff[j]),2))
+ print('\\nUP covid top')
+ for j in ix[-100:][::-1]: print(names[j],round(diff[j],3),round(np.exp(diff[j]),2))
+ # correlations of common signatures with H status, show ranks
+ for gene_set in [['IFI27','IFI44L','IFIT1','IFIT3','ISG15','IFIT2','IFI6','MX1','OAS1','OASL','RSAD2','CCL2','CXCL10','SIGLEC1'],['S100A8','S100A9','FCGR3A','LST1','CTSS','C1QC','MS4A1','CD3D','NKG7','GNLY'],['MEG3','VMO1','FCER1A','RPS4Y1']]:
+  ii=[idx[z] for z in gene_set if z in idx]
+  score=x[:,ii].mean(1)
+  print('\\nscore',gene_set,'healthy/covid',score[hm].mean(),score[~hm].mean(),'r',spearmanr(score,hm).statistic)
+ # table signature values
+ sel=['IFI27','IFI44L','IFIT1','IFIT3','ISG15','IFIT2','IFI6','MX1','OAS1','OASL','RSAD2','CCL2','CXCL10','SIGLEC1','S100A8','S100A9','FCGR3A','LST1','CTSS','C1QC','MS4A1','CD3D','NKG7','GNLY','MEG3','VMO1','FCER1A','RPS4Y1']
+ print(pd.DataFrame({z:x[:,idx[z]] for z in sel},index=cats).loc[hm.tolist()+[]] if False else '')
+ print('\\nall donors selected with H')
+ tab=pd.DataFrame({z:x[:,idx[z]] for z in sel},index=cats); tab.insert(0,'H',hm); print(tab.sort_values(['H'],ascending=False).to_string(float_format=lambda z:f'{z:.2f}'))
+PY"

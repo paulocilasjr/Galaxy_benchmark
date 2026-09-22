@@ -1,0 +1,33 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, concurrent.futures, collections, json
+# get DNase cell-line experiments
+url='https://www.encodeproject.org/search/?type=Experiment&assay_title=DNase-seq&replicates.library.biosample.organism.scientific_name=Homo%20sapiens&assembly=GRCh38&format=json&limit=all'
+exps=requests.get(url,timeout=180).json().get('@graph',[])
+cell_exps=collections.defaultdict(list)
+for exp in exps:
+ if exp.get('biosample_ontology',{}).get('classification')=='cell line':
+  cell_exps[exp['biosample_ontology']['term_name']].append(exp['accession'])
+print('cells',len(cell_exps),'exps',sum(len(v) for v in cell_exps.values()))
+# We'll process each cell line, try experiments in order until find a peak file
+cell_items=[(cell, accs[0]) for cell,accs in cell_exps.items()]
+def get_peak(item):
+ cell,acc=item
+ r=requests.get(f'https://www.encodeproject.org/search/?type=File&dataset=/experiments/{acc}/&format=json&limit=all',timeout=60)
+ files=r.json().get('@graph',[])
+ best=None
+ for pref in ['peaks','hotspots']:
+  for f in files:
+   if f.get('file_format')=='bed' and f.get('output_type')==pref and f.get('file_type')=='bed bed3+':
+    best=f; break
+  if best: break
+ return cell,acc,best
+rows=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+ for cell,acc,best in ex.map(get_peak,cell_items):
+  if best: rows.append((cell,acc,best['accession'],best.get('file_size'),best.get('output_type')))
+print('got',len(rows),'of',len(cell_items))
+with open('dnase_peaks.tsv','w') as f:
+ f.write('cell\\texperiment\\tfile\\tfile_size\\toutput_type\\n')
+ for r in rows: f.write('\\t'.join(map(str,r))+'\\n')
+print(rows[:10])
+PY"

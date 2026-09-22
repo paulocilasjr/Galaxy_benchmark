@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > verify.py <<'PY'
+import gzip,json,numpy as np
+meta=json.load(open('metadata.json')); bcs=list(meta['barcodes']); bc='AACATGGAGCGCCGGG-1'; ci=meta['barcodes'][bc]
+c=np.load('overlap5.npy'); print('barcodes with triple overlaps',[(bcs[i],int(c[i,3])) for i in np.flatnonzero(c[:,3])])
+f=np.load('fragments.npy',mmap_mode='r'); x=f[f[:,3]==ci]; blacklist={}
+with gzip.open('hg38-blacklist.v2.bed.gz','rt') as h:
+ for line in h:
+  t=line.split(); blacklist.setdefault(t[0],[]).append((int(t[1]),int(t[2])))
+regions=[]
+for ch,hi in meta['chroms'].items():
+ if ch not in ['chr'+str(i) for i in range(1,23)]: continue
+ a=x[x[:,0]==hi]; a=a[np.argsort(a[:,1])]; ends=[]; last_end=-1
+ for _,s,e,_ in a:
+  s=int(s)+5; e=int(e)-5
+  if not (s<e and e-s<=1000):continue
+  if any(s<v and e>u for u,v in blacklist.get(ch,[])): continue
+  ends=[v for v in ends if v>s]
+  if len(ends)>=2:
+   high_end=min(e,*ends)
+   if s>=last_end: regions.append((ch,s,high_end))
+   last_end=max(last_end,high_end)
+  ends.append(e)
+print('independent autosomal triple-overlap regions after blacklist filtering',len(regions))
+print('chromosomes',len(set(r[0] for r in regions)))
+print('example regions',regions[:10])
+assert len(regions)>100
+assert len(np.flatnonzero(c[:,3]))==1
+open('answer.txt','w').write(bc+'\\n')
+PY
+python verify.py"

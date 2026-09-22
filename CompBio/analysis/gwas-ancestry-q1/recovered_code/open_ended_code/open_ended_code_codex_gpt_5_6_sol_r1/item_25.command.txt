@@ -1,0 +1,30 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,numpy as np,pandas as pd
+from scipy.stats import chi2,pearsonr
+S=[x.strip() for x in open('samples.txt')]; P=pd.read_csv('integrated_call_samples_v3.20130502.ALL.panel',sep='\\t').set_index('sample').loc[S]
+pops=['GBR','IBS','TSI','CEU','FIN','PUR','CLM','MXL','PEL']
+I={g:np.where(P['pop'].values==g)[0] for g in pops}
+O={}
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+ next(f)
+ for l in f:
+  a=l.split('\\t');
+  if a[6]"'!='"'NA':O[int(a[3])]=float(a[6])
+G={}
+for l in open('matched.genotypes.tsv'):
+ a=l.rstrip().split('\\t');p=int(a[0])
+ if p not in O or ',' in a[2] or a[2].startswith('<'):continue
+ try:G[p]=np.array([np.nan if '.' in x else sum(map(int,x.replace('|','/').split('/'))) for x in a[3:]],float)
+ except:pass
+for lo,hi in [tuple(map(int,l.split()[1:])) for l in open('regions.bed')]:
+ ps=[p for p in G if lo<p<=hi]; lead=min(ps,key=lambda p:O[p]); y=np.array([chi2.isf(O[p],1) for p in ps]); k=y>2
+ vals=[]
+ for g,idx in I.items():
+  z=G[lead][idx];x=[];yy=[]
+  for p,yo,kk in zip(ps,y,k):
+   if not kk:continue
+   w=G[p][idx];ok=np.isfinite(z)&np.isfinite(w)
+   if ok.sum()>30 and np.std(z[ok]) and np.std(w[ok]):x.append(np.corrcoef(z[ok],w[ok])[0,1]**2);yy.append(yo)
+  vals.append((pearsonr(x,yy).statistic,g))
+ print(lead, ' '.join(f'{g}:{v:.2f}' for v,g in sorted(vals,reverse=True)))
+PY"

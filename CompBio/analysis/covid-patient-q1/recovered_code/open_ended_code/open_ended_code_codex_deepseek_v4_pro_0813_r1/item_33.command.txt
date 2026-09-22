@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp, pandas as pd, time
+p='covid.patients.q1.h5ad'
+adata=ad.read_h5ad(p)
+donors=adata.obs['donor_id'].astype(str).values
+cats=np.array(sorted(set(donors), key=lambda x:int(x[5:])))
+D=pd.get_dummies(donors, sparse=True).sparse.to_coo().tocsr() # cells x donors, category order probably lexicographic? Need map columns.
+# Ensure D columns sorted donor1..donor33? pd.get_dummies sorts categories lexicographically; not same as cats numeric. We can reindex columns.
+D = D[:, cats]
+X=adata.X.tocsr()
+sum_gd=(X.T @ D).toarray()
+Xbin=(X>0).astype(np.float32)
+nnz_gd=(Xbin.T @ D).toarray()
+cell_counts=np.asarray(D.sum(axis=0)).ravel()
+np.savez_compressed('donor_sum.npz', sum=sum_gd, nnz=nnz_gd, cats=cats, cell_counts=cell_counts)
+print('saved', cell_counts)
+PY
+cat > cluster_donors.py <<'PY'
+import numpy as np, pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.mixture import GaussianMixture
+import anndata as ad
+
+adata=ad.read_h5ad('covid.patients.q1.h5ad')
+donors=adata.obs['donor_id'].astype(str).values
+cats=np.array(sorted(set(donors), key=lambda x:int(x[5:])))
+D=np.load('donor_sum.npz')
+sums=D['sum']; nnz=D['nnz']; cell_counts=D['cell_counts']
+assert list(D['cats'])==list(cats)
+libs=sums.sum(axis=0, keepdims=True)
+cpm=sums/libs*1e6
+logcpm=np.log1p(cpm)
+frac=nnz/cell_counts.reshape(1,-1)
+keep=(frac>0.05).sum(axis=1)>=3
+print('genes kept', keep.sum())
+X=logcpm[keep,:].T
+Xz=StandardScaler().fit_transform(X)
+pca=PCA(n_components=min(20,X.shape[0]), random_state=0)
+scores=pca.fit_transform(Xz)
+print('explained variance', pca.explained_variance_ratio_[:10])
+pcdf=pd.DataFrame(scores[:,:10], index=cats, columns=[f'PC{i+1}' for i in range(10)])
+pcdf['donor']=cats
+pcdf.to_csv('donor_pca.csv', index=False)
+for n in [2,3,5,10,20]:
+    km=KMeans(n_clusters=2, n_init=20, random_state=0).fit(scores[:,:n])
+    for lab in range(2):
+        members=sorted([str(c) for c,l in zip(cats,km.labels_) if l==lab])
+        print('kmeans nPC',n,'cluster',lab,len(members),members)
+print('\\nfirst PCs')
+for c,s in zip(cats,scores):
+    print(c, ' '.join(f'{v:.2f}' for v in s[:5]))
+PY
+python cluster_donors.py"

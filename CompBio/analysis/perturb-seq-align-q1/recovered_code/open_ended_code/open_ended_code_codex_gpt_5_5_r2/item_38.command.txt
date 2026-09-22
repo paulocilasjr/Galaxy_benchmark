@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix
+
+def dec(a): return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a])
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        X=csc_matrix((f['X/data'][()], f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape'])).tocsr().astype(np.float32)
+        g=dec(f['obs/guide/categories'][()]); c=f['obs/guide/codes'][()].astype(np.int32); v=dec(f['var/_index'][()])
+    return X,g,c,v
+def lognorm_select_dense(X, cols):
+    X=X.copy().tocsr().astype(np.float32)
+    lib=np.asarray(X.sum(1)).ravel().astype(np.float32); scale=np.divide(1e4,lib,out=np.zeros_like(lib),where=lib>0)
+    X.data *= np.repeat(scale,np.diff(X.indptr)); np.log1p(X.data,out=X.data)
+    return X[:,cols].toarray().astype(np.float32)
+refX,refg,refc,refv=load('perturb.seq.align.q1.ref.h5ad'); qX,qg,qc,qv=load('perturb.seq.align.q1.query.h5ad')
+qpos={x:i for i,x in enumerate(qv)}; ri=[]; qi=[]
+for i,x in enumerate(refv):
+    if x in qpos: ri.append(i); qi.append(qpos[x])
+ri=np.array(ri); qi=np.array(qi)
+R=lognorm_select_dense(refX,ri); Q=lognorm_select_dense(qX,qi)
+refnt=np.array([x.startswith('NT-') for x in refg]); qnt=np.array([x.startswith('NT-') for x in qg]); rt=np.where(~refnt)[0]; qt=np.where(~qnt)[0]
+Rctrl=R[np.isin(refc,np.where(refnt)[0])].mean(0); Qctrl=Q[np.isin(qc,np.where(qnt)[0])].mean(0)
+def gm(A,c,ng): return np.vstack([A[c==i].mean(0) for i in range(ng)])
+Rg=gm(R,refc,len(refg)); Qg=gm(Q,qc,len(qg)); var=(Rg[rt]-Rctrl).var(0)+(Qg[qt]-Qctrl).var(0)
+for n in [1000,2000,5000,11858]:
+    m=np.argsort(var)[-n:] if n<len(var) else np.arange(len(var))
+    Rc=Rg[rt][:,m]-Rctrl[m]
+    Rc=Rc-Rc.mean(1,keepdims=True); Rc=Rc/(np.linalg.norm(Rc,axis=1,keepdims=True)+1e-9)
+    Xq=Q[:,m]-Qctrl[m]
+    Xq=Xq-Xq.mean(1,keepdims=True); Xq=Xq/(np.linalg.norm(Xq,axis=1,keepdims=True)+1e-9)
+    scores=Xq@Rc.T
+    print('\\nN',n)
+    for target in ['PABPC1','NUDT21','LEO1','PAF1','CTR9']:
+        r=[i for i in range(len(rt)) if refg[rt[i]].startswith(target+'-')][0]
+        vals=[]
+        for j in qt:
+            vals.append((float(scores[qc==j,r].mean()), qg[j]))
+        print(target, [(g,round(s,4)) for s,g in sorted(vals, reverse=True)[:6]])
+    pred=np.argmax(scores,axis=1)
+    for gname in ['guide14','guide8','guide17','guide20','guide28']:
+        j=np.where(qg==gname)[0][0]
+        counts=np.bincount(pred[qc==j], minlength=len(rt))
+        top=np.argsort(counts)[::-1][:5]
+        print(gname, [(refg[rt[k]], int(counts[k])) for k in top])
+PY"

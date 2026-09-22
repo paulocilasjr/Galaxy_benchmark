@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+z=np.load('cell_site_counts.npz'); a=z['counts']; d=a.sum(2); alt=a[:,:,1]; S,C,_=a.shape
+p=alt.sum(1)/np.maximum(d.sum(1),1)
+g=(d.sum(1)>=20)&(alt.sum(1)>=5)&(a[:,:,0].sum(1)>=5)
+ix=np.where(g)[0]
+rows=[]; cols=[]; vals=[]
+for j,i in enumerate(ix):
+ m=d[i]>0; v=alt[i]/np.maximum(d[i],1)-p[i]; v=v*np.sqrt(np.minimum(d[i],8)/8)
+ for c in np.where(m)[0]: rows.append(c); cols.append(j); vals.append(v[c])
+X=sparse.csr_matrix((vals,(rows,cols)),shape=(C,len(ix)),dtype=np.float32)
+e=TruncatedSVD(20,random_state=7).fit_transform(X)
+l=KMeans(2,n_init=20,random_state=7).fit_predict(e)
+for x in sorted(set(l)):
+ idx=np.where(l==x)[0]; print(x,len(idx),'obs',np.quantile(d[:,idx].sum(0),[0,.1,.5,.9,1]),'embnorm',np.quantile(np.linalg.norm(e[idx],axis=1),[0,.1,.5,.9,1]))
+print('means obs label', [d[:,l==x].sum()/sum(l==x) for x in sorted(set(l))])
+# print lowest/highest cell ids/obs and labels
+ids=[x.strip() for x in open('cell_ids.tsv')]
+for i in np.argsort(d.sum(0))[:20]: print('low',ids[i],int(d[:,i].sum()),l[i])
+for i in np.argsort(d.sum(0))[-20:]: print('high',ids[i],int(d[:,i].sum()),l[i])
+PY"

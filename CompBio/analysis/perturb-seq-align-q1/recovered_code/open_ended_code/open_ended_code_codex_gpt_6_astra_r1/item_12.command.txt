@@ -1,0 +1,29 @@
+/bin/bash -lc "cat > refine.py <<'PY'
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+z=np.load('summary.npz');rg=z['rg'].tolist();qg=z['qg'].tolist();rd=z['rd'];qd=z['qd'];genes=z['genes'];rv=z['rv'];qv=z['qv']
+def scores(R,Q):
+ R=R-R.mean(1)[:,None];Q=Q-Q.mean(1)[:,None]
+ return R@Q.T/np.maximum(np.linalg.norm(R,axis=1)[:,None]*np.linalg.norm(Q,axis=1)[None,:],1e-10)
+for gene in ['LEO1','CTR9','PAF1','CDC73','PABPC1','NUDT21']:
+ i=rg.index(gene)
+ print('\\n',gene)
+ for k in [50,100,200,500,1000,2000,11858]:
+  ix=np.argsort(abs(rd[i])/np.sqrt(rv+.05))[-k:]
+  s=scores(rd[:,ix],qd[:,ix])[i];jj=np.argsort(s)[-5:][::-1]
+  print(k,[(qg[j],round(s[j],3)) for j in jj])
+ print('top markers',[(genes[j],round(rd[i,j],2)) for j in np.argsort(abs(rd[i]))[-20:][::-1]])
+print('\\nFOCUSED scores all')
+s=scores(rd,qd);print(pd.DataFrame(s,index=rg,columns=qg).loc[['LEO1','CTR9','PAF1','CDC73'],:].T.sort_values('LEO1',ascending=False).to_string())
+for n in [0,1,2,3,5,8]:
+ R=rd.copy();Q=qd.copy()
+ R-=R.mean(0);Q-=Q.mean(0)
+ if n:
+  _,_,V=np.linalg.svd(np.concatenate([R,Q]),full_matrices=False);V=V[:n];R-=R@V.T@V;Q-=Q@V.T@V
+ s=scores(R,Q)
+ print('\\nremoved',n)
+ for gene in ['LEO1','CTR9','PAF1','CDC73','PABPC1','NUDT21']:
+  i=rg.index(gene);jj=np.argsort(s[i])[-5:][::-1];print(gene,[(qg[j],round(s[i,j],3)) for j in jj])
+PY
+OPENBLAS_NUM_THREADS=1 python -u refine.py"

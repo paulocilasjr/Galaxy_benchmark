@@ -1,0 +1,65 @@
+/bin/bash -lc "python -u - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']
+ads=[ad.read_h5ad(f) for f in files]
+common=np.array(sorted(set(ads[0].var_names)&set(ads[1].var_names)))
+print('common',len(common))
+outs=[]
+for a in ads:
+ idx=a.var_names.get_indexer(common)
+ X=a.X[:,idx].tocsr().astype(np.float64)
+ lib=np.asarray(X.sum(1)).ravel() # only common; target omission slight
+ X=X.multiply((1e4/np.maximum(lib,1))[:,None]).tocsr(); X.data=np.log1p(X.data)
+ labels=a.obs.guide.astype(str).values
+ cats=np.array([x for x in a.obs.guide.cat.categories if not x.startswith('NT-')])
+ nt=labels.astype(str)
+ ntmask=np.char.startswith(nt,'NT-')
+ ntmean=np.asarray(X[ntmask].mean(0)).ravel()
+ nt2=np.asarray(X[ntmask].power(2).mean(0)).ravel(); ntsd=np.sqrt(np.maximum(nt2-ntmean**2,1e-6))
+ means=np.vstack([np.asarray(X[labels==g].mean(0)).ravel() for g in cats])
+ eff=means-ntmean
+ outs.append((cats,eff,ntmean,ntsd))
+Rcats,R,Rbase,Rsd=outs[0]; Qcats,Q,Qbase,Qsd=outs[1]
+
+def corrmat(A,B,mask,center=True):
+ A=A[:,mask].copy();B=B[:,mask].copy()
+ if center:
+  A-=A.mean(1,keepdims=True);B-=B.mean(1,keepdims=True)
+ A/=np.sqrt((A*A).sum(1,keepdims=True)+1e-20);B/=np.sqrt((B*B).sum(1,keepdims=True)+1e-20)
+ return A@B.T
+
+targets=['PABPC1-I1','NUDT21-I3','LEO1-I2']
+base_mask=(Rbase>0.02)&(Qbase>0.02)
+configs=[]
+# plain with expression filters and response cutoffs
+for thr in [0,0.02,0.05,0.1,0.2,0.4]:
+ mask=(Rbase>thr)&(Qbase>thr)
+ configs.append((f'plain_expr{thr}',R,Q,mask))
+# scale gene by nt sd geometric
+for thr in [0.02,0.05,0.1]:
+ mask=(Rbase>thr)&(Qbase>thr)
+ configs.append((f'sdscale_expr{thr}',R/np.maximum(Rsd,.1),Q/np.maximum(Qsd,.1),mask))
+# responsive global thresholds/top variance
+score=np.maximum(np.max(np.abs(R),axis=0),np.max(np.abs(Q),axis=0))
+for n in [100,200,500,1000,2000,5000]:
+ mask=base_mask.copy(); inds=np.where(mask)[0]; keep=inds[np.argsort(score[inds])[-min(n,len(inds)):]]; m=np.zeros(len(common),bool);m[keep]=1
+ configs.append((f'resptop{n}',R,Q,m))
+# gene-wise standardize across perturbations
+Rz=(R-R.mean(0))/np.maximum(R.std(0),.03); Qz=(Q-Q.mean(0))/np.maximum(Q.std(0),.03)
+for n in [500,1000,2000,5000]:
+ inds=np.where(base_mask)[0]; keep=inds[np.argsort(score[inds])[-min(n,len(inds)):]];m=np.zeros(len(common),bool);m[keep]=1
+ configs.append((f'genez_top{n}',Rz,Qz,m))
+
+for name,A,B,mask in configs:
+ C=corrmat(A,B,mask)
+ ri,qi=linear_sum_assignment(-C)
+ match={Rcats[i]:(Qcats[j],C[i,j]) for i,j in zip(ri,qi)}
+ print('\\nCONFIG',name,'genes',mask.sum())
+ for t in targets:
+  i=np.where(Rcats==t)[0][0]
+  order=np.argsort(C[i])[::-1][:7]
+  print(t,'hung',match.get(t), 'top',[(Qcats[j],round(C[i,j],3)) for j in order])
+PY"

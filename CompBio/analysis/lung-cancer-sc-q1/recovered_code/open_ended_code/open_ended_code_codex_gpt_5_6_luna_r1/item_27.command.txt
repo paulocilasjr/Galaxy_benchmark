@@ -1,0 +1,37 @@
+/bin/bash -lc "python -u - <<'PY'
+import anndata as ad, numpy as np, h5py, pandas as pd
+A=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r'); sy=np.asarray(A.var['symbol'].astype(str))
+sets={
+'dc':['FCER1A','CD1C','CLEC10A','CLEC9A','CST3','HLA-DRA','HLA-DPA1','HLA-DPB1','HLA-DQB1','CD74','COTL1','FCER1G','IRF8','BATF3'],
+'myeloid':['LYZ','LST1','TYROBP','FCER1G','CTSS','AIF1','LGALS3','CSTA','FCGR3A','S100A8','S100A9','S100A10','CTSD','MS4A7'],
+'T':['CD3D','CD3E','TRBC1','TRBC2','CD247','IL7R','CCR7','LTB'],
+'B':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD83','CD22'],
+'NK':['NKG7','GNLY','KLRD1','FCGR3A','GZMB','GZMH','PRF1'],
+'basal':['KRT5','KRT14','KRT17','TP63','SOX2','KRT6A','KRT13','KRT15','KRT16','S100A2','S100A7','SFN','CLCA2','TRIM29','DSC3','DSG3','SERPINB13','GPC1','FSCN1','GPNMB','HOXA1','FGFBP1','PERP','SLC6A8'],
+'luad':['NAPSA','NKX2-1','SFTPB','SFTPA1','SFTPA2','SFTPC','SFTPD','SCGB1A1','SCGB3A2','AQP5','MUC1','WFDC2','FOLR1','SLC34A2','EPCAM','KRT8','KRT18','KRT19'],
+'epi':['EPCAM','KRT8','KRT18','KRT19','KRT5','KRT14','KRT17','KRT6A','KRT13','KRT15','KRT16','MUC1','SFN'],
+'endothelial':['PECAM1','VWF','EMCN','KDR','RAMP2','CA4','EDNRB','PLVAP','ENG','ESAM','RGCC'],
+'fibro':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','COL6A2','COL6A3','PDGFRA','PDGFRB','ACTA2','TAGLN','RGS5'],
+}
+allgs=list(dict.fromkeys(g for gs in sets.values() for g in gs)); present=[g for g in allgs if np.any(sy==g)]; idx=[int(np.flatnonzero(sy==g)[0]) for g in present]; mi={g:i for i,g in enumerate(present)}
+X=A.X[:,idx].toarray().astype(np.float32)
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ ip=np.asarray(f['X/indptr']); data=f['X/data']; rows=np.diff(ip); totals=np.zeros(len(rows),dtype=np.int64)
+ for st in range(0,len(rows),5000):
+  en=min(len(rows),st+5000); a=int(ip[st]); b=int(ip[en]); nz=np.flatnonzero(rows[st:en]);
+  if b>a: totals[st:en][nz]=np.add.reduceat(np.asarray(data[a:b],dtype=np.int64),ip[st:en][nz]-a,dtype=np.int64)
+Z=np.log1p(X/totals[:,None]*1e4)
+scores={k:Z[:,[mi[g] for g in gs if g in mi]].mean(axis=1) for k,gs in sets.items()}
+samples=np.asarray(A.obs['sampleID'].astype(str)); targets=['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']
+for s in targets:
+ m=np.flatnonzero(samples==s); print('\\n###',s,'n',len(m),'total range',totals[m].min(),np.median(totals[m]),totals[m].max())
+ for k in scores:
+  v=scores[k][m]; print(k,'quant',np.round(np.quantile(v,[0,.5,.9,.95,.99,1]),2),'n>1',int((v>1).sum()),'n>2',int((v>2).sum()))
+ # top by each major score with gene values
+ for k in ['dc','basal','luad']:
+  ii=m[np.argsort(scores[k][m])[::-1][:8]]
+  print('\\n',k,'top')
+  for j in ii:
+   vals={g:int(X[j,mi[g]]) for g in sets[k] if g in mi and X[j,mi[g]]>0}
+   print(int(j),round(float(scores[k][j]),2),'tot',int(totals[j]),vals)
+PY"

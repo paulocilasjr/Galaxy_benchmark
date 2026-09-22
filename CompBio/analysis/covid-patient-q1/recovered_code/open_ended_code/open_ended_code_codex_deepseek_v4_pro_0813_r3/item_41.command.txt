@@ -1,0 +1,50 @@
+/bin/bash -c "cat > summarize_raw.py <<'PY'
+import tarfile, gzip, io, re, sys, time
+t=time.time()
+tar=tarfile.open('GSE163668_RAW.tar','r')
+members=tar.getmembers()
+summary=[]
+for m in members:
+    if m.name.endswith('_matrix.mtx.gz'):
+        base=m.name[:-len('_matrix.mtx.gz')]
+        # get barcodes count by matching same base + _barcodes.tsv.gz
+        bm=None
+        for n in members:
+            if n.name==base+'_barcodes.tsv.gz':
+                bm=n; break
+        f=tar.extractfile(m)
+        gz=gzip.GzipFile(fileobj=f)
+        # parse header lines
+        header_lines=[]
+        while len(header_lines)<3:
+            line=gz.readline().decode('ascii','replace')
+            if not line: break
+            if line.startswith('%'): continue
+            header_lines.append(line.strip())
+        dims=[int(x) for x in header_lines[0].split()[:2]]
+        nnz_header=int(header_lines[0].split()[2]) if len(header_lines[0].split())>=3 else None
+        total=0
+        nnz=0
+        cnt=0
+        for line in gz:
+            if not line: continue
+            parts=line.split()
+            if len(parts)==3:
+                try:
+                    val=float(parts[2]); total+=val; nnz+=1
+                except: pass
+            if nnz%1000000==0 and nnz>0:
+                pass
+        gz.close(); f.close()
+        nbarcodes=None
+        if bm:
+            f2=tar.extractfile(bm); gz2=gzip.GzipFile(fileobj=f2)
+            nbarcodes=sum(1 for _ in gz2)
+            gz2.close(); f2.close()
+        summary.append((base, dims[0], dims[1], nnz, total, nbarcodes))
+        print(base, 'genes',dims[0],'cells_raw',dims[1],'nnz',nnz,'total_umi',total,'nbarcodes',nbarcodes, flush=True)
+print('time',time.time()-t)
+import json
+json.dump(summary, open('raw_summary.json','w'))
+PY
+python summarize_raw.py"

@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+z=np.load('donor_pseudobulk.npz', allow_pickle=True)
+counts=z['counts']; donors=z['donors'].astype(str); genes=z['genes'].astype(str)
+nums=np.array([int(d.replace('donor','')) for d in donors])
+lib=counts.sum(axis=1)
+logcpm=np.log1p(counts/lib[:,None]*1e6)
+healthy_nums=set([1,5,11,12,17,21,24,27,29,32])
+H=np.array([n in healthy_nums for n in nums])
+# diff COVID-H
+meanH=logcpm[H].mean(0); meanC=logcpm[~H].mean(0)
+diff=meanC-meanH
+# t-like
+varH=logcpm[H].var(0,ddof=1); varC=logcpm[~H].var(0,ddof=1)
+t=diff/np.sqrt(varH/H.sum()+varC/(~H).sum()+1e-9)
+for title, order in [('COVID higher', np.argsort(diff)[-50:][::-1]), ('Healthy higher', np.argsort(diff)[:50])]:
+ print('\\n'+title)
+ for i in order[:40]:
+  print(f'{genes[i]:12s} diff={diff[i]:7.3f} t={t[i]:7.2f} H={meanH[i]:6.2f} C={meanC[i]:6.2f}')
+# PC1 loading independently
+mask=(logcpm.mean(0)>0.05); var=logcpm.var(0); idx=np.where(mask)[0]; top=idx[np.argsort(var[idx])[-1000:]]
+X=logcpm[:,top]; X=(X-X.mean(0))/(X.std(0)+1e-8)
+U,S,Vt=np.linalg.svd(X, full_matrices=False)
+# PC1 sign: negative = healthy. Genes high in COVID have positive loading if PC1 positive donors covid
+load=Vt[0]
+ord=np.argsort(load)
+print('\\nPC1 positive load (COVID-side)')
+for j in ord[-30:][::-1]: print(genes[top[j]], load[j])
+print('\\nPC1 negative load (healthy-side)')
+for j in ord[:30]: print(genes[top[j]], load[j])
+PY"

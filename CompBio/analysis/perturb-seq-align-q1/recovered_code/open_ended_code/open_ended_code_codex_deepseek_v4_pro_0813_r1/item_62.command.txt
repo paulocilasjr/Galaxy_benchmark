@@ -1,0 +1,56 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from scipy.stats import pearsonr, spearmanr
+
+def load(f):
+    with h5py.File(f,'r') as h:
+        X=sp.csr_matrix((h['X/data'][:], h['X/indices'][:], h['X/indptr'][:]), shape=(len(h['var/_index']), len(h['obs/_index']))).T.tocsr()
+        guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+        codes=h['obs/guide/codes'][:]
+        genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+        targets=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/target_gene/categories'][:]]) if 'obs/target_gene/categories' in h else None
+        tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+    return X, guides, codes, genes, targets, tcodes
+Xr,gr,cr,gr_genes,tr,tcr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,gq_genes,tq,tcq=load('perturb.seq.align.q1.query.h5ad')
+common, ri, qi = np.intersect1d(gr_genes,gq_genes,return_indices=True)
+print(len(common),len(ri),len(qi))
+# subset X columns to common gene order
+Xrc=Xr[:,ri].tocsc(); Xqc=Xq[:,qi].tocsc()
+
+def norm_log(X):
+    sums=np.asarray(X.sum(1)).ravel().astype(float); sums[sums==0]=1
+    return np.log1p(X.multiply(1/sums[:,None]*1e6).tocsr())
+Lr=norm_log(Xrc).toarray(); Lq=norm_log(Xqc).toarray()
+ur=np.array([Lr[cr==i].mean(0) for i in range(len(gr))])
+uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntr=[i for i,g in enumerate(gr) if g.startswith('NT-')]; ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]
+ref_ctrl=ur[ntr].mean(0); q_ctrl=uq[ntq].mean(0)
+Er=ur-ref_ctrl; Eq=uq-q_ctrl
+# target map guide -> gene
+guide2target={}
+for i,g in enumerate(gr):
+    if g.startswith('NT-'): continue
+    vals,counts=np.unique(tr[tcr[cr==i]],return_counts=True)
+    guide2target[g]=vals[np.argmax(counts)]
+# choose variable common genes based on reference guide means; and also query means
+gene_var_r=ur.var(0); gene_var_q=uq.var(0)
+# method 1 top 2000 ref var; method top common rank sum; method top DE? 
+for ngenes in [500,1000,2000,5000,11858]:
+    top=np.argsort(gene_var_r)[::-1][:ngenes]
+    A=Eq[:,top]; B=Er[:,top]
+    A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True)
+    denom=np.sqrt((A*A).sum(1,keepdims=True)) @ np.sqrt((B*B).sum(1,keepdims=True)).T
+    denom[denom==0]=1e-12
+    C=A@B.T/denom
+    pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')]
+    pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+    # best for desired targets
+    print('\\nngenes',ngenes)
+    for target in ['PABPC1','NUDT21','LEO1']:
+        ris=[ri for ri in pr if guide2target[gr[ri]]==target]
+        for refidx in ris:
+            j=pr.index(refidx); scores=C[:,j]
+            order=np.argsort(scores)[::-1]
+            print(target, gr[refidx], 'top query:', [(gq[pq[k]],round(scores[k],3)) for k in order[:8]])
+PY"

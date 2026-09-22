@@ -1,0 +1,62 @@
+/bin/bash -c "python3 - <<'PY'
+# Compute depth profiles and compare endo to mix tail/exo extra using existing approach concise
+from pathlib import Path
+from collections import defaultdict
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+def depth_from_file(name, rng=None):
+ d=np.zeros(len(seq)); n=0
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline(); n+=1
+   if rng and n-1 not in rng: continue
+   lab,i=bestpos(s)
+   if lab=='+': d[i:i+50]+=1
+   else:
+    st=len(seq)-50-i; d[st:st+50]+=1
+ return d,n
+d_endo,n_endo=depth_from_file('endo')
+d_exo,n_exo=depth_from_file('exo')
+d_mix,n_mix=depth_from_file('mix')
+# direct slices from mix by index
+recs=[]
+with open('exogenous.mix.reads.q2.mix.fq') as f:
+ while True:
+  h=f.readline()
+  if not h:break
+  s=f.readline().strip(); f.readline(); f.readline(); recs.append(s)
+def depth_list(arr):
+ d=np.zeros(len(seq))
+ for s in arr:
+  lab,i=bestpos(s)
+  if lab=='+': d[i:i+50]+=1
+  else:
+   st=len(seq)-50-i; d[st:st+50]+=1
+ return d
+d_first=depth_list(recs[:395])
+d_exoextra=depth_list(recs[395:592])
+d_tail=depth_list(recs[592:])
+for a,b,la,lb in [(d_endo,d_tail,'endo','tail'),(d_endo,d_exoextra,'endo','exoextra'),(d_tail,d_exoextra,'tail','exoextra'),(d_first,d_tail,'first395','tail')]:
+ corr=np.corrcoef(a,b)[0,1]
+ l2=np.sqrt(np.sum((a/a.sum()-b/b.sum())**2))
+ print(la,lb,'corr',corr,'normL2',l2,'sums',a.sum(),b.sum())
+# ratios normalized
+print('mean ratio tail/endo per pos where endo>0',np.mean(d_tail[d_endo>0]/d_endo[d_endo>0]))
+PY"

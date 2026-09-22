@@ -1,0 +1,83 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, pysam, numpy as np, io, math
+p='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-0bb2941c0318233f7b766bc0/workspace/gwas.ancestry.q1.tsv'
+df=pd.read_csv(p,sep='\\t')
+na=df[df['P'].isna()].copy()
+panel=pd.read_csv('[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-0bb2941c0318233f7b766bc0/workspace/1kg_panel.tsv',sep='\\t')
+sample_pop=dict(zip(panel['sample'],panel['super_pop']))
+sample_all=dict(zip(panel['sample'],panel['pop']))
+url='https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/ALL.chr1.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz'
+vf=pysam.VariantFile(url)
+pops=['AFR','AMR','EAS','EUR','SAS']
+allpops=sorted(panel['pop'].unique())
+summary=[]
+for _,r in na.iterrows():
+    pos=r['POS']; eff=r['EFFECT_ALLELE']; other=r['OTHER_ALLELE']
+    recs=[rec for rec in vf.fetch('1',pos-1,pos+1) if rec.pos==pos]
+    if not recs:
+        summary.append((pos,eff,other,'NO_VCF',{p:0 for p in pops},{p:0 for p in allpops}))
+        continue
+    # for each record, collect genotypes and frequencies for file alleles and ref/alt classes
+    counts_super={p:{eff:0,other:0,'n':0,'mono_eff':False,'mono_minor':False} for p in pops}
+    counts_all={p:{eff:0,other:0,'n':0} for p in allpops}
+    for rec in recs:
+        ref=rec.ref; alts=list(rec.alts or [])
+        # determine allele indices for eff, other
+        all_alleles=[ref]+alts
+        idx_eff=all_alleles.index(eff) if eff in all_alleles else None
+        idx_other=all_alleles.index(other) if other in all_alleles else None
+        # iterate samples and genotype alleles
+        for sample in vf.header.samples:
+            gt=rec.samples[sample]['GT']
+            if gt is None or None in gt or -1 in gt: continue
+            sp=sample_pop.get(sample)
+            pp=sample_all.get(sample)
+            # count each allele
+            for allele_idx in gt:
+                if allele_idx is None or allele_idx==-1: continue
+                if idx_eff is not None and allele_idx==idx_eff:
+                    if sp: counts_super[sp][eff]+=1
+                    if pp: counts_all[pp][eff]+=1
+                if idx_other is not None and allele_idx==idx_other:
+                    if sp: counts_super[sp][other]+=1
+                    if pp: counts_all[pp][other]+=1
+                # n chromosomes
+            if sp: counts_super[sp]['n']+=2
+            if pp: counts_all[pp]['n']+=2
+    # compute for each superpop
+    info={}
+    for sp in pops:
+        c=counts_super[sp]; n=c['n']; e=c[eff]; o=c[other]
+        af=e/n if n else None
+        info[sp]=af
+    allinfo={}
+    for pp in allpops:
+        c=counts_all[pp]; n=c['n']; e=c[eff]; o=c[other]
+        allinfo[pp]=e/n if n else None
+    summary.append((pos,eff,other,'OK',info,allinfo))
+
+print('Superpop effect allele freqs for NA positions')
+print('pos\\teff\\tother\\t'+'\\t'.join(pops))
+for pos,eff,other,status,info,allinfo in summary:
+    if status"'!='"'OK':
+        print(pos,eff,other,status)
+        continue
+    vals=[info[p] for p in pops]
+    print('\\t'.join([str(pos),eff,other]+[('%.4f'%v if v is not None else 'NA') for v in vals]))
+print('\\nZero count per superpop:')
+for i,p in enumerate(pops):
+    zeros=sum(1 for row in summary if row[3]=='OK' and row[4][p] is not None and row[4][p]==0)
+    nonzeros=[(row[0],row[1],row[2],row[4][p]) for row in summary if row[3]=='OK' and row[4][p] is not None and row[4][p]>0]
+    print(p,'zero',zeros,'nonzeros',len(nonzeros),nonzeros)
+# Which subpopulations have all zero?
+print('\\nSubpopulation all-zero / nonzero details')
+for pp in allpops:
+    vals=[]
+    for row in summary:
+        if row[3]=='OK' and row[5][pp] is not None:
+            vals.append((row[0],row[5][pp]))
+    zeros=sum(1 for pos,v in vals if v==0)
+    nonzeros=[(pos,v) for pos,v in vals if v>0]
+    if zeros>=20:
+        print(pp,'zero',zeros,'of',len(vals),'nonzeros',len(nonzeros), nonzeros[:10])
+PY"

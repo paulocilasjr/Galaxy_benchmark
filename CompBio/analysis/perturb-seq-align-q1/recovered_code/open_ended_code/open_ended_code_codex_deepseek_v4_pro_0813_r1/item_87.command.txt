@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > r_input/label_transfer.R <<'EOF'
+suppressMessages({library(Seurat); library(Matrix)})
+ref_mat <- readMM('r_input/ref_matrix.mtx')
+query_mat <- readMM('r_input/query_matrix.mtx')
+genes <- readLines('r_input/genes.txt')
+ref_meta <- read.table('r_input/ref_meta.tsv', header=TRUE, sep='\\t', stringsAsFactors=FALSE, row.names=1)
+query_meta <- read.table('r_input/query_meta.tsv', header=TRUE, sep='\\t', stringsAsFactors=FALSE, row.names=1)
+colnames(ref_mat) <- rownames(ref_meta); rownames(ref_mat) <- genes
+colnames(query_mat) <- rownames(query_meta); rownames(query_mat) <- genes
+ref <- CreateSeuratObject(counts=ref_mat, meta.data=ref_meta, project='ref')
+query <- CreateSeuratObject(counts=query_mat, meta.data=query_meta, project='query')
+Idents(ref) <- 'target_gene'
+ref <- NormalizeData(ref); query <- NormalizeData(query)
+ref <- FindVariableFeatures(ref, selection.method='vst', nfeatures=3000)
+query <- FindVariableFeatures(query, selection.method='vst', nfeatures=3000)
+# use features present variable in both? Seurat transfer finds anchors on common variable features
+ref <- ScaleData(ref, features=VariableFeatures(ref)); ref <- RunPCA(ref, features=VariableFeatures(ref), npcs=50)
+query <- ScaleData(query, features=VariableFeatures(query)); query <- RunPCA(query, features=VariableFeatures(query), npcs=50)
+anchors <- FindTransferAnchors(reference=ref, query=query, dims=1:30, reference.reduction='pca', recompute.residuals=FALSE)
+pred <- TransferData(anchorset=anchors, refdata=ref"'$target_gene, dims=1:30)
+query <- AddMetaData(query, metadata=pred)
+saveRDS(list(anchors=anchors,pred=pred,query=query), file='"'r_input/transfer_result.rds')
+# majority vote per guide
+meta <- query@meta.data
+for (g in sort(unique(meta"'$guide))) {
+  sub <- meta[meta$guide==g,]
+  cat(g, names(sort(table(sub$predicted.id), decreasing=TRUE))[1], '"'\\n')
+}
+EOF
+Rscript r_input/label_transfer.R > r_input/transfer_stdout.txt 2>&1"

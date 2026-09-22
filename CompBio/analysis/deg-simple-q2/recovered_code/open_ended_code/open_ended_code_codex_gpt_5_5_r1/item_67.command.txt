@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import defaultdict
+cand={'DEFB110','IKZF2','HUWE1','FLNA','RPL15','FNBP1','STAT1','RPS3','RPL4','EIF4G2'}
+seqs=defaultdict(dict)
+cur=None; parts=None; chunks=[]
+with gzip.open('ref/gencode.v48.transcripts.fa.gz','rt') as f:
+    for line in f:
+        line=line.strip()
+        if line.startswith('>'):
+            if cur and parts[5] in cand:
+                seqs[parts[5]][parts[4]+'|'+parts[0]]=''.join(chunks).upper()
+            cur=line[1:].split()[0]; parts=cur.split('|'); chunks=[]
+        else:
+            chunks.append(line)
+    if cur and parts[5] in cand:
+        seqs[parts[5]][parts[4]+'|'+parts[0]]=''.join(chunks).upper()
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+def count_gene(gene, fq):
+    txs=seqs[gene]
+    counts=defaultdict(int); assigned=0; multi=0; total=0
+    with gzip.open(fq,'rt') as f:
+        for i,line in enumerate(f):
+            if i%4==1:
+                total+=1; r=line.strip().upper(); rr=rc(r)
+                hits=[tx for tx,seq in txs.items() if r in seq or rr in seq]
+                if hits:
+                    assigned+=1
+                    if len(hits)>1: multi+=1
+                    for h in hits: counts[h]+=1
+    return assigned,multi,counts
+for gene in cand:
+    print('\\nGENE',gene,'n_tx',len(seqs[gene]))
+    for sample,fq in [('A','deg.simple.q2.sampleA.fq.gz'),('B','deg.simple.q2.sampleB.fq.gz')]:
+        assigned,multi,counts=count_gene(gene,fq)
+        print(' sample',sample,'assigned_reads',assigned,'multi',multi)
+        for tx,c in sorted(counts.items(), key=lambda x:-x[1])[:8]:
+            print('  ',c,tx)
+PY"

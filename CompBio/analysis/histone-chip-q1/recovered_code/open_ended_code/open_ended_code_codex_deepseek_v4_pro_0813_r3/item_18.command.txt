@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+canon=set()
+with gzip.open('knownCanonical.txt.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>=6 and p[4].startswith('ENST'):
+            canon.add(p[4])
+# parse knownGene
+genes={}
+with gzip.open('knownGene.txt.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        name=p[0]
+        if name not in canon: continue
+        chrom,strand=p[1],p[2]
+        txStart,txEnd,cdsStart,cdsEnd=map(int,p[3:7])
+        exonCount=int(p[7]); starts=list(map(int,p[8].rstrip(',').split(','))); ends=list(map(int,p[9].rstrip(',').split(',')))
+        genes[name]=(chrom,strand,txStart,txEnd,cdsStart,cdsEnd,exonCount,starts,ends)
+# parse kgXref mapping ENST to symbol/refseq/description
+xref={}
+with gzip.open('kgXref.txt.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        xref[p[0]]=p
+# produce coding canonical genes
+rows=[]
+for t,(chrom,strand,txStart,txEnd,cdsStart,cdsEnd,exonCount,starts,ends) in genes.items():
+    x=xref.get(t)
+    if not x: continue
+    symbol=x[4]
+    refseq=x[1] or x[5]
+    desc=x[7]
+    if cdsStart>=cdsEnd: # noncoding
+        # keep protein-coding only
+        continue
+    if not chrom.startswith('chr') or '_' in chrom: continue
+    tss=txStart if strand=='+' else txEnd
+    gene_len=txEnd-txStart
+    rows.append((t,chrom,strand,txStart,txEnd,tss,gene_len,symbol,desc,refseq))
+print('coding canonical transcripts', len(rows), 'unique symbols', len(set(r[7] for r in rows)))
+# count duplicates symbols
+from collections import Counter
+c=Counter(r[7] for r in rows)
+print('symbols with >1', sum(1 for v in c.values() if v>1))
+with open('coding_canonical_genes.tsv','w') as f:
+    f.write('\\t'.join(['transcript','chrom','strand','txStart','txEnd','tss','gene_len','symbol','desc','refseq'])+'\\n')
+    for r in sorted(rows,key=lambda x:(x[1],x[5])):
+        f.write('\\t'.join(map(str,r))+'\\n')
+PY
+head coding_canonical_genes.tsv"

@@ -1,0 +1,34 @@
+/bin/bash -c "Rscript - <<'RS'
+suppressMessages(library(mouse4302.db))
+suppressMessages(library(org.Mm.eg.db))
+# parse matrix
+lines <- readLines(gzfile('GSE4479_series_matrix.txt.gz'))
+start <- which(lines=='"'!series_matrix_table_begin'"')+1
+end <- which(lines=='"'!series_matrix_table_end'"')-1
+con <- textConnection(lines[start:end])
+tab <- read.delim(con, header=TRUE, row.names=1, check.names=FALSE, stringsAsFactors=FALSE, quote='')
+close(con)
+colnames(tab) <- sub('\"','',colnames(tab))
+expr <- as.matrix(tab)
+mode(expr) <- 'numeric'
+septic <- rowMeans(expr[,1:5]); sham <- rowMeans(expr[,6:10])
+logfc <- log2((septic+0.5)/(sham+0.5))
+probes <- rownames(expr)
+sym <- mapIds(mouse4302.db, keys=probes, column='SYMBOL', keytype='PROBEID', multiVals='first')
+df <- data.frame(probe=probes, sym=as.character(sym), logfc=as.numeric(logfc), stringsAsFactors=FALSE)
+df <- df["'!is.na(df$sym) & df$sym!='"'NA' & "'!grepl('"'/',df"'$sym),]
+# aggregate max abs per symbol? mean
+agg <- aggregate(logfc~sym, data=df, FUN=mean)
+agg <- agg[order(-agg$logfc),]
+our <- toupper(readLines('"'characterize.response.q1.txt'))
+m <- setNames(agg"'$logfc, toupper(agg$sym))
+found <- our %in% names(m)
+cat('"'found',sum(found),'\\n')
+for(i in seq_along(our)) cat(our[i], if(found[i]) m[[our[i]]] else NA, '\\n')
+# rank our genes among agg; overlap top112 up/down
+agg"'$symu <- toupper(agg$sym)
+up112 <- toupper(head(agg$sym,112)); down112 <- toupper(tail(agg$sym,112))
+cat('"'overlap top up112',sum(our %in% up112),'down112',sum(our %in% down112),'\\n')
+cat('top up:\\n'); print(head(agg,150))
+cat('top down:\\n'); print(tail(agg,150))
+RS"

@@ -1,0 +1,65 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+refs={'+':seq,'-':rc}
+pos=defaultdict(list)
+for lab,t in refs.items():
+ for i in range(len(t)-50+1):
+  k=t[i:i+50]; pos[k].append((lab,i))
+def bestpos(s):
+ if s in pos:
+  return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig: continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     cand=(lab,i)
+     if best is None or cand[1] < best[1] or (cand[1]==best[1] and cand[0] < best[0]):
+      best=cand
+ return best
+uniq={}
+for name in ['exo','endo','mix']:
+ d=Counter()
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h: break
+   s=f.readline().strip(); f.readline(); f.readline()
+   bp=bestpos(s); d[(s,bp)]+=1
+ uniq[name]=d
+ print(name,'assigned',sum(d.values()))
+def pileup(d):
+ counts=defaultdict(Counter)
+ for (s,(lab,i)),n in d.items():
+  for j,ch in enumerate(s):
+   if lab=='+':
+    coord=i+j; base=ch
+   else:
+    L=len(seq); coord=L-1-(i+j); base=ch.translate(comp)
+   counts[coord][base]+=n
+ return counts
+piles={name:pileup(uniq[name]) for name in ['exo','endo','mix']}
+coords=sorted(set(piles['exo'])|set(piles['endo'])|set(piles['mix']))
+print('coords',len(coords))
+rows=[]
+for c in coords:
+ ce=piles['exo'].get(c,Counter()); cn=piles['endo'].get(c,Counter())
+ de=sum(ce.values()); dn=sum(cn.values())
+ if de<3 or dn<3: continue
+ bases=set(ce)|set(cn)
+ diffs=[]
+ for b in bases:
+  fe=ce[b]/de; fn=cn[b]/dn
+  if abs(fe-fn)>=0.25 and max(ce[b],cn[b])>=2:
+   diffs.append((abs(fe-fn),b,fe,fn,ce[b],cn[b]))
+ if diffs:
+  rows.append((c,diffs))
+for c,diffs in sorted(rows, key=lambda x:-max(d[0] for d in x[1]))[:100]:
+ print('coord',c,'ref',seq[c],'diffs',diffs,'exo_depth',sum(piles['exo'][c].values()),'endo_depth',sum(piles['endo'][c].values()),'mix_counts',dict(piles['mix'].get(c,Counter())))
+PY"

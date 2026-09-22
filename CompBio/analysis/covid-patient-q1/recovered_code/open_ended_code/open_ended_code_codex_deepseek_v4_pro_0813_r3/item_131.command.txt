@@ -1,0 +1,42 @@
+/bin/bash -c "python - <<'PY'
+import numpy as np, h5py, scipy.sparse as sp
+# load annotated raw patient counts
+with h5py.File('GSE180578_annotated.h5ad','r') as f:
+    data=f['raw/X/data'][:]; indices=f['raw/X/indices'][:]; indptr=f['raw/X/indptr'][:]
+    ann_var=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['raw/var/_index'][:]])
+    pid=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/patient_id'][:]])
+    disease=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/disease'][:]])
+ann_raw=sp.csr_matrix((data,indices,indptr),shape=(len(pid),len(ann_var)))
+patients=np.unique(pid)
+ann_counts=np.zeros((len(patients),len(ann_var))); ann_dis=[]
+for i,p in enumerate(patients):
+    m=pid==p; ann_counts[i]=np.asarray(ann_raw[m].sum(axis=0)).ravel(); ann_dis.append(disease[m][0])
+ann_counts=np.array(ann_counts); ann_var_up=np.array([g.upper() for g in ann_var])
+# our
+PB=np.load('pb_dense.npy'); donors=np.load('donor_names.npy',allow_pickle=True)
+genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy',allow_pickle=True)])
+our_up=np.array([g.upper() for g in genes])
+healthy=['FCER1A','CLEC4C','CD1C','CLEC10A','CCR7','SELL','TCF7','LEF1','IL7R','GIMAP7','S1PR1','LTB','PLD4','LILRA4','IRF7','MS4A1','IGHD','TCL1A','IL3RA','CST3']
+covid=['IFI27','IFITM3','ISG15','MX1','OAS1','IFI44L','IFIT1','RSAD2','S100A8','S100A9','S100A12','SOCS3','ADM','HP','MKI67','TOP2A','IGHG1','IGHG3','IGHA1','MZB1','XBP1','CD38','TNFRSF17','FCGR1A','CLU','RNASE1','RNASE2']
+def logcpm(M):
+    lib=M.sum(axis=1,keepdims=True); lib[lib==0]=1
+    return np.log2(M/lib*1e6+1)
+def score(logM, geneset, symbols, up):
+    idx=[]
+    for g in geneset:
+        inds=np.where(up==g)[0]
+        if len(inds): idx.append(inds[0])
+    idx=np.array(idx)
+    return logM[:,idx].mean(axis=1)
+ann_log=logcpm(ann_counts); our_log=logcpm(PB.T)
+ann_h=score(ann_log,healthy,ann_var,ann_var_up); ann_c=score(ann_log,covid,ann_var,ann_var_up)
+our_h=score(our_log,healthy,genes,our_up); our_c=score(our_log,covid,genes,our_up)
+print('annotated diff stats healthy/covid')
+for dis in ['healthy','covid']:
+    mask=np.array(ann_dis)==dis
+    d=(ann_h-ann_c)[mask]
+    print(dis,len(d),d.min(),d.mean(),d.max())
+print('our donor scores')
+for j,d in enumerate(donors):
+    print(d, f'h {our_h[j]:.2f} c {our_c[j]:.2f} diff {our_h[j]-our_c[j]:.2f}')
+PY"

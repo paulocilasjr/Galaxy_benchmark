@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import numpy as np
+from scipy import sparse
+from scipy.io import mmwrite
+z=np.load('allele_counts.npz');keys=z['keys'];dp=z['dp'].astype(np.int64);ad0=z['ad'].astype(np.int64);sites0=z['sites'];cb=z['barcodes'];rows=keys>>16;cells=keys&65535;ns=len(sites0)
+known={}
+for line in open('common_candidate_snps.tsv'):
+ c,p,r,a=line.split();known[(c,int(p))]=(r,a)
+valid=[]; flips=[]; refs=[]; alts=[]
+for i,(c,p,r,a) in enumerate(sites0):
+ x=known.get((c,int(p)))
+ if x and set(x)==set((r,a)):
+  valid.append(i);flips.append(a==x[0]);refs.append(x[0]);alts.append(x[1])
+valid=np.array(valid,dtype=int);flips=np.array(flips);refs=np.array(refs);alts=np.array(alts)
+sp=np.bincount(rows,minlength=ns);sd=np.bincount(rows,weights=dp,minlength=ns);sa=np.bincount(rows,weights=ad0,minlength=ns)
+# oriented alt counts per original row
+sao=sa.copy();sao[valid[flips]] = sd[valid[flips]]-sa[valid[flips]]
+for thr in [20,30,50,100]:
+ sel=valid[(sp[valid]>=thr)&(sd[valid]>=50)&(sao[valid]/np.maximum(sd[valid],1)>=.05)&(sao[valid]/np.maximum(sd[valid],1)<=.95)]
+ rid={int(r):i for i,r in enumerate(sel)};q=np.array([rid.get(int(r),-1) for r in rows]);ok=q>=0
+ # orientation per pair
+ orient=np.array([not flips[np.searchsorted(valid,int(r))] if False else False for r in rows[ok]])
+ # map original row -> flip
+ fmap={int(r):bool(fl) for r,fl in zip(valid,flips)}
+ vals=ad0[ok].copy()
+ for j,r in enumerate(rows[ok]):
+  if fmap[int(r)]: vals[j]=dp[ok][j]-vals[j]
+ out=f'cellSNP_common_{thr}';os.makedirs(out,exist_ok=True)
+ mmwrite(out+'/cellSNP.tag.AD.mtx',sparse.coo_matrix((vals,(q[ok],cells[ok])),shape=(len(sel),len(cb))))
+ mmwrite(out+'/cellSNP.tag.DP.mtx',sparse.coo_matrix((dp[ok],(q[ok],cells[ok])),shape=(len(sel),len(cb))))
+ open(out+'/cellSNP.samples.tsv','w').write('\\n'.join(map(str,cb.tolist()))+'\\n')
+ with open(out+'/cellSNP.base.vcf','w') as fh:
+  fh.write('##fileformat=VCFv4.2\\n##source=1000G_sites_and_local_pileup\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\n')
+  for j,r in enumerate(sel):
+   c,p=sites0[r,0],sites0[r,1]; x=known[(c,int(p))];fh.write(f'{c}\\t{p}\\tS{r}\\t{x[0]}\\t{x[1]}\\t.\\tPASS\\t.\\n')
+ print(out,'sites',len(sel),'pairs',ok.sum(),'reads',int(dp[ok].sum()),'alt',int(vals.sum()))
+PY
+for d in cellSNP_common_*; do gzip -c \""'$d/cellSNP.base.vcf" > "$d/cellSNP.base.vcf.gz"; done
+ls -lh cellSNP_common_* | sed -n '"'1,30p'"

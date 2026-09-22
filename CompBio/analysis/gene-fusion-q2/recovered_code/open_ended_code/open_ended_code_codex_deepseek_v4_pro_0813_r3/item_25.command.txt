@@ -1,0 +1,62 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, re
+from collections import defaultdict
+sam=pysam.AlignmentFile('contigs2trans.sam','r')
+# collect primary records and SA strings per query
+records=defaultdict(list)
+for al in sam:
+    if al.is_unmapped: continue
+    if not al.is_secondary and not al.is_supplementary:
+        records[al.query_name].append(al)
+
+def parse_sa(sa):
+    out=[]
+    if not sa: return out
+    for part in sa.split(';'):
+        if not part.strip(): continue
+        f=part.split(',')
+        if len(f)<6: continue
+        rname=f[0]; pos=int(f[1]); strand=f[2]; cigar=f[3]
+        gene=rname.split('|')[5]
+        out.append((rname,gene,pos,strand,cigar))
+    return out
+
+def qspan_cigar(cigar):
+    # from SAM CIGAR, sum M,I,S,H,=,X for query length
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])', cigar)
+    return sum(int(n) for n,op in ops if op in 'MIS=X')
+
+for q,als in records.items():
+    al=als[0]
+    cov=0.0; m=re.search(r'cov_([0-9.]+)',q)
+    if m: cov=float(m.group(1))
+    primary_gene=al.reference_name.split('|')[5]
+    # start with primary alignment; but qstart/end based on cigar
+    segs=[]
+    # parse primary CIGAR qspan and pos, then SA entries
+    allsegs=[]
+    if not al.is_unmapped:
+        allsegs.append((primary_gene, al.query_alignment_start, al.query_alignment_end, 'primary'))
+    sa=al.get_tag('SA') if al.has_tag('SA') else None
+    for rname,gene,pos,strand,cigar in parse_sa(sa):
+        # derive query span from CIGAR (supplementary may include H/S)
+        m=re.match(r'"'^('"\\d+)H?', cigar) # not robust
+        # use query_alignment_start by summing leading S/H until first M/I/=
+        ops=re.findall(r'(\\d+)([MIDNSHP=X])', cigar)
+        qs=0
+        for n,op in ops:
+            if op in 'SH':
+                qs+=int(n)
+            else:
+                break
+        qe=sum(int(n) for n,op in ops if op in 'MIS=X')
+        allsegs.append((gene,qs,qs+qe,'SA'))
+    # sort by qstart
+    allsegs.sort(key=lambda x:x[1])
+    distinct=[]
+    for g,qs,qe,typ in allsegs:
+        if g not in distinct: distinct.append(g)
+    if len(distinct)>=2:
+        print(f'{q} cov={cov:.2f} len? distinct={distinct}')
+        print('  ', allsegs)
+PY"

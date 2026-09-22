@@ -1,0 +1,67 @@
+/bin/bash -c "python3 - <<'PY'
+# Reuse depth computation, solve NNLS and variants on coverage profiles
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+from scipy.optimize import nnls, minimize
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+refs={'+':seq,'-':rc}
+pos=defaultdict(list)
+for lab,t in refs.items():
+ for i in range(len(t)-50+1):
+  pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+arrays={}
+for name in ['exo','endo','mix']:
+ depth=np.zeros(len(seq),dtype=float)
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline()
+   lab,i=bestpos(s)
+   if lab=='+': depth[i:i+50]+=1
+   else:
+    start=len(seq)-50-i; depth[start:start+50]+=1
+ arrays[name]=depth
+X=np.column_stack([arrays['exo'],arrays['endo']])
+y=arrays['mix']
+# use all positions? include zero positions too. NNLS with intercept
+for intercept in [False, True]:
+ Xm=np.column_stack([X,np.ones(len(y))]) if intercept else X
+ coef,res=nnls(Xm,y)
+ print('NNLS intercept',intercept,'coef',coef,'res',res)
+ a,b=coef[:2]
+ pi=a*arrays['exo'].sum()/(a*arrays['exo'].sum()+b*arrays['endo'].sum())
+ print(' pi depth',pi)
+# normalized profiles and nnls on probabilities
+Pe=arrays['exo']/arrays['exo'].sum(); Pn=arrays['endo']/arrays['endo'].sum(); Pm=arrays['mix']/arrays['mix'].sum()
+Xn=np.column_stack([Pe,Pn])
+coefn,resn=nnls(Xn,Pm)
+print('NNLS normalized coef',coefn,'res',resn,'pi norm',coefn[0]/(coefn[0]+coefn[1]))
+# nnls normalized with intercept
+Xni=np.column_stack([Pe,Pn,np.ones(len(y))])
+coefni,resni=nnls(Xni,Pm)
+print('NNLS norm intercept',coefni,'res',resni,'pi',coefni[0]/(coefni[0]+coefni[1]))
+# least squares no constraints
+coefls,resls,rank,sv=np.linalg.lstsq(X,y,rcond=None)
+print('OLS coef',coefls,'pi',coefls[0]*arrays['exo'].sum()/(coefls[0]*arrays['exo'].sum()+coefls[1]*arrays['endo'].sum()))
+# MLE Poisson GLM mixture: y ~ Poisson(a exo + b endo), pi=a*S_exo/(a*S_exo+b*S_endo)
+def negll(theta):
+ a,b=np.exp(theta)
+ mu=a*arrays['exo']+b*arrays['endo']
+ return -np.sum(y*np.log(mu)-mu)
+res=minimize(negll,[np.log(0.001),np.log(0.001)],method='Nelder-Mead')
+a,b=np.exp(res.x); print('Poisson MLE a,b',a,b,'pi',a*arrays['exo'].sum()/(a*arrays['exo'].sum()+b*arrays['endo'].sum()),'negll',res.fun)
+PY"

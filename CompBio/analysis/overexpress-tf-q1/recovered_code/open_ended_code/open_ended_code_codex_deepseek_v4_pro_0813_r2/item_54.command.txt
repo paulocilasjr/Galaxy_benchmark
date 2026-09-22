@@ -1,0 +1,72 @@
+/bin/bash -c "python3 - <<'EOF'
+import json, os
+from Bio import SeqIO
+from MOODS import scan, tools
+import math, statistics
+from scipy.stats import fisher_exact
+motifs=json.load(open('candidate_motifs.json'))
+# prepare matrices with counts (not probabilities), MOODS flat_matrix expects counts maybe
+mat_dict={}
+for tf,m in motifs.items():
+    pfm=m['pfm']
+    cols=len(pfm['A'])
+    # create nested list in ACGT order; MOODS flat_matrix expects list of lists with integers or floats; use counts
+    mat=[ [pfm[b][i] for i in range(cols)] for b in 'ACGT' ]
+    mat_dict[tf]=(mat, cols)
+
+# background frequencies from human genome approx
+bg = [0.295,0.205,0.205,0.295]  # ACGT, adjusted
+# functions
+def flat_matrix(mat):
+    return tools.flat_matrix(mat)
+
+def seqs_from_fa(path):
+    for rec in SeqIO.parse(path,'fasta'):
+        yield str(rec.seq).upper()
+
+def scan_file(path, pvals=(1e-3,1e-4,1e-5)):
+    records=list(seqs_from_fa(path))
+    n=len(records)
+    total_bp=sum(len(s) for s in records)
+    out={}
+    for tf,(mat,cols) in mat_dict.items():
+        m=flat_matrix(mat)
+        for p in pvals:
+            th=tools.threshold_from_p(p, m, bg)
+            hits=0; seqs_hit=0
+            for s in records:
+                if len(s)<cols: continue
+                r=scan.scan_dna(s,[m],bg,[th])
+                c=len(r[0])
+                if c>0: seqs_hit+=1
+                hits+=c
+            out[(tf,p)]={'seqs_hit':seqs_hit,'frac':seqs_hit/n if n else 0,'hits':hits,'hits_per_bp':hits/total_bp if total_bp else 0,'n':n,'total_bp':total_bp,'threshold':th}
+    return out
+files=['gained_top500.fa','gained_top1000.fa','gained_top2000.fa','gained_top5000.fa','stable_bg10k.fa']
+results={}
+for f in files:
+    if os.path.exists(f) and os.path.getsize(f)>0:
+        results[f]=scan_file(f)
+        print('scanned', f, len(list(seqs_from_fa(f))))
+# print fraction for p=1e-4
+print('\\nFrac seqs with motif at p=1e-4')
+header='file '+' '.join(motifs.keys())
+print(header)
+for f in files:
+    if f not in results: continue
+    vals=[]
+    for tf in motifs:
+        vals.append(f\"{results[f][(tf,1e-4)]['frac']:.3f}\")
+    print(f, ' '.join(vals))
+# enrichment gained top sets vs stable bg
+for gainf in [x for x in files if 'gained' in x]:
+    if gainf not in results or 'stable_bg10k.fa' not in results: continue
+    print('\\nEnrichment', gainf, 'vs bg p=1e-4')
+    G=results[gainf]
+    B=results['stable_bg10k.fa']
+    for tf in motifs:
+        a=G[(tf,1e-4)]['seqs_hit']; b=G[(tf,1e-4)]['n']-a
+        c=B[(tf,1e-4)]['seqs_hit']; d=B[(tf,1e-4)]['n']-c
+        orr, pval = fisher_exact([[a,b],[c,d]], alternative='greater')
+        print(f'{tf:8s} a={a:4d}/{G[(tf,1e-4)][\"n\"]:5d} bg={c:4d}/{B[(tf,1e-4)][\"n\"]:5d} frac={G[(tf,1e-4)][\"frac\"]:.3f} vs {B[(tf,1e-4)][\"frac\"]:.3f} OR={orr:.2f} p={pval:.3g}')
+EOF"

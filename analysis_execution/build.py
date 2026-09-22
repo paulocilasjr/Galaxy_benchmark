@@ -349,18 +349,22 @@ def build_evidence(output: Path, links: list[RunLink], repo_root: Path, workbook
                 if d.get("history_content_type") != "dataset":
                     continue
                 o = output_by_hda.get(d["id"])
+                creating_job = d.get("creating_job")
+                creating_event = next((e for e in events if e.get("native_job_id") == creating_job), {})
+                creating_job_path = job_paths.get(creating_job)
+                creating_tool = read_json(creating_job_path).get("tool_id") if creating_job_path else None
                 artifacts.append({"artifact_id": f"art_galaxy_{rid}_{d['id']}",
-                                  "role": "error_output" if d.get("state") == "error" else "shared_input" if d.get("creating_job") and read_json(job_paths.get(d["creating_job"], Path('/nonexistent'))).get("tool_id") == "__DATA_FETCH__" else "analytical_output",
+                                  "role": "error_output" if d.get("state") == "error" else "shared_input" if creating_tool == "__DATA_FETCH__" else "analytical_output",
                                   "condition": link.condition, "run_id": rid, "original_name": d.get("name"),
                                   "local_path": o.get("path") if o else None,
                                   "source_url": o.get("source_url") if o else None,
                                   "format": d.get("extension"), "observed_size": o.get("retained_bytes") if o else d.get("file_size"),
                                   "sha256": o.get("retained_sha256") if o else None,
-                                  "producing_event_id": f"evt_galaxy_{rid}_{d['creating_job']}" if d.get("creating_job") in job_paths else None,
-                                  "derivation_parent_ids": [f"art_galaxy_{rid}_{x}" for x in next((e["native_input_hda_ids"] for e in events if e.get("native_job_id") == d.get("creating_job")), [])], "status": d.get("state"),
+                                  "producing_event_id": f"evt_galaxy_{rid}_{creating_job}" if creating_job in job_paths else None,
+                                  "derivation_parent_ids": [f"art_galaxy_{rid}_{x}" for x in creating_event.get("native_input_hda_ids", [])], "status": d.get("state"),
                                   "history_id": galaxy.get("history_id"), "hda_id": d["id"],
                                   "dataset_id": d.get("dataset_id"), "uuid": d.get("uuid"),
-                                  "creating_job": d.get("creating_job"), "deleted": d.get("deleted"), "purged": d.get("purged")})
+                                  "creating_job": creating_job, "deleted": d.get("deleted"), "purged": d.get("purged")})
         score_field = None
         score = None
         for candidate in ("accuracy", "output_agreement", "result_evaluation"):

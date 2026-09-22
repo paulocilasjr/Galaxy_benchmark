@@ -1,0 +1,44 @@
+/bin/bash -c "python3 - <<'PY'
+import glob, os, re
+query=[g.strip().upper() for g in open('characterize.response.q1.txt')]
+qset=set(query); qrank={g:i for i,g in enumerate(query)}
+def parse(path):
+ terms=[]
+ for line in open(path):
+  p=line.rstrip('\\n').split('\\t')
+  if len(p)<3: continue
+  name=p[0]
+  genes=[]
+  for x in p[2:]:
+   if x:
+    g=x.split(',')[0].upper()
+    genes.append(g)
+  terms.append((name,genes))
+ return terms
+conds={'LPS':r'\\bLPS\\b|lipopolysaccharide','exhaustion':r'exhaust','LIF':r'\\bLIF\\b|leukemia inhibitory factor','IL-39':r'IL-?39|interleukin-?39','COVID-19':r'COVID|SARS-CoV|coronavirus','sepsis':r'sepsis|septic','Med12':r'\\bMed12\\b|MED12','SLE':r'lupus|SLE|systemic lupus','BMS':r'BMS|34554|345541','aldesleukin':r'aldesleukin|interleukin-2|\\bIL-2\\b','aging':r'ag(e|ing)|aging','RA':r'rheumatoid|arthritis'}
+cells={'monocytes':r'monocyte|mono','CD8':r'CD8|cytotoxic T','CD4':r'CD4|T helper|Th cell|T-cell|T cell|Tlymphocyte|Tcell','B':r'\\bB[- ]?cell|\\bB[- ]?lymphocyte|follicular B','DC':r'dendritic|\\bDC\\b|pDC','NK':r'\\bNK\\b|natural killer','Neutrophils':r'neutrophil|granulocyte'}
+rows=[]
+for path in glob.glob('libs/*.gmt'):
+ lib=os.path.basename(path)[:-4]
+ for name,genes in parse(path):
+  gset=set(genes); inter=qset & gset
+  if not inter: continue
+  j=len(inter)/len(qset|gset); oc=len(inter)/len(qset)
+  posmap={g:i for i,g in enumerate(genes) if g in qset}
+  xs=[posmap[g] for g in inter]; ys=[qrank[g] for g in inter]
+  if len(xs)>2:
+   mx=sum(xs)/len(xs); my=sum(ys)/len(ys); num=sum((x-mx)*(y-my) for x,y in zip(xs,ys)); den=(sum((x-mx)**2 for x in xs)*sum((y-my)**2 for y in ys))**.5; corr=num/den if den else 0
+  else: corr=0
+  cond_hit=[c for c,pat in conds.items() if re.search(pat,name,re.I)]
+  cell_hit=[c for c,pat in cells.items() if re.search(pat,name,re.I)]
+  rows.append((len(inter),j,oc,corr,lib,name,cond_hit,cell_hit,len(genes),list(inter)))
+rows.sort(key=lambda x:(-x[0],-x[1]))
+print('top by overlap:')
+for r in rows[:60]:
+ print(f\"{r[0]:3d} j={r[1]:.3f} corr={r[3]:.3f} size={r[8]:4d} {r[4]:35s} cond={r[6]} cell={r[7]} {r[5][:120]}\")
+print('\\nfiltered:')
+f=[r for r in rows if r[6] and r[7]]
+f.sort(key=lambda x:(-x[0],-x[1]))
+for r in f[:100]:
+ print(f\"{r[0]:3d} j={r[1]:.3f} corr={r[3]:.3f} size={r[8]:4d} {r[4]:35s} cond={r[6]} cell={r[7]} :: {r[5][:160]}\")
+PY"

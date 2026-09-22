@@ -1,0 +1,77 @@
+/bin/bash -lc "wc -l refs/gnomad_matched_gt_single.tsv; python3 - <<'PY'
+import json,gzip,collections,math
+# map hg38 pos ref alt -> unknown dosages
+unk={}
+for line in open('refs/gnomad_matched_positions.tsv'):
+    pos,ref,alt,*gs=line.strip().split('\\t')
+    unk[(int(pos),ref,alt)]=[int(x) for x in gs]
+samples=[l.strip() for l in open('refs/gnomad_samples.txt')]
+N=len(samples)
+def jload(x):
+    try: return json.loads(x) if x and x"'!='"'NA' else {}
+    except: return {}
+meta={}
+with gzip.open('refs/gnomad.hgdp_1kg.sample_meta.tsv.bgz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t'); idx={k:i for i,k in enumerate(header)}
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        gp=jload(p[idx['gnomad_population_inference']]); hm=jload(p[idx['hgdp_tgp_meta']])
+        # output label mapping
+        pop=gp.get('pop')
+        region=hm.get('genetic_region')
+        # map gnomad pop nfe/fin to EUR, keep mid/sas etc, for OCE use population
+        population=hm.get('population')
+        label=None
+        if pop=='afr': label='AFR'
+        elif pop in ('nfe','fin'): label='EUR'
+        elif pop=='asj': label='ASJ'
+        elif pop=='eas': label='EAS'
+        elif pop=='mid': label='MID'
+        elif pop=='sas': label='SAS'
+        elif region=='OCE' or population in ('Papuan','Melanesian','Bougainville'): label='OCE'
+        elif region in ('AFR','EUR','EAS','MID','SAS'): label=region
+        else: label=pop or region
+        meta[p[idx['s']]]=(label,pop,region,population,hm.get('gnomad_labeled_subpop'))
+match=[[0]*N for _ in range(4)]; mismatch=[[0]*N for _ in range(4)]; comp=[[0]*N for _ in range(4)]
+used=0
+for line in open('refs/gnomad_matched_gt_single.tsv'):
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<4+N: continue
+    chrom,pos,ref,alts=p[:4]; pos=int(pos); altlist=alts.split(',')
+    found=None
+    for alt in altlist:
+        if (pos,ref,alt) in unk:
+            found=alt; break
+    if not found: continue
+    alt_index=altlist.index(found)+1
+    ugs=unk[(pos,ref,found)]
+    used+=1
+    for j,gt in enumerate(p[4:]):
+        gt=gt.split(':',1)[0].replace('|','/')
+        if '.' in gt: continue
+        try: d=sum(1 for a in gt.split('/') if int(a)==alt_index)
+        except: continue
+        for i,u in enumerate(ugs):
+            comp[i][j]+=1
+            if d==u: match[i][j]+=1
+            else: mismatch[i][j]+=1
+print('used',used)
+for i in range(4):
+    rows=[]
+    bylab=collections.defaultdict(list)
+    for j,s in enumerate(samples):
+        if comp[i][j]>=50:
+            mm=mismatch[i][j]; rate=mm/comp[i][j]
+            rows.append((rate,mm,-match[i][j],comp[i][j],s,meta.get(s)))
+            lab=meta.get(s,(None,))[0]
+            if lab in ['AFR','ASJ','EUR','EAS','MID','SAS','OCE']:
+                bylab[lab].append(rate)
+    rows=sorted(rows)[:15]
+    print('\\nSample',i+1,'nearest')
+    for rate,mm,negm,c,s,m in rows:
+        print(f'{rate:.3f}',mm,-negm,c,s,m)
+    print('label med/topmean')
+    for lab,vals in sorted(bylab.items(), key=lambda kv: sum(sorted(kv[1])[:20])/min(20,len(kv[1]))):
+        vals=sorted(vals)
+        print(lab, 'n',len(vals),'best20mean',sum(vals[:min(20,len(vals))])/min(20,len(vals)), 'median', vals[len(vals)//2], 'best', vals[0])
+PY"

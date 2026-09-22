@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict, Counter
+import subprocess, re
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip(); tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'): trans_gene[tid]=part.split(':',1)[1];break
+
+def qint(cigar):
+    m=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    q=0; qs=None; qe=None
+    for ln,op in m:
+        ln=int(ln)
+        if op in 'SH': q+=ln
+        elif op in 'M=X':
+            if qs is None: qs=q
+            q+=ln; qe=q
+        elif op=='I': q+=ln
+    return (qs,qe)
+directed=Counter(); seen=set()
+proc=subprocess.Popen(['samtools','view','-F','0x900','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+    p=line.rstrip().split('\\t'); flag=int(p[1]); rname=p[2]
+    tags={}
+    for f in p[11:]:
+        if ':' in f:
+            k,t,v=f.split(':',2);tags[k]=v
+    sa=tags.get('SA')
+    if not sa: continue
+    g1=trans_gene.get(rname,'')
+    q1=qint(p[5]); strand1='-' if flag&16 else '+'
+    if not q1 or q1[0] is None: continue
+    for entry in sa.rstrip(';').split(';'):
+        if not entry: continue
+        parts=entry.split(',');
+        if len(parts)<6: continue
+        rt=parts[0]; g2=trans_gene.get(rt,'')
+        if not g1 or not g2 or g1==g2: continue
+        q2=qint(parts[3]); strand2=parts[2]
+        if not q2 or q2[0] is None: continue
+        ov=max(0,min(q1[1],q2[1])-max(q1[0],q2[0]))
+        if ov>8: continue
+        # dedupe read+unordered gene pair (use frozenset plus maybe orientations separately? first record only)
+        key=(p[0],tuple(sorted((g1,g2))))
+        if key in seen: continue
+        seen.add(key)
+        left_g=g1 if q1[0] <= q2[0] else g2
+        right_g=g2 if q1[0] <= q2[0] else g1
+        left_strand=strand1 if left_g==g1 else strand2
+        right_strand=strand2 if right_g==g2 else strand1
+        if left_strand==right_strand=='-':
+            directed[(right_g,left_g)]+=1
+        elif left_strand==right_strand=='+':
+            directed[(left_g,right_g)]+=1
+proc.wait()
+print('unique chimeric reads counted',sum(directed.values()))
+for pair in [('SP1','MYC'),('MYC','SP1'),('SP1','ZIC2'),('ZIC2','SP1'),('SP1','CATSPER4'),('CATSPER4','SP1')]:
+    print(pair,directed.get(pair,0))
+print('top directed:')
+for k,v in directed.most_common(50): print(v,k)
+PY"

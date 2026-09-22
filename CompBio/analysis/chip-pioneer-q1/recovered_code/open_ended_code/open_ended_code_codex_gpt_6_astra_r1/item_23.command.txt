@@ -1,0 +1,27 @@
+/bin/bash -lc "cat > analysis/bin_fragments.cpp <<'CPP'
+#include <cstdio>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+#include <cstdint>
+int main(int argc,char**argv){if(argc"'!=4)return 2;std::ifstream sizes(argv[1]);std::map<std::string,size_t> offsets;std::string c;size_t size,n=0;while(sizes>>c>>size){offsets[c]=n;n+=(size+499)/500;}std::vector<uint32_t> a(n,0);FILE*f=fopen(argv[2],"r");if(!f)return 3;char line[4096],chr[128];int s,e;std::string prev="";size_t off=0;while(fgets(line,sizeof(line),f)){if(sscanf(line,"%127s %d %d",chr,&s,&e)!=3)continue;if(prev!=chr){prev=chr;off=offsets.at(prev);}a[off+((int64_t)s+e)/1000]++;}fclose(f);FILE*out=fopen(argv[3],"wb");fwrite(a.data(),sizeof(uint32_t),a.size(),out);fclose(out);}
+CPP
+clang++ -O3 -std=c++17 analysis/bin_fragments.cpp -o tools/bin_fragments
+python3 - <<'"'PY'
+import re
+with open('analysis/canonical.chrom.sizes','w') as out:
+ for line in open('downloads/hg38.chrom.sizes'):
+  if re.fullmatch(r'chr([0-9]+|X|Y)',line.split()[0]):out.write(line)
+PY
+cat > analysis/bin_fragments.py <<'PY'
+import concurrent.futures,glob,os,subprocess,time
+os.makedirs('analysis/bins',exist_ok=True)
+def run(f):
+ name=os.path.basename(f).replace('.bed','');t=time.time()
+ subprocess.run(['tools/bin_fragments','analysis/canonical.chrom.sizes',f,'analysis/bins/'+name+'.uint32'],check=True)
+ print(name,round(time.time()-t),flush=True)
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:list(ex.map(run,sorted(glob.glob('analysis/fragments/*.bed'))))
+PY
+python3 analysis/bin_fragments.py > analysis/bin_fragments.log 2>&1"

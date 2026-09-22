@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv,gzip,re,pyBigWig,numpy as np,pandas as pd,time,sys
+from concurrent.futures import ThreadPoolExecutor,as_completed
+chrom='chr1p_1'; end=20_000_000; nb=end//10000
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+ rd=csv.reader(f,delimiter='\\t'); hdr=next(rd); rows=[]
+ for z in rd:
+  if z[0]"'!=chrom:
+   if rows: break
+   continue
+  if int(z[1])>=end: break
+  rows.append(z)
+idx=np.array([int(z[1])//10000 for z in rows]); X=np.array([[float(v) for v in z[3:]] for z in rows],dtype=float)
+samples=hdr[3:]
+print('"'rows',len(rows),'max',rows[-1][2],flush=True)
+refs=['Urothelial_cell','Astrocyte','Inhibitory_neuron','Oligodendrocyte','Cloaca_epithelial_cell','Cholangiocyte','Respiratory_epithelial_cell','Cardiac_muscle','Enterocyte','Goblet_cell','Proximal_tubule','Podocyte','Myoblast','Chondrocyte','Osteoblast','Hepatocyte','Pulmonary_epithelium','Lung_fibroblast','Acinar_cell','Pancreatic_ductal_cell','Endocrine_cell','vas_deferens_epithelial_cell','B_cell','T_cell','Macrophage','Foveolar_cell','Parietal_cell']
+base='https://bis.zju.edu.cn/uuatac/data/axolotl_bw/'
+def get(n):
+ t=time.time(); b=pyBigWig.open(base+n+'.bw'); a=b.stats(chrom,0,end,nBins=nb,type='mean',exact=True); b.close()
+ a=np.array([0 if v is None else v for v in a]); return n,a[idx],time.time()-t
+D={}
+with ThreadPoolExecutor(max_workers=6) as ex:
+ futs=[ex.submit(get,n) for n in refs]
+ for fut in as_completed(futs):
+  n,a,t=fut.result();D[n]=a;print(n,round(t,1),flush=True)
+# log correlation, raw rank corr, top enrichment z-ish
+L=np.log1p(X)
+for transform in ['logcorr','rawcorr','spearman']:
+ C=np.zeros((len(refs),len(samples)))
+ for i,n in enumerate(refs):
+  a=D[n]
+  if transform=='logcorr': aa=np.log1p(a); xx=L
+  elif transform=='rawcorr': aa=a; xx=X
+  else:
+   aa=pd.Series(a).rank().to_numpy(); xx=np.column_stack([pd.Series(X[:,j]).rank().to_numpy() for j in range(X.shape[1])])
+  for j in range(len(samples)): C[i,j]=np.corrcoef(aa,xx[:,j])[0,1]
+ print('\\n',transform,'top refs by sample')
+ for j,s in enumerate(samples):
+  q=np.argsort(C[:,j])[-5:][::-1]; print(s,[(refs[i],round(C[i,j],3)) for i in q])
+ print('\\n',transform,'top samples by ref')
+ for i,n in enumerate(refs):
+  q=np.argsort(C[i])[-4:][::-1]; print(n,[(samples[j],round(C[i,j],3)) for j in q])
+PY"

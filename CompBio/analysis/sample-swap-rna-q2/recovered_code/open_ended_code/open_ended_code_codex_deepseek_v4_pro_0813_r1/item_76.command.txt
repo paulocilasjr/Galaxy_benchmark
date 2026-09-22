@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,json,openpyxl,collections,numpy as np
+# load expression
+genes=[]; data=[]
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+ r=csv.reader(f,delimiter='\\t'); h=next(r)
+ for row in r:
+  genes.append(row[0]); data.append(list(map(float,row[1:])))
+A=np.array(data); cols=h[1:]
+gidx={g:i for i,g in enumerate(genes)}
+# load old map
+oldmap=json.load(open('old_geneid_map.json'))
+# build gene2ensembl map filtered tax 4565
+g2e={}
+with gzip.open('gene2ensembl.gz','rt') as f:
+ next(f)
+ for line in f:
+  parts=line.rstrip('\\n').split('\\t')
+  if len(parts)>=3 and parts[0]=='4565':
+   geneid=parts[1]; ens=parts[2]
+   if ens not in g2e: # set maybe
+    pass
+   g2e.setdefault(geneid,set()).add(ens)
+print('g2e wheat',len(g2e))
+# map Table S2 rows
+wb=openpyxl.load_workbook('additional_file2.xlsx', read_only=True, data_only=True)
+ws=wb['Table S2']
+cluster_genes=collections.defaultdict(set)
+mapped_count=collections.Counter(); missing=0
+for row in ws.iter_rows(min_row=4, values_only=True):
+ cl=row[0]; old=row[1]
+ if not old: continue
+ entrez=oldmap.get(old)
+ v03s=[]
+ if entrez:
+  v03s=[e for e in g2e.get(entrez,set()) if e in gidx]
+ # maybe old itself in file?
+ if not v03s and old in gidx:
+  v03s=[old]
+ cluster_genes[cl].update(v03s)
+ mapped_count[cl]+= (1 if v03s else 0)
+print('mapped rows per cluster',dict(mapped_count))
+# compute mean expression for each cluster markers and rank columns
+for cl in range(22):
+ gs=[g for g in cluster_genes[cl] if g in gidx]
+ if not gs:
+  print(cl,'no mapped genes'); continue
+ idx=[gidx[g] for g in gs]
+ mat=A[idx]
+ means=mat.mean(axis=0)
+ # also fraction max and median z
+ order=sorted(range(len(cols)), key=lambda i:means[i], reverse=True)
+ print(f'cluster {cl:2d} n={len(gs):3d} top: ' + ', '.join(f'{cols[i]}:{means[i]:.1f}' for i in order[:5]))
+PY"

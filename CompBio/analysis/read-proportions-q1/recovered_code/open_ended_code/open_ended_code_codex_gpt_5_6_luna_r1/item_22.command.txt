@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+import gzip,math
+import numpy as np
+from scipy.optimize import minimize
+fa={}
+for l in open('read.proportions.q1.fa'):
+ l=l.strip()
+ if l.startswith('>'):n=l[1:].split()[0];fa[n]=''
+ else:fa[n]+=l
+keys=list(fa); L=36; M=len(next(iter(fa.values())))-L+1
+comp=str.maketrans('ACGTN','TGCAN');rc=lambda s:s.translate(comp)[::-1]
+ix=defaultdict(set)
+for ci,c in enumerate(keys):
+ for p in range(M):ix[fa[c][p:p+L]].add(ci)
+def ms(q):return tuple(sorted(ix.get(q,set())|ix.get(rc(q),set())))
+obs=Counter()
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while f.readline():
+  q=f.readline().strip(); f.readline(); f.readline(); S=ms(q)
+  if S:obs[S]+=1
+pred=[]
+for c in keys:
+ cnt=Counter(ms(fa[c][p:p+L]) for p in range(M));pred.append(cnt)
+classes=sorted(set(obs)|set().union(*(set(x) for x in pred)))
+A=np.array([[pred[c][S]/M for c in range(4)] for S in classes]); y=np.array([obs[S]/sum(obs.values()) for S in classes])
+print('exact',sum(obs.values()),'M',M)
+print('class observed expected under pi=.5,.2,.2,.1')
+pi=np.array([.5,.2,.2,.1]);
+for S,row,yy in zip(classes,A,y):
+ print(''.join(str(i+1) for i in S),obs[S],f'{yy:.6f}',f'{row@pi:.6f}',[f'{v:.6f}' for v in row])
+fun=lambda x:-sum(y[j]*math.log(max(1e-300,float(A[j]@x))) for j in range(len(classes)))
+res=minimize(fun,pi,bounds=[(0,1)]*4,constraints={'type':'eq','fun':lambda x:x.sum()-1},method='SLSQP',options={'ftol':1e-14,'maxiter':1000})
+print('mle',res.x)
+# Calculate implied pi from unique classes each
+for c in range(4):
+ S=(c,); print('single',keys[c],obs[S]/sum(obs.values()),A[classes.index(S),c],obs[S]/sum(obs.values())/A[classes.index(S),c])
+PY"

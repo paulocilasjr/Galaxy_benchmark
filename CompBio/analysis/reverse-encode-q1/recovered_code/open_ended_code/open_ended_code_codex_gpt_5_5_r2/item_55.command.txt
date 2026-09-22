@@ -1,0 +1,56 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, json, re, time, sys, gzip, math
+# load diagnostic bins
+bins=[]
+for line in open('diagnostic_bins.bed'):
+    c,s,e,v=line.split(); bins.append((c,int(s),int(e),float(v)))
+bychrom={}
+for i,(c,s,e,v) in enumerate(bins): bychrom.setdefault(c,[]).append((s,e,i))
+# CIGAR reference consuming ops
+cig_re=re.compile(r'(\\d+)([MIDNSHP=X])')
+def ref_end(pos0,cig):
+    p=pos0
+    for n,op in cig_re.findall(cig):
+        if op in 'MDN=X': p+=int(n)
+    return p
+
+def count_acc(acc):
+    url=f'https://www.encodeproject.org/files/{acc}/@@download/{acc}.bam'
+    cmd=['samtools','view','-q','30','-L','diagnostic_bins.bed',url]
+    p=subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    counts=[0]*len(bins); nlines=0
+    for line in p.stdout:
+        if not line or line[0]=='@': continue
+        fields=line.split('\\t')
+        chrom=fields[2]
+        if chrom not in bychrom: continue
+        start=int(fields[3])-1
+        end=ref_end(start, fields[5])
+        for s,e,i in bychrom[chrom]:
+            if start < e and end > s:
+                counts[i]+=1
+        nlines+=1
+    err=p.stderr.read()
+    rc=p.wait()
+    if rc"'!=0:
+        print('"'ERRCMD',acc,rc,err[-500:],file=sys.stderr)
+    return counts,nlines,err
+candidates={
+ 'ENCSR000EQL':['ENCFF505BXT','ENCFF816ZVF'],
+ 'ENCSR000EPK':['ENCFF254VNR'],
+ 'ENCSR420HOT':['ENCFF425CQF'],
+ 'ENCSR385AMY':['ENCFF609ONB'],
+ 'ENCSR000ELA':['ENCFF855PPS'],
+ 'ENCSR597URK':['ENCFF051GHB'],
+}
+N0=76275600
+for exp,files in candidates.items():
+    total=[0]*len(bins); lines=0; t=time.time()
+    for acc in files:
+        cs,n,err=count_acc(acc); lines+=n; total=[a+b for a,b in zip(total,cs)]
+        print(' file',exp,acc,'lines',n,'first5',cs[:5], 'elapsed',round(time.time()-t,1), flush=True)
+    Ns=[cnt*1_000_000/v for cnt,(_,_,_,v) in zip(total,bins) if cnt>0]
+    mean=sum(Ns)/len(Ns); cv=(sum((x-mean)**2 for x in Ns)/len(Ns))**0.5/mean
+    diffs=[cnt-round(v*N0/1_000_000) for cnt,(_,_,_,v) in zip(total,bins)]
+    print('RESULT',exp,'files',files,'lines',lines,'first10counts',total[:10],'Nmean',round(mean),'cv',cv,'diffs0_first10',diffs[:10], 'elapsed',round(time.time()-t,1), flush=True)
+PY"

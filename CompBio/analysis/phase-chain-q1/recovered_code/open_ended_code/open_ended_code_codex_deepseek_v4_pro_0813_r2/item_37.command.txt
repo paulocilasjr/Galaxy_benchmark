@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('aln.sorted.bam','rb')
+region_start=27079100; region_end=27080650
+counts=collections.defaultdict(collections.Counter)
+cover=collections.Counter()
+delcount=collections.Counter()
+for r in bam.fetch('chr22',region_start,region_end):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    refpos=r.reference_start; qpos=0
+    for op,length in r.cigartuples:
+        if op==0:
+            for i in range(length):
+                base=r.query_sequence[qpos+i]
+                qual=r.query_qualities[qpos+i] if r.query_qualities else 20
+                if qual>=10:
+                    counts[refpos+i][base]+=1
+                    cover[refpos+i]+=1
+            refpos+=length; qpos+=length
+        elif op==1:
+            qpos+=length
+        elif op==2:
+            # deletion: mark at first ref pos
+            if length==1:
+                delcount[refpos]+=1
+            refpos+=length
+        elif op==3:
+            refpos+=length
+        elif op==4:
+            qpos+=length
+bam.close()
+# print positions with at least two alleles high (>20%)
+print('positions with major alt fraction>0.15 and total>20')
+for pos in range(region_start,region_end):
+    c=counts[pos]
+    tot=sum(c.values())
+    if tot<20: continue
+    sortedc=c.most_common()
+    if len(sortedc)>=2:
+        top=sortedc[0][1]; second=sortedc[1][1]
+        if second/tot>0.15:
+            print(pos, tot, c.most_common(6), 'del',delcount[pos])
+# print deletion counts > 10
+print('deletion positions with count>10')
+for pos,n in sorted(delcount.items()):
+    if n>10:
+        print('DEL at',pos,'count',n,'bases',counts[pos].most_common(4))
+PY"

@@ -1,0 +1,39 @@
+/bin/bash -c "python3 - <<'PY'
+import snapatac2 as snap, numpy as np
+from scipy.sparse import csr_matrix
+adata=snap.read('atac_peaks_scrub.h5ad')
+X=adata.X[:].tocsr().astype(np.float32); X.data[:]=1
+names=np.array(adata.obs_names)
+norms=np.asarray(X.sum(axis=1)).ravel().astype(np.float32)
+candidates=['CGAGCAATAGAGGTGG-1','GCGACACGCCGGGCAC-1','CGCACGCGTACTGCAG-1','GACTATAATGATTTTT-1','TGAGCCTCACGCTTCG-1','GGCGACCTCTACGTAG-1','CGTGTGGATCTGGCAG-1','TTCGAGACGTAGAAAA-1','CACGGTTTTCATACAA-1','CATCTGGAAAGTAGGC-1']
+# Precompute X @ X.T maybe 1000x1000 sparse? Use dot for all cells, memory okay (8M nnz *? 1000x1000 dense 8MB)
+S=X.dot(X.T).toarray()
+# Jaccard all pairs via counts norms
+N=norms
+J=np.zeros_like(S,dtype=np.float32)
+for i in range(len(names)):
+    # J(i,j)=S/(Ni+Nj-S)
+    den=N[i]+N-S[i]
+    den[den>0]=S[i]/den[den>0]
+    J[i]=den
+    J[i,i]=1.0
+# But S computed on all, loop 1000 okay.
+for b in candidates:
+    i=np.where(names==b)[0][0]
+    order=np.argsort(-J[i])
+    # top excluding self
+    top=[(names[j],J[i,j],N[j]) for j in order[1:16]]
+    print('\\nCandidate',b,'N',N[i])
+    for t in top: print(' ',t)
+    # top two as parents and their similarity
+    a=order[1]; c=order[2]
+    # union Jaccard with candidate: |cand ∩ (a∪b)| / |cand ∪ a ∪ b|
+    # |A∪B∪C| = na+nb+nc - Sab-Sac-Sbc + Sabc. ignore triple by approximate? compute union without triple if binary triple rare.
+    # exact |A∪B∪C| = sum sizes - sum pairwise + triple. Use triple = X[i].multiply(X[a]).multiply(X[b]).sum? binary intersection triple = dot of row i * row a * row b -> can compute by elementwise.
+    # Simpler union numerator = bits in candidate and (a or b)
+    union_ab_bits = N[a]+N[c]-S[a,c]
+    inter_c_union = S[i,a]+S[i,c] - (X[i].multiply(X[a]).multiply(X[c])).sum()
+    union_all = N[i]+N[a]+N[c] - S[i,a]-S[i,c]-S[a,c] + (X[i].multiply(X[a]).multiply(X[c])).sum()
+    jac_union=inter_c_union/union_all if union_all else 0
+    print(' top2 parents',names[a],names[c],'Jacc cand-parent',J[i,a],J[i,c],'Jacc a-b',J[a,c],'Jacc cand union',jac_union)
+PY"

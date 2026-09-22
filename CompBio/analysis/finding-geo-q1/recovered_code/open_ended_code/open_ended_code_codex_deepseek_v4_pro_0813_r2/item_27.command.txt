@@ -1,0 +1,58 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request, io, h5py, time, os
+URL='https://ftp.ncbi.nlm.nih.gov/geo/series/GSE102nnn/GSE102934/suppl/GSE102934_iCell_10x_brain.h5'
+# get size
+req=urllib.request.Request(URL,method='HEAD')
+with urllib.request.urlopen(req,timeout=30) as r:
+    size=int(r.headers['Content-Length'])
+print('size',size)
+class RangeReader(io.RawIOBase):
+    def __init__(self,url,size,chunk=1<<20):
+        self.url=url; self.size=size; self.pos=0; self.chunk=chunk; self.cache={}
+    def seekable(self): return True
+    def readable(self): return True
+    def seek(self,offset,whence=0):
+        if whence==0: self.pos=offset
+        elif whence==1: self.pos+=offset
+        elif whence==2: self.pos=self.size+offset
+        else: raise ValueError
+        return self.pos
+    def tell(self): return self.pos
+    def _fetch(self,start,end):
+        start=max(0,start); end=min(self.size,end)
+        if start>=end: return b''
+        # align to chunk
+        a=(start//self.chunk)*self.chunk; b=min(self.size,((end-1)//self.chunk+1)*self.chunk)
+        if (a,b) not in self.cache:
+            req=urllib.request.Request(self.url,headers={'Range':f'bytes={a}-{b-1}'})
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(req,timeout=60) as r: self.cache[(a,b)]=r.read()
+                    break
+                except Exception as e:
+                    print('retry',attempt,e); time.sleep(2)
+            else: raise
+        data=self.cache[(a,b)]
+        return data[start-a:end-a]
+    def read(self,size=-1):
+        if size is None or size<0: size=self.size-self.pos
+        data=self._fetch(self.pos,self.pos+size)
+        self.pos+=len(data)
+        return data
+    def readinto(self,b):
+        data=self.read(len(b)); b[:len(data)]=data; return len(data)
+reader=RangeReader(URL,size,chunk=1<<20)
+# open h5py, maybe HDF5 tries lots.
+start=time.time()
+try:
+    f=h5py.File(reader,'r')
+    print('opened',time.time()-start)
+    def visit(name,obj):
+        if isinstance(obj,h5py.Dataset):
+            print('D',name,obj.shape,obj.dtype)
+        else:
+            print('G',name,list(obj.attrs.keys()))
+    f.visititems(visit)
+except Exception as e:
+    print('ERR',type(e),e)
+PY"

@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, re, gzip, collections
+sym={}
+with gzip.open('Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as fh:
+    for line in fh:
+        if line.startswith('>'):
+            tid=line[1:].split()[0]
+            m=re.search(r'gene_symbol:(\\S+)',line)
+            if m: sym[tid]=m.group(1)
+sam=pysam.AlignmentFile('raw_transcriptome.sam','r')
+cnt=collections.Counter()
+for a in sam.fetch(until_eof=True):
+    if a.is_unmapped or a.is_secondary: continue
+    genes={sym.get(a.reference_name,a.reference_name)}
+    refs=[(a.reference_name,a.cigarstring,a.is_reverse)]
+    if a.has_tag('SA'):
+        for item in a.get_tag('SA').split(';'):
+            if not item: continue
+            p=item.split(','); refs.append((p[0],p[3] if len(p)>3 else '', p[2]=='-' if len(p)>2 else False)); genes.add(sym.get(p[0],p[0]))
+    if 'GAPDH' in genes and 'SOX2' in genes:
+        # decide order: for each alignment, get query start/end from cigar hard; approximate
+        # primary first
+        def qspan(cigar, reverse):
+            # sum M/I/S but H ignored; for SA cigar string includes M,S,H, we can compute q_len from M/I/S
+            import re
+            ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+            qs=0; qe=0
+            for n,op in ops:
+                n=int(n)
+                if op in 'MIS=X': qe+=n
+                elif op in 'DN': pass
+            return qs,qe
+        # For primary alignment, CIGAR from SAM; SA item has cigar string but same orientation
+        info=[]
+        for ref,cig,rev in refs:
+            # For SA, rev indicates strand relative? CIGAR positions maybe query coords from full q
+            info.append((sym.get(ref,ref),cig,rev))
+        # classify based on first primary: if first alignment has leading S, the other gene is first in read orientation; if trailing S, primary gene first.
+        primary_gene=sym.get(a.reference_name,a.reference_name)
+        primary_cig=a.cigarstring or ''
+        # find SA gene
+        sa_genes=[g for g in genes if g"'!=primary_gene]
+        if len(sa_genes)!=1: continue
+        other=sa_genes[0]
+        # leading clip means other at 5'"' end of read; trailing clip means primary at 5' end
+        leading = bool(primary_cig) and re.match(r'"'^'"\\d+S',primary_cig)
+        trailing = bool(primary_cig) and re.search(r'\\d+S"'$'"',primary_cig)
+        if leading and not trailing:
+            order=(other,primary_gene)
+        elif trailing and not leading:
+            order=(primary_gene,other)
+        elif leading and trailing:
+            order=('ambiguous',)
+        else:
+            order=('none',)
+        cnt[order]+=1
+print(cnt)
+PY"

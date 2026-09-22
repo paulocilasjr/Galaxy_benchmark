@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np
+from scipy import sparse
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')
+def prep(a):
+    X=a.X
+    if sparse.issparse(X): X=X.toarray()
+    lib=X.sum(axis=1,keepdims=True)
+    return np.log1p(X/lib*1e4), np.array(a.var_names), a.obs.guide.astype(str).values
+for name,a in [('ref',ref),('query',q)]:
+    X,genes,guide=prep(a)
+    nt=X[np.array([g.startswith('NT') for g in guide])].mean(axis=0)
+    print('\\n',name)
+    for target in ['PABPC1','NUDT21','LEO1']:
+        idx=np.where(genes==target)[0]
+        if len(idx)==0: print(target,'missing'); continue
+        idx=idx[0]
+        scores=[]
+        for g in sorted(set(guide)):
+            if g.startswith('NT'): continue
+            mask=guide==g
+            score=X[mask].mean(axis=0)[idx]-nt[idx]
+            rank=(X[mask].mean(axis=0)<=X[mask].mean(axis=0)[idx]).sum() # rough rank count lower
+            scores.append((score,g,rank))
+        print(target, 'top by target diff:')
+        for x in sorted(scores)[:8]:
+            print(' ',x)
+PY"

@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+
+# load gene symbols (skip header)
+genes=[]
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:
+    header=next(f)
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        genes.append(parts[1] if len(parts)>1 else parts[0])
+idx={g:i for i,g in enumerate(genes)}
+print(len(genes), genes[:5], genes[-5:])
+
+# marker sets
+cell_markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','GJA1'],
+'microglial cell':['P2RY12','TMEM119','CX3CR1','AIF1','C1QA','C1QB','C1QC','ITGAM'],
+'RPE cell':['RPE65','BEST1','PMEL','TYR','MITF','RDH5','LRAT'],
+'cone cell':['OPN1LW','OPN1MW','OPN1SW','GNAT2','ARR3','PDE6H','GNGT2'],
+'rod cell':['RHO','NRL','GNAT1','PDE6A','PDE6B','SAG','CNGA1','RCVRN'],
+'horizontal cell':['ONECUT1','ONECUT2','LHX1','CALB1','PROX1'],
+'bipolar cell':['VSX2','GRM6','TRPM1','PRKCA','CABP5','OTX2'],
+'RGC':['RBPMS','THY1','SNCG','NEFL','NEFM','POU4F1'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','CD2','CD7'],
+'macrophage':['CD68','CD14','LYZ','FCGR3A','MSR1','MRC1','LST1'],
+'Schwann cell':['MPZ','MBP','SOX10','PLP1','S100B','PMP22'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','NOTCH3','ACTA2'],
+'B cell':['MS4A1','CD79A','CD79B','CD74','BANK1','CD19'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','VIM','CLU','CA2','APOE'],
+'endothelial cell':['PECAM1','VWF','CLDN5','KDR','FLT1','ESAM'],
+}
+inflam=['ISG15','IFI6','IFI27','IFIT1','IFIT2','IFIT3','IFITM1','IFITM3','MX1','MX2','OAS1','OAS2','OAS3','OASL','STAT1','IRF7','CXCL10','CXCL9','CCL2','CCL3','CCL4','TNF','IL1B','NFKBIA','HLA-DRA','HLA-DRB1','HLA-A','HLA-B','B2M']
+
+# Load matrices one at a time, compute normalized marker means per cell
+for eye,path in [('eye1','subtype.inflammation.q1.1.mtx.gz'),('eye2','subtype.inflammation.q1.2.mtx.gz')]:
+    X=mmread(path).tocsr()  # genes x cells
+    totals=np.asarray(X.sum(axis=0)).ravel()
+    print('\\n',eye, X.shape, 'total median', np.median(totals), 'mean', totals.mean())
+    # log normalized rows for all markers only: log1p(count/total*1e4)
+    allgenes=sorted(set(sum(cell_markers.values(),[]) + inflam))
+    present=[g for g in allgenes if g in idx]
+    sub=X[[idx[g] for g in present], :].tocsc()
+    # dense markers x cells ok
+    vals=sub.toarray().astype(float)
+    vals = np.log1p(vals / totals[None,:] * 1e4)
+    pidx={g:i for i,g in enumerate(present)}
+    scores={}
+    for ct,ms in cell_markers.items():
+        inds=[pidx[g] for g in ms if g in pidx]
+        scores[ct]=vals[inds].mean(axis=0) if inds else np.zeros(X.shape[1])
+    inds=[pidx[g] for g in inflam if g in pidx]
+    inf=vals[inds].mean(axis=0)
+    # report top cell marker score means and quantiles of inflam among cells assigned max score
+    mat=np.vstack([scores[ct] for ct in cell_markers])
+    cts=list(cell_markers)
+    labels=np.array(cts)[mat.argmax(axis=0)]
+    # require some score? all cells assigned. Print counts and inf means.
+    print('assigned counts / inf mean / marker mean')
+    for ct in cts:
+        mask=labels==ct
+        if mask.sum()>0:
+            print(f'{ct:18s} {mask.sum():5d} inf_mean {inf[mask].mean():.4f} inf_med {np.median(inf[mask]):.4f} mark {scores[ct][mask].mean():.3f}')
+PY"

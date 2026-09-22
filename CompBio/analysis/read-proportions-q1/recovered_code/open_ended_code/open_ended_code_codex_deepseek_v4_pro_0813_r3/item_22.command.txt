@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import pickle, math, time
+with open('counts_mins.pkl','rb') as f: data=pickle.load(f)
+counts=data['counts']; mins=data['mins']; names=data['names']; reads=data['reads']
+N=len(reads); L=36; maxd=6
+# Precompute log of per-d factor? use floats
+def run_em(p, maxiter=2000, tol=1e-14):
+    q=1-p
+    # likelihoods matrix N x 4
+    Lmat=[]
+    for i in range(N):
+        row=[]
+        for j in range(4):
+            c=counts[i][j]; m=mins[i][j]
+            lik=0.0
+            for d in range(maxd+1):
+                cc=c[d]
+                if cc:
+                    lik += cc * (p**d) * (q**(L-d))
+            if m>maxd:
+                lik += (p**m) * (q**(L-m))
+            if lik==0: lik=1e-300
+            row.append(lik)
+        Lmat.append(row)
+    pi=[0.25]*4
+    ll_prev=-1e100
+    for it in range(maxiter):
+        new=[0.0]*4; ll=0.0
+        for i,row in enumerate(Lmat):
+            denom=0.0; vals=[0.0]*4
+            for j in range(4):
+                v=pi[j]*row[j]; vals[j]=v; denom+=v
+            ll += math.log(denom)
+            inv=1.0/denom
+            for j in range(4): new[j]+=vals[j]*inv
+        pi=[x/N for x in new]
+        if abs(ll-ll_prev)<tol:
+            break
+        ll_prev=ll
+    return pi,ll,it
+best=None
+for p in [0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,0.009,0.010,0.012,0.015,0.02,0.03,0.05,0.08]:
+    pi,ll,it=run_em(p)
+    print('p',p,'ll',ll,'pi',pi,'pct',[100*x for x in pi],'it',it)
+    if best is None or ll>best[0]: best=(ll,p,pi,it)
+print('best',best)
+PY"

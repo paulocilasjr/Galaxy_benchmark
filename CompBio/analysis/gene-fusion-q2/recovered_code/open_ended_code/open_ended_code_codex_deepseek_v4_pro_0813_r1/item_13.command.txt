@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict, Counter
+import subprocess
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip(); tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'): trans_gene[tid]=part.split(':',1)[1]; break
+pairs=defaultdict(list)
+proc=subprocess.Popen(['samtools','view','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+    p=line.rstrip().split('\\t'); flag=int(p[1]); rname=p[2]
+    tags={}
+    for f in p[11:]:
+        if ':' in f:
+            k,t,v=f.split(':',2); tags[k]=v
+    sa=tags.get('SA')
+    if not sa: continue
+    g1=trans_gene.get(rname)
+    for entry in sa.rstrip(';').split(';'):
+        if not entry: continue
+        parts=entry.split(',')
+        if len(parts)<6: continue
+        rt=parts[0]; g2=trans_gene.get(rt)
+        if not g1 or not g2: continue
+        if (g1,g2) in [('ZIC2','SP1'),('SP1','ZIC2'),('SP1','MYC'),('MYC','SP1'),('CATSPER4','SP1'),('SP1','CATSPER4')]:
+            pairs[(g1,g2)].append((p[0],rname,p[3],p[5],rt,parts[1],parts[2],parts[3],parts[4]))
+proc.wait()
+for k,vals in pairs.items():
+    print('\\nPAIR',k,'count',len(vals))
+    for v in vals[:20]:
+        print(v)
+PY"

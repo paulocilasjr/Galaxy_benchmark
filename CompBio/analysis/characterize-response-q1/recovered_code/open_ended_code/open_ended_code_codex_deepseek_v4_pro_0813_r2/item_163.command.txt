@@ -1,0 +1,33 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(data.table)
+library(moe430a.db)
+expr <- fread('GSE2002_expr.csv')
+probes <- gsub('\"','',expr[[1]])
+map <- as.data.table(select(moe430a.db, keys=probes, columns='SYMBOL', keytype='PROBEID'))
+setnames(map,'PROBEID','probe')
+expr[, probe := probes]
+numcols <- grep('"'^""GSM'"', names(expr), value=TRUE)
+for(j in numcols) set(expr, j=j, value=as.numeric(expr[[j]]))
+m <- merge(expr, map, by='probe', allow.cartesian=TRUE)
+m <- m["'!is.na(SYMBOL)]
+m[, SYMBOL := toupper(SYMBOL)]
+out <- m[, lapply(.SD, mean), by=SYMBOL, .SDcols=numcols]
+setnames(out, names(out), gsub('"'\"','',names(out)))
+fwrite(out, 'GSE2002_symbol_expr.csv')
+cat('symbols',nrow(out),'cols',ncol(out),'\\n')
+RS
+python3 - <<'PY'
+import pandas as pd, numpy as np, json, scipy.stats as st
+meta=json.load(open('GSE2002_meta.json'))
+df=pd.read_csv('GSE2002_symbol_expr.csv').set_index('SYMBOL')
+input=[x.strip().upper() for x in open('characterize.response.q1.txt')]
+ri={g:i+1 for i,g in enumerate(input)}
+lps=[c for c in df.columns if 'LPS' in meta[c]]; ctrl=[c for c in df.columns if 'Untreated' in meta[c]]
+s=np.log2((df[lps].mean(axis=1)+1)/(df[ctrl].mean(axis=1)+1))
+got=s[s.index.isin(set(input))]
+a=[ri[g] for g in input if g in s.index]; b=[s[g] for g in input if g in s.index]
+print('spearman',st.spearmanr(a,b))
+ranked=s.sort_values(ascending=False); top=ranked.head(112).index.tolist()
+print('overlap top112',len(set(top)&set(input)), [g for g in input if g in set(top)])
+print('top input lfc:', [(g,round(s.get(g,float('nan')),2)) for g in input[:30] if g in s.index])
+PY"

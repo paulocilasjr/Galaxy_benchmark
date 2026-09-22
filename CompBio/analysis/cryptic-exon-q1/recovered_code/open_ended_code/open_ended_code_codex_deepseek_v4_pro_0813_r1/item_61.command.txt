@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess,re,collections
+known=collections.defaultdict(set); exons=collections.defaultdict(lambda:collections.defaultdict(list))
+for line in open('gencode.v47.annotation.gtf'):
+    if line.startswith('#'):continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<9 or f[2]"'!='"'exon':continue
+    attrs=dict(re.findall(r'(\\S+?) \"(["'^"]*)"'"',f[8])); gn=attrs.get('gene_name',''); tx=attrs.get('transcript_id','')
+    exons[gn][tx].append((int(f[3]),int(f[4])))
+for gn,txs in exons.items():
+    for tx,es in txs.items():
+        es=sorted(es)
+        for (s1,e1),(s2,e2) in zip(es,es[1:]):
+            if s2>e1+1: known[gn].add((e1+1,s2-1))
+for bam in ['stat1_aln_k7.bam']:
+    hits=[]
+    for line in subprocess.Popen(['samtools','view','-F','4',bam],stdout=subprocess.PIPE,text=True).stdout:
+        f=line.split('\\t')
+        if len(f)<6:continue
+        flag=int(f[1]); mapq=int(f[4]); cigar=f[5]
+        if flag&0x900:continue
+        m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"',f[2])
+        if not m:continue
+        gene=m.group(1); ref_start=int(m.group(3)); pos=int(f[3])
+        ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar); left=0; ints=[]
+        for n,op in ops:
+            n=int(n)
+            if op=='N':
+                gs=ref_start+1+(pos-1)+left; ints.append((gs,gs+n-1,n)); left+=n
+            elif op in 'MDN=X':left+=n
+        for i in range(len(ints)-1):
+            a=ints[i][:2];b=ints[i+1][:2]
+            if a not in known.get(gene,set()) and b not in known.get(gene,set()):
+                hits.append((gene,f[0],f[1],pos,mapq,cigar,ints,a,b,b[0]-a[1]-1))
+    print('pairs in',bam,len(hits))
+    for h in hits: print(h)
+PY"

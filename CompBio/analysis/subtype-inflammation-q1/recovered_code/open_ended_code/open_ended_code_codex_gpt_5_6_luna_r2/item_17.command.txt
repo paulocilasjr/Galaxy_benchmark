@@ -1,0 +1,55 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,numpy as np,gc,warnings
+from scipy.io import mmread
+from scipy.sparse import coo_matrix,vstack
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+warnings.filterwarnings('ignore')
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as h:
+ next(h); genes=[x.rstrip().split('\\t')[1] for x in h]
+idx={x:i for i,x in enumerate(genes)}; files=['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz']; ns=[]; mus=[]; m2s=[]
+for f in files:
+ a=mmread(f).tocoo(); n=a.shape[1]; ns.append(n); d=a.data.astype(np.float32); col=a.col; lib=np.bincount(col,weights=d,minlength=n).astype(np.float32); v=np.log1p(d*1e4/lib[col]); mus.append(np.bincount(a.row,weights=v,minlength=a.shape[0])/n); m2s.append(np.bincount(a.row,weights=v.astype(np.float64)**2,minlength=a.shape[0])/n); del a,d,col,lib,v;gc.collect()
+N=sum(ns); mean=sum(mus[j]*ns[j] for j in range(2))/N; m2=sum(m2s[j]*ns[j] for j in range(2))/N; var=np.maximum(m2-mean*mean,0)
+valid=(mean>0.02)&np.array([not (g.startswith('MT-') or g.startswith('RPS') or g.startswith('RPL') or g=='MALAT1') for g in genes]); hvg=np.where(valid)[0][np.argsort(var[valid])[-4000:]]
+force=['CCL5','SLC1A3','RLBP1','GLUL','WIF1','GABRG3','FOXP2','P2RY12','ADGRE1','MARCO','STAB1','OLR1','CCL2','CCL7','CYBB','CD3D','TRAC','IL7R','MARCH1']
+hvg=np.array(sorted(set(hvg.tolist()+[idx[g] for g in force if g in idx])),dtype=np.int32)
+Xs=[]
+for f,n in zip(files,ns):
+ a=mmread(f).tocoo(); d=a.data.astype(np.float32); col=a.col; lib=np.bincount(col,weights=d,minlength=n).astype(np.float32); v=np.log1p(d*1e4/lib[col]); keep=np.isin(a.row,hvg); rr=np.searchsorted(hvg,a.row[keep]); Y=coo_matrix((v[keep],(col[keep],rr)),shape=(n,len(hvg)),dtype=np.float32).tocsr();Y.sum_duplicates();Xs.append(Y);del a,d,col,lib,v,keep,rr,Y;gc.collect()
+X=vstack(Xs,format='csr'); del Xs;gc.collect(); Z=TruncatedSVD(n_components=40,n_iter=3,random_state=1).fit_transform(X); Z=(Z-Z.mean(0))/(Z.std(0)+1e-8); lab=KMeans(n_clusters=40,n_init=5,random_state=1,max_iter=100).fit_predict(Z)
+# marker panels; score mean expression of available markers, weighted down generic-ish
+panels={
+'astrocyte':['GFAP','AQP4','S100B','SLC1A3','ALDOC','KCNJ10','AGT','WIF1','TF','CP'],
+'microglial cell':['P2RY12','TMEM119','CX3CR1','AIF1','C1QA','C1QB','C1QC','CSF1R','TYROBP','LST1','FCER1G','HLA-DRA','CTSS','CST3'],
+'RPE cell':['RPE65','BEST1','RLBP1','MITF','PMEL','TYR','DCT','MERTK','RDH5','LRAT'],
+'cone cell':['ARR3','GNAT2','PDE6C','OPN1SW','OPN1MW','OPN1LW','GNGT2','RXRG','THRB','GUCA1C'],
+'rod cell':['RHO','PDE6A','PDE6B','GNAT1','SAG','CNGB1','NRL','NR2E3','ROM1','GNGT1','PDE6G'],
+'horizontal cell':['LHX1','ONECUT1','ONECUT2','CALB1','VSX1','PROX1'],
+'bipolar cell':['VSX1','VSX2','CABP5','GRM6','TRPM1','GPR179','PRKCA','PCP4','NYX'],
+'RGC':['RBPMS','SNCG','NEFL','NEFM','ISL1','THY1','RBP4','PVALB','SLC17A7','TUBB3'],
+'T cells':['CD3D','CD3E','CD3G','TRBC1','TRBC2','IL7R','LTB','CCL5','NKG7','CD8A','CD8B','KLRD1','LCK','TRAC','IL32','RASGRP1','CD247'],
+'macrophage':['CD68','LILRB1','FCGR3A','APOC1','MSR1','MRC1','MARCO','CTSB','CTSD','TYROBP','LST1','FCER1G','CST3','STAB1','FPR1','OLR1','CCL2','CCL7','CYBB'],
+'Schwann cell':['S100B','SOX10','PLP1','MPZ','MBP','GFAP','NCAM1','PMP22','NGFR'],
+'Pericyte':['RGS5','CSPG4','PDGFRB','MCAM','NOTCH3','ACTA2','COL4A1','COL4A2','DES','KCNJ8','ABCC9'],
+'B cell':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD83','CD22','CD19','CD52'],
+'fibroblast':['COL1A1','COL1A2','COL3A1','DCN','LUM','COL6A1','PDGFRA','C7','COL5A1','COL6A2'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','VIM','AQP4','KCNJ10','RAX','SOX9','CLU','SLC1A2','ALDOC','SLC4A4','WIF1','TF','CP','FOXP2'],
+'endothelial cell':['EMCN','PECAM1','VWF','KDR','ESAM','ENG','RAMP2','PLVAP','CLDN5','CA4','RGCC'],
+}
+# map genes to selected positions; zscore each feature across cells for score
+muX=np.asarray(X.mean(0)).ravel(); sdX=np.sqrt(np.maximum(np.asarray(X.multiply(X).mean(0)).ravel()-muX*muX,1e-4))
+P={t:[np.where(hvg==idx[g])[0][0] for g in ms if g in idx and idx[g] in set(hvg)] for t,ms in panels.items()}
+# print ccl5 clusters with panel scores and marker averages
+cpos=np.where(hvg==idx['CCL5'])[0][0]
+for c in range(40):
+ sel=lab==c; cmean=np.asarray(X[sel].mean(0)).ravel(); cs=(cmean[cpos] > 0) # log mean not prevalence
+ if (np.asarray(X[sel,cpos].todense()).ravel()>0).sum()==0: continue
+ scores=[]
+ for t,pp in P.items(): scores.append((float(np.mean((cmean[pp]-muX[pp])/sdX[pp])) if pp else -99,t))
+ print('\\ncluster',c,'n',sel.sum(),'eye1',sel[:ns[0]].sum(),'eye2',sel[ns[0]:].sum(),'ccl5+',int((np.asarray(X[sel,cpos].todense()).ravel()>0).sum()),'scores',sorted(scores,reverse=True))
+ print('panel genes',end=' ')
+ for g in ['SLC1A3','RLBP1','GLUL','VIM','AQP4','WIF1','TF','CP','FOXP2','GABRG3','P2RY12','ADGRE1','MARCO','STAB1','OLR1','CCL2','CCL7','CYBB','CCL5','IL7R','TRAC','RBPMS','SLC17A7','GFAP','ALDOC']:
+  if g in idx and idx[g] in set(hvg): print(f'{g}:{cmean[np.where(hvg==idx[g])[0][0]]:.2f}',end=' ')
+ print()
+PY"

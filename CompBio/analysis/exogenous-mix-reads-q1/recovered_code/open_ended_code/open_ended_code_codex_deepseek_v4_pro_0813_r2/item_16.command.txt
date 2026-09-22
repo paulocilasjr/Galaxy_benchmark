@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, numpy as np
+from collections import Counter
+L=2903; readlen=50; a=548; b=1937
+files={'exo':'exogenous.mix.reads.q1.exo.sam','endo':'exogenous.mix.reads.q1.endo.sam','mix':'exogenous.mix.reads.q1.mix.sam'}
+pos={}
+for k,fn in files.items():
+    arr=[]
+    with pysam.AlignmentFile(fn,'r') as f:
+      for r in f:
+        if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+        arr.append(r.reference_start)
+    pos[k]=np.array(arr)
+print('counts',{k:len(v) for k,v in pos.items()})
+# bin 50bp, only mapped
+bins=np.arange(0,2901,50)
+for k in files:
+    hist,_=np.histogram(pos[k],bins=bins)
+    print(k,hist)
+# estimate endo total from outside theoretical using uniform
+N_mix=len(pos['mix']); O=((pos['mix']<a)|(pos['mix']>b)).sum(); p=((L-readlen)-b + a)/(L-readlen+1) # possible starts 0..L-readlen
+N_endo=O/p
+alpha=1-N_endo/N_mix
+print('uniform model O,p,N_endo,N_mix,alpha',O,p,N_endo,N_mix,alpha)
+# empirical endo outside fraction
+pe=(pos['endo']<a).sum()+(pos['endo']>b).sum(); pe/=len(pos['endo'])
+print('emp pe',pe,'alpha',1-O/(pe*N_mix))
+# MLE with endo uniform & exo zero outside, all reads (unmapped as endo)
+N_all={'exo':777,'endo':395,'mix':1965}
+O_all=O
+p_all=pe_all=(pos['endo']<a).sum()+(pos['endo']>b).sum(); p_all_frac=p_all/N_all['endo']
+print('emp all pe',p_all,p_all_frac,'alpha all',1-O/(p_all_frac*N_all['mix']))
+PY"

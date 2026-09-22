@@ -1,0 +1,22 @@
+/bin/bash -lc "python - <<'PY'
+# correlations / spatial cross products for integer inferred counts
+import numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import spearmanr,pearsonr
+sc=pd.read_csv('extracted/spatial_q_sc_counts.csv',index_col=0);meta=pd.read_csv('extracted/spatial_q_sc_metadata.csv',index_col=0);sp=mmread('extracted/matrix.mtx.gz').tocsr().toarray().T;pos=pd.read_csv('extracted/tissue_positions.csv');types=sorted(meta.cell_type.unique())
+ref=meta.join(sc.div(sc.sum(1),axis=0)).groupby('cell_type')[sc.columns].mean().loc[types].T.values;ref/=ref.sum(0,keepdims=True);co=np.array([nnls(ref,x)[0] for x in sp/sp.sum(1,keepdims=True)]);co/=co.sum(1,keepdims=True);n=np.rint(sp.sum(1)/sc.sum(1).mean()).astype(int);cnt=np.rint(co*n[:,None]).astype(int)
+xy=pos[['array_row','array_col']].values;D=cdist(xy,xy);jT=types.index('Tumor_Core');
+print('raw corr with tumor fraction/count')
+for vname,v in [('fraction',co[:,jT]),('count',cnt[:,jT]),('presence',cnt[:,jT]>0)]:
+ print(vname)
+ for j,t in enumerate(types):
+  print(t,'pear',round(pearsonr(co[:,j],v)[0],3),'spear',round(spearmanr(co[:,j],v)[0],3))
+print('\\nspatial lag correlation: tumor presence/count kernel radius')
+for rad in [1.01,1.42,2.01,3.01,4.01,5.01,7.01]:
+ K=(D<=rad).astype(float);np.fill_diagonal(K,0); # neighborhood sum of tumor presence / count
+ for vname,v in [('pres',cnt[:,jT]>0),('count',cnt[:,jT])]:
+  z=K@v
+  print(rad,vname,'mean',z.mean(),' '.join(f'{t}:{pearsonr(cnt[:,j],z)[0]:.3f}' for j,t in enumerate(types) if t"'!='"'Tumor_Core'))
+PY"

@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,numpy as np,collections,itertools,sys
+from scipy.stats import rankdata
+
+def load(fn):
+ with gzip.open(fn,'rt') as f:
+  next(f); names=[]; vals=[]
+  for line in f:
+   z=line.rstrip().split('\\t'); names.append(z[0]); vals.append([float(v) for v in z[1:]])
+ return names,np.asarray(vals,dtype=np.float32)
+rn,R=load('multiome.match.atac.rna.q1.rna.tsv.gz'); an,A=load('multiome.match.atac.rna.q1.atac.tsv.gz')
+amap={}
+for k,n in enumerate(an):
+ c,s,e=n.rsplit('_',2); amap[(c,int(s))]=k
+chroms={f'chr{i}' for i in range(1,23)}|{'chrX'}
+trans=collections.defaultdict(list)
+with gzip.open('hg38.ncbiRefSeq.txt.gz','rt') as f:
+ for line in f:
+  z=line.rstrip().split('\\t')
+  if len(z)>=13 and z[2] in chroms:
+   c=z[2]; strand=z[3]; tx0,tx1=int(z[4]),int(z[5]); sym=z[12]
+   trans[sym].append((c,tx0 if strand=='+' else tx1-1,tx0,tx1,strand))
+perms=list(itertools.permutations(range(8)))
+for mode in ['tss','prom1','prom2','prom3','bodymean','bodymax']:
+ rr=[]; aa=[]
+ for gi,sym in enumerate(rn):
+  ts=trans.get(sym,[]); inds=[]
+  if mode=='tss':
+   inds=[amap[(c,(tss//10000)*10000)] for c,tss,*_ in ts if (c,(tss//10000)*10000) in amap]
+  elif mode.startswith('prom'):
+   w=int(mode[4:])*10000
+   for c,tss,*_ in ts:
+    lo=max(0,((tss-w)//10000)*10000); hi=((tss+w)//10000+1)*10000
+    inds += [amap[(c,b)] for b in range(lo,hi,10000) if (c,b) in amap]
+  else:
+   for c,tss,tx0,tx1,*_ in ts:
+    inds += [amap[(c,b)] for b in range((tx0//10000)*10000,((tx1-1)//10000+1)*10000,10000) if (c,b) in amap]
+  if inds:
+   rr.append(R[gi]); v=A[np.unique(inds)]
+   aa.append(v.max(0) if mode=='bodymax' else v.mean(0))
+ rr=np.array(rr); aa=np.array(aa)
+ print('\\nMODE',mode,'n',len(rr),flush=True)
+ for transname,tx,ty in [('log',np.log1p(rr),np.log1p(aa)),('sqrt',np.sqrt(rr),np.sqrt(aa)),('rank',np.apply_along_axis(rankdata,1,rr),np.apply_along_axis(rankdata,1,aa)),('raw',rr,aa)]:
+  x=tx-tx.mean(1,keepdims=True); y=ty-ty.mean(1,keepdims=True)
+  xn=np.sqrt((x*x).sum(1)); yn=np.sqrt((y*y).sum(1)); good=(xn>1e-6)&(yn>1e-6)
+  x=x[good]/xn[good,None]; y=y[good]/yn[good,None]
+  M=x.T@y
+  scores=np.array([sum(M[i,p[i]] for i in range(8)) for p in perms])
+  order=np.argsort(scores)[::-1]
+  print(transname,'valid',len(x),'top:',flush=True)
+  for oi in order[:5]:
+   print(' ',''.join(map(str,perms[oi])),round(scores[oi]/len(x),6),flush=True)
+PY"

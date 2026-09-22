@@ -1,0 +1,30 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-756321853608cf384097fc7b/workspace && python3 - <<'PY'
+import numpy as np
+from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
+z=np.load('mat_5000_7000_8500.npz'); start=int(z['start']); res=int(z['res'])
+H1=np.nan_to_num(z['H1'],nan=0); HFF=np.nan_to_num(z['HFF'],nan=0); eps=1e-2
+# log transform, fill zeros with eps
+L1=np.log(np.maximum(H1,eps)); L2=np.log(np.maximum(HFF,eps)); diff=L1-L2
+# smooth lightly
+sd=1.0
+L1s=gaussian_filter(L1,sigma=sd); L2s=gaussian_filter(L2,sigma=sd); D=gaussian_filter(diff,sigma=sd)
+n=D.shape[0]; reg=(7629950,7809597)
+
+def local_peaks(mat, positive=True, radius=5):
+ footprint=np.ones((2*radius+1,2*radius+1),bool); footprint[radius,radius]=False
+ mx=maximum_filter(mat,footprint=footprint,mode='constant')
+ mn=minimum_filter(mat,footprint=footprint,mode='constant')
+ out=[]
+ for i in range(n):
+  for j in range(i+max(3,40000//res),n):
+   x=start+i*res; y=start+j*res
+   if not (reg[0] <= x < reg[1] and reg[0] <= y < reg[1]): continue
+   val=mat[i,j]
+   if positive and val>0 and val==mx[i,j]: out.append((val,x,y,L1s[i,j],L2s[i,j]))
+   if not positive and val<0 and val==mn[i,j]: out.append((val,x,y,L1s[i,j],L2s[i,j]))
+ return sorted(out, reverse=positive, key=lambda t:abs(t[0]))
+print('Positive H1>HFF peaks in region')
+for p in local_peaks(D,True)[:30]: print(p)
+print('\\nNegative HFF>H1 peaks in region')
+for p in local_peaks(D,False)[:30]: print(p)
+PY"

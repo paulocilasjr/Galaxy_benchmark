@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, concurrent.futures, time, re, sys
+base='https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics'
+accs=[]
+with open('summary_statistics_table_export.tsv', encoding='utf-8') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)>15 and parts[15]=='40593539':
+            acc=parts[1]; path=parts[11]
+            if path:
+                accs.append((acc,path))
+print('accs',len(accs), flush=True)
+
+def head_len(url):
+    req=urllib.request.Request(url, method='HEAD', headers={'User-Agent':'Mozilla/5.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.headers.get('Content-Length'), r.status
+    except urllib.error.HTTPError as e:
+        return None, e.code
+    except Exception as e:
+        return None, str(e)
+
+def sample(url):
+    req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Range':'bytes=0-20000'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data=r.read()
+            return data
+    except Exception as e:
+        return b''
+
+def process(item):
+    acc,path=item
+    url=f'{base}/{path}/{acc}.tsv'
+    length,status=head_len(url)
+    data=sample(url)
+    if not data:
+        return acc,length,status,None,None,None,url
+    text=data.decode('utf-8','ignore')
+    lines=text.splitlines()
+    header=lines[0] if lines else ''
+    # header length bytes via data up to first newline
+    hb=data.find(b'\\n')+1 if data else 0
+    # average bytes per data line from first N data lines
+    n=min(20,len(lines)-1)
+    if n<=0 or length is None:
+        avg=0
+    else:
+        total=0
+        # approximate using cumulative split with offsets expensive; simpler use data length / number lines
+        # estimate avg bytes per line using first n lines lengths from text
+        # text lines length in bytes mostly ascii; use bytes len of each line as encoded utf-8
+        total=sum(len(lines[i].encode('utf-8'))+1 for i in range(1,n+1))
+        avg=total/n
+    est=(int(length)-hb)/avg if length and avg else None
+    return acc,length,status,hb,avg,est,url
+
+results=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    futs=[ex.submit(process,item) for item in accs]
+    for fut in concurrent.futures.as_completed(futs):
+        results.append(fut.result())
+
+# print top candidates closest row count
+valid=[r for r in results if r[5] is not None]
+valid.sort(key=lambda r: abs(r[5]-12774703))
+print('valid',len(valid),'of',len(results))
+for r in valid[:50]:
+    print(f'{r[0]}\\tlen={r[1]}\\tstatus={r[2]}\\test_rows={r[5]:.0f}\\tdiff={r[5]-12774703:.0f}\\turl={r[6]}')
+PY"

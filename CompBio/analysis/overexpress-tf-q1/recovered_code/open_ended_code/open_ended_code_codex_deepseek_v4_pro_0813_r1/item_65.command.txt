@@ -1,0 +1,51 @@
+/bin/bash -lc "cat > scan_peak_motifs.py <<'PY'
+import os, glob, sys, math
+import MOODS.parsers, MOODS.tools, MOODS.scan
+
+def read_fasta(path):
+    seqs=[]
+    name=None; parts=[]
+    with open(path) as f:
+        for line in f:
+            if line.startswith('>'):
+                if name is not None:
+                    seqs.append((name,''.join(parts).upper()))
+                name=line[1:].strip(); parts=[]
+            else:
+                parts.append(line.strip())
+        if name is not None:
+            seqs.append((name,''.join(parts).upper()))
+    return seqs
+
+pfiles=sorted(glob.glob('motif_pfms/*.pfm'))
+bg=MOODS.tools.flat_bg(4)
+pseudocount=1
+pvals=[1e-4, 1e-5]
+models=[]
+for pf in pfiles:
+    lo=MOODS.parsers.pfm_to_log_odds(pf,bg,pseudocount)
+    rc=MOODS.tools.reverse_complement(lo)
+    ths=[MOODS.tools.threshold_from_p(lo,bg,p) for p in pvals]
+    models.append((os.path.basename(pf)[:-4], lo, rc, ths))
+
+sets=['cond1','common','cond2']
+for s in sets:
+    path=f'macs/bdgdiff/{s}.fa'
+    seqs=read_fasta(path)
+    out=open(f'macs/bdgdiff/{s}.motif_scan.tsv','w')
+    out.write('set\\tpeak\\tlength\\t'+'\\t'.join([f'{m}_p1e-4' for m,_,_,_ in models]+[f'{m}_p1e-5' for m,_,_,_ in models])+'\\n')
+    for name,seq in seqs:
+        L=len(seq)
+        vals=[]
+        for m,lo,rc,ths in models:
+            # scan both orientations with window size 1 to enumerate all matches
+            res=MOODS.scan.scan_dna(seq,[lo,rc],bg,[ths[0],ths[0]],1)
+            n4=len(res[0])+len(res[1])
+            res5=MOODS.scan.scan_dna(seq,[lo,rc],bg,[ths[1],ths[1]],1)
+            n5=len(res5[0])+len(res5[1])
+            vals += [n4,n5]
+        out.write(s+'\\t'+name+'\\t'+str(L)+'\\t'+'\\t'.join(str(v) for v in vals)+'\\n')
+    out.close()
+    print(s, 'done', len(seqs), 'seqs')
+PY
+python3 scan_peak_motifs.py"

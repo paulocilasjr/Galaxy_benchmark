@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import anndata as ad, pandas as pd, numpy as np
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array([str(x) if x is not None else '' for x in A.var['feature_name']])
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array([str(x) for x in orig.index])
+wlower=np.char.lower(wnames.astype('U'))
+olower=np.char.lower(onames.astype('U'))
+common=np.intersect1d(wlower,olower)
+omap={s.lower():s for s in onames}
+genes=[omap[c] for c in common]
+print(len(genes))
+with open('common_genes.txt','w') as f: f.write('\\n'.join(genes))
+PY
+Rscript - <<'RS'
+library(Seurat)
+library(Matrix)
+cat('reading\\n'); t0<-Sys.time()
+obj<-readRDS('GSE161918_AllBatches_SeuratObj.rds')
+cat('read', format(difftime(Sys.time(),t0,units='mins')), '\\n')
+counts<-GetAssayData(obj,assay='RNA',slot='counts')
+cat('dims',dim(counts),class(counts),'\\n')
+genes<-readLines('common_genes.txt')
+rown<-rownames(counts)
+idx<-match(genes,rown)
+cat('matched',sum("'!is.na(idx)),'"'of',length(genes),'\\n')
+idx<-idx["'!is.na(idx)]
+sub<-counts[idx,,drop=FALSE]
+cat('"'sub dim',dim(sub),'nnz',length(sub@x),'\\n')
+saveRDS(sub,'orig_common_counts.rds')
+cat('saved rds\\n')
+subT<-Matrix::t(sub)
+writeMM(subT,'orig_common_counts.mtx')
+cat('wrote mtx\\n')
+RS"

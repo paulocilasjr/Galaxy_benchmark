@@ -1,0 +1,44 @@
+/bin/bash -lc "samtools view aln_transcripts.sam | python3 - <<'PY'
+import sys
+from collections import defaultdict, Counter
+from itertools import combinations
+# collect all alignment records by read
+reads=defaultdict(list)
+for line in sys.stdin:
+    if line.startswith('@'): continue
+    p=line.rstrip('\\n').split('\\t')
+    q=p[0]; flag=int(p[1]); rna=p[2]; cigar=p[5]
+    gene='*'
+    if rna"'!='"'*':
+        f=rna.split('|'); gene=f[5] if len(f)>5 else rna
+    reads[q].append((flag,rna,gene,cigar,p))
+# stats
+total=len(reads); supp=0; multi_gene=0; pair=Counter(); gene_counts=Counter()
+soft=0; unmapped=0
+chimeric_candidates=[]
+for q,recs in reads.items():
+    genes=set()
+    has_primary=any((f & 0x900)==0 and f&4==0 for f,_,_,_,_ in recs)
+    for f,rna,g,cigar,p in recs:
+        if f & 0x900: # secondary or supplementary
+            pass
+        if f & 4: unmapped+=1
+        if g"'!='"'*': genes.add(g)
+        # soft clip primary
+        if (f & 0x904)==0 and 'S' in cigar: soft+=1
+    if any(f & 0x800 for f,_,_,_,_ in recs): supp+=1
+    gs=sorted(genes)
+    if len(gs)>1:
+        multi_gene+=1
+        for a,b in combinations(gs,2):
+            pair[(a,b)]+=1
+        chimeric_candidates.append((q,recs))
+print('reads',total,'supplementary',supp,'multi_gene',multi_gene,'soft_primary',soft,'unmapped_records',unmapped)
+print('TOP GENE PAIRS (co-occurring reads, any alignments):')
+for (a,b),n in pair.most_common(100): print(n,a,b)
+print('Example chimeric candidates:')
+for q,recs in chimeric_candidates[:10]:
+    print('\\n',q)
+    for f,rna,g,cigar,p in recs:
+        print(f, g, rna, cigar, p[9][:40] if len(p)>9 else '')
+PY"

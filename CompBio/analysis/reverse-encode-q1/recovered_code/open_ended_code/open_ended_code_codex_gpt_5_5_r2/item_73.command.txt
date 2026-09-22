@@ -1,0 +1,37 @@
+/bin/bash -lc "pkill -f \"pyBigWig\" 2>/dev/null || true; ps -o pid,etime,command -ax | grep encode4_dnase_v3alpha2_grch38_analyses | grep -v grep || true
+python3 - <<'PY'
+import subprocess,re,time,sys,gzip
+bins=[]
+for line in open('diagnostic_bins.bed'):
+    c,s,e,v=line.split(); bins.append((c,int(s),int(e),float(v)))
+bychrom={}
+for i,(c,s,e,v) in enumerate(bins): bychrom.setdefault(c,[]).append((s,e,i))
+cig_re=re.compile(r'(\\d+)([MIDNSHP=X])')
+def ref_end(pos0,cig):
+    p=pos0
+    for n,op in cig_re.findall(cig):
+        if op in 'MDN=X': p+=int(n)
+    return p
+acc='ENCFF051GHB'
+url=f'https://www.encodeproject.org/files/{acc}/@@download/{acc}.bam'
+cmd=['samtools','view','-q','30','-L','diagnostic_bins.bed',url]
+print('START',acc, flush=True)
+p=subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1024*1024)
+counts=[0]*len(bins); lines=0; t=time.time()
+for line in p.stdout:
+    fields=line.split('\\t')
+    if len(fields)<6: continue
+    chrom=fields[2]
+    if chrom not in bychrom: continue
+    start=int(fields[3])-1; end=ref_end(start, fields[5])
+    for s,e,i in bychrom[chrom]:
+        if start<e and end>s: counts[i]+=1
+    lines+=1
+err=p.stderr.read(); rc=p.wait()
+print('RC',rc,'lines',lines,'elapsed',round(time.time()-t,1),'err',err[-300:], flush=True)
+print('counts')
+for (c,s,e,v),cnt in zip(bins,counts):
+    print(c,s,e,v,cnt, 'N', round(cnt*1_000_000/v) if v else None)
+N0=76275600
+print('diffs0',[cnt-round(v*N0/1_000_000) for (c,s,e,v),cnt in zip(bins,counts)])
+PY"

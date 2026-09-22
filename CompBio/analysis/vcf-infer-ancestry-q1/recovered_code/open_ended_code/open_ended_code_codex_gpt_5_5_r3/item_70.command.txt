@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,math,collections
+# selected mapping hg38pos->(ref,alt,unknown dosages)
+sel={}
+for line in open('selected_lifted.tsv'):
+    chrom,pos,ref,alt,hg38pos,*gs=line.strip().split('\\t')
+    sel[int(hg38pos)]=(ref,alt,[int(x) for x in gs],pos)
+samples=[l.strip() for l in open('refs/gnomad_samples.txt')]
+N=len(samples)
+# metadata pop info
+meta={}
+with gzip.open('refs/gnomad.hgdp_1kg.sample_meta.tsv.bgz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    idx_s=header.index('s'); idx_pop=header.index('gnomad_population_inference'); idx_h=header.index('hgdp_tgp_meta')
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        s=p[idx_s]
+        try: gp=json.loads(p[idx_pop]); pop=gp.get('pop')
+        except: pop=None
+        try: hm=json.loads(p[idx_h]); region=hm.get('genetic_region'); population=hm.get('population'); sub=hm.get('gnomad_labeled_subpop')
+        except: region=population=sub=None
+        meta[s]=(pop,region,population,sub)
+# scores unknown x sample
+match=[[0]*N for _ in range(4)]; mismatch=[[0]*N for _ in range(4)]; compared=[[0]*N for _ in range(4)]
+used=0
+for line in open('refs/gnomad_selected_gt.tsv'):
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<5+N: continue
+    chrom,pos,ref,alts=p[:4]; pos=int(pos); alts=alts.split(',')
+    if pos not in sel: continue
+    oref,oalt,ugs,hg19pos=sel[pos]
+    if ref"'!=oref or oalt not in alts: continue
+    alt_index=alts.index(oalt)+1
+    used+=1
+    for j,gt in enumerate(p[4:]):
+        gt=gt.split('"':',1)[0].replace('|','/')
+        if '.' in gt: continue
+        try: d=sum(1 for a in gt.split('/') if int(a)==alt_index)
+        except: continue
+        for i,u in enumerate(ugs):
+            compared[i][j]+=1
+            if d==u: match[i][j]+=1
+            else: mismatch[i][j]+=1
+print('used sites',used)
+for i in range(4):
+    rows=[]
+    for j,s in enumerate(samples):
+        if compared[i][j]>=10:
+            rows.append((mismatch[i][j],-match[i][j],compared[i][j],s,meta.get(s)))
+    rows=sorted(rows)[:15]
+    print('\\nSample',i+1)
+    for r in rows:
+        mm,negm,c,s,m=r
+        print('mism',mm,'match',-negm,'comp',c,s,m)
+PY"

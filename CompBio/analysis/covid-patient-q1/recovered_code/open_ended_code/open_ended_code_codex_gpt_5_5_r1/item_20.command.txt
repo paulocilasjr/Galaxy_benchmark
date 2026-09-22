@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+p='covid.patients.q1.h5ad'
+markers = ['ISG15','IFI6','IFIT1','IFIT2','IFIT3','IFI44L','MX1','OAS1','OAS2','OAS3','RSAD2','IRF7','STAT1','CXCL10','S100A8','S100A9','IL1B','LYZ','LST1','FCGR3A','MS4A1','CD3D','CD3E','CD8A','NKG7','GNLY','PPBP','PF4','MKI67','HBB','HBA1','HBA2','MALAT1']
+with h5py.File(p,'r') as f:
+    cats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/donor_id/categories'][:]]
+    codes=f['obs/donor_id/codes'][:].astype(np.int16)
+    gcats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['var/feature_name/categories'][:]]
+    gcodes=f['var/feature_name/codes'][:]
+    idxraw=f['var/_index'][:]
+    genes=[gcats[c] if c>=0 else (idx.decode() if isinstance(idx,bytes) else str(idx)) for c,idx in zip(gcodes, idxraw)]
+    gene_to_idx={g:i for i,g in enumerate(genes)}
+    sel_names=[g for g in markers if g in gene_to_idx]
+    sel=np.array([gene_to_idx[g] for g in sel_names], dtype=np.int32)
+    n, ng = f['X'].attrs['shape']
+    n_d=len(cats)
+    cells=np.bincount(codes, minlength=n_d).astype(np.float64)
+    sums_sel=np.zeros((n_d,len(sel)), dtype=np.float64)
+    total_counts=np.zeros(n_d,dtype=np.float64)
+    nnz_counts=np.zeros(n_d,dtype=np.float64)
+    indptr=f['X/indptr'][:]
+    data=f['X/data']; indices=f['X/indices']
+    chunk=10000
+    for start in range(0,n,chunk):
+        end=min(n,start+chunk)
+        st=int(indptr[start]); en=int(indptr[end])
+        ip=indptr[start:end+1].astype(np.int64)-st
+        X=csr_matrix((data[st:en], indices[st:en], ip), shape=(end-start,ng))
+        row_sums=np.asarray(X.sum(axis=1)).ravel()
+        cc=codes[start:end]
+        np.add.at(total_counts, cc, row_sums)
+        np.add.at(nnz_counts, cc, np.diff(ip))
+        Xs=X[:, sel]
+        # donor indicator rows x donors
+        D=csr_matrix((np.ones(end-start,dtype=np.float32),(np.arange(end-start), cc)), shape=(end-start,n_d))
+        sums_sel += (D.T @ Xs).toarray()
+    print('donor,cells,total_per_cell,genes_per_cell,'+','.join(sel_names))
+    for di,don in enumerate(cats):
+        vals=sums_sel[di]/cells[di]
+        print(don,int(cells[di]),round(total_counts[di]/cells[di],1),round(nnz_counts[di]/cells[di],1),','.join(f'{v:.4f}' for v in vals),sep=',')
+PY"

@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam,re
+from collections import Counter
+sam=pysam.AlignmentFile('aln_transcripts.sam','r')
+# collect records for reads with both SP1 and ZIC2
+from collections import defaultdict
+recs=defaultdict(list)
+for aln in sam.fetch(until_eof=True):
+    if aln.is_unmapped: continue
+    rna=aln.reference_name
+    if not rna: continue
+    f=rna.split('|'); gene=f[5] if len(f)>5 else ''
+    if gene in ('SP1','ZIC2'):
+        recs[aln.query_name].append((gene,aln.flag,aln.reference_start,aln.cigarstring,aln.query_alignment_sequence,aln.get_tag('SA') if aln.has_tag('SA') else ''))
+# classify
+counts=Counter()
+for q,rs in recs.items():
+    sp=[r for r in rs if r[0]=='SP1']; zi=[r for r in rs if r[0]=='ZIC2']
+    if sp and zi:
+        # get min/max ref starts
+        sp_starts=[r[2] for r in sp]; zi_starts=[r[2] for r in zi]
+        # simple classification using starts and transcript names omitted; just list
+        counts['SP1-ZIC2']+=1
+print('reads with both',sum(counts.values()))
+# Print first 30 with ref positions
+shown=0
+for q,rs in recs.items():
+    sp=[r for r in rs if r[0]=='SP1']; zi=[r for r in rs if r[0]=='ZIC2']
+    if sp and zi:
+        print('\\n',q)
+        for r in sp+zi:
+            print(r[0], 'flag',r[1],'refstart',r[2],'cigar',r[3],'seq',r[4][:60])
+        shown+=1
+        if shown>=30: break
+PY"

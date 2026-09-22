@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam
+from collections import defaultdict,Counter
+from scipy.stats import chi2_contingency
+files=['deg.simple.q2.sampleA.primary.bam','deg.simple.q2.sampleB.primary.bam']
+by=[]
+for fn in files:
+ d=defaultdict(Counter)
+ with pysam.AlignmentFile(fn,'rb') as bam:
+  for r in bam.fetch(until_eof=True):
+   if r.is_unmapped or r.is_secondary or r.is_supplementary or r.mapping_quality<10: continue
+   f=r.reference_name.split('|')
+   t=f[0]; g=f[5] if len(f)>5 else ''
+   d[g][t]+=1
+ by.append(d)
+rows=[]
+for g in set(by[0])|set(by[1]):
+ tx=set(by[0][g])|set(by[1][g])
+ totals=[sum(by[i][g].values()) for i in range(2)]
+ if len(tx)<2 or sum(totals)<20: continue
+ table=[[by[i][g][t] for t in tx] for i in range(2)]
+ # Remove all-zero columns, retain transcript counts
+ cols=[j for j,t in enumerate(tx) if table[0][j]+table[1][j]]
+ table=[[row[j] for j in cols] for row in table]
+ tx2=[t for j,t in enumerate(tx) if j in cols]
+ try: p=chi2_contingency(table, correction=False)[1]
+ except Exception: continue
+ diff=sum(abs(table[0][j]/totals[0]-table[1][j]/totals[1]) for j in range(len(tx2)))/2
+ rows.append((p,-diff,-sum(totals),g,totals,[(t,table[0][j],table[1][j]) for j,t in enumerate(tx2)]))
+for row in sorted(rows)[:40]:
+ p,nd,nt,g,tot,counts=row
+ print(f'{g}\\tp={p:.2g}\\tA={tot[0]} B={tot[1]}\\tTV={-nd:.3f}\\t'+','.join(f'{t}:{a}/{b}' for t,a,b in counts))
+PY"

@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, json, collections
+REG_START=27079126 # 1-based
+ref=json.load(open('ucsc_seq.json'))['dna'].upper()
+bam=pysam.AlignmentFile('aln.hg38.bam')
+base_counts=[collections.Counter() for _ in ref]
+cover=[0]*len(ref)
+del_counts=collections.Counter()
+ins_counts=collections.Counter()  # key (pos_after_1based, seq)
+# For denominators at insertions: reads covering the anchor base
+anchor_cover=collections.Counter()
+for r in bam.fetch('chr22', REG_START-1, REG_START-1+len(ref)):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    qpos=0; refpos=r.reference_start # 0-based
+    seq=r.query_sequence
+    for op,l in r.cigartuples:
+        if op==0 or op==7 or op==8: # M/=X
+            for j in range(l):
+                pos1=refpos+j+1
+                idx=pos1-REG_START
+                if 0<=idx<len(ref):
+                    b=seq[qpos+j]
+                    base_counts[idx][b]+=1
+                    cover[idx]+=1
+            qpos+=l; refpos+=l
+        elif op==1: # insertion after previous ref base
+            pos_after=refpos # 1-based previous base = refpos because refpos is 0-based next
+            insseq=seq[qpos:qpos+l]
+            if l==1 and REG_START <= pos_after < REG_START+len(ref):
+                ins_counts[(pos_after, insseq)] += 1
+            qpos+=l
+        elif op==2: # deletion at refpos+1..refpos+l
+            if l==1:
+                pos1=refpos+1
+                idx=pos1-REG_START
+                if 0<=idx<len(ref): del_counts[pos1]+=1
+            refpos+=l
+        elif op==4: qpos+=l
+        elif op==5: pass
+        elif op==3: refpos+=l
+# Print candidate SNPs
+print('SNP candidates')
+for i,c in enumerate(base_counts):
+    pos=REG_START+i; refb=ref[i]
+    total=sum(c.values())
+    alts=[(b,n) for b,n in c.items() if b"'!=refb]
+    alts.sort(key=lambda x:-x[1])
+    if alts and alts[0][1]>=20:
+        print(pos, '"'ref', refb, 'total', total, 'counts', dict(c), 'af', alts[0][1]/total if total else 0)
+print('INS candidates')
+for (pos,seqi),n in sorted(ins_counts.items()):
+    # denom approximate cover at anchor pos
+    denom=cover[pos-REG_START] if 0<=pos-REG_START<len(ref) else 0
+    if n>=20:
+        print(pos, seqi, n, 'denom', denom, 'af', n/denom if denom else None, 'anchor_ref', ref[pos-REG_START])
+print('DEL candidates')
+for pos,n in sorted(del_counts.items()):
+    denom=cover[pos-REG_START]+n if 0<=pos-REG_START<len(ref) else 0
+    if n>=20:
+        print(pos, 'D', n, 'denom', denom, 'af', n/denom if denom else None, 'ref', ref[pos-REG_START])
+PY"

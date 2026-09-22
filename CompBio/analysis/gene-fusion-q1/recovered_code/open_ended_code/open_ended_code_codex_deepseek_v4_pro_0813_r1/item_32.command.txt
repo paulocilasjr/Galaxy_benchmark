@@ -1,0 +1,45 @@
+/bin/bash -c "python3 - <<'PY'
+import pysam, json, re
+sym=json.load(open('sym.json'))
+def g(ref): return sym.get(ref, ref)
+def clips(c):
+    l=0;r=0
+    m=re.match(r'"'^('"\\d+)S', c)
+    if m:l=int(m.group(1))
+    m=re.search(r'(\\d+)S"'$'"', c)
+    if m:r=int(m.group(1))
+    return l,r
+rows=[]
+infile=pysam.AlignmentFile('aln.sam','r')
+for rec in infile:
+    if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+    rg=g(rec.reference_name)
+    if rg not in ('GAPDH','SOX2') or not rec.has_tag('SA'): continue
+    for e in rec.get_tag('SA').split(';'):
+        if not e: continue
+        p=e.split(',')
+        rg2=g(p[0])
+        if rg2 not in ('GAPDH','SOX2') or rg2==rg: continue
+        l,r=clips(rec.cigarstring)
+        read_rev=bool(rec.flag & 16)
+        sa_rev=(p[2]=='-')
+        # classify left/right segment genes and strands
+        # if primary has left clip, left seg is SA; right seg primary.
+        if l>0 and r==0:
+            left_gene=rg2; left_rev=sa_rev; right_gene=rg; right_rev=read_rev
+        elif r>0 and l==0:
+            left_gene=rg; left_rev=read_rev; right_gene=rg2; right_rev=sa_rev
+        else:
+            # CIGAR could have both? not for these
+            left_gene='?';right_gene='?';left_rev=None;right_rev=None
+        # orientation consistency
+        cons='same' if (left_rev==right_rev) else 'opposite'
+        if cons=='same':
+            # sense if not rev, antisense if rev
+            fusion_order=(left_gene if not left_rev else right_gene)+'-'+(right_gene if not left_rev else left_gene)
+        else:
+            fusion_order='inconsistent'
+        rows.append((rec.query_name, rec.flag, rg, rec.cigarstring, rg2, p[2], rec.mapping_quality, int(p[4]) if len(p)>4 else None, left_gene, right_gene, left_rev, right_rev, fusion_order, rec.query_sequence))
+for row in rows:
+    print(row[:13])
+PY"

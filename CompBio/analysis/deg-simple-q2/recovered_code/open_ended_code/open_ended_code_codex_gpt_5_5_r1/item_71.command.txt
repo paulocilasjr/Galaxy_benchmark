@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import defaultdict, Counter
+cand=['DEFB110','IKZF2','HUWE1','FLNA','RPL15','FNBP1','STAT1','RPS3','RPL4','EIF4G2','TFRC','GNAS','HNRNPK','CLTC']
+K=107
+# read counters
+def load_reads(fq):
+    c=Counter()
+    with gzip.open(fq,'rt') as f:
+        for i,line in enumerate(f):
+            if i%4==1: c[line.strip().upper()]+=1
+    return c
+reads={'A':load_reads('deg.simple.q2.sampleA.fq.gz'),'B':load_reads('deg.simple.q2.sampleB.fq.gz')}
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+# parse candidate transcripts
+seqs=defaultdict(dict)
+cur=None; parts=None; chunks=[]
+with gzip.open('ref/gencode.v48.transcripts.fa.gz','rt') as f:
+    for line in f:
+        line=line.strip()
+        if line.startswith('>'):
+            if cur and parts[5] in cand:
+                seqs[parts[5]][parts[4]+'|'+parts[0]]=''.join(chunks).upper()
+            cur=line[1:].split()[0]; parts=cur.split('|'); chunks=[]
+        else:
+            chunks.append(line)
+    if cur and parts[5] in cand:
+        seqs[parts[5]][parts[4]+'|'+parts[0]]=''.join(chunks).upper()
+for gene in cand:
+    kmap=defaultdict(set)
+    for tx,seq in seqs[gene].items():
+        for i in range(0, len(seq)-K+1):
+            k=seq[i:i+K]
+            if 'N' not in k:
+                kmap[k].add(tx)
+                kmap[rc(k)].add(tx)
+    print('\\nGENE',gene,'n_tx',len(seqs[gene]),'kmers',len(kmap))
+    for sample in ['A','B']:
+        assigned=multi=0; txcounts=Counter(); uniq_tx_reads=Counter()
+        for r,n in reads[sample].items():
+            hits=kmap.get(r)
+            if not hits: continue
+            assigned += n
+            if len(hits)>1: multi += n
+            for h in hits: txcounts[h]+=n
+            if len(hits)==1: uniq_tx_reads[next(iter(hits))]+=n
+        print(' sample',sample,'assigned',assigned,'multi',multi,'unique_assigned',assigned-multi)
+        print('  top all:', '; '.join(f'{c}:{tx.split(\"|\")[0]}' for tx,c in txcounts.most_common(5)))
+        print('  top unique:', '; '.join(f'{c}:{tx.split(\"|\")[0]}' for tx,c in uniq_tx_reads.most_common(5)))
+PY"

@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, glob, html, gzip, csv, math
+from collections import defaultdict, Counter
+rows=[]
+for f in sorted(glob.glob('wheat_scRNA_markers_page_*.html')):
+    txt=open(f, encoding='utf-8').read()
+    tbody=re.search(r'<tbody>(.*?)</tbody>', txt, flags=re.S).group(1)
+    for tr in re.findall(r'<tr>(.*?)</tr>', tbody, flags=re.S):
+        cells=[html.unescape(re.sub(r'<.*?>','',td,flags=re.S)).strip() for td in re.findall(r'<td>(.*?)</td>', tr, flags=re.S)]
+        if len(cells)>=7:
+            rows.append(cells)
+# de-dup gene, cluster pairs
+pairs=[]; seen=set()
+for r in rows:
+    gene, cluster = r[4], r[5]
+    key=(gene, cluster)
+    if key not in seen:
+        pairs.append(key); seen.add(key)
+print('rows', len(rows), 'unique pairs', len(pairs))
+print('clusters', Counter(c for g,c in pairs))
+cluster_map={'Cortex':'cortex','Root cap':'root_cap','Epidermis':'epidermis','Phloem':'phloem','Xylem':'xylem','Provascular cells':'provascular','Endodermis':'endodermis','Pericycle':'pericycle','Root hair':'root_hair','Meristem':'meristems','Meristems':'meristems'}
+# read matrix only needed genes
+want={g for g,c in pairs}
+expr={}
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as fh:
+    reader=csv.reader(fh, delimiter='\\t')
+    header=next(reader)[1:]
+    for row in reader:
+        if row[0] in want:
+            expr[row[0]]=[float(x) for x in row[1:]]
+print('header', header)
+print('markers in matrix', len(expr), 'missing', len(want)-len(expr))
+# Per marker: expected, max column
+conf=[]
+for gene,cl in pairs:
+    if gene not in expr or cl not in cluster_map: continue
+    vals=expr[gene]
+    max_i=max(range(len(vals)), key=lambda i: vals[i])
+    exp=cluster_map[cl]
+    conf.append((exp, header[max_i], gene, max(vals), vals[header.index(exp)] if exp in header else None, vals))
+print('used', len(conf))
+print('expected -> observed max counts')
+mat=defaultdict(Counter)
+for exp,obs,*rest in conf: mat[exp][obs]+=1
+for exp in sorted(mat): print(exp, dict(mat[exp]))
+print('\\nmarkers details sorted by expected')
+for exp,obs,g,m,ev,vals in sorted(conf):
+    print(exp, obs, g, 'max',m,'expval',ev, 'vals', ','.join(f'{h}:{v:g}' for h,v in zip(header,vals)))
+PY"

@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import torch, os
+from safetensors import safe_open
+# locate HF cache
+cache=os.path.expanduser('~/.cache/huggingface/hub')
+import glob
+files=glob.glob(cache+'/models--johahi--borzoi-replicate-0/snapshots/*/model.safetensors')
+print('safetensors',files)
+if not files:
+ print('not found')
+else:
+ with safe_open(files[0], framework='pt', device='cpu') as f:
+  keys=list(f.keys())
+  for k in keys[-5:]: print(k, f.get_slice(k).get_shape())
+  port_head_w=f.get_tensor('human_head.weight') if 'human_head.weight' in keys else None
+  port_head_b=f.get_tensor('human_head.bias') if 'human_head.bias' in keys else None
+  print('port head shapes', port_head_w.shape if port_head_w is not None else None)
+  # compare to Genentech state dict head
+  sd=torch.load('[REDACTED LOCAL PATH]',map_location='cpu',weights_only=False)
+  gw=sd['head.channel_transform.conv.layer.weight']; gb=sd['head.channel_transform.conv.layer.bias']
+  print('gen head',gw.shape)
+  if port_head_w is not None:
+   # gen weight shape [7611,1920,1], port [7611,1920,1] likely; compare row 6068
+   diff=(port_head_w[6068].flatten()-gw[6068].flatten()).abs().max().item()
+   diffb=(port_head_b[6068]-gb[6068]).abs().item()
+   print('max diff row',diff,diffb)
+PY"

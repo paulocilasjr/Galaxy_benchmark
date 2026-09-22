@@ -1,0 +1,32 @@
+/bin/bash -c "cat > ncbi_blast.py <<'PY'
+import sys, urllib.parse, urllib.request, re, time, json
+query=open(sys.argv[1]).read()
+base='https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi'
+params={'CMD':'Put','PROGRAM':'blastn','DATABASE':'nt','QUERY':query,
+'FORMAT_TYPE':'JSON2_S','MEGABLAST':'on','HITLIST_SIZE':'5','DESCRIPTIONS':'5','ALIGNMENTS':'0',
+'NCBI_GI':'off','EXPECT':'1e-5','FILTER':'F','GAPCOSTS':'0 0','MATCH_SCORES':'1,-2'}
+req=urllib.request.Request(base+'?'+urllib.parse.urlencode(params), headers={'User-Agent':'Mozilla/5.0'})
+text=urllib.request.urlopen(req, timeout=120).read().decode('utf-8','ignore')
+m=re.search(r'QBlastInfoBegin\\s*RID\\s*=\\s*([A-Z0-9]+)\\s*RTOE\\s*=\\s*(\\d+)', text)
+if not m:
+    m2=re.search(r'name=\"rid\"["'^>]*value="([A-Z0-9]+)"'"', text) or re.search(r'RID\" value=\"([A-Z0-9]+)\"', text)
+    if not m2:
+        print('no RID', text[:1000]); sys.exit(1)
+    rid=m2.group(1)
+else:
+    rid=m.group(1)
+print('RID', rid, flush=True)
+# poll
+for i in range(60):
+    time.sleep(10)
+    gp={'CMD':'Get','RID':rid,'FORMAT_TYPE':'JSON2_S'}
+    text=urllib.request.urlopen(urllib.request.Request(base+'?'+urllib.parse.urlencode(gp), headers={'User-Agent':'Mozilla/5.0'}), timeout=120).read().decode('utf-8','ignore')
+    if text.strip().startswith('{'):
+        out=open(sys.argv[2],'w'); out.write(text); out.close(); print('got JSON', len(text), 'after', (i+1)*10,'s', flush=True); break
+    if 'Status=READY' in text or 'Status=FAILED' in text or 'No hits' in text:
+        print('status page', i, text[:500]); 
+        # maybe format text includes raw? not likely
+else:
+    print('timeout'); sys.exit(2)
+PY
+python3 ncbi_blast.py unmapped_sample50.fa blast_sample50.json"

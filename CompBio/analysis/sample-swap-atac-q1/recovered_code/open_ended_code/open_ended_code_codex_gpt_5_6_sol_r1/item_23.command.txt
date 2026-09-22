@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv,gzip,pyBigWig,numpy as np,pandas as pd,time
+from concurrent.futures import ThreadPoolExecutor,as_completed
+chrom='chr1p_1'; end=472_560_000; nb=end//10000
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+ rd=csv.reader(f,delimiter='\\t'); hdr=next(rd); rows=[]
+ for z in rd:
+  if z[0]"'!=chrom:
+   if rows: break
+   continue
+  if int(z[1])>=end: break
+  rows.append(z)
+idx=np.array([int(z[1])//10000 for z in rows]); X=np.array([[float(v) for v in z[3:]] for z in rows]); samples=hdr[3:]
+print('"'rows',len(rows),flush=True)
+refs=['Cloaca_epithelial_cell','Foveolar_cell','Parietal_cell','Enterocyte','Goblet_cell','Cholangiocyte']
+base='https://bis.zju.edu.cn/uuatac/data/axolotl_bw/'
+def get(n):
+ t=time.time(); b=pyBigWig.open(base+n+'.bw'); a=b.stats(chrom,0,end,nBins=nb,type='mean',exact=True); b.close(); a=np.array([0 if v is None else v for v in a]); return n,a[idx],time.time()-t
+D={}
+with ThreadPoolExecutor(max_workers=3) as ex:
+ for fut in as_completed([ex.submit(get,n) for n in refs]):
+  n,a,t=fut.result();D[n]=a;print(n,round(t,1),flush=True)
+for typ in ['spearman','log']:
+ print('\\n',typ)
+ for n in refs:
+  a=D[n]
+  aa=pd.Series(a).rank().to_numpy() if typ=='spearman' else np.log1p(a)
+  vals=[]
+  for j,s in enumerate(samples):
+   xx=pd.Series(X[:,j]).rank().to_numpy() if typ=='spearman' else np.log1p(X[:,j])
+   vals.append(np.corrcoef(aa,xx)[0,1])
+  q=np.argsort(vals)[::-1]
+  print(n,[(samples[j],round(vals[j],4)) for j in q[:8]])
+# Enrichment in reference-specific peaks: residual each reference vs mean other GI refs; compare CPM-scaled sample mean top 1% and rank
+lib=X.sum(axis=0); Y=X/lib*1e6
+R=np.column_stack([np.log1p(D[n]) for n in refs])
+for i,n in enumerate(refs):
+ spec=R[:,i]-np.mean(np.delete(R,i,axis=1),axis=1)
+ sel=spec>=np.quantile(spec,.99)
+ en=Y[sel].mean(0)/(Y.mean(0)+1e-9)
+ q=np.argsort(en)[::-1]
+ print('SPEC',n,'n',sel.sum(),[(samples[j],round(en[j],3)) for j in q[:8]])
+PY"

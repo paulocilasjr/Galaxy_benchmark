@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io as sio, numpy as np, time
+M=sio.mmread('match_common_counts.mtx').tocsr()
+print(M.shape,M.nnz)
+# Build original keys: for each row tuple of (col, val) for nonzeros.
+# This could be memory heavy; use deterministic cryptographic hash to reduce.
+import hashlib, struct
+def row_hashes(X):
+    n=X.shape[0]
+    hashes=[]
+    data=X.data.astype(np.int64)
+    ind=X.indices.astype(np.int64)
+    ptr=X.indptr
+    for i in range(n):
+        s=ptr[i]; e=ptr[i+1]
+        arr=[]
+        # encode sorted by col (csr within row sorted by col)
+        # use custom hash over pairs, faster maybe use md5 of bytes
+        # build bytes = col as uint32 + val as int32
+        buf=bytearray((e-s)*8)
+        pos=0
+        for k in range(s,e):
+            c=int(ind[k]); v=int(data[k])
+            # cap v? counts can up to many but int32 enough
+            struct.pack_into('<iI',buf,pos,v,c)
+            pos+=8
+        h=hashlib.blake2b(buf,digest_size=8).digest()
+        hashes.append(h)
+    return hashes
+print('hashing orig')
+t=time.time(); H=row_hashes(M); print('time',time.time()-t)
+# save hashes hex and maybe sample keys? 
+np.save('orig_cell_hashes.npy',np.frombuffer(b''.join(H),dtype=np.uint8).reshape(-1,8))
+print('saved',len(H))
+PY"

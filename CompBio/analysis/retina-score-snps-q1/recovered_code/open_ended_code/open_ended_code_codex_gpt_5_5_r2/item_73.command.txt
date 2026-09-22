@@ -1,0 +1,64 @@
+/bin/bash -lc "arch -arm64 .venv-arm/bin/python - <<'PY'
+import csv, json, os, urllib.parse, urllib.request, time, math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
+import tensorflow as tf
+INP_LEN=2114; BUFFER=500; VAR_OFFSET=INP_LEN//2-1
+rows=list(csv.DictReader(open('retina.score.snps.q1.tsv'), delimiter='\\t'))
+cache='data/hg19_windows_literal_notebook.json'
+def fetch(row):
+    s=int(row['start'])-INP_LEN//2
+    e=s+INP_LEN+BUFFER
+    url='https://api.genome.ucsc.edu/getData/sequence?'+urllib.parse.urlencode({'genome':'hg19','chrom':row['chr'],'start':s,'end':e})
+    last=None
+    for a in range(5):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r: return json.load(r)['dna'].upper()
+        except Exception as ex:
+            last=ex; time.sleep(1+a)
+    raise last
+if os.path.exists(cache):
+    wins=json.load(open(cache))
+else:
+    wins=[None]*len(rows)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs={pool.submit(fetch,r):i for i,r in enumerate(rows)}
+        for fut in as_completed(futs): wins[futs[fut]]=fut.result()
+    json.dump(wins, open(cache,'w'))
+def dna_to_one_hot(seqs):
+    seq_len=len(seqs[0]); seq_concat=''.join(seqs).upper()+'ACGT'
+    oh=np.identity(5)[:,:-1].astype(np.int8)
+    vals=np.frombuffer(bytearray(seq_concat,'utf8'), dtype=np.int8)
+    vals[~np.isin(vals, np.array([65,67,71,84]))]=85
+    _, inds=np.unique(vals, return_inverse=True)
+    return oh[inds[:-4]].reshape((len(seqs), seq_len, 4))
+refs=[]; alts=[]; mm=0
+for r,seq in zip(rows,wins):
+    ref=r['ref'].upper(); alt=r['alt'].upper()
+    if seq[VAR_OFFSET:VAR_OFFSET+len(ref)] "'!= ref:
+        mm += 1
+        seq=seq[:VAR_OFFSET]+ref+seq[VAR_OFFSET+len(ref):]
+    altseq=seq[:VAR_OFFSET]+alt+seq[VAR_OFFSET+len(ref):]
+    refs.append(seq[:INP_LEN]); alts.append(altseq[:INP_LEN])
+print('"'literal mismatches', mm, flush=True)
+ref_oh=dna_to_one_hot(refs); alt_oh=dna_to_one_hot(alts)
+lfcs=[]
+for fold in range(5):
+    model=tf.keras.models.load_model(f'models/retina_models/fold{fold}/Rod.h5', compile=False)
+    ref=model.predict(ref_oh, batch_size=256, verbose=0)[1].ravel()
+    alt=model.predict(alt_oh, batch_size=256, verbose=0)[1].ravel()
+    l=alt-ref; lfcs.append(l); print('literal fold', fold, float(l.mean()), flush=True)
+    tf.keras.backend.clear_session()
+scores=np.abs(np.vstack(lfcs).mean(0)); labels=np.array([int(r['label']) for r in rows])
+# sklearn-style grouping by thresholds
+order=np.argsort(scores, kind='mergesort')[::-1]
+y=labels[order]; s=scores[order]
+dist=np.where(np.diff(s))[0]
+idx=np.r_[dist, y.size-1]
+tps=np.cumsum(y)[idx]
+fps=1+idx-tps
+precision=tps/(tps+fps)
+recall=tps/tps[-1]
+ap=-np.sum(np.diff(np.r_[recall,0]) * np.r_[precision,1][:-1])
+print('literal AP', ap, 'floor', math.floor(ap*100)/100, flush=True)
+PY"

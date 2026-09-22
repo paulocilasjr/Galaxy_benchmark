@@ -1,0 +1,21 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, statsmodels.api as sm, numpy as np
+f='work/diff_features.tsv'; feat=pd.read_csv(f,sep='\\t')
+scores=pd.read_csv('work/perturb_vs_ref_gained_summits.bed',sep='\\t',header=None)
+feat['score']=scores.iloc[:len(feat),4].values
+q=feat.score.quantile([0.25,0.75]); print(q.values)
+top=feat[feat.score>=q[0.75]].copy(); bot=feat[feat.score<=q[0.25]].copy(); top['y']=1; bot['y']=0
+sub=pd.concat([top,bot])
+tf=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']
+mot=[c for c in feat.columns if '_' in c and c.split('_')[0] in tf]
+print('n top/bot',len(top),len(bot),'gc',top.gc.mean(),bot.gc.mean())
+rows=[]
+for f in tf+mot:
+ X=sm.add_constant(sub[['gc',f]]); m=sm.Logit(sub.y,X).fit(disp=0)
+ coef=m.params[f]; z=coef/m.bse[f]; p=m.pvalues[f]; or_=np.exp(coef)
+ rows.append((f,coef,z,p,or_))
+rows=sorted(rows,key=lambda x:-x[2])
+print('Top vs bottom differential gained peaks adjusted GC:')
+for f,coef,z,p,or_ in rows:
+ print(f'{f:22s} coef {coef:+.4f} z {z:+.2f} p {p:.3e} OR {or_:.3f}')
+PY"

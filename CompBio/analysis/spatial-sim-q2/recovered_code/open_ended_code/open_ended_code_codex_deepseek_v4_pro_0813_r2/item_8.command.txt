@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+import scipy.sparse as sp
+
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+types=meta['cell_type'].astype('category')
+ctypes=types.cat.categories.tolist()
+sig=np.array([sc.values[types==t].mean(axis=0) for t in ctypes])
+X=mmread('matrix.mtx.gz').T.tocsr()
+W=np.zeros((X.shape[0], len(ctypes)))
+for i in range(X.shape[0]):
+    x=X[i].toarray().ravel(); W[i]=nnls(sig.T,x,maxiter=10000)[0]
+print(pd.DataFrame(W,columns=ctypes).head(20).round(3))
+print('round sum vs total'); pred=W.sum(1)
+r=W.round()
+print(pd.DataFrame(r,columns=ctypes).head(20))
+print('round sum describe', r.sum(1).describe())
+# residuals if rounded
+S=sig.T
+res=np.array([np.sum((S@r[i]-X[i].toarray().ravel())**2) for i in range(X.shape[0])])
+print('res mean rounded', res.mean(), 'max', res.max())
+# compare W closeness to integer
+print('dist to nearest int', np.abs(W-r).max(), np.abs(W-r).mean())
+PY"

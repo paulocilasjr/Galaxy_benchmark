@@ -1,0 +1,56 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b56996eb73955ba92c",
+  "history_id": "bbd44e69cb8906b5213a1b92a908622e",
+  "tool_id": "score_wheat_pseudobulk_swap",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-10T07:28:45.626457",
+  "update_time": "2026-08-10T07:31:19.900888",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "python -m pip install --quiet numpy scipy openpyxl &&\npython - <<'PY'\nimport csv,gzip,io,math\nfrom urllib.request import Request,urlopen\nfrom openpyxl import load_workbook\nimport numpy as np\nfrom scipy.optimize import linear_sum_assignment\n\nexpr_path='/jetstream2/scratch/main/jobs/79036638/inputs/dataset_2dd44a7e-8ce3-4b19-92f0-bba8a12200e9.dat'\nwith open(expr_path,'rb') as fh:\n    magic=fh.read(2)\nopener=gzip.open if magic==b'\\x1f\\x8b' else open\ngenes=[]\nrows=[]\nwith opener(expr_path,'rt',newline='') as fh:\n    rd=csv.reader(fh,delimiter='\\t')\n    header=next(rd)\n    labels=header[1:]\n    for r in rd:\n        if not r: continue\n        genes.append(r[0])\n        rows.append([float(x) for x in r[1:]])\nX=np.asarray(rows,dtype=float)\nlogX=np.log1p(X)\nmu=logX.mean(axis=1,keepdims=True)\nsd=logX.std(axis=1,keepdims=True)\nZ=np.divide(logX-mu,sd,out=np.zeros_like(logX),where=sd>0)\ngene_to_i={g:i for i,g in enumerate(genes)}\n\nurl='https://ars.els-cdn.com/content/image/1-s2.0-S2211124725000117-mmc5.xlsx'\nreq=Request(url,headers={'User-Agent':'Mozilla/5.0','Referer':'https://www.cell.com/'})\nopen('mmc5.xlsx','wb').write(urlopen(req,timeout=90).read())\nwb=load_workbook('mmc5.xlsx',read_only=True,data_only=True)\nws=wb['Table S4']\nit=ws.iter_rows(values_only=True)\nh=list(next(it))\nix={str(v):i for i,v in enumerate(h)}\nby_cluster={i:[] for i in range(15)}\nfor r in it:\n    try:\n        g=str(r[ix['Gene_ID']])\n        fc=float(r[ix['avg_log2FC']])\n        padj=float(r[ix['p_val_adj']])\n        c=int(r[ix['cluster']])\n    except Exception:\n        continue\n    if c in by_cluster and padj<0.05 and fc>0.25 and g in gene_to_i:\n        by_cluster[c].append((g,fc))\nfor c in by_cluster:\n    by_cluster[c].sort(key=lambda t:(-t[1],t[0]))\n\ngroups={\n 'cortex':[2],\n 'endodermis':[9],\n 'epidermis':[1,5,7],\n 'meristems':[0,3,12],\n 'pericycle':[6],\n 'phloem':[11,13],\n 'provascular':[4],\n 'root_cap':[14],\n 'root_hair':[8],\n 'xylem':[10],\n}\ntypes=list(groups)\ndepths=[20,50,100,200,500]\nscore_by_depth={}\nassignments={}\nswap_by_depth={}\nfor depth in depths:\n    S=np.zeros((len(types),len(labels)))\n    marker_counts={}\n    for ti,t in enumerate(types):\n        best={}\n        for c in groups[t]:\n            for g,fc in by_cluster[c]:\n                if g not in best or fc>best[g]: best[g]=fc\n        selected=sorted(best,key=lambda g:(-best[g],g))[:depth]\n        marker_counts[t]=len(selected)\n        ids=[gene_to_i[g] for g in selected]\n        S[ti,:]=Z[ids,:].mean(axis=0) if ids else np.nan\n    score_by_depth[depth]=S\n    rr,cc=linear_sum_assignment(-S)\n    pred={labels[j]:types[i] for i,j in zip(rr,cc)}\n    assignments[depth]=pred\n    base=sum(S[types.index(l),labels.index(l)] for l in labels)\n    best_pair=None; best_score=base\n    for a in range(len(labels)):\n      for b in range(a+1,len(labels)):\n        sc=base\n        sc-=S[types.index(labels[a]),a]+S[types.index(labels[b]),b]\n        sc+=S[types.index(labels[b]),a]+S[types.index(labels[a]),b]\n        if sc>best_score:\n          best_score=sc; best_pair=(labels[a],labels[b])\n    swap_by_depth[depth]=(best_pair,best_score-base)\n\n# consensus: standardize each row within a depth then average\nCs=[]\nfor depth,S in score_by_depth.items():\n    sm=S.mean(axis=1,keepdims=True); ss=S.std(axis=1,keepdims=True)\n    Cs.append((S-sm)/np.where(ss==0,1,ss))\nC=np.mean(Cs,axis=0)\nrr,cc=linear_sum_assignment(-C)\ncons={labels[j]:types[i] for i,j in zip(rr,cc)}\nbase=sum(C[types.index(l),labels.index(l)] for l in labels)\npairs=[]\nfor a in range(len(labels)):\n  for b in range(a+1,len(labels)):\n    sc=base-C[types.index(labels[a]),a]-C[types.index(labels[b]),b]+C[types.index(labels[b]),a]+C[types.index(labels[a]),b]\n    pairs.append((sc-base,labels[a],labels[b]))\npairs.sort(reverse=True)\n\nwith open('swap_diagnostics.txt','w') as out:\n    out.write(f'MATRIX\\tgenes={len(genes)}\\tcolumns={len(labels)}\\tlabels={\",\".join(labels)}\\n')\n    out.write('CLUSTER_DEG_COUNTS\\t'+'\\t'.join(f'{c}:{len(by_cluster[c])}' for c in range(15))+'\\n')\n    for depth in depths:\n        out.write(f'DEPTH\\t{depth}\\tBEST_SWAP\\t{swap_by_depth[depth][0]}\\tGAIN\\t{swap_by_depth[depth][1]:.6f}\\n')\n        out.write('ASSIGNMENT\\t'+';'.join(f'{lab}->{assignments[depth][lab]}' for lab in labels)+'\\n')\n    out.write('CONSENSUS_ASSIGNMENT\\t'+';'.join(f'{lab}->{cons[lab]}' for lab in labels)+'\\n')\n    out.write('TOP_TRANSPOSITIONS\\n')\n    for gain,a,b in pairs[:8]:\n        out.write(f'{a},{b}\\t{gain:.6f}\\n')\n    out.write('CONSENSUS_SCORE_MATRIX\\n')\n    out.write('reference\\observed\\t'+'\\t'.join(labels)+'\\n')\n    for i,t in enumerate(types):\n        out.write(t+'\\t'+'\\t'.join(f'{v:.3f}' for v in C[i])+'\\n')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135431f3fb678490516",
+      "src": "hda",
+      "uuid": "2dd44a7e-8ce3-4b19-92f0-bba8a12200e9"
+    }
+  },
+  "outputs": {
+    "diagnostics": {
+      "id": "f9cad7b01a4721353da02179730d2518",
+      "src": "hda",
+      "uuid": "a6e7b83e-93e5-4046-b0e5-28aade1f9291"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "  WARNING: The scripts f2py and numpy-config are installed in '/home/g2main/.local/bin' which is not on PATH.\n  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.\n\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\n<stdin>:121: SyntaxWarning: invalid escape sequence '\\o'\nTraceback (most recent call last):\n  File \"<stdin>\", line 80, in <module>\nValueError: matrix contains invalid numeric entries\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "  WARNING: The scripts f2py and numpy-config are installed in '/home/g2main/.local/bin' which is not on PATH.\n  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.\n\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\n<stdin>:121: SyntaxWarning: invalid escape sequence '\\o'\nTraceback (most recent call last):\n  File \"<stdin>\", line 80, in <module>\nValueError: matrix contains invalid numeric entries\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b52ebeeca66cd75221",
+  "history_id": "bbd44e69cb8906b5e5299cdc53c86d42",
+  "tool_id": "axolotl_bulk_celltype_match",
+  "state": "deleted",
+  "exit_code": null,
+  "create_time": "2026-08-10T05:43:06.391803",
+  "update_time": "2026-08-10T07:49:24.583220",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "pip install -q numpy pyBigWig &&\npython - \"/jetstream2/scratch/main/jobs/79035660/inputs/dataset_7e24ed31-b673-4473-8871-566dcb47884c.dat\" \"/jetstream2/scratch/main/jobs/79035660/inputs/dataset_1ffe144e-6536-40f0-9ffc-bedc72cf4a35.dat\" <<'PY'\nimport csv, re, sys, os, urllib.request, heapq, math\nimport numpy as np\nimport pyBigWig\n\ncounts_path, sizes_path = sys.argv[1:3]\nbase='https://bis.zju.edu.cn/uuatac/data/axolotl_bw/'\norgan_refs={\n'Bladder':['Urothelial_cell'],\n'Brain':['Astrocyte','Inhibitory_neuron','Neuron_NR4A1','Neuron_UNC5A','Oligodendrocyte'],\n'Cloaca':['Cloaca_epithelial_cell'],\n'GallBladder':['Cholangiocyte'],\n'Gill':['H+_secreting_cell','Respiratory_epithelial_cell'],\n'Heart':['Cardiac_muscle','Endocardial_endothelial_cell','Epicardial_cell'],\n'Intestine':['Enterocyte','Goblet_cell'],\n'Kidney':['Proximal_tubule','Podocyte','H+_secreting_cell'],\n'Limb':['Chondrocyte','Myoblast','Osteoblast','Fibroblast_GPRC6A'],\n'Liver':['Hepatocyte','Liver_sinusoidal_endothelial_cell','Hepatic_stellate_cell'],\n'Lung':['Pulmonary_epithelium','Respiratory_epithelial_cell','Lung_fibroblast'],\n'Pancreas':['Acinar_cell','Pancreatic_ductal_cell','Endocrine_cell'],\n'Prostate':['Basal_cell','vas_deferens_epithelial_cell','Smooth_muscle_cell'],\n'Spleen':['B_cell','T_cell','Macrophage','Erythroid_cell','Megakaryocyte'],\n'Stomach':['Foveolar_cell','Parietal_cell']\n}\nall_refs=sorted(set(x for v in organ_refs.values() for x in v))\n\n# Chunk -> standard arm and cumulative offset\nchunk_info={}\ncum={}\nwith open(sizes_path) as f:\n    for row in csv.reader(f,delimiter='\\t'):\n        if not row: continue\n        chunk,n=row[0],int(row[1]); arm=re.sub(r'_\\d+$','',chunk)\n        off=cum.get(arm,0); chunk_info[chunk]=(arm,off); cum[arm]=off+n\n\n# Library sizes and sample names\nlibs=None\nwith open(counts_path) as f:\n    rd=csv.reader(f,delimiter='\\t'); header=next(rd); samples=header[3:]\n    libs=np.zeros(len(samples),dtype=np.float64)\n    for row in rd:\n        libs += np.fromiter((int(x) for x in row[3:]),dtype=np.float64,count=len(samples))\nscale=np.median(libs)/libs\n\n# Select 40k bins with highest across-sample variance after library normalization\nK=40000; heap=[]\nwith open(counts_path) as f:\n    rd=csv.reader(f,delimiter='\\t'); next(rd)\n    for row in rd:\n        x=np.fromiter((int(v) for v in row[3:]),dtype=np.float64,count=len(samples))\n        y=np.log1p(x*scale)\n        v=float(np.var(y))\n        item=(v,row[0],int(row[1]),int(row[2]),y.tolist())\n        if len(heap)<K: heapq.heappush(heap,item)\n        elif v>heap[0][0]: heapq.heapreplace(heap,item)\nheap.sort(reverse=True)\nn=len(heap)\nX=np.array([x[4] for x in heap],dtype=np.float64)\ncoords=[]\nfor _,chunk,s,e,_ in heap:\n    arm,off=chunk_info[chunk]; coords.append((arm,off+s,off+e))\n# Z-standardize sample profiles across selected bins\nXz=(X-X.mean(axis=0))/X.std(axis=0)\n\ncorr={}\ndownload_meta=[]\nfor ref in all_refs:\n    url=base+ref+'.bw'; fn=ref.replace('+','plus')+'.bw'\n    urllib.request.urlretrieve(url,fn)\n    bw=pyBigWig.open(fn)\n    chroms=bw.chroms()\n    vals=np.zeros(n,dtype=np.float64)\n    hit=0\n    for i,(chrom,s,e) in enumerate(coords):\n        if chrom not in chroms: continue\n        ee=min(e,chroms[chrom])\n        if s>=ee: continue\n        z=bw.stats(chrom,s,ee,type='mean',exact=False)[0]\n        if z is not None and math.isfinite(z):\n            vals[i]=z; hit+=1\n    bw.close()\n    vals=np.log1p(vals)\n    sd=vals.std()\n    if sd==0: rz=np.zeros(n)\n    else: rz=(vals-vals.mean())/sd\n    corr[ref]=(rz[:,None]*Xz).mean(axis=0)\n    download_meta.append((ref,os.path.getsize(fn),hit))\n    os.remove(fn)\n\n# Organ score: strongest matching constituent cell type\nscores={}\nbestref={}\nfor organ,refs in organ_refs.items():\n    mat=np.vstack([corr[r] for r in refs])\n    scores[organ]=mat.max(axis=0)\n    bestref[organ]=[refs[i] for i in mat.argmax(axis=0)]\n\nidx={s:i for i,s in enumerate(samples)}\nbaseline=sum(scores[s][idx[s]] for s in samples)\nswaps=[]\nfor ai,a in enumerate(samples):\n    for b in samples[ai+1:]:\n        imp=(scores[a][idx[b]]+scores[b][idx[a]])-(scores[a][idx[a]]+scores[b][idx[b]])\n        swaps.append((float(imp),a,b))\nswaps.sort(reverse=True)\n\nwith open('celltype_correlations.tsv','w') as out:\n    out.write('reference\\t'+'\\t'.join(samples)+'\\n')\n    for ref in all_refs:\n        out.write(ref+'\\t'+'\\t'.join(f'{v:.6f}' for v in corr[ref])+'\\n')\nwith open('organ_scores.tsv','w') as out:\n    out.write('expected_organ\\t'+'\\t'.join(samples)+'\\n')\n    for organ in samples:\n        out.write(organ+'\\t'+'\\t'.join(f'{v:.6f}' for v in scores[organ])+'\\n')\nwith open('summary.txt','w') as out:\n    out.write('samples=' + ','.join(samples)+'\\n')\n    out.write('library_sizes=' + ','.join(f'{s}:{int(libs[i])}' for i,s in enumerate(samples))+'\\n')\n    out.write(f'selected_bins={n} min_selected_variance={heap[-1][0]:.6f} reference_tracks={len(all_refs)} baseline={baseline:.6f}\\n')\n    for s in samples:\n        j=idx[s]\n        ranked=sorted(((scores[o][j],o,bestref[o][j]) for o in samples),reverse=True)\n        out.write('sample_'+s+'_top='+';'.join(f'{o}:{v:.4f}:{r}' for v,o,r in ranked[:5])+'\\n')\n    out.write('swap_ranking='+';'.join(f'{a},{b}:{imp:.6f}' for imp,a,b in swaps[:15])+'\\n')\n    out.write('downloads='+';'.join(f'{r}:{sz}:{hit}' for r,sz,hit in download_meta)+'\\n')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": null,
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a472135356c8eec77df2a1d",
+      "src": "hda",
+      "uuid": "7e24ed31-b673-4473-8871-566dcb47884c"
+    },
+    "sizes": {
+      "id": "f9cad7b01a472135d6db8baeebb45812",
+      "src": "hda",
+      "uuid": "1ffe144e-6536-40f0-9ffc-bedc72cf4a35"
+    }
+  },
+  "outputs": {
+    "summary": {
+      "id": "f9cad7b01a472135126c872204e1e367",
+      "src": "hda",
+      "uuid": "0aae842c-c917-4f11-8a5a-d1b35328ff12"
+    },
+    "celltype_correlations": {
+      "id": "f9cad7b01a472135331c260e3145900d",
+      "src": "hda",
+      "uuid": "d1f76ccf-38e3-4daf-854e-94874e9dbc3c"
+    },
+    "organ_scores": {
+      "id": "f9cad7b01a4721351dbe4c32b0b0e7a0",
+      "src": "hda",
+      "uuid": "525c002c-3d0d-4816-b2b9-4b1873fd2451"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": null,
+  "tool_stderr": null,
+  "job_stdout": null,
+  "job_stderr": null,
+  "stdout": "",
+  "stderr": "",
+  "job_messages": null,
+  "dependencies": [],
+  "job_metrics": null
+}

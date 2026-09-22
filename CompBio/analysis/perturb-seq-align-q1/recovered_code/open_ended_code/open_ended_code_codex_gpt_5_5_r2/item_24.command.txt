@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+
+def decode_arr(a): return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a])
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        shape=tuple(int(x) for x in f['X'].attrs['shape'])
+        X=csc_matrix((f['X/data'][()], f['X/indices'][()], f['X/indptr'][()]), shape=shape).tocsr().astype(np.float32)
+        guides=decode_arr(f['obs/guide/categories'][()]); codes=f['obs/guide/codes'][()].astype(np.int32)
+        var=decode_arr(f['var/_index'][()])
+    return X,guides,codes,var
+def lognorm(X):
+    X=X.copy().tocsr().astype(np.float32)
+    lib=np.asarray(X.sum(axis=1)).ravel().astype(np.float32)
+    scale=np.divide(1e4, lib, out=np.zeros_like(lib), where=lib>0)
+    X.data *= np.repeat(scale, np.diff(X.indptr))
+    np.log1p(X.data, out=X.data)
+    return X
+def means(X,codes,ng):
+    G=csr_matrix((np.ones(codes.size,dtype=np.float32),(np.arange(codes.size),codes)), shape=(codes.size,ng))
+    sums=(G.T@X).toarray().astype(np.float32)
+    n=np.bincount(codes,minlength=ng).astype(np.float32)
+    return sums/n[:,None],n
+refX,refg,refc,refv=load('perturb.seq.align.q1.ref.h5ad')
+qX,qg,qc,qv=load('perturb.seq.align.q1.query.h5ad')
+ref_order=[]; q_order=[]
+qpos={g:i for i,g in enumerate(qv)}
+for i,g in enumerate(refv):
+    if g in qpos:
+        ref_order.append(i); q_order.append(qpos[g])
+ref_order=np.array(ref_order); q_order=np.array(q_order)
+print('common order', len(ref_order))
+refM,refN=means(lognorm(refX),refc,len(refg)); qM,qN=means(lognorm(qX),qc,len(qg))
+ref_nt=np.array([g.startswith('NT-') for g in refg]); q_nt=np.array([g.startswith('NT-') for g in qg])
+ref_ctrl=(refM[ref_nt]*refN[ref_nt,None]).sum(0)/refN[ref_nt].sum(); q_ctrl=(qM[q_nt]*qN[q_nt,None]).sum(0)/qN[q_nt].sum()
+refE=(refM-ref_ctrl)[:,ref_order]; qE=(qM-q_ctrl)[:,q_order]
+ref_tidx=np.where(~ref_nt)[0]; q_tidx=np.where(~q_nt)[0]
+# prepare masks in common-gene coordinate
+var_effect=refE[ref_tidx].var(0)+qE[q_tidx].var(0)
+ctrl_ref=ref_ctrl[ref_order]; ctrl_q=q_ctrl[q_order]
+mask_defs=[]
+mask_defs.append(('all', np.ones(refE.shape[1], bool)))
+mask_defs.append(('ctrl>0.05', (ctrl_ref>0.05)&(ctrl_q>0.05)))
+mask_defs.append(('ctrl>0.1', (ctrl_ref>0.1)&(ctrl_q>0.1)))
+for n in [8000,5000,3000,2000,1000]:
+    m=np.zeros(refE.shape[1], bool); m[np.argsort(var_effect)[-n:]]=True; mask_defs.append((f'effect_top{n}',m))
+# function corr
+def corr(A,B):
+    A=A.copy(); B=B.copy()
+    A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True)
+    A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-9; B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-9
+    return A@B.T
+for name,mask in mask_defs:
+    C=corr(refE[ref_tidx][:,mask], qE[q_tidx][:,mask])
+    print('\\nMASK',name,'genes',mask.sum())
+    # global one-to-one greedy top for all maybe
+    for target in ['PABPC1','NUDT21','LEO1']:
+        rid=[i for i in ref_tidx if refg[i].startswith(target+'-')][0]
+        row=np.where(ref_tidx==rid)[0][0]
+        order=np.argsort(C[row])[::-1][:10]
+        print(target, refg[rid], [(qg[q_tidx[j]], round(float(C[row,j]),4), int(qN[q_tidx[j]])) for j in order])
+PY"

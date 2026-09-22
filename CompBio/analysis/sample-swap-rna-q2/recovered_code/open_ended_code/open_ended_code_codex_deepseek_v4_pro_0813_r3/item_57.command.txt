@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, json, pandas as pd, numpy as np
+v1v2=json.load(open('refs/v1_v2.json'))
+wb=openpyxl.load_workbook('refs/13059_2023_2908_MOESM2_ESM.xlsx', read_only=True, data_only=True)
+ws=wb['Table S2']
+cluster_markers={}
+for row in ws.iter_rows(values_only=True):
+    c,g,p,h,a=row[:5]
+    if c is None or str(c).isdigit() is False or g is None: continue
+    c=str(c)
+    v2=v1v2.get(str(g))
+    if v2:
+        cluster_markers.setdefault(c, []).append((v2, a))
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+mapping={
+'cortex':['12'], 'endodermis':['10','17'], 'epidermis':['0'], 'meristems':['2','7','3','18'],
+'pericycle':['1','4','9'], 'phloem':['14','16','21'], 'provascular':['5'], 'root_cap':['15','20'], 'root_hair':['6','8'], 'xylem':['11','13'],
+}
+cols=df.columns.tolist()
+for topn in [5,10,20,30]:
+    print('\\nTOP',topn)
+    # build score matrix ct x actual col, using proportion of max per marker
+    score={}
+    counts={}
+    for ct, clusters in mapping.items():
+        genes=[]
+        for c in clusters:
+            genes += [g for g,a in cluster_markers.get(c,[])[:topn]]
+        present=[g for g in genes if g in df.index]
+        if not present: continue
+        mat=df.loc[present]
+        # mean expression / max per gene
+        prop=(mat.div(mat.max(axis=1),axis=0)).mean(axis=0)
+        score[ct]=prop
+        counts[ct]=len(present)
+    S=pd.DataFrame(score).T[cols]
+    print(S.round(2))
+    # print actual top columns for each ct
+    for ct in S.index:
+        print(ct, '->', S.loc[ct].nlargest(3).index.tolist(), S.loc[ct].nlargest(3).round(2).tolist())
+PY"

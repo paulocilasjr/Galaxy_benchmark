@@ -1,0 +1,69 @@
+/bin/bash -lc "cat > pwm_score2.py <<'PY'
+import gzip, math, pysam
+fasta=pysam.FastaFile('hg38.fa')
+NSTD=200000
+counts_start=[[0]*4 for _ in range(21)]; counts_end=[[0]*4 for _ in range(21)]
+n=0; lines=0
+with gzip.open('std_part.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'):continue
+  lines+=1
+  if (lines-1)%40"'!=0:continue
+  p=line.rstrip().split('"'\\t');ch=p[0];s=int(p[1]);e=int(p[2])
+  try:
+   seq=fasta.fetch(ch,s-10,s+11).upper()
+   seqe=fasta.fetch(ch,e-10,e+11).upper()
+  except:continue
+  if len(seq)"'!=21 or len(seqe)!=21:continue
+  bd={'"'A':0,'C':1,'G':2,'T':3}
+  for j,b in enumerate(seq):
+   if b in bd:counts_start[j][bd[b]]+=1
+  for j,b in enumerate(seqe):
+   if b in bd:counts_end[j][bd[b]]+=1
+  n+=1
+  if n>=NSTD:break
+tot=[0]*4
+for mat in [counts_start,counts_end]:
+ for pos in mat:
+  for i in range(4):tot[i]+=pos[i]
+Ntot=sum(tot); bg=[(x+1)/(Ntot+4) for x in tot]
+def make_pwm(c):
+ pwm=[]
+ for pos in c:
+  n=sum(pos)
+  pwm.append([math.log2(((pos[i]+0.01)/(n+0.04))/bg[i]) for i in range(4)])
+ return pwm
+pwm_s=make_pwm(counts_start);pwm_e=make_pwm(counts_end)
+print('std cons start',''.join('ACGT'[max(range(4),key=lambda i:pwm_s[j][i])] for j in range(21)))
+print('std cons end',''.join('ACGT'[max(range(4),key=lambda i:pwm_e[j][i])] for j in range(21)))
+def extract(ch,c,flank=45):
+ lo=c-flank;hi=c+flank+1
+ if lo<0:return None
+ try:s=fasta.fetch(ch,lo,hi).upper()
+ except:return None
+ return s if len(s)==2*flank+1 else None
+def score(pos_type):
+ pwm=pwm_s if pos_type=='start' else pwm_e
+ sums=[0.0]*41;cnt=[0]*41
+ with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+  for line in f:
+   p=line.rstrip().split('\\t');ch=p[0];s=int(p[1]);e=int(p[2])
+   c=s if pos_type=='start' else e
+   seq=extract(ch,c)
+   if seq is None:continue
+   ci=45
+   for di,d in enumerate(range(-20,21)):
+    center=ci-d;lo=center-10;hi=lo+21
+    if lo<0 or hi>len(seq):continue
+    sc=0
+    for j,b in enumerate(seq[lo:hi]):
+     idx='ACGT'.find(b)
+     if idx>=0:sc+=pwm[j][idx]
+    sums[di]+=sc;cnt[di]+=1
+ return [(d,sums[i]/cnt[i] if cnt[i] else -999) for i,d in enumerate(range(-20,21))]
+for pos in ['start','end']:
+ vals=score(pos)
+ print(pos,'top')
+ for v in sorted(vals,key=lambda x:x[1],reverse=True)[:10]:print(v[0],round(v[1],4))
+PY
+python3 pwm_score2.py"

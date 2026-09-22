@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, numpy as np
+from scipy.optimize import minimize
+from collections import Counter
+# positions
+def getpos(fn):
+    arr=[]
+    with pysam.AlignmentFile(fn,'r') as f:
+      for r in f:
+        if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+        arr.append(r.reference_start)
+    return np.array(arr)
+pos={k:getpos(f' exogenous.mix.reads.q1.{k}.sam'.strip()) for k in ['exo','endo','mix']}
+# actually names
+pos={'exo':getpos('exogenous.mix.reads.q1.exo.sam'),'endo':getpos('exogenous.mix.reads.q1.endo.sam'),'mix':getpos('exogenous.mix.reads.q1.mix.sam')}
+bins=np.arange(0,2951,50)
+H={k:np.histogram(v,bins=bins)[0] for k,v in pos.items()}
+print('bin counts',H)
+# X empirical proportions with pseudocount 0.5
+X=(H['exo']+0.5)/(H['exo'].sum()+0.5*len(H['exo']))
+# Y uniform across starts, aggregate to bins: bins mostly 50 starts except last partial; use exact possible starts per bin
+L=2903; rl=50
+starts=np.arange(0,L-rl+1) # 0..2853
+Y_bin=np.histogram(starts,bins=bins)[0].astype(float)
+Y_bin/=Y_bin.sum()
+# log likelihood with params alpha mix exo, beta endo exo
+def nll(params):
+    a,b=params
+    # sigmoid-ish? direct constrained
+    a=np.clip(a,0,1); b=np.clip(b,0,1)
+    mix_dist=a*X+(1-a)*Y_bin
+    endo_dist=b*X+(1-b)*Y_bin
+    ll=np.sum(H['mix']*np.log(mix_dist+1e-12))+np.sum(H['endo']*np.log(endo_dist+1e-12))
+    return -ll
+# grid search
+best=None
+for a in np.linspace(0,1,201):
+  for b in np.linspace(0,1,201):
+    val=nll([a,b])
+    if best is None or val<best[0]: best=(val,a,b)
+print('grid best',best)
+# optimize
+res=minimize(nll,[best[1],best[2]],method='Nelder-Mead',options={'xatol':1e-6,'fatol':1e-6})
+print(res)
+a,b=res.x
+print('alpha',a,'beta',b)
+# profile ci approximate from hessian maybe not
+PY"

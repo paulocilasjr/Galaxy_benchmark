@@ -1,0 +1,108 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,itertools,math
+import numpy as np, pandas as pd
+from collections import defaultdict
+R=pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz',sep='\\t',index_col=0)
+A=pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz',sep='\\t',index_col=0)
+# parse ATAC into dict
+A_values=A.to_numpy(float)
+peak_to_idx={p:i for i,p in enumerate(A.index)}
+print('loaded',R.shape,A.shape)
+# parse GTF gene records
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)";'"')
+records=[]
+with gzip.open('gencode.v44.annotation.gtf.gz','rt') as fh:
+    for line in fh:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2] "'!= '"'gene': continue
+        chrom=parts[0]
+        if not chrom.startswith('chr'): chrom='chr'+chrom
+        start=int(parts[3])-1 # 0-based
+        end=int(parts[4])
+        strand=parts[6]
+        attrs=dict(attr_re.findall(parts[8]))
+        name=attrs.get('gene_name')
+        typ=attrs.get('gene_type') or attrs.get('gene_biotype')
+        if not name: continue
+        tss=start if strand=='+' else end-1
+        records.append((name,chrom,tss,start,end,typ))
+print('gtf records',len(records))
+# prefer record per symbol with max length? group all
+gene_records=defaultdict(list)
+for rec in records:
+    if rec[0] in R.index:
+        gene_records[rec[0]].append(rec)
+print('genes matched',len(gene_records),'of',len(R.index))
+
+def make_activity(win_bins=0, gene_body=False, protein_only=False):
+    rows=[]; genes=[]
+    for g in R.index:
+        recs=gene_records.get(g)
+        if not recs: continue
+        vals=[]
+        for name,chrom,tss,start,end,typ in recs:
+            if protein_only and typ"'!='"'protein_coding':
+                continue
+            idxs=[]
+            if gene_body:
+                b0=start//10000; b1=(end-1)//10000
+                # cap long genes? no
+                for b in range(max(0,b0-win_bins), b1+win_bins+1):
+                    k=f'{chrom}_{b*10000}_{(b+1)*10000}'
+                    ii=peak_to_idx.get(k)
+                    if ii is not None: idxs.append(ii)
+            else:
+                b0=tss//10000
+                for b in range(max(0,b0-win_bins), b0+win_bins+1):
+                    k=f'{chrom}_{b*10000}_{(b+1)*10000}'
+                    ii=peak_to_idx.get(k)
+                    if ii is not None: idxs.append(ii)
+            if idxs:
+                vals.append(A_values[idxs].sum(axis=0))
+        if vals:
+            rows.append(np.mean(vals,axis=0))
+            genes.append(g)
+    return genes,np.vstack(rows)
+
+def zscore_rows(M):
+    mu=M.mean(axis=1,keepdims=True); sd=M.std(axis=1,keepdims=True)
+    sd[sd==0]=np.nan
+    Z=(M-mu)/sd
+    return Z
+
+def sim_and_perm(genes,GA, min_expr=0, topvar=None, log=True, method='z', min_acc=0):
+    RR=R.loc[genes].to_numpy(float)
+    mask=np.ones(len(genes),dtype=bool)
+    if min_expr: mask &= RR.mean(axis=1) >= min_expr
+    if min_acc: mask &= GA.mean(axis=1) >= min_acc
+    RR=RR[mask]; AA=GA[mask]; g=np.array(genes)[mask]
+    if log:
+        RR=np.log1p(RR); AA=np.log1p(AA)
+    if topvar:
+        v=RR.var(axis=1)+AA.var(axis=1)
+        if len(v)>topvar:
+            idx=np.argsort(v)[-topvar:]
+            RR=RR[idx]; AA=AA[idx]; g=g[idx]
+    if method=='z':
+        RR=zscore_rows(RR); AA=zscore_rows(AA)
+        ok=~(np.isnan(RR).any(axis=1)|np.isnan(AA).any(axis=1))
+        RR=RR[ok]; AA=AA[ok]
+    S=np.corrcoef(RR.T, AA.T)[:8,8:]
+    best=[]
+    for p in itertools.permutations(range(8)):
+        sc=sum(S[i,p[i]] for i in range(8))
+        best.append((sc,p))
+    best.sort(reverse=True)
+    return S,best,RR.shape[0]
+
+for gene_body in [False, True]:
+  for win in ([0,1,2,5,10] if not gene_body else [0,1,2]):
+    genes,GA=make_activity(win,gene_body=gene_body)
+    print('\\nactivity', 'body' if gene_body else 'tss', 'win',win,'genes',len(genes))
+    for top in [None,5000,10000,20000]:
+      S,best,n=sim_and_perm(genes,GA,min_expr=0.1,topvar=top,log=True,method='z',min_acc=0)
+      print(' top',top,'n',n,'best',round(best[0][0],4),best[0][1],'2nd',round(best[1][0],4),best[1][1])
+      if top in [5000,None]:
+        print(np.round(S,3))
+PY"

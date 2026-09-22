@@ -1,0 +1,63 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, pandas as pd
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+rng=np.random.default_rng(2)
+c=pd.read_csv('cell_snp.counts.tsv',sep='\\t')
+n_cells=3639; n_sites=1445
+rows=c.cell.values.astype(np.int32); cols=c.site.values.astype(np.int32); a=c.minor.values.astype(float); t=c.total.values.astype(float)
+idx=np.arange(len(c)); rng.shuffle(idx); train=idx[:int(.8*len(idx))]; test=idx[int(.8*len(idx)):]
+site_minor=np.bincount(cols[train],weights=a[train],minlength=n_sites); site_total=np.bincount(cols[train],weights=t[train],minlength=n_sites); p=np.clip(site_minor/np.maximum(site_total,1),.02,.98)
+vals=(a[train]-t[train]*p[cols[train]])/np.sqrt(t[train]*p[cols[train]]*(1-p[cols[train]])+1e-6); vals=np.clip(vals,-5,5)
+X=sparse.csr_matrix((vals,(rows[train],cols[train])), shape=(n_cells,n_sites))
+Z=TruncatedSVD(n_components=25, random_state=3).fit_transform(X)
+
+def fit_em(K, seed):
+    lab=KMeans(n_clusters=K,n_init=20,random_state=seed).fit_predict(Z[:,:20])
+    alpha=0.5
+    for it in range(80):
+        # M-step
+        key=lab[rows[train]]*n_sites+cols[train]
+        alt=np.bincount(key,weights=a[train],minlength=K*n_sites).reshape(K,n_sites)
+        tot=np.bincount(key,weights=t[train],minlength=K*n_sites).reshape(K,n_sites)
+        theta=np.clip((alt+alpha)/(tot+2*alpha),1e-4,1-1e-4)
+        prior=(np.bincount(lab,minlength=K)+1)/(n_cells+K)
+        # E-step
+        ll=np.zeros((n_cells,K))
+        for k in range(K):
+            per=a[train]*np.log(theta[k,cols[train]])+(t[train]-a[train])*np.log(1-theta[k,cols[train]])
+            ll[:,k]=np.bincount(rows[train],weights=per,minlength=n_cells)+np.log(prior[k])
+        new=ll.argmax(1)
+        if np.array_equal(new,lab): break
+        lab=new
+    # final params
+    key=lab[rows[train]]*n_sites+cols[train]
+    alt=np.bincount(key,weights=a[train],minlength=K*n_sites).reshape(K,n_sites)
+    tot=np.bincount(key,weights=t[train],minlength=K*n_sites).reshape(K,n_sites)
+    theta=np.clip((alt+alpha)/(tot+2*alpha),1e-4,1-1e-4)
+    prior=(np.bincount(lab,minlength=K)+1)/(n_cells+K)
+    trainll=0
+    llcell=np.zeros((n_cells,K))
+    testll_assigned=0
+    for k in range(K):
+        per=a[train]*np.log(theta[k,cols[train]])+(t[train]-a[train])*np.log(1-theta[k,cols[train]])
+        llcell[:,k]=np.bincount(rows[train],weights=per,minlength=n_cells)+np.log(prior[k])
+        pert=a[test]*np.log(theta[k,cols[test]])+(t[test]-a[test])*np.log(1-theta[k,cols[test]])
+        # assigned heldout below
+    lab=llcell.argmax(1)
+    for k in range(K):
+        m=lab[rows[test]]==k
+        if m.any():
+            testll_assigned += np.sum(a[test][m]*np.log(theta[k,cols[test][m]])+(t[test][m]-a[test][m])*np.log(1-theta[k,cols[test][m]]))
+    sizes=np.bincount(lab,minlength=K)
+    return testll_assigned, sizes, theta, lab
+
+for K in range(2,9):
+    best=None
+    for seed in [10,20,30]:
+        res=fit_em(K,seed)
+        if best is None or res[0]>best[0]: best=res
+    testll,sizes,theta,lab=best
+    print(K,'heldout_ll_per_read',round(testll/t[test].sum(),5),'sizes',sorted(sizes, reverse=True))
+PY"

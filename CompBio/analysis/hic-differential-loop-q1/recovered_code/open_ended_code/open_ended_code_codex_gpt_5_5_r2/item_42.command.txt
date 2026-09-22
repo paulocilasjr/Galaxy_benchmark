@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, base64, numpy as np, math, os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+H1='JfVtzAhFSCS-j6tNALioCQ'
+HFF='3e8b4161-556e-4722-bcef-88265a3436a1'
+server='https://higlass.4dnucleome.org/api/v1/tiles/'
+offset=1943767673
+res_for_z={12:1000,11:2000,10:5000,9:10000,8:25000,7:50000}
+
+def fetch(uid,z,x,y):
+    key=f'{uid}.{z}.{x}.{y}'
+    r=requests.get(server, params={'d':key}, timeout=60)
+    r.raise_for_status()
+    j=r.json()[key]
+    arr=np.frombuffer(base64.b64decode(j['dense']), dtype='<f4').reshape(256,256)
+    return arr
+
+def mosaic(uid,z,chr_start,chr_end):
+    res=res_for_z[z]; tilew=256*res
+    gs=offset+chr_start; ge=offset+chr_end
+    x0=gs//tilew; x1=(ge-1)//tilew
+    y0=x0; y1=x1
+    mat=np.full(((y1-y0+1)*256,(x1-x0+1)*256), np.nan, dtype='f4')
+    for xi in range(x0,x1+1):
+      for yi in range(y0,y1+1):
+        mat[(yi-y0)*256:(yi-y0+1)*256,(xi-x0)*256:(xi-x0+1)*256]=fetch(uid,z,xi,yi)
+    # crop
+    bin_start=x0*256
+    a=(gs//res)-bin_start; b=math.ceil(ge/res)-bin_start
+    return mat[a:b,a:b], res, x0
+
+for z,win in [(10,(7200000,8300000)),(11,(7500000,7950000)),(12,(7580000,7850000)),(9,(7000000,8600000))]:
+    h1,res,x0=mosaic(H1,z,*win); hff,_,_=mosaic(HFF,z,*win)
+    # sym? use as-is
+    diff=h1-hff
+    n=h1.shape[0]
+    extent=[win[0]/1e6,win[1]/1e6,win[1]/1e6,win[0]/1e6]
+    fig,axs=plt.subplots(1,3,figsize=(15,5),constrained_layout=True)
+    vals=np.r_[h1[np.isfinite(h1)],hff[np.isfinite(hff)]]
+    vmax=np.nanpercentile(vals,99.5)
+    for ax,arr,title in zip(axs,[h1,hff,diff],[f'H1 z{z} {res}bp', 'HFF', 'H1-HFF']):
+        if 'diff' in title.lower() or '-' in title:
+            m=np.nanpercentile(np.abs(diff[np.isfinite(diff)]),99)
+            im=ax.imshow(arr,origin='upper',extent=extent,cmap='coolwarm',vmin=-m,vmax=m,interpolation='nearest')
+        else:
+            im=ax.imshow(arr,origin='upper',extent=extent,cmap='Reds',vmin=0,vmax=vmax,interpolation='nearest')
+        ax.set_title(title); ax.set_xlabel('chr12 Mb'); ax.set_ylabel('chr12 Mb')
+        ax.axvline(7.62995,color='blue',lw=.5); ax.axvline(7.809597,color='blue',lw=.5)
+        ax.axhline(7.62995,color='blue',lw=.5); ax.axhline(7.809597,color='blue',lw=.5)
+        fig.colorbar(im, ax=ax, fraction=.046)
+    out=f'heatmap_z{z}.png'; fig.savefig(out,dpi=180); print(out, h1.shape, np.nanmin(h1), np.nanmax(h1), np.nanmin(hff), np.nanmax(hff), np.nanmin(diff), np.nanmax(diff))
+PY"

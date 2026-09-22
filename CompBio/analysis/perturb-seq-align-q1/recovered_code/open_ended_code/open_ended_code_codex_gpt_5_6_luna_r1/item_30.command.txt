@@ -1,0 +1,30 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,gc
+from scipy import sparse
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def prof(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  g=h['X']; x=sparse.csc_matrix((g['data'][()],g['indices'][()],g['indptr'][()]),shape=tuple(g.attrs['shape']))
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var/_index'][()]],object)
+  cats=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][()]]; gids=np.array([cats[z] for z in h['obs/guide/codes'][()]])
+ groups=np.unique(gids); codes=np.searchsorted(groups,gids); M=np.zeros((len(gids),len(groups)),np.int8);M[np.arange(len(gids)),codes]=1
+ lib=np.asarray(x.sum(1)).ravel().astype(float); sums=np.asarray(x.T.dot(M)); den=np.bincount(codes,weights=lib)
+ norm=sums/den[None,:]*1e6; nt=np.flatnonzero(np.char.startswith(groups,'NT-')); ctrl=sums[:,nt].sum(1)/den[nt].sum()*1e6
+ pert=[i for i,g in enumerate(groups) if not g.startswith('NT-')]; return genes,groups[pert],np.log2((norm[:,pert].T+.1)/(ctrl+.1)),groups
+rg,rgroups,RL,allrg=prof('perturb.seq.align.q1.ref.h5ad'); qg,qgroups,QL,allqg=prof('perturb.seq.align.q1.query.h5ad')
+# use common only
+qm={g:i for i,g in enumerate(qg)}; keep=np.array([i for i,g in enumerate(rg) if g in qm]); qkeep=np.array([qm[g] for g in rg[keep]])
+
+def print_tops(name, mat, row, genes, only_keep=None, n=20):
+ v=mat[row] if only_keep is None else mat[row,only_keep]; gg=genes if only_keep is None else genes[only_keep]
+ # robust ignore genes with weird? top abs
+ up=np.argsort(v)[-n:][::-1]; dn=np.argsort(v)[:n]
+ print('\\n',name,'UP',[(str(gg[i]),round(float(v[i]),2)) for i in up])
+ print(name,'DOWN',[(str(gg[i]),round(float(v[i]),2)) for i in dn])
+for t in ['PABPC1','NUDT21','LEO1']:
+ i=[j for j,g in enumerate(rgroups) if g.startswith(t+'-')][0]
+ print_tops('REF '+rgroups[i],RL,i,rg,keep)
+for t in ['guide13','guide14','guide15','guide16','guide4','guide19']:
+ i=list(qgroups).index(t)
+ print_tops('QUERY '+t,QL,i,qg,qkeep)
+PY"

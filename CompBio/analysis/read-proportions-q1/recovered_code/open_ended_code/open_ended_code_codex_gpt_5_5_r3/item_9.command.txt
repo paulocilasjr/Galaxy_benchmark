@@ -1,0 +1,80 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import defaultdict, Counter
+contigs=[]; name=None; seq=[]
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'):
+        if name: contigs.append((name,''.join(seq)))
+        name=line[1:].split()[0]; seq=[]
+    else: seq.append(line.upper())
+if name: contigs.append((name,''.join(seq)))
+L=36; seed_len=9
+tr=str.maketrans('ACGTN','TGCAN'); cd=dict(zip('ACGTN','TGCAN'))
+def rc(s): return s.translate(tr)[::-1]
+windows=[]
+for ci,(name,s) in enumerate(contigs):
+    for pos in range(len(s)-L+1):
+        k=s[pos:pos+L]
+        windows.append((ci,pos,'+',k)); windows.append((ci,pos,'-',rc(k)))
+idx=defaultdict(list)
+for sid,(_,_,_,w) in enumerate(windows):
+    for off in range(0,L,seed_len): idx[(off,w[off:off+seed_len])].append(sid)
+vars=[(j,tuple(s[j] for _,s in contigs)) for j in range(3000) if len({s[j] for _,s in contigs})>1]
+site_counts={j:Counter() for j,_ in vars}
+mapstats=Counter(); reads_used=0; coord_ties=0
+for line in gzip.open('read.proportions.q1.fq.gz','rt'):
+    r=gzip.open
+#
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        r=f.readline().strip().upper(); f.readline(); f.readline()
+        cand=set()
+        for off in range(0,L,seed_len): cand.update(idx.get((off,r[off:off+seed_len]),()))
+        best=[]; mind=99
+        for sid in cand:
+            ci,pos,ori,w=windows[sid]
+            d=sum(a"'!=b for a,b in zip(r,w))
+            if d<mind: mind=d; best=[sid]
+            elif d==mind: best.append(sid)
+        mapstats[mind]+=1
+        cos={(windows[sid][1],windows[sid][2]) for sid in best}
+        if mind<=3 and len(cos)==1:
+            pos,ori=next(iter(cos)); reads_used+=1
+            # more efficient loop only vars in interval but ok
+            for j,pat in vars:
+                if pos<=j<pos+L:
+                    base = r[j-pos] if ori=='"'+' else cd[r[pos+L-1-j]]
+                    site_counts[j][base]+=1
+        elif mind<=3: coord_ties+=1
+print('mapstats',mapstats,'reads_used',reads_used,'coord_ties',coord_ties)
+pattern_obs=defaultdict(Counter); pattern_sites=Counter()
+for j,pat in vars:
+    pattern_sites[pat]+=1; pattern_obs[pat].update(site_counts[j])
+for pat,nsite in pattern_sites.most_common():
+    c=pattern_obs[pat]; tot=sum(c.values())
+    print(pat,'sites',nsite,'tot',tot,'counts',dict(c),'freq',{b:round(c[b]/tot,3) for b in c})
+# site-level estimates for unique allele patterns
+import numpy as np
+rows=[]; y=[]; weights=[]
+for j,pat in vars:
+    c=site_counts[j]; tot=sum(c.values())
+    if tot<20: continue
+    for b in set(pat):
+        rows.append([1.0 if pat[i]==b else 0.0 for i in range(4)])
+        y.append(c[b]/tot)
+        weights.append(tot)
+A=np.array(rows); y=np.array(y); W=np.sqrt(np.array(weights))
+print('unconstr site lstsq',np.linalg.lstsq(A*W[:,None],y*W,rcond=None)[0])
+# pattern aggregate excluding error alleles only; same
+rows=[]; y=[]; weights=[]
+for pat,c in pattern_obs.items():
+    tot=sum(c.values())
+    for b in set(pat):
+        rows.append([1.0 if pat[i]==b else 0.0 for i in range(4)])
+        y.append(c[b]/tot); weights.append(tot)
+A=np.array(rows); y=np.array(y); W=np.sqrt(np.array(weights))
+print('unconstr pattern lstsq',np.linalg.lstsq(A*W[:,None],y*W,rcond=None)[0])
+PY"

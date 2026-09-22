@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > analyze.py <<'PY'
+import gzip, collections, time, json
+import numpy as np
+from scipy import sparse
+start=time.time()
+barcodes={}; chroms={}; rows=[]; cols=[]
+counts=collections.Counter(); weighted=collections.Counter(); lengths=collections.Counter()
+# Accumulate chromosome-indexed fragments for overlap and LSI analysis.
+frags=[]
+with gzip.open('atac.doublet.q1.bed.gz','rt') as f:
+ for k,line in enumerate(f):
+  t=line.split(); ch,a,b,bc=t[:4]; a=int(a); b=int(b); dup=int(t[4]) if len(t)>4 else 1
+  if bc not in barcodes: barcodes[bc]=len(barcodes)
+  ci=barcodes[bc]
+  counts[bc]+=1; weighted[bc]+=dup
+  if ch not in chroms: chroms[ch]=len(chroms)
+  hi=chroms[ch]
+  if ch in ['chr'+str(x) for x in range(1,23)]+['chrX','chrY']:
+   rows.append(ci); cols.append(hi*50000+((a+b)//2)//5000)
+   frags.append((hi,a,b,ci))
+  if k and k%2000000==0: print(k,len(barcodes),time.time()-start,flush=True)
+np.save('fragments.npy',np.array(frags,dtype=np.int32))
+m=sparse.coo_matrix((np.ones(len(rows),dtype=np.float32),(rows,cols)),shape=(len(barcodes),len(chroms)*50000)).tocsr()
+sparse.save_npz('bins5k.npz',m)
+json.dump({'barcodes':barcodes,'chroms':chroms,'counts':counts,'weighted':weighted},open('metadata.json','w'))
+vals=np.array(list(counts.values()))
+print('DONE',len(frags),len(barcodes),chroms,'quantiles',np.quantile(vals,[0,.25,.5,.75,.9,.99,1]),'seconds',time.time()-start)
+print('highest counts',counts.most_common(30))
+PY
+OPENBLAS_NUM_THREADS=4 python analyze.py"

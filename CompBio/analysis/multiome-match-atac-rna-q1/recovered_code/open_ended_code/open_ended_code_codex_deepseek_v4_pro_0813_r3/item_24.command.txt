@@ -1,0 +1,68 @@
+/bin/bash -lc "python - <<'PY'
+# Compare RNA0/RNA1 differential with ATAC1/ATAC5 differential using all mapped genes, gene_body and promoter windows
+import gzip,csv,re,numpy as np
+from collections import defaultdict
+from scipy.stats import spearmanr, pearsonr
+# parse
+gene_list=defaultdict(list)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'):continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene':continue
+        m=re.search(r'gene_name \"(["'^"]+)"'"',p[8]); b=re.search(r'gene_biotype \"(["'^"]+)"'"',p[8])
+        if not m:continue
+        gene_list[m.group(1)].append((p[0],int(p[3]),int(p[4]),p[6],b.group(1) if b else ''))
+def choose(ents):
+    pc=[e for e in ents if e[4]=='protein_coding']
+    return max(pc if pc else ents,key=lambda e:e[2]-e[1])
+genes={}
+for gn,ents in gene_list.items():
+    c,s,e,st,bt=choose(ents)
+    if not c.startswith('chr'):c='chr'+c
+    tss=s if st=='+' else e
+    genes[gn]=(c,s,e,st,tss)
+chr_starts=defaultdict(list); chr_vals=defaultdict(list)
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        c,s,e=row[0].split('_'); s=int(s)
+        chr_starts[c].append(s); chr_vals[c].append(np.array([float(x) for x in row[1:9]]))
+for c in chr_starts:
+    idx=np.argsort(chr_starts[c]); chr_starts[c]=np.array(chr_starts[c])[idx]; chr_vals[c]=np.array(chr_vals[c])[idx]
+def act(c,s,e):
+    st=chr_starts.get(c); va=chr_vals.get(c)
+    if st is None:return None
+    li=np.searchsorted(st,s-10000,side='right'); ri=np.searchsorted(st,e,side='right')
+    if li>=ri:return None
+    return va[li:ri].sum(axis=0)
+rna_syms=[]; R=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        rna_syms.append(row[0]); R.append([float(x) for x in row[1:9]])
+R=np.array(R)
+for region in ['gene_body','prom2kb','tss']:
+    arr=[]; rna_diff=[]; atac_diff_candidateA=[]; atac_diff_candidateB=[]
+    for gi,gn in enumerate(rna_syms):
+        g=genes.get(gn)
+        if not g:continue
+        c,s,e,st,tss=g
+        if region=='gene_body': a=act(c,s,e)
+        elif region=='prom2kb': a=act(c,tss-2000,tss+2000)
+        else: a=act(c,(tss//10000)*10000,(tss//10000)*10000)
+        if a is None:continue
+        # only where enough expr/atac
+        r0=R[gi,0]; r1=R[gi,1]
+        a1=a[1]; a5=a[5]
+        if r0+r1<=0 or a1+a5<=0: continue
+        rna_diff.append(np.log1p(r0)-np.log1p(r1))
+        # candidate A: RNA0->ATAC5, RNA1->ATAC1; differential of matching atac = atac5-atac1
+        atac_diff_candidateA.append(np.log1p(a5)-np.log1p(a1))
+        # candidate B reverse
+        atac_diff_candidateB.append(np.log1p(a1)-np.log1p(a5))
+    rna_diff=np.array(rna_diff); A=np.array(atac_diff_candidateA); B=np.array(atac_diff_candidateB)
+    print(region,'n',len(rna_diff))
+    print(' corr RNAdiff vs ATAC_A (RNA0->5): pearson',pearsonr(rna_diff,A)[0],'spearman',spearmanr(rna_diff,A)[0])
+    print(' corr RNAdiff vs ATAC_B (RNA0->1): pearson',pearsonr(rna_diff,B)[0],'spearman',spearmanr(rna_diff,B)[0])
+PY"

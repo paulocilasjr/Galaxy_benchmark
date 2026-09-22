@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from pathlib import Path
+rawfn='geo_check/gse114176/GSM3578982_raw_gene_bc_matrices_h5.h5'
+localfn='finding.geo.q1.h5ad'
+with h5py.File(localfn,'r') as f:
+    Xloc=sp.csr_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=tuple(f['X'].attrs['shape']))
+    obs=[x.decode() for x in f['obs/_index'][:]]
+    genes_loc=[x.decode() for x in f['var/_index'][:]]
+with h5py.File(rawfn,'r') as f:
+    g=f['output_genome2']
+    genes=[x.decode() for x in g['genes'][:]]
+    names=[x.decode() for x in g['gene_names'][:]]
+    bars=[x.decode() for x in g['barcodes'][:]]
+    shape=tuple(g['shape'][:])
+    # 10x H5 matrix is csc genes x barcodes
+    X=sp.csc_matrix((g['data'][:], g['indices'][:], g['indptr'][:]), shape=shape)
+keep=[i for i,gene in enumerate(genes) if gene in set(genes_loc)]
+print('keep',len(keep), 'genes_equal', [genes[i] for i in keep]==genes_loc)
+Xk=X[keep,:]
+cell_sums=np.asarray(Xk.sum(axis=0)).ravel()
+for op,mask in [('>=274',cell_sums>=274),('>273',cell_sums>273),('>=275',cell_sums>=275),('>=276',cell_sums>=276)]:
+    sel=[bars[i] for i in np.nonzero(mask)[0]]
+    print(op,len(sel),'equal_obs',sel==obs,'first',sel[:5], 'min', cell_sums[mask].min() if mask.any() else None)
+mask=cell_sums>=274
+sel_idx=np.nonzero(mask)[0]
+Xsel=Xk[:,sel_idx].T.tocsr()
+print('shape',Xsel.shape, Xloc.shape)
+print('nnz raw/local/diff',Xsel.nnz,Xloc.nnz,(Xsel"'!=Xloc).nnz)
+print('"'sum raw/local',int(Xsel.sum()),int(Xloc.sum()))
+# if diff, print first few coords
+D=(Xsel-Xloc).tocoo()
+print('diff nnz',D.nnz)
+if D.nnz:
+    for r,c,v in zip(D.row[:10],D.col[:10],D.data[:10]): print(r,c,v,obs[r],genes_loc[c])
+PY"

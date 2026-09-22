@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 - <<'PY'
+# Compute marker-peak assignment score and swap penalties for the nine observed types.
+import gzip,csv,numpy as np,pandas as pd,itertools
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ rd=csv.reader(f,delimiter='\\t'); h=next(rd); names=h[3:]; keys=[]; vals=[]
+ for row in rd: keys.append((row[0],int(row[1]))); vals.append([int(x) for x in row[3:]])
+a=np.asarray(vals,float); z=np.log1p(a/a.sum(0)*1e6); idx={k:i for i,k in enumerate(keys)}
+maptypes=[('Rod','Rod'),('Cone','Cone'),('GABA.amacrine','GABAamacrine'),('Horizontal','Horizontal'),('Retinal.ganglion.cell','Retinalganglioncell'),('AII.amacrine','AIIamacrine'),('Astrocyte','Astrocyte'),('Microglia','Microglia'),('Muller.glia','Mullerglia')]
+S=np.zeros((len(maptypes),len(names)))
+for j,(sheet,_) in enumerate(maptypes):
+ d=pd.read_excel('mmc4.xlsx',sheet_name=sheet,header=None,skiprows=1,usecols=[0,1,2]).dropna(); d[0]=d[0].astype(str).map(lambda s:s if s.startswith('chr') else 'chr'+s); d[1]=d[1].astype(int)//10000*10000
+ ix=np.array([idx[k] for k in dict.fromkeys(zip(d[0],d[1])) if k in idx]); S[j]=z[ix].mean(0)
+# row-standardize to avoid differences in scale
+S=(S-S.mean(1,keepdims=True))/S.std(1,keepdims=True)
+correct=[names.index(b) for a,b in maptypes]
+base=sum(S[i,j] for i,j in enumerate(correct))
+print('baseline',base)
+for p,q in itertools.combinations(range(9),2):
+ t=correct.copy(); t[p],t[q]=t[q],t[p]
+ score=sum(S[i,j] for i,j in enumerate(t))
+ print(names[correct[p]]+','+names[correct[q]],'score',round(score,4),'penalty',round(base-score,4))
+PY"

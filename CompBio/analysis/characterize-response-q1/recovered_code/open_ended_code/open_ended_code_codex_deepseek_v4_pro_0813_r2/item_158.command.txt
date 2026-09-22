@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, json, scipy.stats as st, math
+meta=json.load(open('GSE17721_meta.json'))
+df=pd.read_csv('GSE17721_symbol_expr.csv').set_index('SYMBOL')
+# map columns GSM -> title
+cols={c:meta.get(c,'') for c in df.columns}
+# For each timepoint, average LPS and Control, compare log2
+input=[x.strip().upper() for x in open('characterize.response.q1.txt')]
+rank_input={g:i+1 for i,g in enumerate(input)}
+for tp in ['0.5','1','2','4','6','8','12','16','24']:
+    lps=[c for c,v in cols.items() if v.lower().startswith('lps') and f'{tp}_hours' in v]
+    ctrl=[c for c,v in cols.items() if v.lower().startswith('control') and f'{tp}_hours' in v]
+    if not lps or not ctrl: continue
+    lps_mean=df[lps].mean(axis=1); ctrl_mean=df[ctrl].mean(axis=1)
+    lfc=np.log2((lps_mean+1)/(ctrl_mean+1))
+    s=lfc
+    got=s[s.index.isin(set(input))]
+    a=pd.Series([rank_input[g] for g in input if g in s.index])
+    b=pd.Series([s[g] for g in input if g in s.index])
+    rho=st.spearmanr(a,b)[0]
+    ranked=s.sort_values(ascending=False); top=ranked.head(112).index.tolist()
+    overlap=len(set(top)&set(input))
+    print(f'{tp}h LPS vs ctrl: mapped {len(got)}, spearman input_rank~lfc {rho:.3f}, overlap top112 {overlap}')
+    # print top input lfc for best maybe
+    if float(tp)>=4:
+      print('  top input:', [(g, round(s.get(g,float(\"nan\")),2)) for g in input[:15] if g in s.index])
+PY"

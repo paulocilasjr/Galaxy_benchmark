@@ -1,0 +1,104 @@
+/bin/bash -lc "cat > score_samples.py <<'PY'
+#"'!/usr/bin/env python3
+import subprocess, sys, math
+
+query_vcf='"'query.panelalleles.vcf.gz'
+panel_vcf='panel.chr22.30_35.5M.snps.vcf.gz'
+
+# Load query PLs at confidently covered sites. Store by (chrom,pos,ref,alt).
+q = {}
+qgt = {}
+qdp = {}
+cmd = ['bcftools','query','-f','%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT\\t%DP\\t%PL\\t%AD]\\n', query_vcf]
+with subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True) as p:
+    for line in p.stdout:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts) < 8:
+            continue
+        chrom,pos,ref,alt,gt,dp_s,pl_s,ad = parts[:8]
+        if gt in ('.','./.','.|.') or pl_s in ('.',''):
+            continue
+        try:
+            dp=int(dp_s) if dp_s"'!='"'.' else 0
+            pls=[int(x) for x in pl_s.split(',')[:3]]
+        except ValueError:
+            continue
+        if len(pls)"'!=3 or dp < 1:
+            continue
+        m=min(pls)
+        pls=[min(x-m, 255) for x in pls]  # cap very confident sites to avoid overdominance
+        key=(chrom,int(pos),ref,alt)
+        q[key]=tuple(pls)
+        qgt[key]=gt.replace('"'|','/')
+        qdp[key]=dp
+    rc=p.wait()
+    if rc:
+        sys.exit(rc)
+print(f'loaded_query_sites\\t{len(q)}', file=sys.stderr)
+
+# Get samples from panel header
+samples=subprocess.check_output(['bcftools','query','-l',panel_vcf], text=True).splitlines()
+n=len(samples)
+scores=[0]*n
+sites=[0]*n
+matches=[0]*n
+nonref_matches=[0]*n
+nonref_query_sites=0
+used=0
+
+def dosage(gt):
+    gt=gt.split(':',1)[0]
+    if gt in ('.','./.','.|.'):
+        return None
+    alleles=gt.replace('|','/').split('/')
+    if len(alleles)"'!=2 or '"'.' in alleles:
+        return None
+    try:
+        return int(alleles[0])+int(alleles[1])
+    except ValueError:
+        return None
+
+def normgt_from_dosage(d):
+    return ('0/0','0/1','1/1')[d]
+
+# Stream panel genotypes. bcftools query is faster than parsing full VCF columns.
+fmt='%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT]\\n'
+cmd=['bcftools','query','-f',fmt,panel_vcf]
+with subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1024*1024) as p:
+    for line in p.stdout:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts) < 5:
+            continue
+        key=(parts[0],int(parts[1]),parts[2],parts[3])
+        pls=q.get(key)
+        if pls is None:
+            continue
+        used += 1
+        qg=qgt[key]
+        q_nonref = qg "'!= '"'0/0'
+        if q_nonref:
+            nonref_query_sites += 1
+        gts=parts[4:]
+        for i,gt in enumerate(gts):
+            d=dosage(gt)
+            if d is None or d<0 or d>2:
+                continue
+            scores[i] += pls[d]
+            sites[i] += 1
+            pg=normgt_from_dosage(d)
+            if pg == qg:
+                matches[i] += 1
+                if q_nonref:
+                    nonref_matches[i] += 1
+    rc=p.wait()
+    if rc:
+        sys.exit(rc)
+
+print(f'used_sites\\t{used}\\tnonref_query_site_records\\t{nonref_query_sites}', file=sys.stderr)
+rank=sorted(range(n), key=lambda i:(scores[i]/sites[i] if sites[i] else math.inf, scores[i], -matches[i]))
+print('rank\\tsample\\tavgPL\\tscore\\tsites\\tmatches\\tnonref_matches')
+for r,i in enumerate(rank[:50],1):
+    avg=scores[i]/sites[i] if sites[i] else float('inf')
+    print(f'{r}\\t{samples[i]}\\t{avg:.6f}\\t{scores[i]}\\t{sites[i]}\\t{matches[i]}\\t{nonref_matches[i]}')
+PY
+python score_samples.py > sample_scores.tsv"

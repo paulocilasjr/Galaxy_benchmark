@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+# Load saved counts? We didn't save. Recompute quickly perhaps using pickle? We can save min_ds and counts from previous process? no. Recompute counts efficient.
+from Bio import SeqIO
+import gzip, math, pickle, time
+from collections import defaultdict, Counter
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+names=list(seqs); comp=str.maketrans('ACGT','TGCA'); L=36;k=9;maxd=3
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in seqs}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1): index[name]['f'][s[i:i+k]].append(i)
+    rs=s.translate(comp)[::-1]
+    for i in range(len(rs)-L+1): index[name]['r'][rs[i:i+k]].append(i)
+def count_dists(read,name):
+    cnt=[0]*(maxd+1); min_any=L+1
+    for strand in ['f','r']:
+        idx=index[name][strand]; sstr=seqs[name] if strand=='f' else seqs[name].translate(comp)[::-1]
+        aligns=set()
+        for start in [0,k,2*k,3*k]:
+            seed=read[start:start+k]
+            for pos in idx.get(seed,()):
+                a=pos-start
+                if 0<=a<=len(sstr)-L: aligns.add(a)
+        for a in aligns:
+            d=sum(sstr[a+j]"'!=read[j] for j in range(L))
+            if d<min_any: min_any=d
+            if d<=maxd: cnt[d]+=1
+    return cnt,min_any
+allcnt=[]; mins=[]
+with gzip.open('"'read.proportions.q1.fq.gz','rt') as f:
+    for i in range(40000):
+        h=f.readline(); seq=f.readline().strip().upper(); f.readline(); f.readline()
+        row={}; md={}
+        for n in names:
+            c,m=count_dists(seq,n); row[n]=c; md[n]=m
+        allcnt.append(row); mins.append(md)
+print('computed')
+# loglik for pi,p
+def loglik(pi,p):
+    q=1-p; tot=0.0
+    for i,row in enumerate(allcnt):
+        vals=[]
+        for j,n in enumerate(names):
+            c=row[n]; m=mins[i][n]; lik=0.0
+            for d,cc in enumerate(c):
+                if cc: lik += cc*(p**d)*(q**(L-d))
+            if m>maxd: lik += (p**m)*(q**(L-m))
+            if lik==0: lik=1e-300
+            vals.append(pi[j]*lik)
+        tot += math.log(sum(vals))
+    return tot
+for pi in ([0.504028,0.198450,0.196972,0.100550], [0.6957,0.1102,0.1496,0.0445], [0.5,0.2,0.2,0.1], [0.7,0.1,0.15,0.05]):
+    for p in [0.005,0.008,0.01]:
+        print(pi,p,loglik(pi,p))
+PY"

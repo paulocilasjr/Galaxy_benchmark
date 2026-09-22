@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import concurrent.futures, gzip, urllib.request, urllib.error, io, re, sys, collections, time
+base='https://egg2.wustl.edu/roadmap/data/byFileType/chromhmmSegmentations/ChmmModels/coreMarks/jointModel/final'
+# Standard Roadmap epigenomes are E001-E129 with some IDs absent.
+ids=[f'E{i:03d}' for i in range(1,130)]
+lo,hi=124738680,124738772
+
+def one(eid):
+    u=f'{base}/{eid}_15_coreMarks_hg38lift_dense.bed.gz'
+    try:
+        req=urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0'})
+        with urllib.request.urlopen(req,timeout=90) as r:
+            gz=gzip.GzipFile(fileobj=r)
+            out=[]
+            for b in gz:
+                a=b.decode().rstrip('\\n').split('\\t')
+                if len(a)>=4 and a[0]=='chr11':
+                    s,e=int(a[1]),int(a[2])
+                    if e>lo and s<hi: out.append((a[3],s,e))
+            return eid,out,None
+    except Exception as e:
+        return eid,[],type(e).__name__
+
+counts=collections.Counter(); rows=[]; errors=[]
+t0=time.time()
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+    futs={ex.submit(one,e):e for e in ids}
+    for k,f in enumerate(concurrent.futures.as_completed(futs),1):
+        eid,out,err=f.result()
+        if err: errors.append((eid,err))
+        for x in out: counts[x[0]]+=1; rows.append((eid,)+x)
+        if k%20==0: print(f'progress {k}/129 elapsed {time.time()-t0:.1f}s',file=sys.stderr,flush=True)
+print('COUNTS',dict(counts))
+for x in sorted(rows): print('\\t'.join(map(str,x)))
+print('ERRORS',errors,file=sys.stderr)
+PY"

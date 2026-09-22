@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+# download first ~2MB of chr1 deflated member from final Zenodo archives, compute p meta for local first rows
+import urllib.request,struct,zlib,gzip,math
+
+def get(u,a,b):
+ req=urllib.request.Request(u,headers={'User-Agent':'curl/8.0','Range':f'bytes={a}-{b}'})
+ return urllib.request.urlopen(req,timeout=300).read()
+def entries(u,size):
+ tail=get(u,size-300000,size-1);e=tail.rfind(b'PK\\x05\\x06');vals=struct.unpack_from('<4s4H2IH',tail,e);_,_,_,n1,n2,cdsize,cdoff,_=vals
+ if cdsize==0xffffffff or cdoff==0xffffffff or n1==0xffff:
+  z=tail.rfind(b'PK\\x06\\x06');v=struct.unpack_from('<4sQ2H2I4Q',tail,z);cdsize,cdoff=v[-2:]
+ b=get(u,cdoff,cdoff+cdsize-1);p=0;o={}
+ while p<len(b):
+  v=struct.unpack_from('<4s6H3I5H2I',b,p);_,_,_,flag,comp,_,_,_,cs,us,nl,xl,cl,_,_,_,lo=v;name=b[p+46:p+46+nl].decode();ex=b[p+46+nl:p+46+nl+xl];q=0
+  while q+4<=len(ex):
+   eid,el=struct.unpack_from('<HH',ex,q);d=ex[q+4:q+4+el]
+   if eid==1:
+    z=0
+    if us==0xffffffff:us=struct.unpack_from('<Q',d,z)[0];z+=8
+    if cs==0xffffffff:cs=struct.unpack_from('<Q',d,z)[0];z+=8
+    if lo==0xffffffff:lo=struct.unpack_from('<Q',d,z)[0];z+=8
+   q+=4+el
+  o[name]=(lo,cs,us);p+=46+nl+xl+cl
+ return o
+def first(u,size):
+ o=entries(u,size);name=next(x for x in o if x.endswith('_1.tsv') and not x.startswith('__'));lo,cs,us=o[name];lf=get(u,lo,lo+29);_,_,_,_,_,_,_,_,_,nl,xl=struct.unpack('<4s5H3I2H',lf);ds=lo+30+nl+xl;d=get(u,ds,ds+2000000-1);out=zlib.decompressobj(-15).decompress(d).decode('utf8','replace').splitlines();h=out[0].split('\\t');return h,[dict(zip(h,x.split('\\t'))) for x in out[1:] if len(x.split('\\t'))==len(h)]
+ars=[('afr','https://zenodo.org/api/records/17370173/files/afr47041.zip/content',5769815245),('lat','https://zenodo.org/api/records/17370173/files/lat36378.zip/content',5668676568),('eur','https://zenodo.org/api/records/17370173/files/eur115620.zip/content',4152398287)]
+D={}
+for lab,u,s in ars:
+ print('fetch',lab)
+ try:D[lab]=first(u,s);print(lab,len(D[lab][0]),len(D[lab][1]))
+ except Exception as e:print(type(e).__name__,e)
+with gzip.open('reverse.search.gwas.q1.tsv.gz','rt') as f:
+ lh=f.readline().strip().split('\\t');L=[dict(zip(lh,f.readline().strip().split('\\t'))) for _ in range(1000)]
+idx={lab:{r['ID']:r for r in x[1]} for lab,x in D.items()}; traits=[x[:-2] for x in D['afr'][0] if x.endswith('_P')];print('traits',traits)
+for l in L[:10]:
+ print('\\n',l['ID'],l['P'])
+ for t in traits:
+  vals=[]
+  for lab in idx:
+   a=idx[lab].get(l['ID']);
+   if a and a[t+'_BETA'] and a[t+'_SE']: vals.append((lab,float(a[t+'_BETA']),float(a[t+'_SE']),float(a[t+'_P'])))
+  if len(vals)==3:
+   z=sum(b/se**2 for _,b,se,p in vals)/math.sqrt(sum(1/se**2 for _,b,se,p in vals));mp=math.erfc(abs(z)/2**.5)
+   if t=='protein_density' or abs(math.log10(max(mp,1e-300))-math.log10(float(l['P'])))<.2:print(t,[round(x[3],6) for x in vals],mp)
+PY"

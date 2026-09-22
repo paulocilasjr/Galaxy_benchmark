@@ -1,0 +1,25 @@
+/bin/bash -lc "cat > raw_ranges.py <<'PY'
+import requests,concurrent.futures
+ids=['GCST90088489','GCST90088044','GCST90019419','GCST90013335']
+def f(i):
+ try:
+  n=int(i[4:]);lo=(n-1)//1000*1000+1;u=f'https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST{lo:08d}-GCST{lo+999:08d}/{i}/{i}_buildGRCh37.tsv'
+  s=requests.Session()
+  r=s.get(u,headers={'Range':'bytes=0-4095'},timeout=30);r.raise_for_status();h=r.text.splitlines()[0].split('\\t');print(i,'HEAD',r.text[:700],flush=True)
+  size=int(r.headers['Content-Range'].split('/')[-1]);ci=h.index('chromosome');pi=h.index('base_pair_location')
+  def key(line):
+   x=line.split('\\t');return (int(x[ci]),int(x[pi]))
+  for target in [(1,161500796),(17,16842991)]:
+   low,high=0,size
+   for k in range(25):
+    m=(low+high)//2
+    r=s.get(u,headers={'Range':f'bytes={m}-{min(m+16383,size-1)}'},timeout=30);r.raise_for_status();ls=r.text.splitlines()[1:-1];ks=[key(l) for l in ls]
+    if target<ks[0]:high=m
+    elif target>ks[-1]:low=m+16384
+    else:
+     print(i,target,[l for l in ls if key(l)==target],flush=True);break
+    if high-low<0:print(i,target,'MISSING',flush=True);break
+ except Exception as e:print(i,type(e).__name__,str(e),flush=True)
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as e:list(e.map(f,ids))
+PY
+python raw_ranges.py > raw_ranges.txt"

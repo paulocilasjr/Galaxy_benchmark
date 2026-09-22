@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np
+ca=[]
+for line in open('protein.shape.q1.pdb'):
+ if line.startswith('ATOM') and line[12:16].strip()=='CA':
+  chain=line[21]; resi=int(line[22:26]); x=float(line[30:38]); y=float(line[38:46]); z=float(line[46:54]); ca.append((chain,resi,np.array([x,y,z])))
+chains={}
+for ch,ri,p in ca: chains.setdefault(ch,[]).append((ri,p))
+for ch in chains: chains[ch].sort()
+allpts=np.array([p for _,_,p in ca]); c=allpts.mean(0); U,S,Vt=np.linalg.svd(allpts-c)
+def raster(lines2d,W=70,H=30):
+ xs=[x for seg in lines2d for x,y in seg]; ys=[y for seg in lines2d for x,y in seg]; xmin=min(xs); xmax=max(xs); ymin=min(ys); ymax=max(ys)
+ sx=(W-1)/(xmax-xmin); sy=(H-1)/(ymax-ymin); scale=min(sx,sy); W2=int((xmax-xmin)*scale)+1; H2=int((ymax-ymin)*scale)+1
+ img=np.zeros((H2,W2),dtype=bool)
+ def seg(ix1,iy1,ix2,iy2):
+  dx=abs(ix2-ix1); sx=1 if ix1<ix2 else -1; dy=-abs(iy2-iy1); sy=1 if iy1<iy2 else -1; err=dx+dy
+  while True:
+   if 0<=ix1<W2 and 0<=iy1<H2: img[iy1,ix1]=True
+   if ix1==ix2 and iy1==iy2: break
+   e2=2*err
+   if e2>=dy: err+=dy; ix1+=sx
+   if e2<=dx: err+=dx; iy1+=sy
+ for x1,y1,x2,y2 in lines2d:
+  seg(int(round((x1-xmin)*scale)),int(round((y1-ymin)*scale)),int(round((x2-xmin)*scale)),int(round((y2-ymin)*scale)))
+ return img
+for inds in [(0,1),(0,2),(1,2)]:
+ i,j=inds
+ lines=[]
+ for ch,res in chains.items():
+  pts=[p for ri,p in res]
+  for a,b in zip(pts,pts[1:]):
+   x1=np.dot(a-c,Vt[i]); y1=np.dot(a-c,Vt[j]); x2=np.dot(b-c,Vt[i]); y2=np.dot(b-c,Vt[j])
+   lines.append((x1,y1,x2,y2))
+ img=raster(lines,W=70,H=30)
+ print('\\nCA trace PCA',i,j)
+ for row in img:
+  print(''.join('#' if v else ' ' for v in row))
+PY"

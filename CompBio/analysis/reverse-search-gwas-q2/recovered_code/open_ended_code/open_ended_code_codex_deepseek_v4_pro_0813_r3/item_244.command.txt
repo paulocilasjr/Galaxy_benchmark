@@ -1,0 +1,79 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import requests, pysam, os, sys, json, time, math, statistics
+proxies=[l.strip() for l in open('[REDACTED LOCAL PATH]') if l.strip()]
+queries=[('6',34215919,'rs1150779',-0.0886096,0.00669,0.703),('6',34219010,'rs6909732',0.0855989,0.00697,0.258),('6',34225931,'rs2483211',-0.0768232,0.00629,0.631),('6',34165721,'rs7742369',0.0753678,0.00625,0.364),('18',20735461,'rs4308051',0.0738032,0.00637,0.660),('3',141121814,'rs2871960',0.0,0.0,0.0),('20',34023962,'rs224333',0.0,0.0,0.0),('4',18025484,'rs2011603',0.0,0.0,0.0),('2',56096892,'rs3791679',0.0,0.0,0.0),('1',17311190,'rs9435734',0.0,0.0,0.0),('7',2803510,'rs798485',0.0,0.0,0.0),('4',145574844,'rs1812175',0.0,0.0,0.0)]
+
+def get_urls(id_):
+ for proxy in proxies:
+  p={'http':f'http://{proxy}','https':f'http://{proxy}'}
+  for attempt in range(2):
+   try:
+    r=requests.post('https://api.opengwas.io/api/gwasinfo/files/trial',json={'id':id_,'type':'vcf'},proxies=p,timeout=20)
+    if r.status_code==200:
+     return r.json(), proxy
+    if r.status_code"'!=429:
+     # print briefly
+     pass
+   except Exception:
+    pass
+   time.sleep(0.3)
+ return None,None
+
+def parse_val(v):
+ try:return float(v)
+ except:return None
+
+out=open('"'scan_52_58_results.txt','w',buffering=1)
+ids=[]
+for line in open('candidates_52_58.tsv'):
+ a=line.rstrip('\\n').split('\\t'); ids.append(a[0])
+for id_ in ids:
+ urls,proxy=get_urls(id_)
+ if not urls:
+  print('NOURL',id_,flush=True); out.write(f'{id_}\\tNOURL\\n'); continue
+ vcf,tbiurl=urls
+ idx=f'[REDACTED LOCAL PATH]'
+ if not os.path.exists(idx):
+  try:
+   r=requests.get(tbiurl,timeout=120)
+   if r.status_code"'!=200:
+    print('"'TBIFAIL',id_,r.status_code,flush=True); out.write(f'{id_}\\tTBIFAIL {r.status_code}\\n'); continue
+   open(idx,'wb').write(r.content)
+  except Exception as e:
+   print('TBIERR',id_,e,flush=True); out.write(f'{id_}\\tTBIERR {e}\\n'); continue
+ try:
+  tb=pysam.TabixFile(vcf,index=idx)
+ except Exception as e:
+  print('OPENERR',id_,e,flush=True); out.write(f'{id_}\\tOPENERR {e}\\n'); continue
+ matches=[]
+ allrows=[]
+ for chrom,pos,rs,b,se,af in queries[:5]:
+  try: rows=list(tb.fetch(chrom,pos-1,pos))
+  except Exception as e:
+   allrows.append((rs,'FETCHERR')); continue
+  got=None
+  for rec in rows:
+   f=rec.split('\\t')
+   # position match enough
+   if f[0]==chrom and int(f[1])==pos:
+    got=rec; break
+  if got is None:
+   allrows.append((rs,'NOROW')); continue
+  f=got.split('\\t'); d=dict(zip(f[8].split(':'),f[9].split(':')))
+  es=parse_val(d.get('ES')); sev=parse_val(d.get('SE')); afv=parse_val(d.get('AF')); ss=parse_val(d.get('SS'))
+  # score closeness: es/se/af using tolerance
+  score=0
+  if es is not None and abs(es-b)<0.005: score+=2
+  elif es is not None and abs(abs(es)-abs(b))<0.005: score+=1
+  if sev is not None and abs(sev-se)<0.0005: score+=2
+  elif sev is not None and abs(sev-se)<0.002: score+=1
+  if afv is not None and af is not None and (abs(afv-af)<0.01 or abs((1-afv)-af)<0.01): score+=2
+  matches.append(score)
+  allrows.append((rs,score,es,sev,afv,f[2],f[3],f[4]))
+ total=sum(matches) if matches else -1
+ line=f'{id_}\\ttotal={total}\\t{allrows}'
+ print(line,flush=True)
+ out.write(line+'\\n')
+out.close()
+PY
+python3 [REDACTED LOCAL PATH]"

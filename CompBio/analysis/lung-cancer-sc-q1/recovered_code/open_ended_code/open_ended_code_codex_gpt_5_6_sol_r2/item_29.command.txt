@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import csv,h5py,collections
+# mapping exact sample source to anonymized using original prefix recovery from first source order; create lookup
+src_by_cell={}
+sample_info={}
+with open('source_meta.csv',newline='') as f:
+ for r in csv.DictReader(f):
+  src_by_cell[r['Cells']]=r
+  sample_info[r['SampleID']]=(r['Tissue'],r['Disease'],r['PatientID'])
+# exact mapping can use prefix and barcode, infer source prefix candidates via source rows grouped; known mapping from order/use sets as before
+# construct barcode tuple lookup lists and identify exact source sample from cell count + barcode set fingerprint
+src_rows=collections.defaultdict(dict)
+with open('source_meta.csv',newline='') as f:
+ for r in csv.DictReader(f):
+  sid=r['SampleID']; bc=r['Cells'][len(sid)+1:]
+  src_rows[sid][bc]=r
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ idx=[x.decode() for x in f['obs/_index'][:]]
+ cats=[x.decode() for x in f['obs/sampleID/categories'][:]]
+ codes=f['obs/sampleID/codes'][:]
+our_bcs=collections.defaultdict(list)
+for cell,code in zip(idx,codes):
+ p=cats[int(code)]; our_bcs[p].append(cell[len(p)+1:])
+map_sid={}
+for p,bcs in our_bcs.items():
+ aset=set(bcs); exact=[]
+ for sid,d in src_rows.items():
+  if len(d)==len(bcs) and aset==set(d): exact.append(sid)
+ if len(exact)"'!=1:
+  # ties from near duplicated libraries resolved by full exact cell count set usually; print
+  print('"'mapping issue',p,exact)
+ else: map_sid[p]=exact[0]
+immune={'B','CD4','CD8','DC','Gran','Mast','Mo','NK','Tregs'}
+nonimmune={'ATI','ATII','Basal','Cilia','Club','EC','Fib','NE'}
+ct=collections.Counter(); per=collections.defaultdict(collections.Counter)
+for p,bcs in our_bcs.items():
+ sid=map_sid[p]
+ for bc in bcs:
+  r=src_rows[sid][bc]
+  cell=r['CellName']; dis=r['Disease']; tissue=r['Tissue']
+  ct[(cell,dis,tissue)]+=1; per[p][cell]+=1
+for p in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+ sid=map_sid[p]; inf=sample_info[sid]
+ print(p,sid,inf,'n',sum(per[p].values()),'DC',per[p]['DC'],'prop',per[p]['DC']/sum(per[p].values()),'cells',per[p])
+all_non=sum(n for (cell,dis,t),n in ct.items() if cell in nonimmune)
+lusc_basal=sum(n for (cell,dis,t),n in ct.items() if cell=='Basal' and dis=='LUSC')
+lusc_basal_tumor=sum(n for (cell,dis,t),n in ct.items() if cell=='Basal' and dis=='LUSC' and t=='Tumor')
+print('all_non',all_non,'lusc_basal',lusc_basal,lusc_basal/all_non*100,'lusc_basal_tumor',lusc_basal_tumor,lusc_basal_tumor/all_non*100)
+print('nonimmune breakdown', {c:sum(n for (cell,dis,t),n in ct.items() if cell==c) for c in sorted(nonimmune)})
+print('disease/tissue',collections.Counter((sample_info[map_sid[p]][0],sample_info[map_sid[p]][1]) for p in cats))
+PY"

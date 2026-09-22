@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('phase.bam','rb')
+region_start=27079100; region_end=27080650
+ins=collections.defaultdict(list)
+dele=collections.defaultdict(list)
+for read in bam.fetch('chr22', region_start, region_end):
+    if read.is_unmapped: continue
+    refpos=read.reference_start  # 0-based
+    qpos=0
+    for op,length in read.cigartuples:
+        if op==0:
+            refpos+=length; qpos+=length
+        elif op==1:  # insertion to ref
+            ins[(refpos)].append(read.query_sequence[qpos:qpos+length])
+            qpos+=length
+        elif op==2:  # deletion
+            dele[(refpos,length)].append(read.query_name)
+            refpos+=length
+        elif op==3: refpos+=length
+        elif op==4: qpos+=length
+        elif op==5: pass
+        elif op==6: pass
+        elif op==7 or op==8: qpos+=length; refpos+=length
+print('Insertions with support>=5 or length<=3:')
+for pos in sorted(ins):
+    seqs=ins[pos]
+    c=collections.Counter(seqs)
+    if len(seqs)>=5:
+        print('after ref 0-based',pos,'1-based pos',pos, 'reads',len(seqs), dict(c))
+print('Deletions with support>=5 or len<=3:')
+for (pos,length) in sorted(dele):
+    reads=dele[(pos,length)]
+    if len(reads)>=5:
+        print('del 0-based',pos,'1-based',pos+1,'len',length,'reads',len(reads))
+PY"

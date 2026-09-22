@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse,numpy as np,pandas as pd,re
+from collections import defaultdict
+QFILE='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/characterize.response.q1.txt';DEST='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/geo'
+g=GEOparse.get_GEO(geo='GSE138018',destdir=DEST,silent=True)
+mats=[]
+for name,gsm in g.gsms.items():
+ t=gsm.table.copy();t=t[['ID_REF','VALUE']].rename(columns={'VALUE':'value'});t['sample']=name;mats.append(t)
+expr=pd.concat(mats).pivot(index='ID_REF',columns='sample',values='value').astype(float)
+ann=g.gpls[next(iter(g.gpls))].table
+sym={}
+for _,row in ann.iterrows():
+ ga=row.get('gene_assignment','')
+ if isinstance(ga,str):
+  m=re.search(r'//\\s*(\\S+?)\\s*//',ga)
+  if m:sym[row['ID']]=m.group(1)
+cond=[];ctrl=[]
+for name in expr.columns:
+ title=g.gsms[name].metadata.get('title')
+ if isinstance(title,list):title=title[0]
+ if re.search(r'pDC \\+ LIF\\.',title,re.I):cond.append(name)
+ elif re.search(r'pDC \\+ medium\\.',title,re.I):ctrl.append(name)
+print(cond,ctrl)
+m0=expr[cond].mean(axis=1);m1=expr[ctrl].mean(axis=1);logfc=np.log2((m0+1)/(m1+1))
+best=defaultdict(lambda:(0,0))
+for p in expr.index:
+ gene=str(sym.get(p,'')).upper()
+ if gene and abs(logfc[p])>best[gene][0]:best[gene]=(abs(logfc[p]),logfc[p])
+ranked=sorted(best.items(),key=lambda kv:-kv[1][0]);top=[x for x,v in ranked[:112]]
+qlist=open(QFILE).read().split();q=set(x.upper() for x in qlist);inter=set(top)&q
+print('overlap',len(inter), sorted(inter,key=lambda x:qlist.index(x.capitalize()) if x.capitalize() in qlist else 999))
+rank={x:i+1 for i,(x,v) in enumerate(ranked)}
+print([(x.capitalize(),rank.get(x.upper())) for x in qlist if x.upper() in rank][:40])
+PY"

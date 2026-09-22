@@ -1,0 +1,90 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,struct,zlib,gzip,math,collections,json
+
+def get(u,a,b):
+ req=urllib.request.Request(u,headers={'User-Agent':'curl/8.0','Range':f'bytes={a}-{b}'})
+ return urllib.request.urlopen(req,timeout=300).read()
+
+def entries(u,size):
+ tail=get(u,size-200000,size-1);i=tail.rfind(b'PK\\x06\\x06');vals=struct.unpack_from('<4sQ2H2I4Q',tail,i);cdsize,cdoff=vals[-2:];b=get(u,cdoff,cdoff+cdsize-1);p=0;out={}
+ while p<len(b):
+  vals=struct.unpack_from('<4s6H3I5H2I',b,p); _,_,_,flag,comp,_,_,_,csize,usize,nlen,xlen,clen,_,_,_,loff=vals
+  name=b[p+46:p+46+nlen].decode();extra=b[p+46+nlen:p+46+nlen+xlen]
+  q=0
+  while q+4<=len(extra):
+   eid,elen=struct.unpack_from('<HH',extra,q);d=extra[q+4:q+4+elen]
+   if eid==1:
+    z=0
+    if usize==0xffffffff:usize=struct.unpack_from('<Q',d,z)[0];z+=8
+    if csize==0xffffffff:csize=struct.unpack_from('<Q',d,z)[0];z+=8
+    if loff==0xffffffff:loff=struct.unpack_from('<Q',d,z)[0];z+=8
+   q+=4+elen
+  out[name]=(loff,csize,usize,flag,comp);p+=46+nlen+xlen+clen
+ return out
+
+def first(u,size,name):
+ loff,csize,usize,flag,comp=entries(u,size)[name]
+ lfh=get(u,loff,loff+29);_,_,_,_,_,_,_,_,_,nlen,xlen=struct.unpack('<4s5H3I2H',lfh)
+ ds=loff+30+nlen+xlen
+ data=get(u,ds,ds+2000000-1)
+ out=zlib.decompressobj(-15).decompress(data)
+ lines=out.decode('utf8','replace').splitlines()
+ h=lines[0].split('\\t'); rows=[]
+ for line in lines[1:]:
+  a=line.split('\\t')
+  if len(a)==len(h): rows.append(dict(zip(h,a)))
+ return h,rows
+archives=[
+ ('afr47','https://zenodo.org/api/records/11111186/files/afr47041.zip/content',6011347563,'afr47041/ss_afr47041_1.tsv'),
+ ('eur47','https://zenodo.org/api/records/11111186/files/eur47041.zip/content',3699436929,'eur47041/ss_eur47041_1.tsv'),
+ ('eur94','https://zenodo.org/api/records/11111186/files/eur94082.zip/content',4078857688,'eur94082/ss_eur94082_1.tsv'),
+]
+all={}
+for lab,u,s,n in archives:
+ print('fetch',lab)
+ try:
+  h,rows=first(u,s,n); all[lab]=(h,rows);print(lab,len(h),len(rows),h[:10],h[-10:],rows[0].get('ID'))
+ except Exception as e:print(lab,type(e).__name__,e)
+# local first 1000
+local=[]
+with gzip.open('reverse.search.gwas.q1.tsv.gz','rt') as f:
+ lh=f.readline().strip().split('\\t')
+ for i in range(1000):
+  a=f.readline().strip().split('\\t');local.append(dict(zip(lh,a)))
+print('local',len(local),local[0])
+# index rows by ID
+idx={lab:{r['ID']:r for r in rows} for lab,(h,rows) in all.items()}
+# trait names from header
+traits=[]
+h=all['afr47'][0]
+for col in h:
+ if col.endswith('_P'):traits.append(col[:-2])
+print('traits',traits)
+# print local and cohort p for 10 IDs, plus meta p all traits
+for l in local[:10]:
+ id=l['ID'];print('\\nID',id,'local',l['P'])
+ for t in traits:
+  vals=[]
+  for lab in ['afr47','eur47','eur94']:
+   a=idx[lab].get(id)
+   if a: vals.append((lab,float(a[t+'_P']),float(a[t+'_BETA']),float(a[t+'_SE'])))
+  if vals:
+   # fixed inverse variance
+   z=sum(b/se**2 for _,p,b,se in vals)/math.sqrt(sum(1/se**2 for _,p,b,se in vals))
+   mp=math.erfc(abs(z)/math.sqrt(2))
+   if abs(mp-float(l['P']))<0.05 or t=='protein_density':print(t,'cohort',[(x,round(p,6)) for x,p,b,se in vals],'meta',mp)
+# evaluate absolute error log p for each trait and sample rows where all present
+print('\\ntrait fit')
+for t in traits:
+ errs=[]; corr=[]
+ for l in local[:1000]:
+  vals=[]
+  for lab in ['afr47','eur47','eur94']:
+   a=idx[lab].get(l['ID'])
+   if a:vals.append((float(a[t+'_BETA']),float(a[t+'_SE'])))
+  if len(vals)==3:
+   z=sum(b/se**2 for b,se in vals)/math.sqrt(sum(1/se**2 for b,se in vals)); mp=math.erfc(abs(z)/math.sqrt(2));lp=float(l['P'])
+   errs.append(abs(math.log10(max(mp,1e-300))-math.log10(max(lp,1e-300))))
+   corr.append((mp,lp))
+ if errs: print(t,'n',len(errs),'median logerr',sorted(errs)[len(errs)//2],'mean',sum(errs)/len(errs),'corr',__import__('numpy').corrcoef([x[0] for x in corr],[x[1] for x in corr])[0,1])
+PY"

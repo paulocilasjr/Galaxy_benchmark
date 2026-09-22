@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import rankdata
+# load all scores
+classifier=pd.read_csv('classifier_probs.csv',index_col=0).rename(columns={'p_covid':'p_HC','pred_HC':'pred'})
+sig=pd.read_csv('working_signature_scores2.csv',index_col=0)
+freq=pd.read_csv('celltype_freq.csv',index_col=0)
+# compute composite from sig + freq manually maybe read from output? not saved. Use available fields.
+# p_HC higher = healthy; diff lower = healthy; ISG lower healthy; mono lower healthy, lymph higher healthy.
+freq['Myeloid']=freq['Monocyte']; freq['Lymph']=freq[['T','NK','B']].sum(axis=1)
+df=pd.DataFrame(index=sig.index)
+df['p_HC']=classifier['p_HC']
+df['diff']=sig['diff']
+df['ISG']=sig['ISG']
+df['Mono']=sig['Mono']
+df['T']=sig['T']; df['NK']=sig['NK']; df['B']=sig['B']
+df['myel_lymph_ratio']=sig['myel_lymph_ratio']
+df['myel_freq']=freq['Myeloid']; df['lymph_freq']=freq['Lymph']
+# healthy ranking features
+asc=['diff','ISG','Mono','myel_lymph_ratio','myel_freq']
+desc=['p_HC','T','NK','B','lymph_freq']
+ranks=pd.DataFrame(index=df.index)
+for c in asc: ranks[c]=rankdata(df[c],method='average') # low good, rank 1 = best healthy
+for c in desc: ranks[c]=rankdata(-df[c],method='average') # high good -> low rank
+ranks['avg']=ranks.mean(axis=1)
+print(df.assign(avg_rank=ranks['avg']).sort_values('avg_rank').round(3).to_string())
+# top 13,14,15
+for n in [13,14,15]:
+ print('\\nTOP',n,sorted([int(x[5:]) for x in ranks.sort_values('avg').index[:n]]))
+PY"

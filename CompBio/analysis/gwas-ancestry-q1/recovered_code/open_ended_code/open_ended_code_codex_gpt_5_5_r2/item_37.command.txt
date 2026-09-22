@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+rows=[]
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+    next(f)
+    for line in f:
+        snpid,rsid,chrom,pos,ea,oa,p=line.strip().split('\\t')
+        if p=='NA': continue
+        rows.append((int(pos),rsid,float(p)))
+rows.sort()
+sig=[r for r in rows if r[2]<1e-5]
+clusters=[]
+for r in sig:
+    if not clusters or r[0]-clusters[-1][-1][0]>1_000_000: clusters.append([r])
+    else: clusters[-1].append(r)
+windows=[]
+for cl in clusters:
+    lead=min(cl,key=lambda x:x[2])
+    if len(cl)>=4 or lead[2]<5e-8:
+        windows.append((max(1,cl[0][0]-500000),cl[-1][0]+500000,lead))
+with open('target_positions.bed','w') as out:
+    n=0
+    for pos,rs,p in rows:
+        if any(s <= pos <= e for s,e,_ in windows):
+            out.write(f'1\\t{pos-1}\\t{pos}\\n')
+            n+=1
+print('windows',len(windows),'positions',n)
+for s,e,lead in windows:
+    print(s,e,lead)
+PY
+wc -l target_positions.bed
+head target_positions.bed"

@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,gzip,h5py,numpy as np,tarfile,os
+# print SOFT title/relation
+for g in ['GSE125620']:
+ u=f'https://ftp.ncbi.nlm.nih.gov/geo/series/{g[:-3]}nnn/{g}/soft/{g}_family.soft.gz';f=gzip.GzipFile(fileobj=urllib.request.urlopen(u))
+ for l in f:
+  if l.startswith(b'"'!Series_title'"') or l.startswith(b'"'!Series_relation'"') or l.startswith(b'"'!Series_summary'"'):
+   print(l.decode(errors='replace').strip()[:1500])
+# Compare target barcodes to raw source and compute threshold stats / feature ID exact
+with h5py.File('GSE125620_extract/GSM3578982_raw_gene_bc_matrices_h5.h5','r') as f:
+ g=f['output_genome2'];b=np.asarray(g['barcodes'][:]); ip=np.asarray(g['indptr'][:]); data=np.asarray(g['data'][:]); inds=np.asarray(g['indices'][:]); genes=np.asarray(g['genes'][:]); names=np.asarray(g['gene_names'][:]);
+ total=np.add.reduceat(data,ip[:-1]); nnz=np.diff(ip)
+ print('raw stats total',[(q,int(np.percentile(total,q))) for q in [0,1,5,10,25,50,75,90,95,99,100]])
+ print('raw gt thresholds',[(t,int((total>t).sum()),int((total>=t).sum())) for t in [0,1,10,50,100,150,200,250,254,255,256,274,275,276,300,500]])
+ with h5py.File('finding.geo.q1.h5ad','r') as z:
+  ob=np.asarray(z['obs']['_index'][:]); vi=np.asarray(z['var']['_index'][:]);
+ print('h5ad barcodes in raw',len(set(ob)&set(b)),len(ob),'all',set(ob)-set(b))
+ loc={x:i for i,x in enumerate(b)}; li=np.array([loc[x] for x in ob if x in loc]);
+ print('source loc first',li[:20], 'sorted?',np.all(np.diff(li)>=0),'target first idx',loc.get(ob[0]))
+ print('target var in source',len(set(vi)&set(genes)),len(vi), 'source extras',len(set(genes)-set(vi)), 'target extras',set(vi)-set(genes))
+ # inspect target exact matrix equality allowing genes differences and source rows
+ # map target row by source barcode, source gene ids; compare sparse row values for first/last and all maybe
+PY"

@@ -1,0 +1,139 @@
+/bin/bash -lc "cat > stage1_worker.py <<'PY'
+import json, sys, math, time, pyBigWig
+
+CHROMS=['chr1','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrX','chrY']
+
+def corr(a,b):
+ n=len(a)
+ if n==0: return 0.0
+ ma=sum(a)/n; mb=sum(b)/n
+ cov=0.0; va=0.0; vb=0.0
+ for x,y in zip(a,b):
+  cov+=(x-ma)*(y-mb); va+=(x-ma)**2; vb+=(y-mb)**2
+ if va==0 or vb==0: return 0.0
+ return cov/math.sqrt(va*vb)
+
+def open_bw(url):
+ last=None
+ for i in range(5):
+  try:
+   return pyBigWig.open(url)
+  except Exception as e:
+   last=e; time.sleep(1+2*i)
+ raise last
+
+def work(cand):
+ vec=None; lengths=None
+ for f in cand['files']:
+  try:
+   bw=open_bw(f['url'])
+   if lengths is None:
+    lengths={ch:bw.chroms(ch) for ch in CHROMS}
+   add=[]
+   for ch in CHROMS:
+    L=lengths[ch]; n=(L+999999)//1000000
+    try:
+     arr=bw.stats(ch,0,L,nBins=n,type='mean')
+    except Exception:
+     arr=[0.0]*n
+    for val in arr:
+     add.append(0.0 if val is None else float(val))
+   bw.close()
+   if vec is None: vec=[0.0]*len(add)
+   if len(add)"'!=len(vec):
+    raise RuntimeError('"'length mismatch')
+   for i,val in enumerate(add): vec[i]+=val
+  except Exception as e:
+   return {'exp':cand['exp'], 'corr':None, 'error':repr(e), 'vec':None, 'n':None}
+ if vec is None:
+  return {'exp':cand['exp'], 'corr':None, 'error':'no files', 'vec':None, 'n':None}
+ return {'exp':cand['exp'], 'corr':vec, 'error':None, 'vec':None, 'n':len(vec)}
+
+def main():
+ args=json.load(sys.stdin)
+ cands=args['cands']; obs=args['obs']
+ # obs already 1Mb in chrom order
+ for c in cands:
+  r=work(c)
+  if r['error'] is None:
+   r['corr']=corr(obs,r['corr'])
+   r['vec']=None
+  print(json.dumps(r), flush=True)
+
+if __name__=='__main__':
+ main()
+PY
+# build input obs/cands chunk? We'll run Python orchestrator with multiprocessing directly, not stdin worker maybe.
+cat > run_stage1.py <<'PY'
+import json, math, time, concurrent.futures, os, sys
+import pyBigWig
+from collections import defaultdict
+CHROMS=['chr1','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrX','chrY']
+
+def corr(a,b):
+ n=len(a)
+ if n==0: return 0.0
+ ma=sum(a)/n; mb=sum(b)/n
+ cov=0.0; va=0.0; vb=0.0
+ for x,y in zip(a,b):
+  cov+=(x-ma)*(y-mb); va+=(x-ma)**2; vb+=(y-mb)**2
+ if va==0 or vb==0: return 0.0
+ return cov/math.sqrt(va*vb)
+
+def open_bw(url):
+ last=None
+ for i in range(4):
+  try:
+   return pyBigWig.open(url)
+  except Exception as e:
+   last=e; time.sleep(1+i)
+ raise last
+
+# get lengths from first file of first cand? use pyBigWig once
+cands=json.load(open('candidate_bw.json'))
+first_bw=open_bw(cands[0]['files'][0]['url']); lengths={ch:first_bw.chroms(ch) for ch in CHROMS}; first_bw.close()
+# target 1Mb obs
+targ=defaultdict(float)
+for line in open('counts.tsv'):
+ ch,s,e,v=line.split(); targ[(ch,int(s)//1000000)]+=float(v)
+obs=[]
+for ch in CHROMS:
+ n=(lengths[ch]+999999)//1000000
+ for i in range(n): obs.append(targ[(ch,i)])
+print('obs len',len(obs),'cands',len(cands), flush=True)
+
+def work(cand):
+ try:
+  vec=None
+  for f in cand['files']:
+   bw=open_bw(f['url'])
+   add=[]
+   for ch in CHROMS:
+    L=lengths[ch]; n=(L+999999)//1000000
+    try: arr=bw.stats(ch,0,L,nBins=n,type='mean')
+    except Exception: arr=[0.0]*n
+    add.extend([0.0 if val is None else float(val) for val in arr])
+   bw.close()
+   if vec is None: vec=[0.0]*len(add)
+   if len(add)"'!=len(vec): return cand['"'exp'],None,'len mismatch'
+   for i,val in enumerate(add): vec[i]+=val
+  c=corr(obs,vec)
+  return cand['exp'],c,None
+ except Exception as e:
+  return cand['exp'],None,repr(e)
+
+if __name__=='__main__':
+ workers=int(sys.argv[1]) if len(sys.argv)>1 else 8
+ start=0; end=int(sys.argv[2]) if len(sys.argv)>2 else len(cands)
+ subset=cands[start:end]
+ outfile=f'stage1_{start}_{end}.jsonl'
+ t=time.time(); done=0
+ with open(outfile,'w') as out, concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
+  futs=[ex.submit(work,c) for c in subset]
+  for fut in concurrent.futures.as_completed(futs):
+   exp,c,err=fut.result(); done+=1
+   out.write(json.dumps({'exp':exp,'corr':c,'error':err})+'\\n'); out.flush()
+   if done%20==0: print(done,'/',len(subset),'elapsed',time.time()-t,'last',exp,c, flush=True)
+ print('done chunk',start,end,'elapsed',time.time()-t)
+PY
+python3 run_stage1.py 8 0 50"

@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np
+from scipy import sparse
+import pandas as pd
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0)
+qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+def topdiff(X,guide,g,nt,genes,n=50):
+ mask=guide==g; diff=X[mask].mean(0)-nt
+ idx=np.argsort(diff)[:n]
+ return set(genes[idx]), diff
+for refg, candidates in [('LEO1-I2',['guide14','guide17','guide20','guide9','guide11','guide1','guide2','guide7','guide23']),
+                         ('PABPC1-I1',['guide18','guide16','guide15','guide17','guide5','guide28']),
+                         ('NUDT21-I3',['guide13','guide19','guide16','guide27','guide12','guide4'])]:
+    rs,_=topdiff(R,rguide,refg,rnt,np.array(r.var_names),50)
+    print('\\nREF',refg, 'top50 down genes:', ','.join(sorted(rs)))
+    for c in candidates:
+        qs,_=topdiff(Q,qguide,c,qnt,np.array(q.var_names),50)
+        inter=len(rs&qs)
+        # jaccard and overlap top 10
+        print(c,'intersection',inter,'genes',sorted(rs&qs)[:20])
+PY"

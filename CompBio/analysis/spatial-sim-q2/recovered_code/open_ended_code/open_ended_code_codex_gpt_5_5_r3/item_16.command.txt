@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, pandas as pd, gzip, math
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.stats import fisher_exact
+# use NNLS labels and marker labels; compute tumor-neighbor enrichment vs all non-tumor adjacency opportunities
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+types=sorted(meta.cell_type.unique())
+means=np.vstack([sc.loc[meta.cell_type==t].mean(axis=0).values for t in types]).T
+X=mmread('matrix.mtx.gz').tocsc().toarray().astype(float)
+W=[]
+for j in range(X.shape[1]):
+    w,_=nnls(means, X[:,j]); W.append(w)
+props=np.array(W); props=props/props.sum(axis=1,keepdims=True)
+cls_nn=np.array(types)[props.argmax(axis=1)]
+# marker labels
+blocks={
+ 'Tumor_Core': range(0,50),'Fibroblast_Stroma': range(50,100),'T_Cell': range(100,150),'B_Cell': range(150,200),'Macrophage': range(200,250),'Endothelial': range(250,300)}
+types_m=sorted(blocks)
+S=np.column_stack([X[list(blocks[t]),:].sum(axis=0) for t in types_m])
+frac=S/S.sum(axis=1,keepdims=True)
+cls_m=np.array(types_m)[frac.argmax(axis=1)]
+pos=pd.read_csv('tissue_positions.csv')
+barcodes=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+p=pos.set_index('barcode').loc[barcodes]
+# build 4 and 8 neighbor undirected edges by array row/col (regular grid)
+idx_by_rc={(int(r),int(c)):i for i,(r,c) in enumerate(zip(p.array_row,p.array_col))}
+for neigh_name,deltas in [('4-neigh',[(1,0),(-1,0),(0,1),(0,-1)]),('8-neigh',[(dr,dc) for dr in[-1,0,1] for dc in[-1,0,1] if not (dr==0 and dc==0)])]:
+    edges=set()
+    for (r,c),i in idx_by_rc.items():
+        for dr,dc in deltas:
+            j=idx_by_rc.get((r+dr,c+dc))
+            if j is not None:
+                edges.add(tuple(sorted((i,j))))
+    print('\\n',neigh_name,'edges',len(edges))
+    for name,cls in [('nnls',cls_nn),('marker',cls_m)]:
+        tumor=cls=='Tumor_Core'
+        tumor_edges=[e for e in edges if tumor[e[0]]"'^tumor[e[1]]]  # boundary neighbor to tumor
+        non_tumor_neighbors=[e[1] if tumor[e[0]] else e[0] for e in tumor_edges]
+        print(name,'"'tumor n',tumor.sum(),'boundary neighbor label counts',pd.Series(cls[non_tumor_neighbors]).value_counts().to_dict())
+        # Compare label distribution among tumor-boundary non-tumor nodes to non-tumor nodes not neighboring? Fisher for each type: boundary neighbor edge labels vs all non-tumor edge endpoints from non-tumor/tumor boundary? Not necessary.
+PY"

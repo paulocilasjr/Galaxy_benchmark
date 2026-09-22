@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse, stats
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f: features=[l.rstrip('\\n').split('\\t')[1] for l in f]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f: barcodes=[l.strip() for l in f]
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+lib=np.asarray(X.sum(axis=0)).ravel()
+Xn=X @ sparse.diags(1/np.maximum(lib,1)*1e4); Xn.data=np.log1p(Xn.data)
+calls=pd.read_csv('protospacer_calls_per_cell.csv').set_index('cell_barcode').loc[barcodes]
+ref=pd.read_csv('feature_reference.csv').set_index('id')
+guides=calls['feature_call'].values
+targets=np.array([ref.loc[g,'target_gene_name'] for g in guides])
+nt=targets=='Non-Targeting'; stat=guides=='guide_011'; isg=guides=='guide_012'
+path_idx=list(range(20)); nonpath_idx=list(range(20,1000))
+house=[g for g in ['GAPDH','PPIA','RPS6','RPS17','RPL6','RPL37','RPL26','RPS19','RPS8'] if g in features]
+house_idx=[features.index(g) for g in house]
+for name,mask in [('NT',nt),('STAT1',stat),('ISG15',isg)]:
+    print('\\n',name,'n',mask.sum())
+    print('lib mean/median/range', lib[mask].mean(), np.median(lib[mask]), lib[mask].min(), lib[mask].max())
+    for label,idx in [('path20',path_idx),('nonpath980',nonpath_idx),('house',house_idx)]:
+        S=np.asarray(Xn[idx,:].mean(axis=0)).ravel()
+        print(label, 'mean',S[mask].mean(), 'median',np.median(S[mask]), 'q',np.round(np.quantile(S[mask],[0,.25,.5,.75,1]),3))
+    if name=='STAT1':
+        print('barcodes', list(np.array(barcodes)[mask]))
+        # show first 25 raw counts for the five cells
+        raw=X[path_idx,:][:,mask].toarray().T
+        print(pd.DataFrame(raw, columns=[features[i] for i in path_idx]).to_string(index=False))
+PY"

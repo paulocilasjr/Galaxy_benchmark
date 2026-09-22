@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam
+from collections import defaultdict, Counter
+ref_start=27079126; ref_end=27080625  # 1-based inclusive
+region_len=ref_end-ref_start+1
+b=pysam.AlignmentFile('mapped.sorted.bam','rb')
+pos_counts=[Counter() for _ in range(region_len)]
+pos_depth=[0]*region_len
+example={}
+for rec in b.fetch('chr22',ref_start-1,ref_end):
+    if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+    seq=rec.query_sequence
+    if seq is None: continue
+    for qpos,rpos in rec.get_aligned_pairs(matches_only=False):
+        if rpos is None: continue
+        idx=rpos-(ref_start-1)
+        if idx<0 or idx>=region_len: continue
+        pos_depth[idx]+=1
+        if qpos is None:
+            ch='-'
+        else:
+            ch=seq[qpos]
+        pos_counts[idx][ch]+=1
+        if idx in [0,1,2,region_len-3,region_len-2,region_len-1] and rec.qname=='READ_197':
+            example.setdefault((idx,ch),0); example[(idx,ch)]+=1
+# show variable positions
+vars=[]
+for i,c in enumerate(pos_counts):
+    if len(c)>1 and sum(c.values())>5:
+        total=sum(c.values())
+        # only if second allele freq enough
+        top=c.most_common()
+        if len(top)>1 and top[1][1]>=2:
+            vars.append((ref_start+i,i,c))
+print('variable positions count',len(vars))
+for pos,i,c in vars:
+    print(pos, i, c.most_common(10), 'depth', pos_depth[i])
+print('edge examples')
+for i in [0,1,2,region_len-3,region_len-2,region_len-1]:
+    print(ref_start+i, pos_counts[i].most_common(6), 'depth',pos_depth[i])
+PY"

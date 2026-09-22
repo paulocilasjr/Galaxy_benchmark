@@ -1,0 +1,64 @@
+/bin/bash -c "python - <<'PY'
+import scanpy as sc, numpy as np, pandas as pd, time
+f='lung.cancer.sc.h5ad'
+t=time.time(); adata=sc.read_h5ad(f); print('read',time.time()-t)
+sc.pp.normalize_total(adata, target_sum=1e4); sc.pp.log1p(adata); print('norm',time.time()-t)
+# Build gene name mapping var.symbol, possibly duplicates
+sym=adata.var['symbol'].astype(str).values
+marker_sets={
+ 'Tcell':['CD3D','CD3E','CD3G','CD2','CD7','TRAC','TRBC1','TRBC2'],
+ 'NK':['NKG7','GNLY','KLRD1','KLRF1','NCAM1','PRF1','GZMB','KLRB1'],
+ 'Bcell':['CD79A','CD79B','MS4A1','CD19','BANK1','PAX5'],
+ 'Plasma':['MZB1','JCHAIN','DERL3','SDC1','XBP1','IGHG1','IGLC2'],
+ 'Myeloid':['LYZ','CD68','CSF1R','CD14','FCGR3A','ITGAX','LST1','TYROBP'],
+ 'Monocyte':['CD14','S100A8','S100A9','VCAN','FCN1','LYZ'],
+ 'Macrophage':['CD163','MRC1','MSR1','C1QA','C1QB','C1QC','APOE','TREM2','SPP1','F13A1'],
+ 'DC':['FCER1A','CLEC9A','CD1C','LILRA4','IRF8','BATF3','CCR7','FLT3','LAMP3','CLEC10A','XCR1','IRF7','TCF4'],
+ 'cDC1':['CLEC9A','XCR1','BATF3','IRF8'],
+ 'cDC2':['CD1C','FCER1A','CLEC10A','SIRPA'],
+ 'pDC':['LILRA4','IRF7','TCF4','GZMB','JCHAIN'],
+ 'mregDC':['LAMP3','CCR7','FSCN1','CD40','CD83','IL4I1'],
+ 'Mast':['KIT','TPSAB1','TPSB2','CPA3','MS4A2','HDC'],
+ 'Endothelial':['PECAM1','VWF','CLDN5','CDH5','ENG','PLVAP','FLT1','ACKR1','CA4'],
+ 'Fibroblast':['COL1A1','COL1A2','DCN','LUM','PDGFRA','FAP','ACTA2','TAGLN','MFAP4','COL3A1'],
+ 'Epithelial':['EPCAM','KRT7','KRT8','KRT18','KRT19','CLDN3','CLDN4','ELF3','MUC1','SFN'],
+ 'AT1':['AGER','HOPX','RTKN2','CLIC5','CAV1','EMP2'],
+ 'AT2':['SFTPC','SFTPB','NAPSA','LAMP3','ABCA3','ETV5'],
+ 'Club':['SCGB1A1','SCGB3A1','CYP2F1','PIGR'],
+ 'Ciliated':['FOXJ1','TPPP3','SNTN','PIFO','DNAH5','CCDC153'],
+ 'Basal':['KRT5','KRT14','TP63','KRT15','KRT6A','DSC3','DSG3','SERPINB3','SERPINB4','SOX2'],
+ 'LUSC_basal':['KRT5','KRT14','TP63','KRT6A','DSC3','DSG3','SOX2','SERPINB3','SERPINB4','KRT17'],
+ 'LUAD_AT2':['NKX2-1','NAPSA','SFTPB','SFTPC','KRT7','CLDN3','MUC1','SLC34A2'],
+}
+# Find genes
+idx_map={}
+for g in np.unique(sym): idx_map[g]=np.where(sym==g)[0]
+print('prepared', time.time()-t)
+# score manually mean log normalized expression of present genes
+X=adata.X
+# We'll build scores matrix; if many gene sets, loop each gene set and subset sparse columns.
+scores=pd.DataFrame(index=adata.obs_names)
+for name, genes in marker_sets.items():
+    idxs=[]
+    for g in genes:
+        if g in idx_map:
+            idxs.extend(idx_map[g].tolist())
+    idxs=np.unique(idxs)
+    if len(idxs)==0:
+        scores[name]=0.0
+    else:
+        sub=X[:,idxs]
+        scores[name]=np.asarray(sub.mean(axis=1)).ravel()
+    print(name, len(idxs), time.time()-t)
+# add individual genes
+for g in ['PTPRC','EPCAM','KRT5','KRT14','TP63','SOX2','NKX2-1','NAPSA','SFTPB','SFTPC','KRT7','CD3D','MS4A1','CD79A','CD14','FCGR3A','LYZ','CD68','FCER1A','CLEC9A','CD1C','LILRA4','MKI67','MUC1','COL1A1','PECAM1','VWF','TPSAB1']:
+    if g in idx_map:
+        idx=idx_map[g][0]
+        scores[g]=np.asarray(X[:,idx].toarray()).ravel()
+    else: scores[g]=0
+scores['sampleID']=adata.obs['sampleID'].values
+scores['total_counts']=np.asarray(adata.raw.X.sum(axis=1)).ravel() if adata.raw is not None else 0
+scores.to_parquet('scores.parquet')
+print('saved', scores.shape, time.time()-t)
+print(scores.describe().T.round(3).head(30).to_string())
+PY"

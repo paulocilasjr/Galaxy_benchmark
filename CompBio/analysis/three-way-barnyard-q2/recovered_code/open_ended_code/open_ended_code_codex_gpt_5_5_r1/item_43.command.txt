@@ -1,0 +1,62 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reuse saved-like logic by quickly making gene UMI counters again, then query marker panels
+from collections import defaultdict,Counter
+maps=defaultdict(dict)
+with open('refs/transcript_gene.tsv') as f:
+    next(f)
+    for line in f:
+        sp,tid,gene=line.rstrip('\\n').split('\\t')
+        maps[sp][tid]=gene.upper()
+species_files={'human':'human.paf','mouse':'mouse.paf','pig':'pig.paf'}
+best={}
+for sp,fn in species_files.items():
+    with open(fn) as f:
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            q=p[0]; tid=p[5]; nm=int(p[9]); alen=int(p[10])
+            if alen < 45 or nm/alen < 0.84: continue
+            score=2*nm-alen; gene=maps[sp].get(tid,'')
+            d=best.setdefault(q,{})
+            if sp not in d or score>d[sp][0]: d[sp]=(score,nm,alen,gene)
+read_sp={}; read_gene={}; bc_counts=defaultdict(Counter)
+for q,d in best.items():
+    items=sorted(((v[0],sp,v[1],v[2],v[3]) for sp,v in d.items()), reverse=True)
+    second=items[1][0] if len(items)>1 else -999
+    if items[0][0]>=second+10 and items[0][2]>=50:
+        sp=items[0][1]; read_sp[q]=sp; read_gene[q]=items[0][4]; bc_counts[q.split('|')[1]][sp]+=1
+bc_sp={}
+for cb,c in bc_counts.items():
+    tot=sum(c.values()); sp,n=c.most_common(1)[0]
+    if tot>=20 and n/tot>=0.8: bc_sp[cb]=sp
+umi=defaultdict(set); cells=defaultdict(lambda: defaultdict(set))
+for q,sp in read_sp.items():
+    cb=q.split('|')[1]; u=q.split('|')[2]
+    if bc_sp.get(cb)"'!=sp: continue
+    g=read_gene[q]
+    if g:
+        umi[sp].add((cb,u,g)); cells[sp][g].add(cb)
+uc=defaultdict(Counter)
+for sp,s in umi.items():
+    for cb,u,g in s: uc[sp][g]+=1
+panels={
+'"'liver':'ALB APOA1 APOA2 APOB APOC1 APOC2 TTR HP FGA FGB FGG KRT18 ASGR1 CYP2E1'.split(),
+'heart':'TNNT2 TNNI3 MYH6 MYH7 ACTC1 MYL2 MYL3 TPM1 PLN NPPA NPPB TTN'.split(),
+'testis':'PRM1 PRM2 TNP1 TNP2 DDX4 DAZL SYCP1 SYCP2 SYCP3 ACR ODF1 ODF2 SPATA18 HSPA2 PIWIL1 PIWIL2'.split(),
+'kidney':'UMOD SLC12A1 SLC34A1 SLC22A6 SLC22A8 AQP1 AQP2 NPHS1 NPHS2 PODXL LRP2 CUBN'.split(),
+'bone_marrow':'HBB HBA1 HBA2 HBD AHSP ALAS2 CA1 GYPA GYPB SLC4A1 KLF1 EPB42 MPO ELANE LYZ LST1'.split(),
+'spleen':'MS4A1 CD79A CD74 HLA-DRA LYZ LST1 C1QA C1QB C1QC NKG7 GNLY HBB HBA1 HBA2'.split(),
+'cortex':'SNAP25 RBFOX3 SYT1 SLC17A7 GAD1 GAD2 MBP PLP1 GFAP AQP4'.split(),
+'retina':'RHO OPN1SW OPN1MW GNAT1 PDE6A PDE6B SAG RCVRN VSX2 RLBP1'.split(),
+'lung':'SCGB1A1 SFTPC SFTPA1 SFTPA2 SFTPB SCGB3A2 AGER FOXJ1 EPCAM KRT8 KRT18 WFDC2 CALCA'.split(),
+'skin':'KRT5 KRT14 KRT1 KRT10 FLG LOR KRTDAP COL1A1 COL1A2 DCN'.split()
+}
+for sp in ['human','mouse','pig']:
+    print('\\n',sp)
+    scores=[]
+    for tissue,genes in panels.items():
+        s=sum(uc[sp].get(g,0) for g in genes)
+        present=[(g,uc[sp][g],len(cells[sp].get(g,[]))) for g in genes if uc[sp].get(g,0)>0]
+        scores.append((s,tissue,present[:20]))
+    for s,t,p in sorted(scores, reverse=True):
+        if s>0: print(t,s,p)
+PY"

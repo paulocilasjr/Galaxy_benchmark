@@ -1,0 +1,28 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+f=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','gene','type'])
+b=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+c=pd.read_csv('protospacer_calls_per_cell.csv'); r=pd.read_csv('feature_reference.csv')
+m=b.merge(c,left_on='barcode',right_on='cell_barcode').merge(r[['id','target_gene_name']],left_on='feature_call',right_on='id')
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').T.tocsr(); lib=np.asarray(X.sum(1)).ravel(); detected=np.diff(X.indptr)
+Y=X.multiply(1e4/lib[:,None]).tocsr();Y.data=np.log1p(Y.data)
+mod=np.asarray(Y[:,:20].mean(1)).ravel(); non=np.asarray(Y[:,20:].mean(1)).ravel(); frac=np.asarray(X[:,:20].sum(1)).ravel()/lib
+for t in ['STAT1','ISG15','Non-Targeting','CD39']:
+ z=(m.target_gene_name==t).values
+ print('\\n',t,'n',z.sum())
+ for name,a in [('lib',lib),('detected',detected),('pathmod',mod),('nonpathmod',non),('pathfrac',frac)]:print(name,'values',np.round(a[z],4) if z.sum()<=10 else '', 'mean',a[z].mean(),'sd',a[z].std(),'median',np.median(a[z]))
+print('\\nSTAT1 cells')
+z=(m.target_gene_name=='STAT1').values
+print(pd.DataFrame({'barcode':m.barcode[z],'umis':lib[z],'det':detected[z],'path_counts':np.asarray(X[z,:20].sum(1)).ravel(),'path_frac':frac[z],'path_mod':mod[z],'nonpath_mod':non[z]}).to_string(index=False))
+print('\\nquantiles')
+for t in ['STAT1','ISG15','Non-Targeting']:
+ z=m.target_gene_name==t; print(t,np.quantile(mod[z],[0,.1,.25,.5,.75,.9,1]))
+nt=m.target_gene_name=='Non-Targeting'; ntm=np.asarray(Y[nt].mean(0)).ravel()
+for t in ['STAT1','ISG15']:
+ z=m.target_gene_name==t; d=np.asarray(Y[z].mean(0)).ravel()-ntm
+ idx=np.argsort(d)
+ print('\\n',t,'top down')
+ print(pd.DataFrame({'gene':f.gene[idx[:40]].values,'delta':d[idx[:40]],'ispath':idx[:40]<20}).to_string(index=False))
+ print('mean pathway',d[:20].mean(),'mean non',d[20:].mean(),'median non',np.median(d[20:]),'path ranks',[int(np.where(np.argsort(d)==i)[0][0]+1) for i in range(20)])
+PY"

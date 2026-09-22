@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,pyBigWig,numpy as np,time,collections,multiprocessing as mp
+N=76275859
+chroms={'chr1':248956422,'chr2':242193529,'chr10':133797422,'chr15':101991189,'chrX':156040895}
+Ts={c:[] for c in chroms}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.split()
+ if c in Ts:Ts[c].append(round(float(v)*N/1e6))
+# each list should have ceil(len/10k), and stats equal bins approximately
+target=np.concatenate([np.array(Ts[c],float) for c in chroms])
+p=json.load(open('encode_alpha_bams.json'))['@graph']
+def m(x):
+ vals=[]
+ for q in x.get('quality_metrics',[]):
+  if 'reads mapped' in q:vals.append(q['reads mapped'])
+  if 'mapped' in q and isinstance(q['mapped'],int):vals.append(q['mapped'])
+ return max(vals)
+by=collections.defaultdict(list)
+for x in p:by[x['dataset']].append(x)
+b=json.load(open('encode_alpha_bw_urls.json'))['@graph'];bwby=collections.defaultdict(list)
+for x in b:
+ if x.get('status')=='released':bwby[x['dataset']].append((x['accession'],x['cloud_metadata']['url']))
+items=[]
+for d,xs in by.items():
+ s=sum(m(x) for x in xs)
+ if 76e6<=s<=85e6:items.append((d,s,bwby[d]))
+print('items',len(items),flush=True)
+def worker(item):
+ d,s,urls=item;zs={c:np.zeros(len(Ts[c])) for c in chroms};errs=[]
+ for acc,u in urls:
+  try:
+   bw=pyBigWig.open(u)
+   for c,L in chroms.items(): zs[c]+=np.nan_to_num(np.array(bw.stats(c,0,L,nBins=len(Ts[c]),type='sum'),dtype=float))
+   bw.close()
+  except BaseException as e:errs.append((acc,repr(e)))
+ z=np.concatenate([zs[c] for c in chroms])
+ # exclude all-zero bins, plus correlations raw/log
+ return (d,s,float(np.corrcoef(target,z)[0,1]),float(np.corrcoef(np.log1p(target),np.log1p(z))[0,1]),errs)
+with mp.get_context('fork').Pool(4) as pool:
+ res=list(pool.imap_unordered(worker,items))
+for r in sorted(res,key=lambda x:x[2],reverse=True):print(r,flush=True)
+PY"

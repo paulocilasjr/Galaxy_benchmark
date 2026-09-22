@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.spatial.distance import cdist
+R=pd.read_csv('deconv_raw.csv',index_col=0)
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode')
+# coordinates in fullres
+coords=pos.loc[R.index,['pxl_row_in_fullres','pxl_col_in_fullres']].values
+tumor_idx=np.where(R['Tumor_Core'].values>0.85)[0]
+print('n tumor',len(tumor_idx))
+# nearest dist from each spot to tumor
+dist=cdist(coords, coords[tumor_idx]).min(axis=1)
+non_tumor_types=[c for c in R.columns if c"'!='"'Tumor_Core']
+# presence threshold .5, also raw count-weighted maybe
+for ct in non_tumor_types:
+    pres=(R[ct].values>0.5)
+    print(f'{ct}: n_present={pres.sum()}, mean_dist={dist[pres].mean():.1f}, median={np.median(dist[pres]):.1f}, all_nonTumor_mean={dist[~np.isin(np.arange(len(dist)),tumor_idx)].mean():.1f}, difference={dist[pres].mean()-dist[~np.isin(np.arange(len(dist)),tumor_idx)].mean():.1f}')
+    # permutation random same number spots among non-tumor? compute z
+    all_non=np.setdiff1d(np.arange(len(dist)), tumor_idx)
+    rng=np.random.default_rng(0)
+    sims=np.array([dist[rng.choice(all_non, size=pres.sum(), replace=False)].mean() for _ in range(2000)])
+    p=(np.sum(sims <= dist[pres].mean())+1)/(len(sims)+1)
+    z=(dist[pres].mean()-sims.mean())/sims.std()
+    print('  z,p_closer',z,p)
+print('\\ncount-weighted: mean distance to tumor weighted by cell count per spot')
+for ct in non_tumor_types:
+    w=R[ct].values
+    m=np.sum(w*dist)/np.sum(w)
+    print(ct, 'weighted mean', m, 'presence mean above')
+# Correlation between count and distance to nearest tumor (among all spots excluding tumor)
+print('\\nCorr count with dist')
+for ct in non_tumor_types:
+    idx=~np.isin(np.arange(len(dist)),tumor_idx)
+    r=np.corrcoef(R[ct].values[idx], dist[idx])[0,1]
+    print(ct,r)
+PY"

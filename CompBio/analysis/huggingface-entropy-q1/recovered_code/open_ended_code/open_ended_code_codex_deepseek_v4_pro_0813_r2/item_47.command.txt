@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, time, pathlib, math
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); L=len(seq)
+mapping={'A':7,'C':8,'G':9,'T':10}; base_ids=[7,8,9,10]
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel'))
+model.load_state_dict(load_file('model.safetensors'), strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+# create batch positions 0..9
+B=10
+batch=[]
+for i in range(B):
+ x=ids[0].clone(); x[i]=3; batch.append(x)
+inp=torch.stack(batch)
+with torch.no_grad(): out=model(input_ids=inp)
+logits=out.logits.cpu().float()
+print('special probs and N for first positions')
+for i in range(B):
+ l=logits[i,i]
+ p=torch.softmax(l,dim=0)
+ print(i, 'A',p[7].item(),'C',p[8].item(),'G',p[9].item(),'T',p[10].item(),'N',p[11].item(),'mask',p[3].item(),'sum special0-6,12-15', (p.sum()-p[7:12].sum()).item())
+PY"

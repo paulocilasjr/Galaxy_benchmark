@@ -1,0 +1,23 @@
+/bin/bash -lc "python3 - <<'PY'
+import glob, os, numpy as np
+# Spatial autocorrelation of 100kb bin counts by adjacent bins, using original and dedup.
+for label,pattern in [('orig','analysis/*.100kb.tsv'),('dedup','analysis_dedup/*.100kb.dedup.tsv')]:
+    print('\\n'+label)
+    for f in sorted(glob.glob(pattern), key=lambda p:int(os.path.basename(p).split('.')[0])):
+        id_=int(os.path.basename(f).split('.')[0]); d={}; maxbin={}
+        for line in open(f):
+            _,ch,b,c=line.split(); b=int(b); c=int(c); d[(ch,b)]=c; maxbin[ch]=max(maxbin.get(ch,0),b)
+        cors=[]; ratios=[]
+        for ch,m in maxbin.items():
+            arr=np.array([d.get((ch,i),0) for i in range(m+1)],float)
+            if len(arr)>2 and arr.std()>0:
+                cors.append(np.corrcoef(arr[:-1],arr[1:])[0,1])
+                # adjacent mass ratio around high bins: count in neighbor / count in bin for top 100 bins excluding edges
+                top=np.argsort(arr)[-100:]
+                vals=[]
+                for i in top:
+                    neigh=(arr[i-1] if i>0 else 0)+(arr[i+1] if i+1<len(arr) else 0)
+                    if arr[i]>0: vals.append(neigh/(2*arr[i]))
+                ratios += vals
+        print(id_, 'adj_corr_mean', f'{np.mean(cors):.3f}', 'top_neighbor_ratio', f'{np.median(ratios):.3f}')
+PY"

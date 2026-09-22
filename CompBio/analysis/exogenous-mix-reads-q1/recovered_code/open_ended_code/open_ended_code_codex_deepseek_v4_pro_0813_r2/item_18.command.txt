@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, pysam
+from scipy.optimize import minimize
+bins=np.arange(0,2951,50); L=2903; rl=50
+starts=np.arange(0,L-rl+1)
+Y_bin=np.histogram(starts,bins=bins)[0].astype(float); Y_bin/=Y_bin.sum()
+X_starts=np.arange(548,1938) # CDS start positions? 548..1937 inclusive
+X_bin=np.histogram(X_starts,bins=bins)[0].astype(float); X_bin/=X_bin.sum()
+def getpos(fn):
+ a=[]
+ with pysam.AlignmentFile(fn,'r') as f:
+  for r in f:
+   if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+   a.append(r.reference_start)
+ return np.array(a)
+H={'exo':np.histogram(getpos('exogenous.mix.reads.q1.exo.sam'),bins=bins)[0], 'endo':np.histogram(getpos('exogenous.mix.reads.q1.endo.sam'),bins=bins)[0], 'mix':np.histogram(getpos('exogenous.mix.reads.q1.mix.sam'),bins=bins)[0]}
+def nll(params):
+ a,b=np.clip(params,0,1)
+ md=a*X_bin+(1-a)*Y_bin; ed=b*X_bin+(1-b)*Y_bin
+ return -np.sum(H['mix']*np.log(md+1e-12))-np.sum(H['endo']*np.log(ed+1e-12))
+best=None
+for a in np.linspace(0,1,201):
+ for b in np.linspace(0,1,201):
+  v=nll([a,b])
+  if best is None or v<best[0]: best=(v,a,b)
+print('grid best',best)
+res=minimize(nll,[best[1],best[2]],method='Nelder-Mead')
+print(res.x, res.fun)
+PY"

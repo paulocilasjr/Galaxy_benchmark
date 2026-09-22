@@ -1,0 +1,48 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+import scanpy as sc
+import harmonypy
+from scipy import sparse
+sc.settings.verbosity=1
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+r.obs['batch']='ref'; q.obs['batch']='query'
+r.obs['label']=r.obs['target_gene'].astype(str).values
+q.obs['label']='unknown'
+adata=anndata.concat([r,q], join='inner', index_unique=None, keys=None)
+print('concat', adata.shape)
+# store raw? X already raw counts. Normalize log
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+sc.pp.highly_variable_genes(adata, n_top_genes=3000, flavor='seurat_v3', batch_key='batch')
+print('HVG', adata.var.highly_variable.sum())
+adata_hvg=adata[:, adata.var.highly_variable].copy()
+sc.tl.pca(adata_hvg, n_comps=50)
+sc.external.pp.harmony_integrate(adata_hvg, 'batch', max_iter_harmony=20)
+print('harmony done')
+sc.pp.neighbors(adata_hvg, use_rep='X_pca_harmony', n_neighbors=15)
+# kNN label transfer: for each query cell, majority label of ref neighbors by kNN in harmony space
+from sklearn.neighbors import NearestNeighbors
+X=adata_hvg.obsm['X_pca_harmony']
+ref_mask=adata_hvg.obs['batch'].values=='ref'
+qmask=~ref_mask
+nn=NearestNeighbors(n_neighbors=30, metric='euclidean').fit(X[ref_mask])
+dist,idx=nn.kneighbors(X[qmask])
+ref_labels=adata_hvg.obs['label'].values[ref_mask]
+# majority with distance weighting maybe
+trans=[]
+for row in idx:
+    labs=ref_labels[row]
+    # exclude NT? include maybe
+    vals,counts=np.unique(labs,return_counts=True)
+    trans.append(vals[np.argmax(counts)])
+q.obs['pred_label']=trans
+print(q.obs.groupby('guide', observed=True)['pred_label'].agg(lambda x: x.mode()[0] if len(x) else 'NA'))
+# For target genes
+for target in ['PABPC1','NUDT21','LEO1']:
+    sub=q.obs[q.obs.pred_label==target]
+    print(target, sub.guide.value_counts().head(10).to_dict())
+PY"

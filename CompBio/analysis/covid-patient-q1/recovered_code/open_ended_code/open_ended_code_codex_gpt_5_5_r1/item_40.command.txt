@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+# Recompute compact donor pseudobulk means, compare candidate healthy vs others for selected genes and signatures.
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+p='covid.patients.q1.h5ad'
+healthy_nums={1,5,11,12,17,21,24,27,29,32}
+sets={
+ 'ISG':['ISG15','IFI6','IFIT1','IFIT2','IFIT3','IFI44L','MX1','OAS1','OAS2','OAS3','RSAD2','IRF7','STAT1'],
+ 'InflammMonocyte':['S100A8','S100A9','VCAN','FCN1','LYZ','LST1','CTSS','ANXA2','S100A10','TYROBP','LGALS3'],
+ 'RestingT':['IL7R','CCR7','LTB','TCF7','LEF1','S1PR1','LINC00861','IL16'],
+ 'Plasmablast':['MZB1','JCHAIN','XBP1','IGHG1','IGKC'],
+ 'HLAII':['HLA-DRA','HLA-DRB1','CD74','HLA-DPA1','HLA-DPB1'],
+}
+allg=[]
+for vs in sets.values():
+    for g in vs:
+        if g not in allg: allg.append(g)
+with h5py.File(p,'r') as f:
+    cats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/donor_id/categories'][:]]
+    codes=f['obs/donor_id/codes'][:].astype(np.int16)
+    nums=np.array([int(c.replace('donor','')) for c in cats])
+    H=np.array([n in healthy_nums for n in nums])
+    gcats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['var/feature_name/categories'][:]]
+    gcodes=f['var/feature_name/codes'][:]; idxraw=f['var/_index'][:]
+    genes=[gcats[c] if c>=0 else (idx.decode() if isinstance(idx,bytes) else str(idx)) for c,idx in zip(gcodes,idxraw)]
+    gi={g:i for i,g in enumerate(genes)}
+    sel=[gi[g] for g in allg if g in gi]; names=[g for g in allg if g in gi]; pos={g:i for i,g in enumerate(names)}
+    n,ng=f['X'].attrs['shape']; nd=len(cats); cells=np.bincount(codes,minlength=nd).astype(float)
+    sums=np.zeros((nd,len(sel)))
+    indptr=f['X/indptr'][:]; data=f['X/data']; indices=f['X/indices']
+    for start in range(0,n,10000):
+        end=min(n,start+10000); st=int(indptr[start]); en=int(indptr[end])
+        ip=indptr[start:end+1].astype(np.int64)-st
+        X=csr_matrix((data[st:en],indices[st:en],ip),shape=(end-start,ng))
+        row=np.asarray(X.sum(axis=1)).ravel(); row[row==0]=1
+        Xs=X[:,sel].toarray().astype(float)
+        Xs=np.log1p(Xs/row[:,None]*1e4)
+        cc=codes[start:end]
+        D=csr_matrix((np.ones(end-start),(np.arange(end-start),cc)),shape=(end-start,nd))
+        sums += (D.T @ csr_matrix(Xs)).toarray()
+    means=sums/cells[:,None]
+    print('candidate healthy nums sorted', sorted(healthy_nums))
+    for setname,vs in sets.items():
+        ps=[pos[g] for g in vs if g in pos]
+        score=means[:,ps].mean(1)
+        print(setname, 'healthy_mean',score[H].mean(), 'covid_mean',score[~H].mean(), 'ratio/diff',score[~H].mean()-score[H].mean())
+        print('  healthy range',score[H].min(),score[H].max(),'other range',score[~H].min(),score[~H].max())
+    print('Candidate healthy per donor: IFN Inflam RestingT Plasmablast')
+    for i in np.where(H)[0]:
+        vals=[]
+        for setname in ['ISG','InflammMonocyte','RestingT','Plasmablast']:
+            ps=[pos[g] for g in sets[setname] if g in pos]
+            vals.append(means[i,ps].mean())
+        print(cats[i], ' '.join(f'{v:.3f}' for v in vals))
+    print('Lowest PC-like nonhealthy candidates by ISG:')
+    score_isg=means[:,[pos[g] for g in sets['ISG'] if g in pos]].mean(1)
+    score_infl=means[:,[pos[g] for g in sets['InflammMonocyte'] if g in pos]].mean(1)
+    for i in np.argsort(score_isg):
+        if not H[i]: print(cats[i], f'ISG={score_isg[i]:.3f}', f'Infl={score_infl[i]:.3f}')
+PY"

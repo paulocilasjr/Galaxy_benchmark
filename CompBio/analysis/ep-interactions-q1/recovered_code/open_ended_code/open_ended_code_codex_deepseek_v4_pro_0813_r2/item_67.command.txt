@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+from sklearn.decomposition import PCA
+hic=pd.read_csv('ep.interactions.q1.hic.csv'); expr=pd.read_csv('ep.interactions.q1.expr.csv')
+cand=hic[hic.set=='candidate'].set_index('pair_id')
+rows=[]
+for p,g in expr.groupby('pair_id'):
+    c=g[g.condition=='control'].rna_count; t=g[g.condition=='perturbed'].rna_count
+    # per-guide consistency score = abs(mean logFC / sd across guides)
+    l=[]
+    for guide,gg in g.groupby('guide_id'):
+        cc=gg[gg.condition=='control'].rna_count.values.astype(float); tt=gg[gg.condition=='perturbed'].rna_count.values.astype(float)
+        l.append(np.log2(tt.mean()/cc.mean()))
+    l=np.array(l)
+    expr_score=abs(l.mean()/l.std()) if l.std()>0 else 0
+    hic_mean=cand.loc[p,['count_rep1','count_rep2','count_rep3']].mean()
+    rows.append([p,hic_mean,abs(l.mean()),expr_score,stats.ttest_1samp(l,0).pvalue])
+df=pd.DataFrame(rows,columns=['pair','hic','abslogFC','guide_consistency','p_guide'])
+print(df)
+# Standardize and compute distance from line hic = expr consistency
+for col in ['hic','guide_consistency']:
+    df[col+'_z']=(df[col]-df[col].mean())/df[col].std()
+df['diff']=df['hic_z']-df['guide_consistency_z']
+print(df.sort_values('diff'))
+PY"

@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+
+def dec(a): return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a])
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        X=csc_matrix((f['X/data'][()], f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape'])).tocsr().astype(np.float32)
+        g=dec(f['obs/guide/categories'][()]); c=f['obs/guide/codes'][()].astype(np.int32); v=dec(f['var/_index'][()])
+    return X,g,c,v
+def lognorm(X):
+    X=X.copy(); lib=np.asarray(X.sum(1)).ravel().astype(np.float32); scale=np.divide(1e4,lib,out=np.zeros_like(lib),where=lib>0)
+    X.data *= np.repeat(scale,np.diff(X.indptr)); np.log1p(X.data,out=X.data); return X
+def stats(X,c,ng):
+    G=csr_matrix((np.ones(c.size,dtype=np.float32),(np.arange(c.size),c)),shape=(c.size,ng))
+    n=np.bincount(c,minlength=ng).astype(np.float32)
+    mean=(G.T@X).toarray()/n[:,None]
+    X2=X.copy(); X2.data **= 2
+    mean2=(G.T@X2).toarray()/n[:,None]
+    var=np.maximum(mean2-mean**2, 0)
+    return mean,var,n
+def corr(A,B,mask=None):
+    if mask is not None: A=A[:,mask]; B=B[:,mask]
+    A=A.copy(); B=B.copy(); A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True)
+    A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-9; B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-9; return A@B.T
+refX,refg,refc,refv=load('perturb.seq.align.q1.ref.h5ad'); qX,qg,qc,qv=load('perturb.seq.align.q1.query.h5ad')
+qpos={x:i for i,x in enumerate(qv)}; pairs=[(i,qpos[x]) for i,x in enumerate(refv) if x in qpos]; ri=np.array([p[0] for p in pairs]); qi=np.array([p[1] for p in pairs])
+refM,refV,refN=stats(lognorm(refX),refc,len(refg)); qM,qV,qN=stats(lognorm(qX),qc,len(qg))
+refnt=np.array([x.startswith('NT-') for x in refg]); qnt=np.array([x.startswith('NT-') for x in qg]); rt=np.where(~refnt)[0]; qt=np.where(~qnt)[0]
+# pooled control stats from NT cells by treating as combined rows: compute weighted grouped mean/var exactly from group stats
+ref_n0=refN[refnt].sum(); q_n0=qN[qnt].sum()
+ref_cmean=(refM[refnt]*refN[refnt,None]).sum(0)/ref_n0; q_cmean=(qM[qnt]*qN[qnt,None]).sum(0)/q_n0
+ref_cmean2=((refV[refnt]+refM[refnt]**2)*refN[refnt,None]).sum(0)/ref_n0; q_cmean2=((qV[qnt]+qM[qnt]**2)*qN[qnt,None]).sum(0)/q_n0
+ref_cvar=np.maximum(ref_cmean2-ref_cmean**2,0); q_cvar=np.maximum(q_cmean2-q_cmean**2,0)
+refE=(refM-ref_cmean)[:,ri]; qE=(qM-q_cmean)[:,qi]
+refT=((refM-ref_cmean)/np.sqrt(refV/(refN[:,None]+1e-9)+ref_cvar/(ref_n0+1e-9)+1e-4))[:,ri]
+qT=((qM-q_cmean)/np.sqrt(qV/(qN[:,None]+1e-9)+q_cvar/(q_n0+1e-9)+1e-4))[:,qi]
+# Masks
+varE=refE[rt].var(0)+qE[qt].var(0)
+ctrl=(ref_cmean[ri]>0.05)&(q_cmean[qi]>0.05)
+mask_top=np.zeros(refE.shape[1],bool); mask_top[np.argsort(varE)[-2000:]]=1
+masks={'all':np.ones(refE.shape[1],bool),'ctrl':ctrl,'top2000':mask_top,'ctrl_top':ctrl&mask_top}
+for sig,Sref,Sq in [('effect',refE,qE),('tstat',refT,qT),('clipped_t',np.clip(refT,-10,10),np.clip(qT,-10,10))]:
+    print('\\nSIG',sig)
+    for mname,mask in masks.items():
+        C=corr(Sref[rt],Sq[qt],mask)
+        print(' mask',mname,'genes',mask.sum())
+        for target in ['PABPC1','NUDT21','LEO1','PAF1','CTR9']:
+            r=[i for i in range(len(rt)) if refg[rt[i]].startswith(target+'-')]
+            if not r: continue
+            row=r[0]; order=np.argsort(C[row])[::-1][:5]
+            print(' ',target,[(qg[qt[j]],round(float(C[row,j]),3)) for j in order])
+# simple overlap top pos/neg LEO1 ref versus query effects
+print('\\nLEO1 signed overlap on effect top genes')
+leo=[i for i in range(len(rt)) if refg[rt[i]].startswith('LEO1-')][0]
+for N in [50,100,200,500,1000]:
+    rvec=refE[rt[leo]]
+    rup=set(np.argsort(rvec)[-N:]); rdn=set(np.argsort(rvec)[:N])
+    scores=[]
+    for jj,j in enumerate(qt):
+        qvec=qE[j]
+        qup=set(np.argsort(qvec)[-N:]); qdn=set(np.argsort(qvec)[:N])
+        same=len(rup&qup)+len(rdn&qdn); opp=len(rup&qdn)+len(rdn&qup)
+        scores.append((same-opp,qg[j]))
+    print(N, sorted(scores, reverse=True)[:8])
+PY"

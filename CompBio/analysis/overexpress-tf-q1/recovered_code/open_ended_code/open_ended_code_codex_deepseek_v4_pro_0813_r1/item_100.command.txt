@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from Bio import SeqIO
+from scipy.stats import fisher_exact
+sets=['cond1','common','cond2']
+dfs={}
+for s in sets:
+ d=pd.read_csv(f'macs/bdgdiff/{s}.motif_scan.tsv',sep='\\t')
+ gcs=[]; lens=[]
+ for rec in SeqIO.parse(f'macs/bdgdiff/{s}.fa','fasta'):
+  seq=str(rec.seq).upper(); lens.append(len(seq)); gcs.append((seq.count('G')+seq.count('C'))/len(seq) if seq else 0)
+ d['gc']=gcs; d['length']=lens; d['set']=s; dfs[s]=d
+# bin GC into 20 quantile-ish bins based on common+cond2
+allg=pd.concat([dfs['cond2']['gc'],dfs['common']['gc']])
+bins=np.quantile(allg,np.linspace(0,1,21)); bins[0]=-0.001; bins[-1]=1.001
+for s in ['cond1','common','cond2']:
+ dfs[s]['gc_bin']=pd.cut(dfs[s]['gc'],bins=bins,labels=False)
+# for each motif p1e-4, compute within-bin odds and weighted average (MH-like)
+cols=[c for c in dfs['cond2'].columns if c.endswith('_p1e-4')]
+rows=[]
+for col in cols:
+ motif=col[:-6]
+ vals=[]
+ weights=[]
+ for b in range(len(bins)-1):
+  d2=dfs['cond2'][dfs['cond2'].gc_bin==b]; dc=dfs['common'][dfs['common'].gc_bin==b]
+  if len(d2)==0 or len(dc)==0: continue
+  a=(d2[col]>0).sum(); n2=len(d2); c=(dc[col]>0).sum(); nc=len(dc)
+  odds=(a/(n2-a))/(c/(nc-c)) if c>0 and (n2-a)>0 else np.nan
+  vals.append(np.log(odds) if odds>0 else np.nan); weights.append(n2)
+ arr=np.array(vals); w=np.array(weights); mask=np.isfinite(arr)&(w>0)
+ if mask.sum()>0:
+  logor=np.average(arr[mask],weights=w[mask]); se=np.sqrt(1/w[mask].sum())  # rough
+ else: logor=np.nan
+ rows.append({'motif':motif,'GCstrat_logOR':logor,'GCstrat_OR':np.exp(logor) if np.isfinite(logor) else np.nan})
+res=pd.DataFrame(rows).sort_values('GCstrat_OR',ascending=False)
+print(res.to_string(index=False,float_format=lambda x:f'{x:,.4g}'))
+PY"

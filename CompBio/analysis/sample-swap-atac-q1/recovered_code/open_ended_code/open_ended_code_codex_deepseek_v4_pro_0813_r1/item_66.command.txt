@@ -1,0 +1,49 @@
+/bin/bash -lc "cat > specificity_score.py <<'PY'
+import numpy as np
+D=np.load('matrix_data.npz',allow_pickle=True)
+X=D['X']; ref=D['ref']; names=list(D['names'])
+# Normalize columns to total
+Xn=X/X.sum(axis=0,keepdims=True)
+global_mean=Xn.sum(axis=0)/X.shape[0]
+# Add pseudocount, log transform? use ref scores as weights
+# For each tissue, specificity ratio vs max of others
+R=ref.copy()
+R=R/R.sum(axis=0,keepdims=True)  # normalize each tissue profile
+for method in ['ratio_top','ratio_all_weighted','rank_top']:
+    print('\\nMETHOD',method)
+    scores=np.zeros((len(names),len(names)))
+    for t in range(len(names)):
+        # other max normalized
+        other=np.delete(R,t,axis=1)
+        max_other=other.max(axis=1)
+        ratio=(R[:,t]+1e-8)/(max_other+1e-8)
+        if method=='ratio_top':
+            # top 20000 bins by ratio where R_t positive and ratio high
+            candidates=np.where(R[:,t]>0)[0]
+            if len(candidates)>20000:
+                idx=candidates[np.argsort(ratio[candidates])[::-1][:20000]]
+            else:
+                idx=candidates
+        elif method=='ratio_all_weighted':
+            # all bins weighted by ratio"'^2*R_t, but this still maybe specific
+            idx=np.where(R[:,t]>0)[0]
+        elif method=='"'rank_top':
+            # top 50000 by R_t score
+            candidates=np.where(R[:,t]>0)[0]
+            idx=candidates[np.argsort(R[candidates,t])[::-1][:50000]]
+        if len(idx)==0: continue
+        if method=='ratio_all_weighted':
+            w=(ratio[idx]**2)*R[idx,t]
+            vals=(Xn[idx].T@w)/(w.sum()+1e-12)
+        else:
+            vals=Xn[idx].mean(axis=0)
+        scores[:,t]=vals/global_mean
+    print('sample\\t'+'\\t'.join(names))
+    for i,s in enumerate(names):
+        print(s+'\\t'+'\\t'.join(f'{scores[i,j]:.3f}' for j in range(len(names))))
+    print('Argmax per sample')
+    for i,s in enumerate(names):
+        order=np.argsort(scores[i])[::-1]
+        print(f'{s:12s} best {names[order[0]]:12s} {scores[i,order[0]]:.2f} 2nd {names[order[1]]:12s} {scores[i,order[1]]:.2f}')
+PY
+python3 specificity_score.py"

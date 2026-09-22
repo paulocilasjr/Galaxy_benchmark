@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import math, statistics
+rows=[]
+for line in open('bwa_cov100k.tsv'):
+ c,s,e,v=line.strip().split('\\t'); s=int(s); e=int(e); v=float(v)
+ rows.append((s,e,v))
+vals=[v for s,e,v in rows]
+# binary segmentation on log2 ratios; segment means using t-test
+import numpy as np
+x=np.array(vals,dtype=float)
+pos=np.arange(len(x))
+med=np.median(x)
+y=np.log2(x/med)
+# Find best split in range
+def best_split(a,b):
+ best=(None,-1)
+ if b-a<2:return None
+ # only split between positions; compute cumulative sums
+ seg=y[a:b]
+ cum=np.cumsum(seg)
+ total=cum[-1]; n=len(seg)
+ sumsq=np.cumsum(seg*seg); totalsq=sumsq[-1]
+ for i in range(1,n):
+  n1=i; n2=n-i
+  s1=cum[i-1]; s2=total-s1
+  mean1=s1/n1; mean2=s2/n2
+  ss1=sumsq[i-1]-n1*mean1*mean1
+  ss2=totalsq-sumsq[i-1]-n2*mean2*mean2
+  # Welch? ignore var, use squared diff normalized
+  if n1<2 or n2<2: continue
+  var=(ss1+ss2)/(n-2)
+  if var<=0: continue
+  t=abs(mean1-mean2)/math.sqrt(var*(1/n1+1/n2))
+  if t>best[0]: best=(t,a+i)
+ return best
+
+def rec(a,b,depth=0):
+ if depth>8 or b-a<2:return []
+ bp=best_split(a,b)
+ if bp is None or bp[0]<8:return []
+ split=bp[1]
+ return rec(a,split,depth+1)+[(a,split,b)]+rec(split,b,depth+1)
+
+# Instead iterative top splits
+segments=[(0,len(x))]
+for k in range(10):
+ best=None
+ for a,b in segments:
+  bp=best_split(a,b)
+  if bp and (best is None or bp[0]>best[0]): best=(bp[0],a,b,bp[1])
+ if not best or best[0]<5: break
+ t,a,b,split=best
+ print('split',t,'at',pos[split]+1,'idx',split,'segments',a,split,b,'means',np.mean(x[a:split]),np.mean(x[split:b]),'ratio',np.mean(x[a:split])/np.mean(x[split:b]) if np.mean(x[split:b])>0 else None)
+ segments.remove((a,b)); segments.append((a,split)); segments.append((split,b))
+segments.sort()
+for a,b in segments:
+ print('segment',pos[a]+1,pos[b-1]+1,'n',b-a,'mean',np.mean(x[a:b]),'median',np.median(x[a:b]),'ratio to med',np.mean(x[a:b])/med)
+PY"

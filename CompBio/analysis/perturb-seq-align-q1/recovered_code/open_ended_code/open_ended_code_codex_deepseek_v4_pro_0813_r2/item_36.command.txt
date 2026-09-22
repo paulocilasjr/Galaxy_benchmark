@@ -1,0 +1,74 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import spearmanr
+from scipy.optimize import linear_sum_assignment
+warnings.filterwarnings('ignore')
+
+def load_common():
+ files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+ for fn in files:
+  with h5py.File(fn,'r') as f:
+   n_obs,n_var=f['X'].attrs['shape']
+   X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+   gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+   gc=f['obs/guide/codes'][:]
+   g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+   out.append((X,g,var))
+ (X1,g1,v1),(X2,g2,v2)=out
+ common=[x for x in v1 if x in set(v2)]
+ X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr(); X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+ return X1,g1,X2,g2,common
+X1,g1,X2,g2,var=load_common()
+def norm(X):
+ X=X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4); return X.tocsr()
+X1=norm(X1); X2=norm(X2)
+# filter genes where NT sd enough
+nt1=np.char.startswith(g1.astype(str),'NT-'); nt2=np.char.startswith(g2.astype(str),'NT-')
+m1=np.asarray(X1[nt1].mean(0)).ravel(); s1=np.asarray(X1[nt1].std(0)).ravel()
+m2=np.asarray(X2[nt2].mean(0)).ravel(); s2=np.asarray(X2[nt2].std(0)).ravel()
+keep=(s1>0)&(s2>0)
+X1=X1[:,keep]; X2=X2[:,keep]; m1=m1[keep];m2=m2[keep];s1=s1[keep];s2=s2[keep]; var=[g for g,k in zip(var,keep) if k]
+# zscore relative to NT per dataset
+X1z=X1.copy(); X2z=X2.copy()
+# apply per gene affine
+X1z=X1z.multiply(1.0/s1[None,:]).tocsr()
+# subtract mean: use csr; can use array broadcasting? avoid dense. subtract via data? Use dense? 4k x 11k ~ 45m floats okay 360MB. Let's do dense for simplicity maybe ok.
+X1z=X1z.toarray()-m1[None,:]/s1[None,:]
+X2z=X2z.toarray()-m2[None,:]/s2[None,:]
+# Actually X1z data = X/s; mean should subtract m1/s1. ok
+print('dense shape',X1z.shape)
+
+def prep(X,g):
+ nt=np.char.startswith(g.astype(str),'NT-'); cats=[gg for gg in sorted(set(g)) if not gg.startswith('NT-')]
+ M=[]
+ for gg in cats:
+  M.append(X[g==gg].mean(axis=0))
+ return cats,np.array(M)
+rc,rM=prep(X1z,g1); qc,qM=prep(X2z,g2)
+def target(g): return re.sub(r'-I\\d+"'$'"','',g)
+rt=[target(g) for g in rc]
+# variances across all
+stack=np.vstack([rM,qM]); gvar=np.var(stack,axis=0)
+def hung(S):
+ nrow,ncol=S.shape; C=np.zeros((ncol,ncol)); C[:nrow,:]=-S
+ row,col=linear_sum_assignment(C); mask=row<nrow; return row[mask],col[mask]
+def report(name,row,col):
+ mp={qc[i]:rc[j] for i,j in zip(row,col)}
+ print('\\n'+name)
+ for t in ['PABPC1','NUDT21','LEO1']:
+  print(t,[q for q,r in mp.items() if target(r)==t])
+ assigned=set(col); print('unassigned',[rc[j] for j in range(len(rc)) if j not in assigned])
+ print('mapping',' '.join(f'{q}->{target(mp[q])}' for q in sorted(qc,key=lambda s:int(s[5:]))))
+for idxname,idx in [('all',None),('var500',np.argsort(gvar)[::-1][:500]),('var1000',np.argsort(gvar)[::-1][:1000]),('var2000',np.argsort(gvar)[::-1][:2000]),('var5000',np.argsort(gvar)[::-1][:5000])]:
+ A=rM; B=qM
+ if idx is not None: A=A[:,idx];B=B[:,idx]
+ Sp=np.corrcoef(B,A)[:len(qc),len(qc):]; row,col=hung(Sp); report('pearson-'+idxname,row,col)
+ Ss=np.zeros((len(qc),len(rc)))
+ for i in range(len(qc)):
+  for j in range(len(rc)): Ss[i,j]=spearmanr(B[i],A[j]).correlation
+ row,col=hung(Ss); report('spearman-'+idxname,row,col)
+ Bn=B/(np.linalg.norm(B,axis=1,keepdims=True)+1e-9); An=A/(np.linalg.norm(A,axis=1,keepdims=True)+1e-9)
+ Sc=Bn@An.T; row,col=hung(Sc); report('cosine-'+idxname,row,col)
+PY
+python [REDACTED LOCAL PATH]"

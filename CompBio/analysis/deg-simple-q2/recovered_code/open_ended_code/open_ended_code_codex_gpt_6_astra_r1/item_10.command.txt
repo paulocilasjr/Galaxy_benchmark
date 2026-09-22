@@ -1,0 +1,27 @@
+/bin/bash -lc "cat > scripts/compare.py <<'PY'
+import pandas as pd
+import numpy as np
+from scipy.stats import chi2_contingency
+A=pd.read_csv('results/A/abundance.tsv',sep='\\t').set_index('target_id')
+B=pd.read_csv('results/B/abundance.tsv',sep='\\t').set_index('target_id')
+x=pd.DataFrame({'A':A.est_counts,'B':B.est_counts,'tpmA':A.tpm,'tpmB':B.tpm,'length':A.length})
+x['gene']=x.index.str.split('|').str[5]
+x['tx']=x.index.str.split('|').str[0]
+x['log2FC']=np.log2((x.B+1)/(x.A+1))
+x['difference']=x.B-x.A
+x.to_csv('results/transcripts.tsv',sep='\\t')
+rows=[]
+for gene,g in x.groupby('gene'):
+ a=g.A.sum();b=g.B.sum(); z=g.loc[(g.A+g.B)>=10,['A','B']]
+ p=1;chi=0
+ if len(z)>1 and z.A.sum()>0 and z.B.sum()>0:
+  chi,p,_,_=chi2_contingency(z.to_numpy().T,correction=False)
+ tv=(abs(g.A/max(a,1)-g.B/max(b,1))).sum()/2
+ rows.append([gene,a,b,len(z),chi,p,tv,g.difference.abs().max()])
+r=pd.DataFrame(rows,columns=['gene','A','B','n_tx','chi2','p','TV','max_count_difference']).sort_values('chi2',ascending=False)
+r.to_csv('results/genes.tsv',sep='\\t',index=False)
+print('GENE ISOFORM COMPOSITION')
+print(r.head(25).to_string(index=False))
+print('\\nLARGEST TRANSCRIPT COUNT DIFFERENCES')
+print(x.loc[x.difference.abs().sort_values(ascending=False).head(35).index,['gene','tx','A','B','log2FC']].to_string(index=False))
+PY"

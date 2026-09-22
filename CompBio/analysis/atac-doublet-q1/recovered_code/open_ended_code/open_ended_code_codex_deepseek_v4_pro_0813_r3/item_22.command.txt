@@ -1,0 +1,39 @@
+/bin/bash -c "cat > snap_doublets.py <<'PY'
+import snapatac2 as snap, numpy as np, time
+
+frags='atac.doublet.q1.bed.gz'
+t=time.time()
+adata = snap.pp.import_fragments(
+    frags,
+    chrom_sizes=snap.genome.GRCh38.chrom_sizes,
+    is_paired=True,
+    min_num_fragments=0,
+    sorted_by_barcode=False,
+    file='atac.snap.h5ad',
+)
+print('import done', adata, adata.shape, 'time', time.time()-t, flush=True)
+print(adata.obs.head())
+print(adata.var.keys() if hasattr(adata,'var') else 'no var')
+# add tile matrix
+snap.pp.add_tile_matrix(adata, bin_size=500, counting_strategy='fragment', inplace=True)
+print('tile done', adata.shape, adata.X.nnz if hasattr(adata.X,'nnz') else 'dense', flush=True)
+# select features
+snap.pp.select_features(adata, n_features=50000, filter_lower_quantile=0.005, filter_upper_quantile=0.005)
+print('select done', flush=True)
+# scrublet
+snap.pp.scrublet(adata, expected_doublet_rate=0.06, sim_doublet_ratio=2, n_comps=15, random_state=0)
+print('scrub done', flush=True)
+print(adata.obs.columns)
+# filter doublets returns mask
+mask=snap.pp.filter_doublets(adata, probability_threshold=0.5, inplace=True)
+print('filter returned', mask.sum() if mask is not None else None)
+# scores
+obs=adata.obs
+print(obs[['doublet_probability','doublet_score','doublet']].head() if 'doublet_probability' in obs else obs.columns)
+idx=obs['doublet_probability'].values.argsort()[::-1] if 'doublet_probability' in obs else obs['doublet_score'].values.argsort()[::-1]
+for i in idx[:30]:
+    print(adata.obs_names[i], obs['doublet_probability'].values[i] if 'doublet_probability' in obs else '', obs['doublet_score'].values[i] if 'doublet_score' in obs else '', obs['doublet'].values[i] if 'doublet' in obs else '')
+obs.to_csv('snap_obs.csv')
+print('saved snap_obs.csv')
+PY
+python3 snap_doublets.py"

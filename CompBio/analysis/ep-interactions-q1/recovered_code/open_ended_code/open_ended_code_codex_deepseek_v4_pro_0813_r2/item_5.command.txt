@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+import statsmodels.api as sm
+# statsmodels may exist
+hic=pd.read_csv('ep.interactions.q1.hic.csv')
+expr=pd.read_csv('ep.interactions.q1.expr.csv')
+bg=hic[hic.set=='background'].copy()
+bg['mean_count']=bg[['count_rep1','count_rep2','count_rep3']].mean(axis=1)
+cand=hic[hic.set=='candidate'].copy()
+cand['mean_count']=cand[['count_rep1','count_rep2','count_rep3']].mean(axis=1)
+# Fit negative binomial? try GLM poisson with log distance
+X=sm.add_constant(np.log(bg['distance_bp']))
+pois=sm.GLM(bg['mean_count'], X, family=sm.families.Poisson()).fit()
+print(pois.summary())
+# predicted candidate means
+Xc=sm.add_constant(np.log(cand['distance_bp']))
+pred=pois.predict(Xc)
+print('candidate mean,pred,ratio,pois p')
+for _,r in cand.iterrows():
+    mu=pois.predict(sm.add_constant(np.log(r.distance_bp), has_constant='add'))[0] if False else None
+# do vectorized
+cand['pred']=pois.predict(Xc)
+cand['ratio']=cand['mean_count']/cand['pred']
+print(cand[['pair_id','distance_bp','mean_count','pred','ratio']])
+# Poisson p-value upper tail using total counts maybe sum reps with exposure? We'll compute using counts total vs predicted*3
+for _,r in cand.iterrows():
+    total=sum([r.count_rep1,r.count_rep2,r.count_rep3])
+    mu=r['pred']*3
+    p=stats.poisson.sf(total-1, mu) # P>=total
+    print(r.pair_id,'total',total,'mu',mu,'p_upper',p)
+# Expr p two-sided per pair
+print('\\nExpr p two-sided')
+for p,g in expr.groupby('pair_id'):
+    c=g[g.condition=='control'].rna_count; t=g[g.condition=='perturbed'].rna_count
+    pv=stats.ttest_ind(c,t,equal_var=False).pvalue
+    print(p,pv)
+PY"

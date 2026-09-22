@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd, time
+from scipy.io import mmread
+from scipy import sparse
+
+def load(p):
+ with gzip.open(p,'rt') as f: return mmread(f).tocsr()
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:
+ next(f); genes=[x.rstrip('\\n').split('\\t')[1] for x in f]
+print('loading',flush=True); a=load('subtype.inflammation.q1.1.mtx.gz'); b=load('subtype.inflammation.q1.2.mtx.gz')
+for label,x in [('eye1',a),('eye2',b)]:
+ totals=np.asarray(x.sum(axis=0)).ravel(); detected=np.asarray((x>0).sum(axis=0)).ravel()
+ print(label,x.shape,'nnz',x.nnz,'counts',np.percentile(totals,[0,1,10,25,50,75,90,99,100]),'genes',np.percentile(detected,[0,1,10,25,50,75,90,99,100]),'mean',totals.mean())
+# pseudo-bulk library-normalized expression; log fold and Welch-ish positive
+for label,x in [('eye1',a),('eye2',b)]:
+ lib=np.asarray(x.sum(axis=0)).ravel()
+ norm=x.multiply(1e6/lib).mean(axis=1).A.ravel()
+ det=np.asarray((x>0).sum(axis=1)).ravel()/x.shape[1]
+ # store
+ if label=='eye1': m1,d1=norm,det
+ else: m2,d2=norm,det
+# top fold differences with min expression / detection
+lfc=np.log2((m2+0.01)/(m1+0.01))
+# output by lfc but avoid low values requiring positive support
+for title, idx in [('higher eye2',np.argsort(-lfc)),('higher eye1',np.argsort(lfc))]:
+ print('\\n',title)
+ n=0
+ for i in idx:
+  if (max(m1[i],m2[i])>1 or max(d1[i],d2[i])>.01) and abs(lfc[i])>0.5:
+   print(genes[i], 'mean',round(m1[i],2),round(m2[i],2),'det',round(d1[i],3),round(d2[i],3),'lfc',round(lfc[i],2))
+   n+=1
+   if n>=40: break
+# marker genes expression
+markers=['AIF1','TYROBP','TMEM119','P2RY12','CX3CR1','C1QA','C1QB','C1QC','APOE','TREM2','HLA-DRA','HLA-DPA1','HLA-DPB1','CD74','CTSS','IL1B','TNF','CCL2','CCL3','CCL4','NFKBIA','JUN','FOS','S100A8','S100A9','FCGR3A','LYZ','MS4A1','CD3D','CD3E','TRBC1','MKI67','GFAP','AQP4','SLC1A3','VIM','RPE65','BEST1','RHO','GNAT1','ARR3','OPN1SW','OPN1LW','VSX2','NEFL','RBPMS','THY1','POU4F2','KCNJ8','CSPG4','PDGFRB','COL1A1','COL1A2','DCN','KDR','ESM1','PECAM1','VWF','CLDN5','MPZ','S100B','SOX10','MAL','MBP','CD68','FCER1G','LST1','IRF8','CST3']
+pos={g:i for i,g in enumerate(genes)}
+print('\\nmarkers')
+for g in markers:
+ if g in pos:
+  i=pos[g]; print(g, f'e1 {m1[i]:.2f}/{d1[i]:.3f}',f'e2 {m2[i]:.2f}/{d2[i]:.3f}',f'lfc {lfc[i]:.2f}')
+PY"

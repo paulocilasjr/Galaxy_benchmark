@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, urllib.request, re, concurrent.futures
+path='summary_statistics_table_export.tsv'
+urls=[]
+with open(path, encoding='utf-8', newline='') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        if row.get('pubmedId')=='40593539':
+            u=row['summaryStatistics']
+            if u and u not in urls: urls.append(u)
+print('rows',len(urls))
+target=151441444
+
+def list_dir(u):
+    try:
+        req=urllib.request.Request(u, headers={'User-Agent':'curl/8'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html=resp.read().decode('utf-8','replace')
+        matches=[]
+        for m in re.finditer(r'href=\"(["'^"]+)"[''^>]*>(?:[''^<]*)</a></td><td[''^>]*>(?:&nbsp;|[''^<]*)</td><td align="right">'"\\s*([0-9]+)\\s*</td>', html):
+            name=m.group(1); size=int(m.group(2)); matches.append((name,size))
+        return (u,matches,None)
+    except Exception as e:
+        return (u,[],str(e))
+
+found=[]; errors=0; candidates=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+    futs=[ex.submit(list_dir,u) for u in urls]
+    for fut in concurrent.futures.as_completed(futs):
+        u,matches,err=fut.result()
+        if err:
+            errors+=1; continue
+        for name,size in matches:
+            if size==target:
+                found.append((u,name,size)); print('FOUND',u,name,size,flush=True)
+            elif abs(size-target)<20000000:
+                candidates.append((u,name,size))
+print('found',found)
+print('errors',errors,'near candidates',len(candidates))
+for c in sorted(candidates,key=lambda x:abs(x[2]-target))[:30]: print(c)
+PY"

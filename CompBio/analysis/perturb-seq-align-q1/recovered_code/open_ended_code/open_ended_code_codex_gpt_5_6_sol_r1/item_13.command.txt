@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csc_matrix
+from scipy.stats import rankdata
+
+def ld(f):
+ with h5py.File(f) as h:
+  X=csc_matrix((h['X/data'][:].astype('float64'),h['X/indices'][:],h['X/indptr'][:]),shape=tuple(h['X'].attrs['shape'])).tocsr(); g=np.array([x.decode() for x in h['var/_index'][:]]); c=np.array([x.decode() for x in h['obs/guide/categories'][:]]); z=h['obs/guide/codes'][:]
+ # pseudobulk CPM
+ sums=np.vstack([np.asarray(X[z==i].sum(0)).ravel() for i in range(len(c))]); pc=np.log1p(sums/sums.sum(1,keepdims=True)*1e6)
+ # mean lognorm
+ sf=1e4/np.asarray(X.sum(1)).ravel(); X.data*=np.repeat(sf,np.diff(X.indptr)); np.log1p(X.data,out=X.data); m=np.vstack([np.asarray(X[z==i].mean(0)).ravel() for i in range(len(c))])
+ return g,c,z,m,pc
+rg,rc,rz,rm,rp=ld('perturb.seq.align.q1.ref.h5ad'); qg,qc,qz,qm,qp=ld('perturb.seq.align.q1.query.h5ad'); cm=np.intersect1d(rg,qg); ri=np.array([np.where(rg==x)[0][0] for x in cm]); qi=np.array([np.where(qg==x)[0][0] for x in cm]); rn=np.char.startswith(rc,'NT');qn=np.char.startswith(qc,'NT');rr=rc[~rn];qq=qc[~qn]
+variants={
+ 'mean':(rm[~rn][:,ri]-rm[rn][:,ri].mean(0),qm[~qn][:,qi]-qm[qn][:,qi].mean(0)),
+ 'pbulk':(rp[~rn][:,ri]-rp[rn][:,ri].mean(0),qp[~qn][:,qi]-qp[qn][:,qi].mean(0)),
+}
+mask=~np.char.startswith(cm,'MT-')
+paft=['CDC73-I2','CTR9-I7','LEO1-I2','PAF1-I6']
+qshow=['guide14','guide28','guide30','guide12','guide10','guide17','guide20','guide16','guide5']
+def corr(a,b):
+ a=a-a.mean(); b=b-b.mean(); return a@b/np.sqrt(a@a*(b@b))
+for v,(R,Q) in variants.items():
+ print('\\n###',v)
+ for k in [25,50,100,200,500,1000,3000,mask.sum()]:
+  print('k=',k)
+  for t in paft:
+   i=np.where(rr==t)[0][0]; pool=np.where(mask)[0]; sel=pool[np.argsort(np.abs(R[i,pool]))[-min(k,len(pool)):]]
+   scores=[corr(R[i,sel],Q[j,sel]) for j in range(len(qq))]; o=np.argsort(scores)[::-1][:6]
+   print(t, ' '.join(f'{qq[j]}:{scores[j]:.2f}' for j in o))
+PY"

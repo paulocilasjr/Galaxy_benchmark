@@ -1,0 +1,93 @@
+/bin/bash -lc "cat > detect_shift.py <<'PY'
+import gzip, sys
+import numpy as np
+from pyfaidx import Fasta
+
+def parse_motifs(path):
+    pwms={'+':{},'-':{}}
+    cur=None; name=None
+    with open(path) as f:
+        for line in f:
+            line=line.rstrip('\\n')
+            if not line: continue
+            if line.startswith('>'):
+                if cur is not None:
+                    pwms[orient][name]=np.array(cur)
+                if line.endswith('_plus'): orient='+'
+                elif line.endswith('_minus'): orient='-'
+                else: raise ValueError(line)
+                name=line[1:]; cur=[]
+            else:
+                cur.append([float(x) for x in line.split('\\t')])
+        pwms[orient][name]=np.array(cur)
+    return pwms['+'], pwms['-']
+
+def onehot(seqs):
+    arr=np.zeros((len(seqs),len(seqs[0]),4),dtype=np.float32)
+    mp={'A':0,'C':1,'G':2,'T':3}
+    for i,s in enumerate(seqs):
+        for j,c in enumerate(s.upper()):
+            if c in mp: arr[i,j,mp[c]]=1
+    return arr
+
+def norm(pwm):
+    return pwm/np.sum(pwm,axis=-1,keepdims=True)
+
+def ic_scale(pwm):
+    p=norm(pwm)
+    bg=np.array([.25]*4)
+    return p*np.log2((p+1e-9)/(bg+1e-9))
+
+def convolve(to_scan, longer_seq):
+    vals=[]
+    L=len(longer_seq)-len(to_scan)+1
+    for i in range(L):
+        vals.append(np.sum(to_scan*longer_seq[i:i+len(to_scan)]))
+    return np.array(vals)
+
+def main():
+    frag=sys.argv[1]; fasta=sys.argv[2]; motif=sys.argv[3]
+    plus=[]; minus=[]
+    with gzip.open(frag,'rt') as f:
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            chrom=p[0]; start=int(p[1]); end=int(p[2])
+            if chrom"'!='"'chr1': continue
+            plus.append((chrom,start))
+            minus.append((chrom,end))
+    print('counts',len(plus),len(minus), flush=True)
+    seq_plus=[]; seq_minus=[]
+    g=Fasta(fasta)
+    for chrom,pos in plus:
+        s=str(g[chrom][pos-20:pos+20])
+        if len(s)==40 and 'N' not in s.upper(): # chromBPNet doesn't filter N but okay
+            seq_plus.append(s)
+    for chrom,pos in minus:
+        s=str(g[chrom][pos-20:pos+20])
+        if len(s)==40 and 'N' not in s.upper():
+            seq_minus.append(s)
+    print('seq counts',len(seq_plus),len(seq_minus), flush=True)
+    plus_pwm=onehot(seq_plus).mean(0)
+    minus_pwm=onehot(seq_minus).mean(0)
+    plus_pwm=norm(plus_pwm); minus_pwm=norm(minus_pwm)
+    refp,refm=parse_motifs(motif)
+    print('motif lens plus', {k:len(v) for k,v in refp.items()}, 'minus',{k:len(v) for k,v in refm.items()})
+    for scale,name in [(lambda x:x,'raw'),(ic_scale,'ic')]:
+        print('scale',name)
+        sp=[]; sm=[]
+        for k,ref in refp.items():
+            conv=convolve(scale(ref), scale(plus_pwm))
+            shift=14-int(np.argmax(conv))
+            sp.append((shift,float(np.max(conv)),k))
+            print(' plus',k,'shifts',shift,'argmax',int(np.argmax(conv)),'max',float(np.max(conv)))
+        for k,ref in refm.items():
+            conv=convolve(scale(ref), scale(minus_pwm))
+            shift=5-int(np.argmax(conv))
+            sm.append((shift,float(np.max(conv)),k))
+            print(' minus',k,'shift',shift,'argmax',int(np.argmax(conv)),'max',float(np.max(conv)))
+        print('summary plus shifts',[(x[0],x[2],round(x[1],5)) for x in sp])
+        print('summary minus shifts',[(x[0],x[2],round(x[1],5)) for x in sm])
+
+if __name__=='__main__': main()
+PY
+python3 detect_shift.py unknown.shift.frag.bed.gz chr1.fa ATAC.ref.motifs.txt"

@@ -1,0 +1,34 @@
+/bin/bash -lc "cat > scan_dinuc_motifs.py <<'PY'
+import os,glob,time,random
+from collections import Counter,defaultdict
+from Bio import SeqIO
+import MOODS.parsers,MOODS.tools,MOODS.scan
+random.seed(123)
+pfiles=sorted(glob.glob('motif_pfms/*.pfm')); bg=MOODS.tools.flat_bg(4); pseudocount=1.0; p=1e-4
+models=[]; mats=[]; ths=[]
+for pf in pfiles:
+ name=os.path.basename(pf)[:-4]; lo=MOODS.parsers.pfm_to_log_odds(pf,bg,pseudocount); rc=MOODS.tools.reverse_complement(lo); th=MOODS.tools.threshold_from_p(lo,bg,p)
+ models.append(name); mats += [lo,rc]; ths += [th,th]
+def dinuc_shuffle(seq):
+ if len(seq)<=1: return seq
+ first=seq[0]; edges=Counter(zip(seq,seq[1:])); out=defaultdict(list)
+ for (a,b),cnt in edges.items(): out[a].extend([b]*cnt)
+ for lst in out.values(): random.shuffle(lst)
+ stack=[first]; path=[]
+ while stack:
+  v=stack[-1]
+  if out[v]: stack.append(out[v].pop())
+  else: path.append(stack.pop())
+ path.reverse(); return ''.join(path)
+for s in ['cond1','common','cond2']:
+ out=open(f'macs/bdgdiff/{s}.dinuc_motif_scan.tsv','w'); out.write('set\\tlength\\t'+'\\t'.join(f'{m}_dinuc' for m in models)+'\\n')
+ t0=time.time()
+ for i,rec in enumerate(SeqIO.parse(f'macs/bdgdiff/{s}.fa','fasta')):
+  seq=str(rec.seq).upper(); sh=dinuc_shuffle(seq)
+  res=MOODS.scan.scan_dna(sh,mats,bg,ths,1)
+  vals=[len(res[2*j])+len(res[2*j+1]) for j in range(len(models))]
+  out.write(s+'\\t'+str(len(seq))+'\\t'+'\\t'.join(str(v) for v in vals)+'\\n')
+  if (i+1)%10000==0: print(s,i+1,'elapsed',round(time.time()-t0,1),flush=True)
+ out.close(); print(s,'done',round(time.time()-t0,1))
+PY
+python3 scan_dinuc_motifs.py"

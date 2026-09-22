@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, collections, numpy as np, time
+chroms={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+S=collections.defaultdict(list); E=collections.defaultdict(list)
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+ for l in f:
+  a=l.split('\\t')
+  if a[0] in chroms: S[a[0]].append(int(a[1])); E[a[0]].append(int(a[2]))
+for c in S:
+ S[c]=np.sort(np.array(S[c],dtype=np.int64)); E[c]=np.sort(np.array(E[c],dtype=np.int64))
+T=collections.defaultdict(set)
+with gzip.open('ncbiRefSeq.txt.gz','rt') as f:
+ for l in f:
+  a=l.rstrip('\\n').split('\\t')
+  if len(a)>=6 and a[2] in chroms:
+   T[a[2]].add(int(a[4]) if a[3]=='+' else int(a[5]))
+T={c:np.array(sorted(v),dtype=np.int64) for c,v in T.items()}
+shifts=range(-12,13); win=100
+print('loaded endpoints',sum(map(len,S.values())),sum(map(len,E.values())),'tss',sum(map(len,T.values())))
+def calc(D):
+ H={sh:np.zeros(2*win+1,dtype=np.int64) for sh in shifts}
+ local_n=0
+ for c, ts in T.items():
+  arr=D.get(c)
+  if arr is None: continue
+  for p in ts:
+   lo=np.searchsorted(arr,p-win-12,side='left'); hi=np.searchsorted(arr,p+win+12,side='right')
+   v=arr[lo:hi]-p
+   local_n+=len(v)
+   for sh in shifts:
+    q=v+sh
+    q=q[(q>=-win)&(q<=win)]
+    if len(q): H[sh]+=np.bincount(q+win,minlength=2*win+1)
+ print('local pairs',local_n)
+ return H
+for label,D in [('start',S),('end',E)]:
+ t0=time.time(); H=calc(D); print(label,'secs',time.time()-t0)
+ out=[]
+ for sh,h in H.items():
+  # scores use peak in central +/- 20 and central +/-5, normalized by total/window
+  out.append((int(h[win-10:win+11].sum()),int(h[win-2:win+3].sum()),int(h[win]),int(h.max()),int(h.argmax()-win),sh,int(h.sum())))
+ print('by central +-10',sorted(out,reverse=True)[:12])
+ print('profiles candidates')
+ for row in sorted(out,key=lambda z:z[-2]): print(row)
+PY"

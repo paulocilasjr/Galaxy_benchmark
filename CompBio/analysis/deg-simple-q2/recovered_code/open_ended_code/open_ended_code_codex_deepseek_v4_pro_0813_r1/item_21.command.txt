@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, csv, re, os, collections
+# parse fasta headers once into dict
+hdr={}
+with gzip.open('ref/Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as f:
+    for line in f:
+        if line.startswith('>'):
+            m=re.match(r'>(\\S+)', line)
+            tid=m.group(1)
+            gs=re.search(r'gene_symbol:(\\S+)', line)
+            gene=re.search(r'gene:(\\S+)', line)
+            hdr[tid]=(gs.group(1) if gs else '', gene.group(1) if gene else '')
+quants={}
+for s in ['sampleA','sampleB']:
+    with open(f'quant/{s}/quant.sf') as f:
+        r=csv.DictReader(f, delimiter='\\t')
+        quants[s]={row['Name']:(float(row['TPM']),float(row['NumReads']),float(row['EffectiveLength'])) for row in r}
+# only transcripts with >0 reads in either
+tids=set(hdr)&(set(quants['sampleA'])|set(quants['sampleB']))
+data=[]
+for t in tids:
+    a=quants['sampleA'].get(t,(0,0,0)); b=quants['sampleB'].get(t,(0,0,0))
+    if a[1]+b[1]>0:
+        data.append((t,hdr[t][0],hdr[t][1],a[1],b[1],a[0],b[0],a[2],b[2]))
+print('n nonzero transcripts',len(data))
+data.sort(key=lambda x:-(x[3]+x[4]))
+for row in data[:30]:
+    print(row)
+# aggregate gene reads/tpm
+gene_counts=collections.defaultdict(lambda:[0.0,0.0,0.0,0.0])
+for t,gs,gene,a,b,at,bm,al,bl in data:
+    gene_counts[(gs,gene)][0]+=a; gene_counts[(gs,gene)][1]+=b; gene_counts[(gs,gene)][2]+=at; gene_counts[(gs,gene)][3]+=bm
+print('n genes nonzero',len(gene_counts))
+# top genes by total reads
+for (gs,g),v in sorted(gene_counts.items(), key=lambda x:-(x[1][0]+x[1][1]))[:30]:
+    print(gs,g,v)
+PY"

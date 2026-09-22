@@ -1,0 +1,24 @@
+/bin/bash -lc "PYTHONPATH='deps/mamba_ssm-2.2.2:.' python - <<'PY'
+import json, torch
+import torch.nn.functional as F
+from model.configuration_caduceus import CaduceusConfig
+from model.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.modules.mamba_simple as ms
+import mamba_ssm.ops.selective_scan_interface as ssi
+from run_mask_entropy import selective_scan_cpu_fast
+s=json.load(open('interval_ucsc.json'))['dna'].upper(); mp={'A':7,'C':8,'G':9,'T':10}
+x=torch.tensor([[mp[c] for c in s] for _ in range(2)],dtype=torch.long)
+for row,pos in enumerate([194,221]):x[row,pos]=3
+config=CaduceusConfig.from_pretrained('model');config.fused_add_norm=False
+m=CaduceusForMaskedLM.from_pretrained('model',config=config,local_files_only=True).eval()
+with torch.inference_mode():
+ ms.selective_scan_fn=selective_scan_cpu_fast
+ fast=m(x,return_dict=True).logits
+ ms.selective_scan_fn=ssi.selective_scan_ref
+ ref=m(x,return_dict=True).logits
+for row,pos in enumerate([194,221]):
+ d=(fast[row,pos]-ref[row,pos]).abs()
+ bp=F.softmax(fast[row,pos,[7,8,9,10]],dim=-1); rp=F.softmax(ref[row,pos,[7,8,9,10]],dim=-1)
+ bh=-(bp*torch.log2(bp)).sum(); rh=-(rp*torch.log2(rp)).sum()
+ print(pos,'max_logit_diff',float(d.max()),'mean',float(d.mean()),'Hfast',float(bh),'Href',float(rh),'pred', 'ACGT'[int(bp.argmax())])
+PY"

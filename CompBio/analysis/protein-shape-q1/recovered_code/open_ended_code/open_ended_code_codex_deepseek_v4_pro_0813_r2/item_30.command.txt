@@ -1,0 +1,18 @@
+/bin/bash -lc "python3 - <<'PY'
+# quick use functions from previous? recreate compact
+import numpy as np,cv2
+from PIL import Image,ImageDraw,ImageFont
+from scipy.ndimage import gaussian_filter,binary_closing
+coords=np.array([list(map(float,[l[30:38],l[38:46],l[46:54]])) for l in open('protein.shape.q1.pdb') if l.startswith('ATOM')])
+N=128; letters='BDFHJLNPRTVXZ'; fp='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+def temp(ch):
+ im=Image.new('L',(N,N),0); d=ImageDraw.Draw(im); fs=100; f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; scale=.82*N/max(w,h); fs=int(fs*scale); f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; d.text(((N-w)/2-bb[0],(N-h)/2-bb[1]),ch,font=f,fill=255); a=(np.array(im)>40).astype(np.uint8)*255; c,_=cv2.findContours(a,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE); return max(c,key=cv2.contourArea)
+temps={ch:temp(ch) for ch in letters}
+def proj(n):
+ n=np.asarray(n,float); n/=np.linalg.norm(n); a=np.array([0.,0.,1.]) if abs(n[2])<.9 else np.array([1.,0.,0.]); u=np.cross(n,a); u/=np.linalg.norm(u); v=np.cross(n,u); v/=np.linalg.norm(v); p=coords-coords.mean(0); x=p@u;y=p@v; margin=8; span=max(x.max()-x.min(),y.max()-y.min()); scale=(N-2*margin)/span; xi=((x-x.min())*scale+margin).astype(int); yi=((y-y.min())*scale+margin).astype(int); im=np.zeros((N,N),np.float32)
+ for xx,yy in zip(xi,yi):
+  if 0<=xx<N and 0<=yy<N: im[yy,xx]=1
+ im=gaussian_filter(im,1.5); im=im>.03; im=binary_closing(im,iterations=5); c,_=cv2.findContours((im.astype(np.uint8)*255),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE); return max(c,key=cv2.contourArea)
+for n in ([0.151,-0.919,-0.365],[-0.377,0.872,0.312],[0.891,-0.42,-0.172],[-0.845,0.535,-0.002]):
+ cnt=proj(n); ds=sorted((cv2.matchShapes(cnt,temps[ch],cv2.CONTOURS_MATCH_I2,0),ch) for ch in letters); print('n',n); print([(ch,round(d,3)) for d,ch in ds])
+PY"

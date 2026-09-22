@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd,numpy as np
+from scipy.stats import spearmanr
+atac=pd.read_csv('atac_gene_promoter_counts.tsv',sep='\\t'); rna=pd.read_csv('bulk_rna_counts_clean.tsv',sep='\\t')
+atac_agg=atac.groupby('symbol').sum(numeric_only=True)
+common=atac_agg.index.intersection(rna['symbol']).tolist()
+A=atac_agg.loc[common].values.astype(float); R=rna.set_index('symbol').loc[common].values.astype(float)
+def norm(X): return X/X.sum(axis=0,keepdims=True)*1e6
+Ac=norm(A); Rc=norm(R)
+mask=((Ac>0).sum(axis=1)>0)&((Rc>0).sum(axis=1)>0); Ac=Ac[mask]; Rc=Rc[mask]
+Al=np.log1p(Ac); Rl=np.log1p(Rc)
+def z(X):
+ mu=X.mean(axis=1,keepdims=True); sd=X.std(axis=1,keepdims=True); sd[sd==0]=1; return (X-mu)/sd
+Az=z(Al); Rz=z(Rl)
+atac_cols=atac_agg.columns.tolist(); rna_cols=rna.columns[1:].tolist()
+# pearson z
+P=np.corrcoef(Az.T,Rz.T)[:len(atac_cols),len(atac_cols):]
+# spearman z
+S=np.zeros((len(atac_cols),len(rna_cols)))
+for i in range(len(atac_cols)):
+ for j in range(len(rna_cols)):
+  S[i,j]=spearmanr(Az[:,i],Rz[:,j])[0]
+for name,M in [('Pz',P),('Sz',S)]:
+ print('\\n',name)
+ for i,c in enumerate(atac_cols):
+  idx=np.argsort(-M[i])[:8]
+  print(c, '; '.join(f'{rna_cols[j]}:{M[i,j]:.3f}' for j in idx))
+PY"

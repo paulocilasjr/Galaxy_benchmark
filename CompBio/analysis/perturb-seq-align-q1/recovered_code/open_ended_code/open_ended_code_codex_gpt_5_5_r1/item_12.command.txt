@@ -1,0 +1,119 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, time
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+
+REQ=['PABPC1','NUDT21','LEO1']
+
+def decode_arr(arr):
+    return np.array([x.decode() if isinstance(x, (bytes, bytearray)) else str(x) for x in arr])
+
+def read_h5ad(fn):
+    t=time.time(); print('reading', fn, flush=True)
+    with h5py.File(fn,'r') as f:
+        shape=tuple(f['X'].attrs['shape'])
+        data=f['X/data'][()].astype(np.float32)
+        indices=f['X/indices'][()]
+        indptr=f['X/indptr'][()]
+        X=sparse.csc_matrix((data,indices,indptr), shape=shape)
+        var=decode_arr(f['var/_index'][()])
+        cats=decode_arr(f['obs/guide/categories'][()])
+        codes=f['obs/guide/codes'][()]
+        guides=cats[codes]
+        if 'target_gene' in f['obs']:
+            tcats=decode_arr(f['obs/target_gene/categories'][()])
+            tcodes=f['obs/target_gene/codes'][()]
+            targets=tcats[tcodes]
+        else:
+            targets=None
+    print(' done', X.shape, 'nnz', X.nnz, 'time', time.time()-t, flush=True)
+    return X,var,guides,cats,targets
+
+def lognorm(X):
+    # X csc cells x genes
+    totals=np.asarray(X.sum(axis=1)).ravel().astype(np.float32)
+    totals[totals==0]=1
+    X=X.tocoo(copy=True)
+    X.data=np.log1p(X.data/totals[X.row]*1e4).astype(np.float32)
+    return X.tocsr()
+
+def group_means(Xcsr, labels, groups):
+    # groups order list
+    out=np.zeros((len(groups), Xcsr.shape[1]), dtype=np.float32)
+    sizes=np.zeros(len(groups), dtype=int)
+    for i,g in enumerate(groups):
+        idx=np.flatnonzero(labels==g)
+        sizes[i]=len(idx)
+        if len(idx):
+            out[i]=np.asarray(Xcsr[idx].mean(axis=0)).ravel()
+    return out, sizes
+
+Xr,varr,gr,gr_cats,tr=read_h5ad('perturb.seq.align.q1.ref.h5ad')
+Xq,varq,gq,gq_cats,tq=read_h5ad('perturb.seq.align.q1.query.h5ad')
+print('vars equal', np.array_equal(varr,varq), flush=True)
+
+# map ref guide to target
+ref_map={}
+for guide in gr_cats:
+    vals=tr[gr==guide]
+    if len(vals):
+        u,c=np.unique(vals, return_counts=True)
+        ref_map[guide]=u[c.argmax()]
+print('ref requested guides', {gene:[g for g,t in ref_map.items() if t==gene] for gene in REQ}, flush=True)
+
+Xrl=lognorm(Xr); Xql=lognorm(Xq)
+ref_groups=list(gr_cats)
+query_groups=list(gq_cats)
+Mr, sr=group_means(Xrl, gr, ref_groups)
+Mq, sq=group_means(Xql, gq, query_groups)
+print('group sizes ref min/max', sr.min(), sr.max(), 'query', sq.min(), sq.max(), flush=True)
+
+ref_nt=[i for i,g in enumerate(ref_groups) if g.startswith('NT-')]
+q_nt=[i for i,g in enumerate(query_groups) if g.startswith('NT-')]
+ref_non=[i for i,g in enumerate(ref_groups) if not g.startswith('NT-')]
+q_non=[i for i,g in enumerate(query_groups) if not g.startswith('NT-')]
+Er=Mr[ref_non]-Mr[ref_nt].mean(axis=0)
+Eq=Mq[q_non]-Mq[q_nt].mean(axis=0)
+ref_names=[ref_groups[i] for i in ref_non]
+query_names=[query_groups[i] for i in q_non]
+
+# select genes with strongest perturbation effects in either dataset; try several k
+def corr_mat(A,B, idx=None):
+    if idx is not None:
+        A=A[:,idx]; B=B[:,idx]
+    A=A.astype(np.float64); B=B.astype(np.float64)
+    A=A-A.mean(axis=1, keepdims=True); B=B-B.mean(axis=1, keepdims=True)
+    An=np.sqrt((A*A).sum(axis=1)); Bn=np.sqrt((B*B).sum(axis=1))
+    return (A@B.T)/(An[:,None]*Bn[None,:]+1e-12)
+
+score=np.maximum(np.max(np.abs(Er),axis=0), np.max(np.abs(Eq),axis=0))
+for k in [200,500,1000,2000,5000,Er.shape[1]]:
+    idx=np.argsort(score)[-k:] if k<Er.shape[1] else None
+    C=corr_mat(Er,Eq,idx)
+    print('\\nK', k, 'top matches for requested ref guides')
+    for gene in REQ:
+        rgs=[g for g,t in ref_map.items() if t==gene]
+        for rg in rgs:
+            ri=ref_names.index(rg)
+            order=np.argsort(C[ri])[::-1][:8]
+            print(gene, rg, [(query_names[j], float(C[ri,j])) for j in order])
+    # assignment all non-controls maximize corr
+    rows, cols=linear_sum_assignment(-C)
+    assign={ref_names[r]:query_names[c] for r,c in zip(rows,cols)}
+    print('assignment requested', {gene: assign.get([g for g,t in ref_map.items() if t==gene][0]) for gene in REQ})
+
+# Direct target expression in query per group and ref per group for requested genes
+print('\\nDirect target expression query means/ranks')
+for gene in REQ:
+    gi=int(np.flatnonzero(varq==gene)[0])
+    vals=Mq[q_non, gi]
+    order=np.argsort(vals)[:10]
+    print(gene, 'lowest query', [(query_names[j], float(vals[j]), int(sq[q_non[j]])) for j in order])
+    print(gene, 'NT mean', float(Mq[q_nt,gi].mean()), 'all anon mean', float(vals.mean()))
+print('\\nDirect target ref expression requested')
+for gene in REQ:
+    gi=int(np.flatnonzero(varr==gene)[0])
+    vals=Mr[ref_non, gi]
+    order=np.argsort(vals)[:8]
+    print(gene, 'lowest ref', [(ref_names[j], ref_map[ref_names[j]], float(vals[j])) for j in order])
+PY"

@@ -1,0 +1,74 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam
+from collections import defaultdict, Counter
+sites=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+site_idx={s:i for i,s in enumerate(sites)}
+ref_start=27079126; ref_end=27080625
+b=pysam.AlignmentFile('mapped.sorted.bam','rb')
+
+def rec_alleles(rec):
+    seq=rec.query_sequence
+    d={}
+    for qpos,rpos in rec.get_aligned_pairs(matches_only=False):
+        if rpos is None: continue
+        pos=rpos+1
+        if pos in site_idx:
+            if qpos is None:
+                ch='D'
+            else:
+                ch=seq[qpos]
+            d[pos]=ch
+    return d
+
+# gather all reads by name
+pairs=defaultdict(list)
+for rec in b.fetch('chr22',ref_start-1,ref_end):
+    if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+    pairs[rec.qname].append(rec)
+
+# determine major alleles per site from all read observations (individual)
+site_allele_counts=[Counter() for _ in sites]
+for qname,recs in pairs.items():
+    for rec in recs:
+        for pos,ch in rec_alleles(rec).items():
+            site_allele_counts[site_idx[pos]][ch]+=1
+major=[]
+for c in site_allele_counts:
+    print('counts', c.most_common())
+    top=c.most_common(2)
+    # require two major alleles with reasonable counts
+    major.append([top[0][0], top[1][0]])
+print('major',major)
+
+# build fragments
+link=defaultdict(lambda: Counter()) # (i,j)->Counter({'same':, 'diff':})
+frag_count=0
+for qname,recs in pairs.items():
+    # combine alleles from both mates, prefer consensus if conflict
+    merged={}
+    counts=defaultdict(Counter)
+    for rec in recs:
+        for pos,ch in rec_alleles(rec).items():
+            counts[pos][ch]+=1
+    for pos,c in counts.items():
+        # choose most common if clear; else skip
+        top=c.most_common(1)[0]
+        merged[pos]=top[0]
+    covered=sorted(merged)
+    if len(covered)<2: continue
+    frag_count+=1
+    for a in range(len(covered)):
+        for c in range(a+1,len(covered)):
+            i=site_idx[covered[a]]; j=site_idx[covered[c]]
+            # binary based on major list index; if allele not in major, use nearest? skip
+            if merged[covered[a]] not in major[i] or merged[covered[c]] not in major[j]:
+                continue
+            b1=major[i].index(merged[covered[a]])
+            b2=major[j].index(merged[covered[c]])
+            link[(i,j)][('same' if b1==b2 else 'diff')]+=1
+print('fragments with >=2 sites',frag_count)
+for (i,j),c in sorted(link.items()):
+    same=c['same']; diff=c['diff']; total=same+diff
+    if total>=5:
+        print(sites[i],sites[j],'same',same,'diff',diff,'coupling', 'SAME' if same>diff else 'OPP')
+PY"

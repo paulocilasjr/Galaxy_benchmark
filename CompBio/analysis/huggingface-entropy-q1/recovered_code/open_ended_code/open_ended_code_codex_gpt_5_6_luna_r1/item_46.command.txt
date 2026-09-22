@@ -1,0 +1,39 @@
+/bin/bash -lc "PYTHONPATH='deps/mamba_ssm-2.2.2:.' python - <<'PY'
+import torch, torch.nn.functional as F, time
+from model.configuration_caduceus import CaduceusConfig
+from model.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.modules.mamba_simple as ms
+
+def fast(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False, return_last_state=False):
+ dtype_in=u.dtype; uf=u.float(); df=delta.float()
+ if delta_bias is not None: df=df+delta_bias[...,None].float()
+ if delta_softplus: df=F.softplus(df)
+ Bf=B.float(); Cf=C.float(); batch,dim,L=uf.shape; n=A.shape[-1]
+ x=torch.zeros((batch,dim,n),device=uf.device,dtype=torch.float32); ys=[]; bs=32
+ for st in range(0,L,bs):
+  en=min(L,st+bs); d=df[...,st:en]; uu=uf[...,st:en]
+  bb0=Bf[...,st:en].permute(0,2,1); cc=Cf[...,st:en]
+  aa=torch.exp(d.unsqueeze(-1)*A.float()[None,:,None,:])
+  bb=d.unsqueeze(-1)*bb0.unsqueeze(1)*uu.unsqueeze(-1)
+  off=1
+  while off<en-st:
+   olda=aa; oldb=bb
+   aa=torch.cat((olda[...,:off,:],olda[...,off:,:]*olda[...,:-off,:]),dim=-2)
+   bb=torch.cat((oldb[...,:off,:],oldb[...,off:,:]+olda[...,off:,:]*oldb[...,:-off,:]),dim=-2)
+   off*=2
+  xall=aa*x.unsqueeze(-2)+bb; x=xall[...,-1,:]
+  ys.append(torch.einsum('bdtn,bnt->bdt',xall,cc))
+ y=torch.cat(ys,dim=-1)+uf*D.float()[None,:,None]
+ if z is not None: y=y*F.silu(z.float())
+ y=y.to(dtype_in)
+ return y if not return_last_state else (y,x)
+
+config=CaduceusConfig.from_pretrained('model'); config.fused_add_norm=False
+m=CaduceusForMaskedLM.from_pretrained('model',config=config,local_files_only=True).eval(); layer=m.caduceus.backbone.layers[0]
+x=torch.randn(2,127,256)
+with torch.no_grad():
+ t=time.time(); ref=layer.mixer.mamba_fwd(x); print('ref',time.time()-t,ref.shape)
+ ms.selective_scan_fn=fast
+ t=time.time(); out=layer.mixer.mamba_fwd(x); print('fast',time.time()-t,out.shape)
+ print('maxabs',float((ref-out).abs().max()),'mean',float((ref-out).abs().mean()),'rel',float(((ref-out).abs()/(ref.abs()+1e-5)).max()))
+PY"

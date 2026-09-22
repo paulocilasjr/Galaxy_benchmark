@@ -1,0 +1,79 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import gzip, os, pickle, numpy as np, pandas as pd
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import normalize
+from collections import defaultdict
+
+frag='atac.doublet.q1.bed.gz'
+# parse barcodes and counts, collect fragments maybe not all too memory huge but ok 10m lines
+barcodes=[]; bidx={}
+# hg38 sizes common autosomes+sex approximate exact; use observed max if unknown
+bin_size=5000
+chrom_offsets={}
+chrom_bins={}
+rows=[]; cols=[]
+# first pass chrom max and barcodes? combine dynamic with dict of bin ids
+feature={}; nextf=0
+counts=defaultdict(int)
+with gzip.open(frag,'rt') as f:
+    for i,line in enumerate(f):
+        chrom,start,end,bc,c=line.rstrip('\\n').split('\\t')
+        if bc not in bidx:
+            bidx[bc]=len(barcodes); barcodes.append(bc)
+        bi=bidx[bc]
+        mid=(int(start)+int(end))//2
+        key=(chrom, mid//bin_size)
+        fid=feature.get(key)
+        if fid is None:
+            fid=nextf; feature[key]=fid; nextf+=1
+        rows.append(bi); cols.append(fid); counts[bc]+=int(c)
+print('lines',len(rows),'cells',len(barcodes),'features',nextf)
+# binary sparse matrix cells x bins
+X=sparse.coo_matrix((np.ones(len(rows),dtype=np.uint8),(rows,cols)),shape=(len(barcodes),nextf)).tocsr()
+# set binary (coo may sum)
+X.data=np.ones_like(X.data)
+# filter bins by cell accessibility >= 3 <= 500
+cell_per_bin=np.asarray((X>0).sum(axis=0)).ravel()
+keep=(cell_per_bin>=3)&(cell_per_bin<=500)
+X=X[:,keep].astype(np.float32)
+print('kept',X.shape,'nnz',X.nnz)
+# TF-IDF variant
+n_cells=X.shape[0]
+# term frequency: counts normalized by cell total (binary features / nnz cell)
+cell_sums=np.asarray(X.sum(axis=1)).ravel()
+Xtf=X.multiply(1/np.maximum(cell_sums,1)[:,None])
+idf=np.log(1+n_cells/(1+np.asarray((X>0).sum(axis=0)).ravel()))
+Xtfidf=Xtf.multiply(idf).tocsr()
+# scale features? no
+svd=TruncatedSVD(n_components=50, random_state=1)
+Z=svd.fit_transform(Xtfidf)
+# drop component 0? often correlated depth
+for drop in [0,1,2]:
+    Zuse=Z[:,drop:30]
+    Zuse=(Zuse-Zuse.mean(0))/Zuse.std(0)
+    # simulate doublets by sums of raw binary (counts), same TFIDF transform then project
+    rng=np.random.default_rng(123)
+    nd=5000
+    a=rng.integers(0,n_cells,nd); b=rng.integers(0,n_cells,nd)
+    Xsim=X[a]+X[b]
+    Xsim.data=np.ones_like(Xsim.data) # OR for binary doublet; maybe combine
+    cs=np.asarray(Xsim.sum(axis=1)).ravel()
+    Xsimtf=Xsim.multiply(1/np.maximum(cs,1)[:,None])
+    Xsimtfidf=Xsimtf.multiply(idf).tocsr()
+    Zs=svd.transform(Xsimtfidf)[:,drop:30]
+    Zall=np.vstack([Zuse,Zs])
+    Zall=(Zall-Zall.mean(0))/Zall.std(0)
+    # kNN in combined; score actual fraction sim in neigh
+    k=50
+    nn=NearestNeighbors(n_neighbors=k+1, metric='euclidean', algorithm='auto').fit(Zall)
+    ind=nn.kneighbors(Zall[:n_cells], return_distance=False)[:,1:]
+    score=(ind>=n_cells).mean(axis=1)
+    order=np.argsort(-score)[:30]
+    print('\\nDrop',drop,'top')
+    for j in order[:20]:
+        print(j,barcodes[j],score[j],cell_sums[j],counts[barcodes[j]])
+PY"

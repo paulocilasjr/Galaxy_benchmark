@@ -1,0 +1,24 @@
+/bin/bash -lc "cat > analyze.py <<'PY'
+import pandas as pd
+import numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+c=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+m=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+f=pd.read_csv('features.tsv.gz',sep='\\t',header=None)
+b=pd.read_csv('barcodes.tsv.gz',header=None)[0].tolist()
+s=mmread('matrix.mtx.gz').tocsc()
+y=s[:,b.index('Spot_710-1')].toarray().ravel()
+ref=c.groupby(m.cell_type).mean().T.loc[f[1]].copy()
+print('target total',y.sum(),'nonzero',(y>0).sum())
+print('reference means',ref.mean().to_string())
+for weighting in ['none','poisson','relative']:
+ w=np.ones(len(y)) if weighting=='none' else 1/np.sqrt(ref.mean(axis=1).values+0.1) if weighting=='poisson' else 1/(ref.mean(axis=1).values+0.1)
+ coef,res=nnls(ref.values*w[:,None],y*w)
+ print(weighting,dict(zip(ref.columns,coef)), 'residual',res)
+print('gene blocks: target and reference')
+for start in range(0,1000,50):
+ print(start,round(y[start:start+50].mean(),3),ref.iloc[start:start+50].mean().round(2).to_dict())
+np.savez('profiles.npz',y=y,ref=ref.values,types=ref.columns.values.astype(str))
+PY
+OPENBLAS_NUM_THREADS=1 python analyze.py"

@@ -1,0 +1,25 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+import numpy as np
+from collections import Counter
+# use 100bp bins positions
+def bins(file):
+    ps=[int(l.split('\\t')[3]) for l in Path(file).read_text().splitlines() if not l.startswith('@')]
+    c=Counter((p-1)//100 for p in ps)
+    return np.array([c.get(i,0) for i in range(29)],float)
+exo=bins('exogenous.mix.reads.q2.exo.sam'); endo=bins('exogenous.mix.reads.q2.endo.sam'); mix=bins('exogenous.mix.reads.q2.mix.sam')
+print(exo,endo,mix,sep='\\n')
+# scale to proportions then NNLS with sum=1
+E=np.column_stack([exo/exo.sum(), endo/endo.sum()])
+y=mix/mix.sum()
+# constrained least squares alpha+beta=1, alpha in [0,1] => y-E[:,1] = alpha*(E[:,0]-E[:,1])
+d=E[:,0]-E[:,1]; r=y-E[:,1]
+alpha=np.clip(np.dot(d,r)/np.dot(d,d),0,1)
+pred=E[:,1]+alpha*d
+print('alpha',alpha,'resid',np.sum((y-pred)**2))
+# unconstrained nnls
+from scipy.optimize import nnls
+coef,res=nnls(E,y)
+print('nnls coef',coef, 'sum',coef.sum(), 'resid',res)
+print('pred',coef[0]*E[:,0]+coef[1]*E[:,1])
+PY"

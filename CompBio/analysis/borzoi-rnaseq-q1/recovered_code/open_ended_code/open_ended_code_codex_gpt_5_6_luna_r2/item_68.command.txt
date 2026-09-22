@@ -1,0 +1,60 @@
+/bin/bash -lc "PYTORCH_ENABLE_MPS_FALLBACK=1 native_venv/bin/python - <<'PY'
+import sys, time, gzip, numpy as np, torch
+sys.path.insert(0,'borzoi_pytorch_repo')
+from borzoi_pytorch import Borzoi
+from borzoi_pytorch.config_borzoi import BorzoiConfig
+from safetensors.torch import load_file
+
+chrom_start=70157360
+chrom_end=70353968
+pad=(524288-(chrom_end-chrom_start))//2
+seq_start=chrom_start-pad
+seq_end=chrom_end+pad
+print('coords',chrom_start,chrom_end,'pad',pad,'input',seq_start,seq_end,flush=True)
+# Read only chr1 sequence from gzipped UCSC fasta.
+t=time.time()
+parts=[]
+with gzip.open('assets/chr1.fa.gz','rt') as f:
+    for line in f:
+        if not line.startswith('>'):
+            parts.append(line.strip())
+seq=''.join(parts)
+print('chr1',len(seq),'read_s',time.time()-t,flush=True)
+sub=seq[seq_start:seq_end].upper()
+assert len(sub)==524288,(len(sub),seq_start,seq_end)
+# A,C,G,T one-hot; unknowns all zero.
+one=np.zeros((4,len(sub)),dtype=np.float32)
+for i,b in enumerate('ACGT'):
+    one[i]=np.frombuffer(sub.encode('ascii'),dtype=np.uint8)==ord(b)
+print('counts',one.sum(axis=1), 'n',len(sub)-one.sum(),flush=True)
+x=torch.from_numpy(one[None])
+# Load published replicate-0 ported weights.
+t=time.time()
+model=Borzoi(BorzoiConfig(return_center_bins_only=True,enable_mouse_head=False))
+sd=load_file('assets/borzoi_rep0_model.safetensors',device='cpu')
+model.load_state_dict(sd)
+del sd
+model.eval()
+print('model loaded',time.time()-t,flush=True)
+device=torch.device('mps')
+model=model.to(device)
+x=x.to(device)
+print('on device',flush=True)
+t=time.time()
+with torch.inference_mode():
+    y=model(x)
+# synchronize before timing/reporting
+if device.type=='mps': torch.mps.synchronize()
+print('pred shape',tuple(y.shape),'time',time.time()-t,flush=True)
+y=y.detach().to('cpu').numpy()
+np.save('assets/borzoi_rep0_pred_center6144.npy',y)
+vals=y[0,6068,:]
+print('raw stats',vals.min(),vals.max(),vals.mean(),float(vals.sum()),flush=True)
+# inverse old paper transform: output = scale * softclip(raw**(3/4)); scale=.3, softclip above 384.
+z=vals.astype(np.float64)/0.3
+mask=z>384
+z[mask]=(z[mask]-384)**2+384
+cov=z**(4/3)
+print('inverse stats',cov.min(),cov.max(),cov.mean(),float(cov.sum()),flush=True)
+print('rounded10',round(float(cov.sum())/10)*10,flush=True)
+PY"

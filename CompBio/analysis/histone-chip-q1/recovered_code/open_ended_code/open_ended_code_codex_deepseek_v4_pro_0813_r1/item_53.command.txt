@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, math
+scale=1.6392283037914148
+def parse(path):
+ d={}
+ with open(path) as f:
+  for line in f:
+   p=line.rstrip().split('\\t'); name=p[0]; mean0=float(p[4]); base,fb=name.split('_'); idx=int(base[1:]); feat=fb[0]; b=int(fb[1:]);
+   if idx not in d: d[idx]={'T':[0.0]*100,'E':[0.0]*100,'B':[0.0]*50}
+   d[idx][feat][b]=mean0
+ return d
+sig=parse('bins/signal.avg.tab'); ctrl=parse('bins/control.avg.tab')
+genes=[]
+with open('ref/genes.pc.longest.tsv') as f:
+ next(f)
+ for line in f: genes.append(line.rstrip().split('\\t'))
+counts={'body_pos':0,'tss_pos':0,'tss_peak':0,'body_enr_gt2':0}
+n=0; vals=[]
+for i,p in enumerate(genes):
+ if i not in sig or i not in ctrl: continue
+ strand=p[2]; sB=np.array(sig[i]['B']); cB=np.array(ctrl[i]['B']); sT=np.array(sig[i]['T']); cT=np.array(ctrl[i]['T'])
+ if strand=='-':
+  sB=sB[::-1]; cB=cB[::-1]; sT=sT[::-1]; cT=cT[::-1]
+ # mean body ratio
+ mb=math.log2((sB.mean()+0.1)/(cB.mean()*scale+0.1)); mt=math.log2((sT[45:55].mean()+0.1)/(cT[45:55].mean()*scale+0.1))
+ vals.append(mb); n+=1
+ if mb>0: counts['body_pos']+=1
+ if mt>0: counts['tss_pos']+=1
+ # peakiness: max sig around TSS / flanks? H3K4me3 peak, H3K9 no
+ flank=np.concatenate([sT[:35],sT[65:]])
+ peak=sT[40:60].mean()
+ if flank.mean()>0 and peak/flank.mean()>1.5: counts['tss_peak']+=1
+print('n',n,counts)
+print('body log2 ratio percentiles', np.percentile(vals,[5,10,25,50,75,90,95]))
+PY"

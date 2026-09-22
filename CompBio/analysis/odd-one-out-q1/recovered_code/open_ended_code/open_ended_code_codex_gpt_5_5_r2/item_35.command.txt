@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, bisect, glob, os, time
+# Load unique TSS by strand from refGene.
+raw={w:{'+':{}, '-':{}, 'any':{}} for w in (100,500,1000,5000)}
+seen=set()
+with gzip.open('ref/refGene.hg38.txt.gz','rt') as fh:
+    for line in fh:
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<6: continue
+        chrom,strand=f[2],f[3]
+        if strand not in '+-' or not chrom.startswith('chr') or '_' in chrom: continue
+        tss=int(f[4]) if strand=='+' else int(f[5])
+        key=(chrom,tss,strand)
+        if key in seen: continue
+        seen.add(key)
+        for w in raw:
+            for cat in (strand,'any'):
+                raw[w][cat].setdefault(chrom,[]).append((max(0,tss-w),tss+w+1))
+
+def merge(iv):
+    iv=sorted(iv)
+    out=[]
+    for s,e in iv:
+        if out and s<=out[-1][1]:
+            if e>out[-1][1]: out[-1]=(out[-1][0],e)
+        else: out.append((s,e))
+    return out
+intervals={}
+starts={}
+ends={}
+for w in raw:
+    intervals[w]={}; starts[w]={}; ends[w]={}
+    for cat in raw[w]:
+        intervals[w][cat]={}; starts[w][cat]={}; ends[w][cat]={}
+        for chrom,iv in raw[w][cat].items():
+            m=merge(iv); intervals[w][cat][chrom]=m
+            starts[w][cat][chrom]=[s for s,e in m]
+            ends[w][cat][chrom]=[e for s,e in m]
+
+def contains(w,cat,chrom,pos):
+    ss=starts[w][cat].get(chrom)
+    if not ss: return False
+    i=bisect.bisect_right(ss,pos)-1
+    return i>=0 and pos < ends[w][cat][chrom][i]
+files=sorted(glob.glob('odd.one.out.q1/*.tagAlign.gz'), key=lambda p:int(os.path.basename(p).split('.')[0]))
+print('id\\t'+'\\t'.join([f'any{w}\\tsame{w}\\topp{w}' for w in (100,500,1000,5000)]))
+for path in files:
+    t=time.time(); id_=os.path.basename(path).split('.')[0]
+    counts={(w,cat):0 for w in (100,500,1000,5000) for cat in ('any','same','opp')}
+    n=0
+    with gzip.open(path,'rt') as fh:
+        for line in fh:
+            chrom,s,e,_,_,strand=line.split()[:6]
+            pos=int(s) if strand=='+' else int(e)-1
+            n+=1
+            opp='-' if strand=='+' else '+'
+            for w in (100,500,1000,5000):
+                if contains(w,'any',chrom,pos): counts[(w,'any')]+=1
+                if contains(w,strand,chrom,pos): counts[(w,'same')]+=1
+                if contains(w,opp,chrom,pos): counts[(w,'opp')]+=1
+    vals=[]
+    for w in (100,500,1000,5000):
+        vals += [counts[(w,'any')]/n, counts[(w,'same')]/n, counts[(w,'opp')]/n]
+    print(id_+'\\t'+'\\t'.join(f'{v:.4f}' for v in vals), 'sec', f'{time.time()-t:.1f}', flush=True)
+PY"

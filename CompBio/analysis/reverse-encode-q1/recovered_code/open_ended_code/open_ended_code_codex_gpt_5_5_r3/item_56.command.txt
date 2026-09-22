@@ -1,0 +1,25 @@
+/bin/bash -lc "curl -L 'https://www.encodeproject.org/search/?type=File&assay_term_name=DNase-seq&file_format=bam&output_type=alignments&assembly=GRCh38&status=released&analyses.title=ENCODE4%20v3.0.0-alpha.2%20GRCh38&field=accession&field=dataset&field=quality_metrics&field=file_size&field=biological_replicates&field=technical_replicates&field=cloud_metadata&field=replicate.library.biosample.donor.accession&format=json&limit=all' -o data/alpha2_bam_file_qc.json
+python3 - <<'PY'
+import json, collections, math
+d=json.load(open('data/alpha2_bam_file_qc.json'))
+print('total', d.get('total'), len(d.get('@graph',[])))
+TARGET=76275859
+hits=[]
+for f in d['@graph']:
+    exp=f['dataset'].strip('/').split('/')[-1]
+    for qm in f.get('quality_metrics',[]) or []:
+        nums={k:v for k,v in qm.items() if isinstance(v,int)}
+        # Include simple derived values that look like read/pair counts.
+        for k,v in list(nums.items()):
+            if abs(v-TARGET)<1000000:
+                hits.append((abs(v-TARGET), exp, f['accession'], k, v, qm.get('@type',[None])[0]))
+        if 'total' in nums and 'duplicates' in nums:
+            v=nums['total']-nums['duplicates']
+            if abs(v-TARGET)<1000000: hits.append((abs(v-TARGET), exp, f['accession'], 'total-duplicates', v, qm.get('@type',[None])[0]))
+            if abs(v/2-TARGET)<1000000: hits.append((abs(v/2-TARGET), exp, f['accession'], '(total-duplicates)/2', v/2, qm.get('@type',[None])[0]))
+        if 'Reads Examined' in nums and 'Read Duplicates' in nums:
+            v=nums['Reads Examined']-nums['Read Duplicates']
+            if abs(v-TARGET)<1000000: hits.append((abs(v-TARGET), exp, f['accession'], 'Reads Examined-Read Duplicates', v, qm.get('@type',[None])[0]))
+            if abs(v/2-TARGET)<1000000: hits.append((abs(v/2-TARGET), exp, f['accession'], '(Reads Examined-Read Duplicates)/2', v/2, qm.get('@type',[None])[0]))
+for h in sorted(hits)[:50]: print(h)
+PY"

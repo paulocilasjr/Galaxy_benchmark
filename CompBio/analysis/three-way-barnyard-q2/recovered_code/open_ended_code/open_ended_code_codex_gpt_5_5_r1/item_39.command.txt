@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+species_files={'human':'human.paf','mouse':'mouse.paf','pig':'pig.paf'}
+best={}  # read -> sp -> (score,nmatch,alen)
+for sp,fn in species_files.items():
+    with open(fn) as f:
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            q=p[0]; qlen=int(p[1]); qs=int(p[2]); qe=int(p[3]); nm=int(p[9]); alen=int(p[10]); mapq=int(p[11])
+            if alen < 45 or nm/alen < 0.84: continue
+            # score favor longer/high identity hits; subtract mismatches approximately
+            score=2*nm-alen
+            d=best.setdefault(q,{})
+            if sp not in d or score>d[sp][0]:
+                d[sp]=(score,nm,alen)
+print('reads any',len(best))
+for gap in [1,2,3,5,8,10,15,20]:
+  for ratio in [0.75,0.8,0.9]:
+    bc=defaultdict(Counter)
+    read_assign=Counter()
+    for q,d in best.items():
+        items=sorted(((v[0],sp,v[1],v[2]) for sp,v in d.items()), reverse=True)
+        top=items[0]
+        second=items[1][0] if len(items)>1 else -999
+        if top[0] >= second + gap and top[2] >=50: # nm >=50
+            sp=top[1]; cb=q.split('|')[1]
+            bc[cb][sp]+=1; read_assign[sp]+=1
+    assigned=[]; amb=0; low=0
+    for cb,c in bc.items():
+        tot=sum(c.values())
+        if tot<20: low+=1; continue
+        sp,n=c.most_common(1)[0]; frac=n/tot
+        if frac>=ratio:
+            assigned.append(sp)
+        else: amb+=1
+    cnt=Counter(assigned); total=len(assigned)
+    print('gap',gap,'ratio',ratio,'read_assign',dict(read_assign),'bc_assigned',total,'amb',amb,'low',low,'species',dict(cnt),'pct',{s: (cnt[s]/total*100 if total else 0) for s in ['human','mouse','pig']})
+  print()
+PY"

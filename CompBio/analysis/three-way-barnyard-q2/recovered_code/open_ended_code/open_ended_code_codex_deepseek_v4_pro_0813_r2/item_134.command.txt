@@ -1,0 +1,34 @@
+/bin/bash -lc "cd work && python3 - <<'PY'
+import numpy as np
+from collections import Counter, defaultdict
+bc_list=[]; umis=[]
+with open('read_bc_umi.tsv') as f:
+    for l in f:
+        rid,b,u=l.rstrip().split('\\t'); bc_list.append(b); umis.append(u)
+barcodes=sorted(set(bc_list)); bidx={b:i for i,b in enumerate(barcodes)}; ridx=np.array([bidx[b] for b in bc_list],dtype=np.int32)
+h=np.load('human_scores.npy');m=np.load('mouse_scores.npy');p=np.load('pig_scores.npy')
+S=np.vstack([h,m,p]).T; order=np.argsort(-S,axis=1); best=S[np.arange(len(S)),order[:,0]]; second=S[np.arange(len(S)),order[:,1]]
+# read assignment margin 2 min20
+assign=np.full(len(S),-1,dtype=np.int8); ok=(best>=20)&(best-second>=2); assign[ok]=order[ok,0]
+counts=np.zeros((len(barcodes),3),dtype=np.float64); valid=assign>=0; np.add.at(counts,(ridx[valid],assign[valid]),1)
+# add pseudocount, normalize rows
+X=counts/counts.sum(axis=1,keepdims=True)
+# kmeans
+rng=np.random.default_rng(0)
+cent=rng.choice(X,3,replace=False)
+for it in range(100):
+    dist=np.sum((X[:,None,:]-cent[None,:,:])**2,axis=2); labels=dist.argmin(axis=1)
+    new=[]
+    for k in range(3):
+        if (labels==k).sum()>0: new.append(X[labels==k].mean(axis=0))
+        else: new.append(rng.choice(X,1))
+    new=np.array(new)
+    if np.allclose(cent,new): break
+    cent=new
+print('iter',it+1,'counts',Counter(labels))
+# print species fraction means and top genes per cluster using marker files? aggregate genes by top species file? For each cluster, load species gene counts sum all species? simpler just print cluster barcodes and marker scores.
+for k in range(3):
+    sel=[barcodes[i] for i in np.where(labels==k)[0]]
+    print('\\ncluster',k,'n',len(sel),'mean counts',counts[[bidx[b] for b in sel]].mean(axis=0))
+    print(sel[:20])
+PY"

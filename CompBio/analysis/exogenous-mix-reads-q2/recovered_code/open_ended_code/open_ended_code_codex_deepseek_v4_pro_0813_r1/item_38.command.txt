@@ -1,0 +1,59 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+L=len(seq)
+def depth(name):
+ d=np.zeros(L)
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline(); lab,i=bestpos(s)
+   if lab=='+': d[i:i+50]+=1
+   else:
+    st=L-50-i; d[st:st+50]+=1
+ return d
+Xraw=depth('exo'); Yraw=depth('endo'); Zraw=depth('mix')
+F=L; pseud=1e-3
+X=(Xraw+pseud)/(Xraw.sum()+pseud*F)
+Ny=Yraw.sum(); Nz=Zraw.sum()
+def run(init_delta=0.5,init_pi=0.5,initE='endo',iters=3000,tol=1e-12):
+ if initE=='endo': E=(Yraw+pseud)/(Yraw.sum()+pseud*F)
+ elif initE=='uniform': E=np.ones(F)/F
+ else: E=(Zraw+pseud)/(Zraw.sum()+pseud*F)
+ delta=init_delta; pi=init_pi
+ for it in range(iters):
+  py=delta*X+(1-delta)*E; pz=pi*X+(1-pi)*E
+  ry=delta*X/np.maximum(py,1e-300); rz=pi*X/np.maximum(pz,1e-300)
+  dn=np.sum(Yraw*ry)/Ny; pn=np.sum(Zraw*rz)/Nz
+  En=Yraw*(1-ry)+Zraw*(1-rz)+pseud
+  E=En/En.sum(); delta=dn; pi=pn
+ return delta,pi,E
+best=(-1e99,None)
+for d0 in [0.001,0.01,0.1,0.3,0.5,0.8,0.99]:
+ for p0 in [0.001,0.01,0.1,0.3,0.5,0.8,0.99]:
+  for ei in ['endo','uniform','mix']:
+   delta,pi,E=run(d0,p0,ei)
+   ll=np.sum(Yraw*np.log(delta*X+(1-delta)*E))+np.sum(Zraw*np.log(pi*X+(1-pi)*E))
+   if ll>best[0]: best=(ll,(d0,p0,ei,delta,pi))
+print('best depth EM',best)
+for params in [(0.001,0.001,'endo'),(0.5,0.5,'endo'),(0.99,0.5,'endo'),(0.001,0.99,'endo'),(0.99,0.99,'endo')]:
+ d0,p0,ei=params; delta,pi,E=run(d0,p0,ei); ll=np.sum(Yraw*np.log(delta*X+(1-delta)*E))+np.sum(Zraw*np.log(pi*X+(1-pi)*E)); print(params,'delta',delta,'pi',pi,'ll',ll)
+PY"

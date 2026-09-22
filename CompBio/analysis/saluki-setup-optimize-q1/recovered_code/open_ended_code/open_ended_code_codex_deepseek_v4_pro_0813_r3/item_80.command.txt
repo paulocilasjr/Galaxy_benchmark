@@ -1,0 +1,75 @@
+/bin/bash -lc "cat > run_evolution.py <<'PY'
+import os, glob, json, time, sys
+import numpy as np
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')
+from basenji import rnann
+
+SEQ0='GCCGCCACCATGGTGAGCAAGGGCGAGTAGTGTACATAATAAGGACT'
+L=12288
+MODEL_DIR='models_h5'
+MODEL_PAT=os.path.join(MODEL_DIR,'*_model0_best.h5')
+
+PARAMS={'model':{
+    'activation':'relu','rnn_type':'gru','seq_length':L,'augment_shift':3,
+    'num_targets':1,'heads':2,'filters':64,'kernel_size':5,'dropout':0.3,
+    'l2_scale':0.001,'ln_epsilon':0.007,'num_layers':6,'bn_momentum':0.90
+}}
+
+def encode_batch(seqs):
+    X=np.zeros((len(seqs),L,6),dtype='float32')
+    for si,seq in enumerate(seqs):
+        for i,nt in enumerate(seq):
+            X[si,i,'ACGT'.index(nt)]=1
+        # CDS start and stop from original, unchanged
+        cds_start=9
+        cds_end=30
+        for i in range(cds_start,cds_end,3):
+            X[si,i,4]=1
+        # splice track all zero (single exon)
+    return X
+
+def main():
+    model_files=sorted(glob.glob(MODEL_PAT))
+    print('models',len(model_files),flush=True)
+    model=rnann.RnaNN(PARAMS['model'])
+    seq=SEQ0
+    cds_end=30
+    utr=list(range(cds_end,len(seq)))
+    print('initial',seq,'len',len(seq),'utr',len(utr),seq[cds_end:],flush=True)
+
+    for rnd in range(1,4):
+        cands=[]
+        for pos in utr:
+            cur=seq[pos]
+            for nt in 'ACGT':
+                if nt"'!=cur:
+                    s=list(seq); s[pos]=nt; cands.append('"''.join(s))
+        cands_unique=list(dict.fromkeys(cands))
+        print('round',rnd,'candidates',len(cands_unique),flush=True)
+        # add current as sanity index 0 maybe
+        seqs=[seq]+cands_unique
+        X=encode_batch(seqs)
+        total=np.zeros((len(seqs),1),dtype='float64')
+        for mi,mf in enumerate(model_files):
+            t0=time.time()
+            model.restore(mf,0)
+            preds=model.predict(X,verbose=0,batch_size=len(X))
+            total += preds.astype('float64')
+            print(' model',mi+1,'time',round(time.time()-t0,2),'ref_pred',float(preds[0,0]),'best_so_far',float(np.max(total[:len(cands_unique)+1]/(mi+1))),flush=True)
+        avg=total/len(model_files)
+        ref_avg=float(avg[0,0])
+        best_idx=int(np.argmax(avg[1:]))+1
+        best_seq=seqs[best_idx]; best_avg=float(avg[best_idx,0])
+        # identify mutation
+        diffs=[(i,seq[i],best_seq[i]) for i in range(len(seq)) if seq[i]"'!=best_seq[i]]
+        print('"'ROUND',rnd,'ref_avg',ref_avg,'best_avg',best_avg,'mut',diffs,'best_utr',best_seq[cds_end:],flush=True)
+        seq=best_seq
+
+    print('FINAL',seq,flush=True)
+    open('final_answer.txt','w').write(seq+'\\n')
+
+if __name__=='__main__':
+    main()
+PY
+TF_CPP_MIN_LOG_LEVEL=3 PYTHONPATH=basenji_repo ./tfenv_arm/bin/python run_evolution.py"

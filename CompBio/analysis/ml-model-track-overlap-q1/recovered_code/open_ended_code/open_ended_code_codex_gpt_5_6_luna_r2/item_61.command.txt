@@ -1,0 +1,35 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4f28973e7799493c47bfc76c/workspace && python - <<'PY'
+import csv,re,json,collections
+from openpyxl import load_workbook
+wb=load_workbook('sei_supp_tables.xlsx',read_only=True,data_only=True)
+profiles=[]
+for row in wb['Supp Table 1'].iter_rows(min_row=3,max_col=1,values_only=True):
+ s=row[0]
+ if s and 'ID:' in s: profiles.append((int(re.search(r'ID:(\\d+)"'$'"',s).group(1)),s))
+samples={s['id']:s for fn in ['cistrome_all_samples.json','cistrome_all_samples_2.json'] for s in json.load(open(fn))['samples']}
+rows=list(csv.DictReader(open('borzoi_targets_hg38_storage.txt'),delimiter='\\t'))
+base=lambda e: re.match(r'(ENCSR[A-Z0-9]+)',e).group(1) if e.startswith('ENCSR') else e
+# source accession from full target file, no distinction identifier/path fields needed
+txt='\\n'.join('\\t'.join(x.values()) for x in rows)
+bgz=set(re.findall(r'GSM\\d+',txt)); bec=set(re.findall(r'ENCSR[A-Z0-9]+',txt))
+matched=[]
+for i,s in profiles:
+ e=samples[i]['external_id']; key=base(e)
+ if e in bgz or key in bec: matched.append((i,s,e,samples[i]))
+print('total',len(matched))
+print('source type',collections.Counter('GEO' if e.startswith('GSM') else 'ENCODE' for _,_,e,_ in matched))
+print('sei profile target assay',collections.Counter(s.split('|')[1].strip() for _,s,_,_ in matched).most_common())
+# cistrome records / base source counts
+print('matched by cistrome species',collections.Counter(rec['species'] for *_,rec in matched))
+print('matched by borzoi target assay if any target row includes source accession')
+source_to_assay=collections.defaultdict(set)
+for x in rows:
+ for acc in set(re.findall(r'GSM\\d+|ENCSR[A-Z0-9]+',x['identifier']+'\\t'+x['file']+'\\t'+x['description'])):
+  source_to_assay[acc].add(x['description'].split(':',1)[0])
+# for ENCSR Cistrome source, get base; GSM exact
+print(collections.Counter(a for _,_,e,_ in matched for a in source_to_assay[base(e)] if e.startswith('ENCSR') or a))
+# more correct: a source can have multiple assays; summarize each matched record possible labels
+print('match record with borzoi assay labels',collections.Counter(tuple(sorted(source_to_assay[base(e)])) for _,_,e,_ in matched))
+# source count vs records by key
+print('matched unique external raw',len(set(e for _,_,e,_ in matched)),'keys',len(set(base(e) for _,_,e,_ in matched)))
+PY"

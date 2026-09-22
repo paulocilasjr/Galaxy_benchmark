@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+sp=mmread('matrix.mtx.gz').tocsr()
+bar=pd.read_csv('barcodes.tsv.gz',header=None)[0].astype(str).tolist()
+print('sc',sc.shape,'sp',sp.shape,'barcodes',len(bar))
+print('types',md.cell_type.value_counts().to_dict())
+print('sc totals by type')
+print(pd.DataFrame({'total':sc.sum(axis=1).to_numpy(),'type':md.cell_type}).groupby('type').agg(['mean','std','min','max']).to_string())
+j=bar.index('Spot_710-1')
+y=np.asarray(sp[:,j].todense()).ravel()
+print('target index total nonzero min max',j,y.sum(),(y>0).sum(),y.min(),y.max())
+print('sp totals quantiles',np.quantile(np.asarray(sp.sum(axis=0)).ravel(),[0,.01,.1,.5,.9,.99,1]))
+# group means and fits
+types=sorted(md.cell_type.unique())
+A=np.vstack([sc.loc[md.cell_type==t].mean(axis=0).to_numpy() for t in types]).T
+for transform in ['raw']:
+    coef,res=nnls(A,y)
+    pred=A@coef
+    print('nnls',[(t,round(c,3)) for t,c in zip(types,coef)],'resnorm',res,'predtotal',pred.sum(),'corr',np.corrcoef(y,pred)[0,1])
+# correlations target to each cell type mean, plus normalized
+for t in types:
+    a=A[:,types.index(t)]
+    print(t,'corr',np.corrcoef(y,a)[0,1],'cos',np.dot(y,a)/(np.linalg.norm(y)*np.linalg.norm(a)),'ratio',y.sum()/a.sum())
+print('top target genes')
+for k in np.argsort(y)[-50:][::-1]: print(k, 'Gene_'+str(k), int(y[k]))
+PY"

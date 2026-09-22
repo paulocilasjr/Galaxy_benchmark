@@ -1,0 +1,68 @@
+/bin/bash -lc "/opt/miniconda3/envs/benchmark_codex_ede3d7ec20244f319297/bin/python3 - <<'PY'
+import numpy as np
+from collections import defaultdict
+# target keyed by exact position/ref/alt
+target={}
+with open('target_spaced.tsv') as f:
+    for line in f:
+        p,r,a,d1,d2,d3,d4=line.rstrip().split('\\t')
+        target[(int(p),r,a)]=[int(d1),int(d2),int(d3),int(d4)]
+print('target',len(target), flush=True)
+rows=[]; trows=[]; keys=[]; nlines=0
+with open('ref_spaced.gt.tsv') as f:
+    for line in f:
+        nlines+=1
+        z=line.rstrip('\\n').split('\\t')
+        p=int(z[0]); key=(p,z[1],z[2])
+        ds=target.get(key)
+        if ds is None: continue
+        arr=np.empty(2504,dtype=np.int8)
+        for i,g in enumerate(z[3:]):
+            if g=='.' or g=='./.' or g=='.|.': arr[i]=-1; continue
+            aa=g.replace('|','/').split('/')
+            arr[i]=sum(x=='1' for x in aa)
+        rows.append(arr); trows.append(ds); keys.append(key)
+print('ref lines',nlines,'matched',len(rows), flush=True)
+R=np.stack(rows,axis=0); T=np.array(trows,dtype=np.float64).T
+np.savez_compressed('ref_target_spaced.npz',R=R,T=T,pos=np.array([k[0] for k in keys]),ref=np.array([k[1] for k in keys]),alt=np.array([k[2] for k in keys]))
+print('shape',R.shape,'missing',np.sum(R<0), flush=True)
+# reference labels
+samples=[]; pops=[]; supers=[]
+with open('1000G_samples.panel') as f:
+    next(f)
+    for line in f:
+        s,p,sp,*_=line.rstrip().split('\\t')
+        samples.append(s); pops.append(p); supers.append(sp)
+assert len(samples)==2504
+# filter sites common and no missing
+mean=R.mean(axis=1)
+maf=np.minimum(mean/2,1-mean/2)
+keep=(R>=0).all(axis=1)&(maf>0.02)&(maf<0.98)
+print('common sites',keep.sum(),'maf range',maf[keep].min(),maf[keep].max(), flush=True)
+X=R[keep].astype(np.float64).T
+mu=X.mean(axis=0); sd=np.sqrt(2*(mu/2)*(1-mu/2)); sd[sd==0]=1
+Z=(X-mu)/sd
+# covariance PCA
+C=(Z@Z.T)/(Z.shape[1]-1)
+evals,U=np.linalg.eigh(C); order=np.argsort(evals)[::-1]; evals=evals[order]; U=U[:,order]
+k=10
+ref_scores=U[:,:k]*np.sqrt(np.maximum(evals[:k],0))
+load=(Z.T@U[:,:k])/np.sqrt(np.maximum(evals[:k],1e-12))
+Tx=T[:,keep]
+t_scores=((Tx-mu)/sd)@load
+print('eigen',np.round(evals[:10],3), flush=True)
+for i in range(4): print('TARGET',i+1,np.round(t_scores[i,:6],3))
+for sp in ['AFR','EUR','EAS','SAS']:
+    ix=np.array([x==sp for x in supers]); cen=ref_scores[ix,:6].mean(0); print('CENT',sp,'n',ix.sum(),np.round(cen,3))
+    d=np.linalg.norm(t_scores[:,:6]-ref_scores[ix,:6].mean(0),axis=1) if False else None
+# nearest centroid and nearest individuals using PCs
+for dims in [2,3,4,6,10]:
+ print('DIMS',dims)
+ cents={sp:ref_scores[np.array([x==sp for x in supers]),:dims].mean(0) for sp in ['AFR','EUR','EAS','SAS']}
+ for i in range(4):
+  dist={sp:float(np.linalg.norm(t_scores[i,:dims]-c)) for sp,c in cents.items()}
+  print(i+1,sorted(dist.items(),key=lambda x:x[1]))
+for i in range(4):
+ d=np.linalg.norm(ref_scores[:,:6]-t_scores[i,:6],axis=1); ix=np.argsort(d)[:10]
+ print('NN',i+1,[(samples[j],pops[j],supers[j],round(float(d[j]),3)) for j in ix])
+PY"

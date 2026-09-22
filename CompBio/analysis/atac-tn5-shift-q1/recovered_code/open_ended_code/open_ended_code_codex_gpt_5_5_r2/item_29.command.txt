@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+# Re-run cached-like sample and evaluate palindromic self-symmetry around candidate centers.
+import sys, os, gzip
+sys.path.insert(0, os.path.abspath('pydeps'))
+import py2bit, numpy as np
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+frags=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for idx,line in enumerate(f):
+        chrom,s,e,bc,c=line.rstrip().split('\\t')[:5]
+        if chrom in std and idx%5==0 and len(frags)<18000:
+            frags.append((chrom,int(s),int(e),int(c)))
+print('sample', len(frags))
+tb=py2bit.open('hg38.2bit'); sizes=tb.chroms(); trans=str.maketrans('ACGT','TGCA')
+base_idx={'A':0,'C':1,'G':2,'T':3}; comp=[3,2,1,0]
+K=20; Dmin=-15; Dmax=15; flank=K+max(abs(Dmin),abs(Dmax)); L=2*K+1
+mats={'L':{d:np.zeros((L,4)) for d in range(Dmin,Dmax+1)}, 'R':{d:np.zeros((L,4)) for d in range(Dmin,Dmax+1)}}
+for chrom,s,e,w in frags:
+    size=sizes[chrom]
+    for side,pos,orient in [('L',s,1),('R',e,-1)]:
+        a=pos-flank; b=pos+flank+1
+        if a<0 or b>size: continue
+        seq=tb.sequence(chrom,a,b).upper()
+        if len(seq)"'!=2*flank+1 or '"'N' in seq: continue
+        for d in range(Dmin,Dmax+1):
+            sub=seq[flank+d-K:flank+d+K+1]
+            if orient==-1: sub=sub.translate(trans)[::-1]
+            mat=mats[side][d]
+            for i,ch in enumerate(sub):
+                j=base_idx.get(ch)
+                if j is not None: mat[i,j]+=w
+
+def freq(mat): return (mat+0.5)/(mat.sum(axis=1,keepdims=True)+2.0)
+def lo(mat): return np.log2(freq(mat)/0.25)
+def corr(x,y):
+    x=x.ravel(); y=y.ravel(); x=x-x.mean(); y=y-y.mean(); den=np.linalg.norm(x)*np.linalg.norm(y); return float(x@y/den)
+def pal(mat):
+    x=lo(mat)
+    y=x[::-1][:,comp]
+    return corr(x,y)
+def ic_center(mat,rad=8):
+    f=freq(mat); ic=(f*np.log2(f/0.25)).sum(axis=1); return float(ic[K-rad:K+rad+1].sum())
+for side in ['L','R']:
+    arr=[]
+    for d,mat in mats[side].items():
+        f=freq(mat); cons=''.join('ACGT'[i] for i in f.argmax(axis=1))
+        arr.append((pal(mat),ic_center(mat),d,cons))
+    print(side,'pal top')
+    for p,ic,d,cons in sorted(arr, reverse=True)[:10]: print(f'pal={p:.5f}\\tic={ic:.4f}\\td={d}\\tu={4-d if side==\"L\" else -5-d}\\t{cons}')
+    print(side,'ic top')
+    for p,ic,d,cons in sorted(arr, key=lambda x:x[1], reverse=True)[:10]: print(f'pal={p:.5f}\\tic={ic:.4f}\\td={d}\\tu={4-d if side==\"L\" else -5-d}\\t{cons}')
+PY"

@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,csv,re,collections
+# Load experiment graph
+j=json.load(open('encode_experiments.json'))
+exp_by={g['accession']:g for g in j['@graph'] if 'accession' in g}
+# Load file meta
+filemeta=json.load(open('borzoi_encff_meta.json'))
+# Load Sei meta
+sei=json.load(open('sei_cistrome_meta.json'))
+rows=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+
+# Build per ENCSR selected bio nums and selected GSMs from Borzoi rows
+exp_bio=collections.defaultdict(set)
+exp_gsm=collections.defaultdict(set)
+for r in rows:
+ ident=r['identifier'].strip()
+ m=re.match(r'(ENCFF\\d{3}[A-Z]{3})[+-]?"'$'"',ident)
+ if not m:
+  continue
+ base=m.group(1)
+ fm=filemeta.get(base)
+ if not fm: continue
+ ds=fm.get('dataset','')
+ en=ds.split('/')[-2] if '/' in ds else None
+ bios=fm.get('biological_replicates',[])
+ if en and bios:
+  exp_bio[en].update(int(b) for b in bios)
+  g=exp_by.get(en)
+  if g:
+   for rep in g.get('replicates',[]) or []:
+    if rep.get('biological_replicate_number') in bios:
+     for dx in (rep.get('library') or {}).get('dbxrefs',[]) or []:
+      if dx.startswith('GEO:GSM'): exp_gsm[en].add(dx[4:])
+
+# Direct non-ENCFF GSM identifiers from Borzoi (chip/geo, atac/geo) should also be included for GEO matching
+direct_gsm=set()
+for r in rows:
+ if re.fullmatch(r'GSM\\d+',r['identifier']): direct_gsm.add(r['identifier'])
+
+all_borzoi_gsm=set(direct_gsm)
+for s in exp_gsm.values(): all_borzoi_gsm |= s
+print('selected borzoi gsm unique',len(all_borzoi_gsm))
+
+# Count Sei GEO matches
+geo=0
+for s in sei.values():
+ if s.get('external_id_type')"'!='"'ENCODE' and s.get('external_id') in all_borzoi_gsm:
+  geo+=1
+# Count Sei ENCODE matches exact bio replicate
+enc=0
+for s in sei.values():
+ if s.get('external_id_type')=='ENCODE':
+  ext=s['external_id']
+  base,_,repnum=ext.partition('_')
+  if base in exp_bio:
+   if repnum=='' or int(repnum) in exp_bio[base]:
+    enc+=1
+print('geo',geo,'enc',enc,'total',geo+enc,'rounded',round((geo+enc)/100)*100)
+# Compare previous union all replicates counts: 
+PY"

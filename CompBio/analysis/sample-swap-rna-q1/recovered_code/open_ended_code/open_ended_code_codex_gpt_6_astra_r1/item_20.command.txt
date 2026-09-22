@@ -1,0 +1,20 @@
+/bin/bash -lc "cat > compare_reference.py <<'PY'
+import pandas as pd,numpy as np,gzip
+meta=pd.read_csv('GSE255742_Amphioxus_21hpf_sc_annotations.tsv.gz',sep='\\t',index_col=0)
+with gzip.open('GSE255742_Amphioxus_21hpf_sc_UMI_counts.tsv.gz','rt') as f:
+ cells=f.readline().strip().split('\\t'); labels=meta.loc[cells,'cell_type'];types=sorted(labels.unique());idx=[np.where(labels.values==t)[0] for t in types];genes=[];rows=[]
+ for k,line in enumerate(f):
+  gene,vs=line.split('\\t',1);v=np.fromstring(vs,sep='\\t');genes.append(gene);rows.append([v[ii].sum() for ii in idx])
+  if k%5000==0:print(k,flush=True)
+x=pd.DataFrame(rows,index=genes,columns=types);x.to_csv('reference_counts.tsv',sep='\\t')
+merge={t:t for t in types}
+merge.update({'epidermal_neural1':'epidermal_neural','epidermal_neural2':'epidermal_neural','epidermis_1':'epidermis','epidermis_2':'epidermis','neural_like1':'neural_like','neural_like2':'neural_like','DiMes':'neural','HyTh':'neural'})
+x=x.T.groupby(merge).sum().T
+x=x/x.sum()*1e6;x.to_csv('reference_pseudobulk.tsv',sep='\\t')
+y=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0);x=x.loc[y.index]
+for col in y:
+ cors=x.apply(lambda s:np.corrcoef(np.log1p(y[col]),np.log1p(s))[0,1]).sort_values(ascending=False)
+ print(col,':',cors.head(3).to_dict())
+ best=cors.index[0];rat=y[col]/x[best].replace(0,np.nan); print('ratios',rat.describe().to_dict(),'max abs err',abs(y[col]-x[best]).max())
+PY
+python -u compare_reference.py"

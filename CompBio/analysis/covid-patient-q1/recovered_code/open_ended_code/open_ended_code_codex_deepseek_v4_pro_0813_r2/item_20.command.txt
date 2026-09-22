@@ -1,0 +1,124 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp, time, resource
+A=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+ens=np.asarray(A.var_names); sym=np.asarray(A.var['feature_name'].astype(str))
+# map symbol to indices, first occurrence
+sym_to_idx={}
+for i,s in enumerate(sym):
+    if s not in sym_to_idx:
+        sym_to_idx[s]=i
+sets={
+'CD14_Mono':['CD14','LYZ','S100A8','S100A9','FCN1','VCAN'],
+'CD16_Mono':['FCGR3A','MS4A7','LST1','IFITM3'],
+'T':['CD3D','CD3E','CD2','IL7R','TRAC'],
+'CD4':['CD4'],
+'CD8':['CD8A','CD8B'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1','KLRF1'],
+'B':['MS4A1','CD79A','CD79B','CD19','BANK1'],
+'Plasma':['MZB1','XBP1','JCHAIN','IGHG1','SDC1'],
+'cDC':['FCER1A','CLEC9A','CD1C','CST3'],
+'pDC':['LILRA4','IL3RA','CLEC4C','GZMB'],
+'Platelet':['PPBP','PF4','TUBB1'],
+'RBC':['HBA1','HBA2','HBB'],
+'ISG':['ISG15','IFI27','IFIT1','IFIT3','IFIT2','MX1','OAS1','OAS2','OAS3','IFI44L','RSAD2','IFITM3','IRF7','STAT1','STAT2','IFI6','IFITM1','IFI44','ISG20','MX2'],
+}
+# build index arrays per set
+set_indices={}
+for k,gs in sets.items():
+    inds=[]
+    missing=[]
+    for g in gs:
+        if g in sym_to_idx:
+            inds.append(sym_to_idx[g])
+        else:
+            missing.append(g)
+    set_indices[k]=np.array(inds,dtype=np.int64)
+    print(k,'present',len(inds),'missing',missing)
+cats=A.obs['donor_id'].cat.categories.astype(str).values
+codes=A.obs['donor_id'].cat.codes.values
+n=A.shape[0]; nd=len(cats)
+donor_total_cells=np.zeros(nd,dtype=np.int64)
+donor_type_counts={k:np.zeros(nd,dtype=np.int64) for k in ['CD14_Mono','CD16_Mono','T','NK','B','Plasma','cDC','pDC','Platelet','RBC']}
+# accumulated sums of ISG mean log expr among all, mono, T etc
+acc_ISG_all=np.zeros(nd,dtype=np.float64)
+acc_ISG_mono=np.zeros(nd,dtype=np.float64)
+acc_ISG_T=np.zeros(nd,dtype=np.float64)
+acc_ISG_B=np.zeros(nd,dtype=np.float64)
+cnt_mono=np.zeros(nd,dtype=np.int64)
+cnt_T=np.zeros(nd,dtype=np.int64)
+cnt_B=np.zeros(nd,dtype=np.int64)
+acc_mono_CD14=np.zeros(nd,dtype=np.float64) # maybe mean mono signature
+# combined marker indices
+type_names=['CD14_Mono','CD16_Mono','T','NK','B','Plasma','cDC','pDC','Platelet','RBC']
+type_indices=[set_indices[k] for k in type_names]
+all_gene_names=[]
+for k in ['ISG','CD14_Mono','T','B','CD14','FCGR3A','MS4A7']:
+    pass
+# Use set-specific raw scores: for type assignment, compute mean log normalized expression for each set; but CD16 mono marker and CD14 mono maybe both.
+# To save, compute raw counts sums? Let's do log CPM for selected all unique genes.
+selected_genes=list(dict.fromkeys(sum([list(set_indices[k]) for k in type_names+['ISG']],[])))
+selected_idx=np.array(selected_genes,dtype=np.int64)
+# maps gene->col
+col_of_gene={g:c for c,g in enumerate(selected_genes)}
+# Also CD14 idx local
+cd14_local=col_of_gene.get(sym_to_idx['CD14'])
+T_markers=set_indices['T']; T_local=[col_of_gene[g] for g in T_markers]
+B_markers=set_indices['B']; B_local=[col_of_gene[g] for g in B_markers]
+ISG_local=[col_of_gene[g] for g in set_indices['ISG']]
+Mono_local=[col_of_gene[g] for g in set_indices['CD14_Mono']]
+# type score indices local
+type_local=[[col_of_gene[g] for g in set_indices[k]] for k in type_names]
+chunk=20000
+start=time.time()
+for i in range(0,n,chunk):
+    j=min(n,i+chunk)
+    c=codes[i:j]
+    X=A.X[i:j, selected_genes]
+    if sp.issparse(X):
+        X=X.toarray().astype(np.float64)
+    else:
+        X=np.asarray(X,dtype=np.float64)
+    totals=X.sum(axis=1,keepdims=True)
+    totals[totals==0]=1
+    logX=np.log1p(X*1e4/totals)
+    # ISG mean across all
+    isg=logX[:,ISG_local].mean(axis=1)
+    np.add.at(acc_ISG_all,c,isg)
+    # type score = mean log expr
+    scores=np.zeros((X.shape[0],len(type_local)))
+    for ti,locs in enumerate(type_local):
+        scores[:,ti]=logX[:,locs].mean(axis=1)
+    pred=scores.argmax(axis=1)
+    np.add.at(donor_total_cells,c,1)
+    for ti,k in enumerate(type_names):
+        np.add.at(donor_type_counts[k], c, (pred==ti).astype(np.int64))
+    # masks
+    mono_mask=(logX[:,cd14_local] > 1.0) | (scores[:,0] > np.quantile(scores[:,0],0.7)) if False else (logX[:,cd14_local] > 1.0)
+    T_mask=(logX[:,T_local].mean(axis=1) > 1.0) & (scores[:,2] > scores[:,0])
+    B_mask=(logX[:,B_local].mean(axis=1) > 1.0) & (scores[:,4] > scores[:,0])
+    if mono_mask.sum():
+        np.add.at(acc_ISG_mono,c[mono_mask], isg[mono_mask]); np.add.at(cnt_mono,c[mono_mask],1)
+    if T_mask.sum():
+        np.add.at(acc_ISG_T,c[T_mask], isg[T_mask]); np.add.at(cnt_T,c[T_mask],1)
+    if B_mask.sum():
+        np.add.at(acc_ISG_B,c[B_mask], isg[B_mask]); np.add.at(cnt_B,c[B_mask],1)
+    if i % 100000 < chunk:
+        print(i, resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e6, flush=True)
+print('done',time.time()-start)
+# save
+res={}
+for k in type_names:
+    res['type_'+k]=donor_type_counts[k]
+res['ISG_all_sum']=acc_ISG_all
+res['ISG_mono_sum']=acc_ISG_mono
+res['cnt_mono']=cnt_mono
+res['ISG_T_sum']=acc_ISG_T
+res['cnt_T']=cnt_T
+res['ISG_B_sum']=acc_ISG_B
+res['cnt_B']=cnt_B
+res['total_cells']=donor_total_cells
+np.savez('cell_scores.npz', cats=cats, **res)
+pd.DataFrame({'donor':cats, **{k:v for k,v in res.items()}}).to_csv('cell_scores.csv',index=False)
+print('saved')
+PY
+python [REDACTED LOCAL PATH]"

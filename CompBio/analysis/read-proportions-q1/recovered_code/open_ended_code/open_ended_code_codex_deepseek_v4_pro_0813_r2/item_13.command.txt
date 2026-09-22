@@ -1,0 +1,79 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, gzip, time, sys
+seqs={};name=None
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'):
+        name=line[1:]; seqs[name]=''
+    else:
+        seqs[name]+=line.upper()
+order=['chr1','chr2','chr3','chr4']
+windows=[]; meta=[]
+for c in order:
+    s=seqs[c]
+    for i in range(len(s)-35):
+        windows.append(s[i:i+36]); meta.append(c)
+comp=str.maketrans('ACGT','TGCA')
+def rc(x): return x.translate(comp)[::-1]
+ref=np.frombuffer(''.join(windows).encode(),dtype=np.uint8).reshape(len(windows),36)
+ref_rc=np.frombuffer(''.join(rc(w) for w in windows).encode(),dtype=np.uint8).reshape(len(windows),36)
+meta_idx=np.array([order.index(m) for m in meta])
+# parse reads
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    reads=[]
+    while True:
+        h=f.readline()
+        if not h: break
+        s=f.readline().strip().upper(); f.readline(); f.readline(); reads.append(s)
+N=len(reads)
+print('reads',N)
+# Compute cnt per read per chr per d. 4*37 int16 maybe.
+cnt=np.zeros((N,4,37), dtype=np.int32)
+t=time.time()
+chunk=2000
+for start in range(0,N,chunk):
+    end=min(N,start+chunk)
+    rarr=np.frombuffer(''.join(reads[start:end]).encode(),dtype=np.uint8).reshape(end-start,36)
+    # compare all reads chunk to all windows; memory
+    d1=np.count_nonzero(ref[None,:,:]"'!=rarr[:,None,:],axis=2) # (nchunk, nwin)
+    d2=np.count_nonzero(ref_rc[None,:,:]!=rarr[:,None,:],axis=2)
+    for j in range(end-start):
+        # for each chr, concatenate distances from d1 and d2 for windows of that chr
+        for ci in range(4):
+            mask=(meta_idx==ci)
+            dd=np.concatenate([d1[j,mask], d2[j,mask]])
+            h=np.bincount(dd, minlength=37)
+            cnt[start+j,ci,:]+=h
+    print('"'chunk',start,'time',time.time()-t)
+print('dist computation done',time.time()-t)
+
+# EM
+K=37
+pi=np.ones(4)/4
+eps=0.01
+for it in range(50):
+    # P_d
+    P=np.array([(1-eps)**(K-1-d)*(eps/3.0)**d for d in range(K)])
+    # log pi per chr
+    loglik=cnt.astype(np.float64) @ np.log(P)  # N,4
+    loglik += np.log(pi)[None,:]
+    # stable softmax
+    mx=loglik.max(axis=1,keepdims=True)
+    w=np.exp(loglik-mx)
+    gamma=w/w.sum(axis=1,keepdims=True)
+    newpi=gamma.mean(axis=0)
+    # epsilon update from expected mismatches
+    # cnt shape N,4,K; weights gamma N,4
+    # total positions per read per chr = 2*npos = 5930; but counts includes. A=sum cnt*(K-1-d)
+    A=((cnt.astype(np.float64)*(np.arange(K-1,-1,-1)[None,None,:]))*gamma[:,:,None]).sum()
+    B=((cnt.astype(np.float64)*(np.arange(K)[None,None,:]))*gamma[:,:,None]).sum()
+    neweps=B/(A+B)
+    diff=max(np.max(np.abs(newpi-pi)),abs(neweps-eps))
+    pi,eps=newpi,neweps
+    print(it, pi*100, eps, diff)
+    if diff<1e-8: break
+print('FINAL pi',pi*100)
+print('eps',eps)
+print('rounded nearest 5',[int(round(x*100/5)*5) for x in pi])
+PY
+python3 [REDACTED LOCAL PATH]"

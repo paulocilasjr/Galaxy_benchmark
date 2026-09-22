@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, collections, re
+D=json.load(open('encode_dnase_grch38_bam_alignments.json'))['@graph']
+# get stats total/mq0 for each file
+def qmval(f, key):
+    for q in f.get('quality_metrics',[]):
+        ty=q.get('@type',[])
+        if 'SamtoolsStatsQualityMetric' in ty:
+            return q.get(key)
+    return None
+def flagval(f,key):
+    for q in f.get('quality_metrics',[]):
+        if 'SamtoolsFlagstatsQualityMetric' in q.get('@type',[]): return q.get(key)
+    return None
+by=collections.defaultdict(list)
+for f in D:
+    aliases=tuple(f.get('analysis_step_version',{}).get('aliases',[]))
+    total=qmval(f,'raw total sequences') or qmval(f,'reads mapped') or flagval(f,'total')
+    mq0=qmval(f,'reads MQ0')
+    if total:
+        by[(f['dataset'].strip('/').split('/')[-1], aliases, f.get('status'))].append((f['accession'], total, mq0, f.get('biological_replicates'), f.get('file_size')))
+# print closest experiment sums to 76.9M for each alias/status or overall for released
+TARGET=76_923_700
+rows=[]
+for (exp,aliases,status),files in by.items():
+    # maybe one file per replicate; if duplicate reps? all files in same alias/status are pipeline outputs; pool all replicate BAMs
+    s=sum(x[1] for x in files)
+    rows.append((abs(s-TARGET),s,exp,aliases,status,len(files),files))
+for r in sorted(rows)[:50]:
+    diff,s,exp,aliases,status,n,files=r
+    print(diff,s,exp,status,n,aliases)
+    print(' ', files[:5])
+PY"

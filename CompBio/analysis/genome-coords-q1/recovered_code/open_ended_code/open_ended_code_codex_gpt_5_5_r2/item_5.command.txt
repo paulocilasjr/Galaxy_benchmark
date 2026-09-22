@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math
+from collections import defaultdict
+rows=[]
+with open('single_cell_dynamics_question.csv', newline='') as f:
+    r=csv.DictReader(f)
+    for d in r:
+        cid=int(d['cell_id']); t=int(d['time'])
+        ex,ey,ez=(float(d[k]) for k in ['enh_x','enh_y','enh_z'])
+        px,py,pz=(float(d[k]) for k in ['prom_x','prom_y','prom_z'])
+        tr=int(d['transcription'])
+        dist=math.sqrt((ex-px)**2+(ey-py)**2+(ez-pz)**2)
+        contact=int(dist<=260)
+        rows.append((cid,t,dist,contact,tr))
+print('n',len(rows),'cells',len(set(x[0] for x in rows)),'times',min(x[1] for x in rows),max(x[1] for x in rows))
+print('contact rate',sum(x[3] for x in rows)/len(rows),'tx rate',sum(x[4] for x in rows)/len(rows))
+# contemporaneous table
+from collections import Counter
+ct=Counter((c,tr) for _,_,_,c,tr in rows)
+print('contemp table contact,tx',ct)
+print('P(tx|contact)',ct[(1,1)]/(ct[(1,0)]+ct[(1,1)]),'P(tx|no contact)',ct[(0,1)]/(ct[(0,0)]+ct[(0,1)]))
+print('P(contact|tx)',ct[(1,1)]/(ct[(0,1)]+ct[(1,1)]),'P(contact|no tx)',ct[(1,0)]/(ct[(0,0)]+ct[(1,0)]))
+# arrange per cell
+by=defaultdict(dict)
+for cid,t,dist,c,tr in rows:
+    by[cid][t]=(dist,c,tr)
+# lag functions: X at t => Y at t+lag, excluding same-cell?
+for lag in range(-10,11):
+    if lag==0: continue
+    pairs=[]
+    # contact_t vs tr_t+lag (lag>0 contact precedes tx; lag<0 tx precedes contact equivalently)
+    for cid,dct in by.items():
+        for t,(dist,c,tr) in dct.items():
+            if t+lag in dct:
+                pairs.append((c,dct[t+lag][2],tr,dct[t+lag][1]))
+    if not pairs: continue
+    # P(tx at t+lag | contact t)
+    n1=sum(1 for c,trlag,_,_ in pairs if c==1); y1=sum(trlag for c,trlag,_,_ in pairs if c==1)
+    n0=sum(1 for c,trlag,_,_ in pairs if c==0); y0=sum(trlag for c,trlag,_,_ in pairs if c==0)
+    # P(contact at t+lag | tx t)
+    m1=sum(1 for _,_,tr,clag in pairs if tr==1); z1=sum(clag for _,_,tr,clag in pairs if tr==1)
+    m0=sum(1 for _,_,tr,clag in pairs if tr==0); z0=sum(clag for _,_,tr,clag in pairs if tr==0)
+    print('lag',lag,'P(tx_lag|contact)-no', y1/n1-y0/n0, 'P(contact_lag|tx)-no', z1/m1-z0/m0, 'rates', y1/n1,y0/n0,z1/m1,z0/m0)
+PY"

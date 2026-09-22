@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp, time, os
+p='lung.cancer.sc.h5ad'
+t=time.time()
+with h5py.File(p,'r') as f:
+    print('loading metadata')
+    syms=np.array([x.decode() if isinstance(x,bytes) else x for x in f['var/symbol'][:]])
+    cats=np.array([x.decode() if isinstance(x,bytes) else x for x in f['obs/sampleID/categories'][:]])
+    codes=f['obs/sampleID/codes'][:]
+    print('loading csr arrays')
+    data=f['X/data'][:]
+    indices=f['X/indices'][:]
+    indptr=f['X/indptr'][:]
+    shape=tuple(f['X'].attrs['shape'])
+print('arrays loaded', time.time()-t, 'nnz', data.size, 'shape', shape)
+X=sp.csr_matrix((data, indices, indptr), shape=shape)
+# total per cell
+lib=np.asarray(X.sum(axis=1)).ravel().astype(float)
+print('lib median', np.median(lib), 'cells', len(lib))
+# selected genes matrix counts and cp10k/log? 
+markers=['PTPRC','EPCAM','KRT5','KRT6A','KRT14','TP63','KRT17','DSG3','SERPINB5','SFTPA1','SFTPA2','SFTPB','SFTPC','NAPSA','MUC1','NKX2-1','AGER','SCGB3A1','SCGB1A1','PECAM1','VWF','COL1A1','DCN','LUM','CD3D','MS4A1','NKG7','LYZ','FCER1A','CLEC10A','CD1C','CLEC9A','XCR1','LILRA4','IL3RA','LAMP3','CCR7','HLA-DRA','ITGAX','FLT3','CD74']
+g2i={g:i for i,g in enumerate(syms)}
+cols=[g2i[g] for g in markers]
+M=X[:, cols].toarray().astype(float)
+# log1p CPM10K selected
+norm=np.log1p(M/lib[:,None]*1e4)
+# patient mean expression selected
+for sid in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    mask=(cats[codes]==sid)
+    mean=norm[mask].mean(axis=0)
+    print('\\n',sid,'n',mask.sum())
+    for g,v in sorted(zip(markers,mean), key=lambda x:-x[1])[:12]:
+        print(g, round(float(v),3), end='; ')
+    print()
+PY"

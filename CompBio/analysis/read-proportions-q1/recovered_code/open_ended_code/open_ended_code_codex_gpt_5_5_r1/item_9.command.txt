@@ -1,0 +1,100 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import defaultdict, Counter
+
+fa='read.proportions.q1.fa'
+fq='read.proportions.q1.fq.gz'
+
+def parse_fa(path):
+    names=[]; seqs=[]; name=None; parts=[]
+    for line in open(path):
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None:
+                names.append(name); seqs.append(''.join(parts).upper())
+            name=line[1:].split()[0]; parts=[]
+        else:
+            parts.append(line)
+    if name is not None:
+        names.append(name); seqs.append(''.join(parts).upper())
+    return names, seqs
+
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+
+names, seqs=parse_fa(fa)
+L=36
+# Build 9-mer seed index for forward and reverse-complement references.
+k=9
+index=defaultdict(list)
+for ci,seq in enumerate(seqs):
+    for strand,g in [(0,seq),(1,rc(seq))]:
+        for p in range(0,len(g)-k+1):
+            index[g[p:p+k]].append((ci,strand,p))
+
+def hdist(a,b):
+    return sum(x"'!=y for x,y in zip(a,b))
+
+counts=Counter(); minhist=Counter(); ambig=0; nomap=0; used_fallback=0
+unique_counts=Counter(); fractional=[0.0]*len(seqs)
+# For candidate positions, for each seed offset s, genomic start is seed_pos - s in the oriented ref.
+seed_offsets=[0,9,18,27]
+refs=[]
+for seq in seqs:
+    refs.append((seq,rc(seq)))
+
+with gzip.open(fq,'"'rt') as fh:
+    while True:
+        header=fh.readline()
+        if not header: break
+        read=fh.readline().strip().upper(); fh.readline(); fh.readline()
+        cand=set()
+        for off in seed_offsets:
+            seed=read[off:off+k]
+            for ci,strand,p in index.get(seed,()):
+                start=p-off
+                if 0 <= start <= len(refs[ci][strand])-L:
+                    cand.add((ci,strand,start))
+        best=99; best_chrs=[]; seen_chrs=set()
+        if cand:
+            for ci,strand,start in cand:
+                d=hdist(read, refs[ci][strand][start:start+L])
+                if d<best:
+                    best=d; best_chrs=[ci]
+                elif d==best:
+                    best_chrs.append(ci)
+        # fallback brute if no seed candidate; rare unless >3 errors
+        if not cand:
+            used_fallback += 1
+            for ci,(f,r) in enumerate(refs):
+                for strand,g in enumerate((f,r)):
+                    for start in range(0,len(g)-L+1):
+                        d=hdist(read,g[start:start+L])
+                        if d<best:
+                            best=d; best_chrs=[ci]
+                        elif d==best:
+                            best_chrs.append(ci)
+        chset=sorted(set(best_chrs))
+        minhist[best]+=1
+        if not chset:
+            nomap+=1
+            continue
+        if len(chset)==1:
+            counts[chset[0]]+=1
+            unique_counts[chset[0]]+=1
+        else:
+            ambig+=1
+            # fractional assignment among tied chromosomes
+            for ci in chset:
+                fractional[ci]+=1/len(chset)
+            # also count first? no
+
+print('names', names)
+print('unique_counts', [unique_counts[i] for i in range(len(seqs))], 'sum', sum(unique_counts.values()))
+print('ambig', ambig, 'nomap', nomap, 'fallback', used_fallback)
+print('fractional_from_ambig', fractional)
+print('combined_frac', [unique_counts[i]+fractional[i] for i in range(len(seqs))])
+print('percent_frac', [(unique_counts[i]+fractional[i])/40000*100 for i in range(len(seqs))])
+print('minhist', sorted(minhist.items())[:20], sorted(minhist.items())[-10:])
+PY"

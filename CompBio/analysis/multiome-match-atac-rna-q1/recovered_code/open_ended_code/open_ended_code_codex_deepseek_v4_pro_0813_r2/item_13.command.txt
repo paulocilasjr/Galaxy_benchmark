@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, json, time, requests, sys
+genes=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    next(f)
+    for line in f:
+        genes.append(line.split('\\t',1)[0])
+print(len(genes), genes[:10])
+pos={}
+batch=500
+sess=requests.Session()
+for st in range(0,len(genes),batch):
+    q=genes[st:st+batch]
+    for attempt in range(3):
+        try:
+            r=sess.post('https://mygene.info/v3/query', json={'q':q,'scopes':'symbol','fields':'symbol,genomic_pos','species':'human','size':batch}, timeout=60)
+            r.raise_for_status()
+            hits=r.json()
+            break
+        except Exception as e:
+            print('retry',st,attempt,e)
+            time.sleep(2)
+    else:
+        continue
+    for h in hits:
+        # h is dict; may be notfound with notfound True
+        qry=h.get('query')
+        sym=h.get('symbol')
+        gp=h.get('genomic_pos')
+        if not qry: continue
+        # Prefer exact symbol? store first hit with gp, but later hits may include same.
+        if gp and qry not in pos:
+            pos[qry]=(sym,gp)
+        elif gp and qry in pos and sym==qry and not pos[qry][1]:
+            pos[qry]=(sym,gp)
+    if st%5000==0:
+        print('done',st,'found',len(pos), 'sample', list(pos.items())[-1:] if pos else None)
+    time.sleep(0.1)
+print('total found',len(pos))
+missing=[g for g in genes if g not in pos]
+print('missing',len(missing),missing[:20])
+# save
+with open('gene_positions.json','w') as f:
+    json.dump({k:v for k,v in pos.items()},f)
+PY"

@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, anndata as ad
+from sklearn.mixture import GaussianMixture
+D=np.load('donor_sum.npz'); sums=D['sum']; cats=D['cats']; cc=D['cell_counts']
+adata=ad.read_h5ad('covid.patients.q1.h5ad'); names=list(adata.var['feature_name'].astype(str))
+libs=sums.sum(axis=0,keepdims=True); cpm=sums/libs*1e6; log=np.log1p(cpm)
+# curated hallmark ifna genes present
+genes='IFITM1 LY6E TXNIP ELF1 PSMA3 EIF2AK2 ADAR IFIH1 MX1 ISG20 IFITM2 PARP14 EPSTI1 OGFR IRF9 IFI44L TDRD7 RIPK2 CASP8 IL15 TRAFD1 TMEM140 IRF1 NCOA7 PLSCR1 GBP4 IFIT2 TRIM26 TAP1 PNPT1 IFIT3 IFI27 CMPK2 IFI44 LAP3 TRIM21 OASL CMTR1 ISG15 CNP RTP4 IL4R LGALS3BP TRIM25 MOV10 PARP12 PARP9 SP110 HERC6 RSAD2 NUB1 HELZ2 OAS1 HLA-C DHX58 DDX60 IFITM3 B2M CD74 PSME1 LPAR6 IFI30 IRF7 NMI IFI35 SAMD9 STAT2 PSME2 UBE2L6 BST2 SELL TRIM14 IRF2 CASP1 GBP2 CD47 PSMB9 PSMB8 GMPR CCRL2 USP18 MVB12A SAMD9L'.split()
+idx=[names.index(g) for g in genes if g in names]
+print('found',len(idx))
+logsel=log[idx,:]
+# score mean zscore across genes
+z=(logsel-logsel.mean(axis=1,keepdims=True))/logsel.std(axis=1,keepdims=True)
+score=z.mean(axis=0)
+print('IFN score')
+for c,s in sorted(zip(cats,score), key=lambda x:x[1], reverse=True):
+ print(c, round(s,3))
+# mixture
+for data,name in [(score,'zscore'), (logsel.mean(axis=0),'logmean')]:
+ g=GaussianMixture(n_components=2,random_state=0).fit(data.reshape(-1,1))
+ print('\\n',name,'GMM means',g.means_.ravel(),'counts',np.bincount(g.predict(data.reshape(-1,1))))
+ for lab in range(2):
+  print(lab,sorted([str(c) for c,l in zip(cats,g.predict(data.reshape(-1,1))) if l==lab]))
+PY"

@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+rng=np.random.default_rng(0)
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rg=[g for g in r.obs.guide.cat.categories if not g.startswith('NT-')]
+qg=[g for g in q.obs.guide.cat.categories if not g.startswith('NT-')]
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0)
+qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+Er=np.array([R[rguide==g].mean(0)-rnt for g in rg])
+Eq=np.array([Q[qguide==g].mean(0)-qnt for g in qg])
+def corr(A,B):
+ A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True); A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-9; B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-9
+ return A@B.T
+# variability selection many k
+for k in [100,200,500,750,1000,1500,2000,3000,5000,7000,10000,11857]:
+ v=Er.var(0)+Eq.var(0)
+ idx=np.argsort(v)[-k:]
+ C=corr(Er[:,idx],Eq[:,idx])
+ i=rg.index('LEO1-I2')
+ top=np.argsort(C[i])[::-1][:10]
+ print(k, [(qg[j],round(C[i,j],3)) for j in top])
+print('done')
+PY"

@@ -1,0 +1,40 @@
+/bin/bash -lc "cat > map_query2.py <<'PY'
+import mygene, json, time
+mg=mygene.MyGeneInfo()
+genes=[l.strip() for l in open('characterize.response.q1.txt') if l.strip()]
+out=mg.querymany(genes, scopes='symbol', species='mouse', fields='symbol,name,taxid,homologene', returnall=True, verbose=False)
+print(type(out), out.keys())
+res={}
+for d in out['out']:
+ q=d.get('query'); sym=d.get('symbol'); h=d.get('homologene')
+ hid=None
+ if isinstance(h,dict): hid=h.get('id')
+ print(q, sym, h)
+ res[q]={'mouse_symbol':sym,'homologene':hid}
+# get human genes by homologene ids
+ids=[v['homologene'] for v in res.values() if v['homologene']]
+hum=mg.querymany(ids, scopes='homologene', species='human', fields='symbol,name,taxid,homologene', returnall=True, verbose=False)
+# map hid -> human symbol (choose protein coding maybe first)
+hmap={}
+for d in hum['out']:
+ h=d.get('homologene')
+ hid=h.get('id') if isinstance(h,dict) else None
+ sym=d.get('symbol')
+ if hid and sym: hmap.setdefault(hid, []).append(sym)
+for q,v in res.items():
+ hid=v['homologene']
+ v['human_symbols']=hmap.get(hid,[])
+ # prefer uppercase same
+ syms=v['human_symbols']
+ if syms:
+  up=q.upper()
+  if up in syms: v['human']=up
+  else: v['human']=syms[0]
+ else:
+  # fallback upper if identical common
+  v['human']=q.upper()
+ print(q,'->',v['mouse_symbol'], 'human', v.get('human'), 'all', syms[:5])
+json.dump({q:v.get('human') for q,v in res.items()}, open('mouse_to_human2.json','w'), indent=2)
+print('done', len(res))
+PY
+python3 map_query2.py"

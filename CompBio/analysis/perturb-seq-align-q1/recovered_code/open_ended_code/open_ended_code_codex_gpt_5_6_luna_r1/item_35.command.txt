@@ -1,0 +1,49 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,gc
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def aggregate(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  gg=h['X']; x=sparse.csc_matrix((gg['data'][()],gg['indices'][()],gg['indptr'][()]),shape=tuple(gg.attrs['shape']))
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var/_index'][()]],object)
+  cats=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][()]]; gids=np.array([cats[z] for z in h['obs/guide/codes'][()]])
+ groups=np.unique(gids); codes=np.searchsorted(groups,gids); M=np.zeros((len(gids),len(groups)),np.int8);M[np.arange(len(gids)),codes]=1
+ lib=np.asarray(x.sum(1)).ravel().astype(float); vals=np.log1p(x.data.astype(float)/(lib[x.indices])*1e4); lx=sparse.csc_matrix((vals,x.indices,x.indptr),shape=x.shape,copy=False)
+ means=np.asarray(lx.T.dot(M))/np.bincount(codes)[None,:]
+ det=np.asarray(x.astype(bool).T.dot(M))/np.bincount(codes)[None,:]
+ nt=np.flatnonzero(np.char.startswith(groups,'NT-')); pert=[i for i,g in enumerate(groups) if not g.startswith('NT-')]
+ eff=(means[:,pert]-means[:,nt].mean(1)[:,None]).T; deff=(det[:,pert]-det[:,nt].mean(1)[:,None]).T
+ return genes,groups[pert],eff,deff,means[:,nt].mean(1),det[:,nt].mean(1)
+rgenes,rg,RL,RD,RC,Rdet=aggregate('perturb.seq.align.q1.ref.h5ad'); qgenes,qg,QL,QD,QC,Qdet=aggregate('perturb.seq.align.q1.query.h5ad')
+rm={g:i for i,g in enumerate(rgenes)}; qm={g:i for i,g in enumerate(qgenes)}; common=[g for g in rgenes if g in qm]; ri=np.array([rm[g] for g in common]); qi=np.array([qm[g] for g in common])
+A=RL[:,ri]; B=QL[:,qi]; AD=RD[:,ri];BD=QD[:,qi]
+print('groups',len(rg),len(qg),'common',len(common),flush=True)
+def simcorr(A,B,ix,rank=False):
+ if rank:
+  A=np.apply_along_axis(rankdata,1,A[:,ix]);B=np.apply_along_axis(rankdata,1,B[:,ix])
+ else: A=A[:,ix].astype(float);B=B[:,ix].astype(float)
+ A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True); A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-9;B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-9
+ return B@A.T
+# selectors based on mean control detection and effect variation
+rdetc=Rdet[ri]; qdetc=Qdet[qi]
+var=np.var(np.vstack([A,B]),0)
+selectors={'all':np.arange(len(common)),'var100':np.argsort(var)[-100:],'var300':np.argsort(var)[-300:],'var1000':np.argsort(var)[-1000:],'var3000':np.argsort(var)[-3000:]}
+for filt in [0.0,.01,.05,.1,.2,.4]:
+ selectors['det'+str(filt)]=np.flatnonzero((rdetc>filt)&(qdetc>filt))
+for sel,ix in selectors.items():
+ for met in ['corr','rank']:
+  sim=simcorr(A,B,ix,met=='rank')
+  print('\\n',sel,met,'ng',len(ix),flush=True)
+  for t in ['PABPC1','NUDT21','LEO1']:
+   j=[i for i,g in enumerate(rg) if g.startswith(t+'-')][0];order=np.argsort(sim[:,j])[::-1][:8]
+   print(rg[j],[(str(qg[i]),round(float(sim[i,j]),3)) for i in order])
+  if sel in ['all','var300','det0.05'] and met=='corr':
+   # Hungarian leave one ref unmatched: append dummy query? assignment 32 query to 32 of 33 ref max
+   # choose max over omitted ref by enumerate? scipy assignment on 33x33 with one dummy query score 0
+   mat=np.vstack([sim,np.zeros((1,sim.shape[1]))]) # 33 query rows x 33 ref; dummy row can take one
+   rr,cc=linear_sum_assignment(-mat)
+   pairs=[(qg[i] if i<len(qg) else 'DUMMY',rg[j],sim[i,j] if i<len(qg) else 0) for i,j in zip(rr,cc) if i<len(qg)]
+   print('ASSIGN',[(a,b,round(float(s),3)) for a,b,s in pairs])
+PY"

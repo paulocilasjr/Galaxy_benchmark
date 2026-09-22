@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, re, time, pathlib, xml.etree.ElementTree as ET
+base='https://blast.ncbi.nlm.nih.gov/Blast.cgi'
+fa=pathlib.Path('random_200.fa').read_text().strip().split('\\n')
+records=[]
+for i in range(0,len(fa),2): records.append((fa[i][1:],fa[i+1]))
+summary=[]
+for ci in range(0,len(records),50):
+    recs=records[ci:ci+50]
+    query='\\n'.join(f'>{h}\\n{s}' for h,s in recs)
+    params={'CMD':'Put','PROGRAM':'blastn','DATABASE':'nt','QUERY':query,'MEGABLAST':'on','SHORT_QUERY_ADJUST':'on','EXPECT':'10','HITLIST_SIZE':'10','FORMAT_TYPE':'XML'}
+    r=requests.post(base,data=params,timeout=90)
+    rid=re.search(r'RID = (\\S+)',r.text); rtoe=re.search(r'RTOE = (\\d+)',r.text)
+    print('chunk',ci//50+1,'status',r.status_code,'rid',rid.group(1) if rid else None,'rtoe',rtoe.group(1) if rtoe else None, flush=True)
+    if not rid: print(r.text[:500]); continue
+    rid=rid.group(1); wait=int(rtoe.group(1) if rtoe else 20)
+    for poll in range(30):
+        time.sleep(wait if poll==0 else 10)
+        g=requests.get(base,params={'CMD':'Get','RID':rid,'FORMAT_TYPE':'XML','DESCRIPTIONS':'10','ALIGNMENTS':'10'},timeout=90)
+        txt=g.text
+        if 'Status=WAITING' in txt:
+            print('chunk',ci//50+1,'waiting',poll, flush=True); continue
+        pathlib.Path(f'blast_api_random200_chunk{ci//50+1}.xml').write_text(txt)
+        try:
+            root=ET.fromstring(txt[txt.find('<?xml'):])
+        except Exception as e:
+            print('parse error',e,txt[:200]); break
+        for it in root.findall('.//Iteration'):
+            q=it.findtext('Iteration_query-def') or it.findtext('Iteration_query-ID')
+            hit=it.find('.//Hit')
+            if hit is None:
+                summary.append((q,'NO_HIT','','','','',''))
+                continue
+            hdef=hit.findtext('Hit_def') or ''
+            acc=hit.findtext('Hit_accession') or ''
+            tax=''
+            hsp=hit.find('.//Hsp')
+            vals=['','','','']
+            if hsp is not None:
+                vals=[hsp.findtext(x) or '' for x in ['Hsp_identity','Hsp_align-len','Hsp_evalue','Hsp_bit-score']]
+            summary.append((q,acc,hdef,*vals))
+        print('chunk',ci//50+1,'done',len(summary), flush=True)
+        break
+pathlib.Path('blast_api_random200_summary.tsv').write_text('\\n'.join('\\t'.join(map(str,row)) for row in summary)+'\\n')
+PY"

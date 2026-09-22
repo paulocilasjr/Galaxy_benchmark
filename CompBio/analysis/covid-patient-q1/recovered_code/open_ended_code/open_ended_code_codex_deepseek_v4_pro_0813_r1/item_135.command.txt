@@ -1,0 +1,50 @@
+/bin/bash -lc "cat > match_expr.py <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+from scipy.stats import spearmanr, pearsonr
+
+# working gene names
+adata=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+wnames=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); wsum=D['sum']; wcc=D['cell_counts']; wcats=D['cats']
+wlib=wsum.sum(axis=0, keepdims=True); wcpm=wsum/wlib*1e6; wlog=np.log1p(wcpm)
+
+# original group sums donor
+orig=pd.read_csv('group_sums_Donor.csv', index_col=0)
+onames=np.array(orig.index.astype(str))
+ocols=np.array(orig.columns.astype(str))
+O=orig.values.astype(float)
+olib=O.sum(axis=0, keepdims=True); ocpm=O/olib*1e6; olog=np.log1p(ocpm)
+
+# common genes case insensitive
+wnorm=np.char.lower(wnames); onorm=np.char.lower(onames)
+common,wi,oi=np.intersect1d(wnorm,onorm,return_indices=True)
+print('common genes',len(common))
+W=wlog[wi,:] # genes x donors
+Or=olog[oi,:]
+
+# top variable genes across all samples
+allmat=np.concatenate([W,Or],axis=1) # genes x (33+47)
+mu=allmat.mean(axis=1,keepdims=True); sd=allmat.std(axis=1,keepdims=True); sd[sd==0]=1
+Z=(allmat-mu)/sd
+# variance across all samples
+var=Z.var(axis=1)
+# select top n genes
+for n in [200,500,1000,2000,5000,10000]:
+    idx=np.argsort(-var)[:n]
+    Wz=Z[idx,:W.shape[1]]
+    Oz=Z[idx,W.shape[1]:]
+    print('\\nN',n)
+    # for each working donor compute top correlation and margin
+    for j,d in enumerate(wcats):
+        cw=Wz[:,j]
+        sims=[]
+        for k,od in enumerate(ocols):
+            co=Oz[:,k]
+            # pearson zscore
+            r=pearsonr(cw,co)[0]
+            sims.append((r,od))
+        sims.sort(reverse=True)
+        top=sims[:3]
+        print(f'{d}: ' + ', '.join(f'{od}:{r:.3f}' for r,od in top))
+PY
+python3 match_expr.py"

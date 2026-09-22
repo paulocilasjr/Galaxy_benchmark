@@ -1,0 +1,32 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(Matrix)
+obj <- readRDS('tissue.fibroblast.q1.rds')
+libs <- Matrix::colSums(obj)
+X <- obj
+# log-normalize sparse values by column library size
+for (j in seq_len(ncol(X))) {
+  if (X@p[j+1] > X@p[j]) {
+    idx <- (X@p[j]+1):X@p[j+1]
+    X@x[idx] <- log1p(X@x[idx] / libs[j] * 10000)
+  }
+}
+norms <- sqrt(Matrix::colSums(X"'^2))
+targets <- c('"'Cell_11249_MCI','Cell_10369_WXV')
+for (target in targets) {
+  dots <- as.numeric(Matrix::crossprod(X[,target,drop=FALSE], X))
+  sim <- dots / (norms[target] * norms + 1e-9)
+  ord <- order(sim, decreasing=TRUE)
+  top <- ord[1:50]
+  cat('\\nTARGET', target, 'lib', libs[target], 'nonzero', length(obj[,target]@x), '\\n')
+  print(data.frame(rank=1:20, cell=colnames(obj)[ord[1:20]], sim=round(sim[ord[1:20]],3), numeric=as.integer(sub('Cell_([0-9]+)_.*','\\\\1', colnames(obj)[ord[1:20]]))))
+  # top avg genes among nearest excluding target compared to global
+  nn <- colnames(obj)[ord[2:101]]
+  avg.nn <- Matrix::rowMeans(obj[,nn,drop=FALSE])
+  avg.all <- Matrix::rowMeans(obj)
+  pct.nn <- Matrix::rowMeans(obj[,nn,drop=FALSE] > 0)
+  pct.all <- Matrix::rowMeans(obj > 0)
+  score <- log2((avg.nn+0.01)/(avg.all+0.01)) * pmax(pct.nn-pct.all,0)
+  topg <- head(order(score, decreasing=TRUE), 50)
+  print(data.frame(gene=rownames(obj)[topg], avg_nn=round(avg.nn[topg],2), pct_nn=round(pct.nn[topg],2), avg_all=round(avg.all[topg],2), pct_all=round(pct.all[topg],2), score=round(score[topg],2)), row.names=FALSE)
+}
+RS"

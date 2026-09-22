@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+from scipy.optimize import linear_sum_assignment
+
+def load(f):
+ with h5py.File(f) as h:
+  sh=tuple(h['X'].attrs['shape'])
+  x=csc_matrix((h['X/data'][:].astype('float32'),h['X/indices'][:],h['X/indptr'][:]),shape=sh).tocsr()
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var/_index'][:]])
+  cats=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+ # cell normalized log1p
+ sf=1e4/np.asarray(x.sum(1)).ravel()
+ x.data *= np.repeat(sf,np.diff(x.indptr))
+ np.log1p(x.data,out=x.data)
+ # group means
+ means=np.vstack([np.asarray(x[codes==i].mean(0)).ravel() for i in range(len(cats))])
+ return genes,cats,codes,means
+rg,rc,rcode,rm=load('perturb.seq.align.q1.ref.h5ad')
+qg,qc,qcode,qm=load('perturb.seq.align.q1.query.h5ad')
+common=np.intersect1d(rg,qg)
+ri=np.array([np.where(rg==g)[0][0] for g in common]); qi=np.array([np.where(qg==g)[0][0] for g in common])
+rnt=np.char.startswith(rc.astype(str),'NT-'); qnt=np.char.startswith(qc.astype(str),'NT-')
+R=rm[~rnt][:,ri]-rm[rnt][:,ri].mean(0)
+Q=qm[~qnt][:,qi]-qm[qnt][:,qi].mean(0)
+rnames=rc[~rnt]; qnames=qc[~qnt]
+# filter genes moderately expressed in either baseline and non-mt/ribo
+baseR=rm[rnt][:,ri].mean(0); baseQ=qm[qnt][:,qi].mean(0)
+mask=((baseR>0.05)|(baseQ>0.05)) & ~np.char.startswith(common.astype(str),'MT-')
+print('shapes',R.shape,Q.shape,'common',len(common),'mask',mask.sum())
+
+def corrmat(A,B):
+ A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True)
+ A=A/np.sqrt((A*A).sum(1,keepdims=True)); B=B/np.sqrt((B*B).sum(1,keepdims=True))
+ return A@B.T
+for desc,A,B in [('all',R[:,mask],Q[:,mask])]:
+ C=corrmat(A,B)
+ print('\\n',desc)
+ for target in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+  i=np.where(rnames==target)[0][0]; order=np.argsort(C[i])[::-1][:10]
+  print(target,[(qnames[j],round(float(C[i,j]),4)) for j in order])
+ # hungarian
+ rows,cols=linear_sum_assignment(-C)
+ for target in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+  i=np.where(rnames==target)[0][0]; j=cols[np.where(rows==i)[0][0]] if i in rows else -1
+  print('hung',target,qnames[j],C[i,j])
+# top abs genes specific per ref row, score corr on selected
+for k in [25,50,100,200,500,1000,2000]:
+ C=np.zeros((len(rnames),len(qnames)))
+ for i in range(len(rnames)):
+  ix=np.where(mask)[0]
+  sel=ix[np.argsort(np.abs(R[i,ix]))[-k:]]
+  C[i]=corrmat(R[i:i+1,sel],Q[:,sel])[0]
+ print('\\ntop',k)
+ for target in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+  i=np.where(rnames==target)[0][0]; order=np.argsort(C[i])[::-1][:5]
+  print(target,[(qnames[j],round(float(C[i,j]),3)) for j in order])
+PY"

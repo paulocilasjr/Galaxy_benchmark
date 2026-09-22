@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import struct, sys, numpy as np, torch, h5py
+torch.set_num_threads(1)
+sys.path.insert(0,'proto')
+from example_pb2 import Example
+from saluki_torch import Saluki, load_weights
+
+def read_tfrs(fn,N=5):
+ data=open(fn,'rb').read(); pos=0; out=[]; n=0
+ while pos+16<=len(data) and n<N:
+  length=struct.unpack('<Q',data[pos:pos+8])[0]
+  payload=data[pos+12:pos+12+length]
+  ex=Example(); ex.ParseFromString(payload); f=ex.features.feature
+  seq=np.frombuffer(f['sequence'].bytes_list.value[0],dtype=np.uint8)
+  coding=np.frombuffer(f['coding'].bytes_list.value[0],dtype=np.uint8)
+  splice=np.frombuffer(f['splice'].bytes_list.value[0],dtype=np.uint8)
+  length_val=f['lengths'].int64_list.value[0]
+  # pad to 12288 right
+  seqp=np.zeros(12288,dtype=np.float32); seqp[:length_val]=seq
+  codp=np.zeros(12288,dtype=np.float32); codp[:length_val]=coding
+  splp=np.zeros(12288,dtype=np.float32); splp[:length_val]=splice
+  out.append((seqp,codp,splp))
+  pos += 12+length+4; n+=1
+ return out
+recs=read_tfrs('models/train_gru/f0_c0/test-0.tfr.dec',20)
+X=[]
+for seqp,codp,splp in recs:
+ one=np.eye(4,dtype=np.float32)[seqp.astype(int)]
+ X.append(np.concatenate([one,codp[:,None],splp[:,None]],axis=1))
+X=np.array(X)
+Xt=torch.from_numpy(X).permute(0,2,1).contiguous()
+model=Saluki(); load_weights(model,'models/train_gru/f0_c0/train/model0_best.h5'); model.eval()
+with torch.no_grad(): pred=model(Xt).numpy().ravel()
+with h5py.File('models/train_gru/f0_c0/test0_preds.h5','r') as f: ref=f['preds'][:20].ravel()
+for i in range(20): print(i,pred[i],ref[i],pred[i]-ref[i])
+print('corr',np.corrcoef(pred,ref)[0,1])
+PY"

@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+from collections import defaultdict
+from scipy import stats
+hic=list(csv.DictReader(open('ep.interactions.q1.hic.csv')))
+expr=list(csv.DictReader(open('ep.interactions.q1.expr.csv')))
+bg=[]; cand=[]
+for r in hic:
+ c=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+ (bg if r['set']=='background' else cand).append((r['pair_id'],int(r['distance_bp']),c))
+logd=[math.log(d) for _,d,c in bg]; totals=[sum(c) for _,d,c in bg]
+def lam(d):
+ ld=math.log(d); ws=[math.exp(-.5*((ld-l)/.3)**2) for l in logd]; return sum(w*t for w,t in zip(ws,totals))/sum(ws)
+pairs=defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+for r in expr: pairs[r['pair_id']][r['guide_id']][r['condition']].append(int(r['rna_count']))
+rows=[]
+for pid,d,c in cand:
+ k=sum(c); l=lam(d)
+ p_hi=stats.poisson.sf(k-1,l)
+ ctrl=[]; pert=[]
+ for g,dic in pairs[pid].items(): ctrl+=dic['control']; pert+=dic['perturbed']
+ t,p_down=stats.ttest_ind(pert,ctrl,equal_var=False,alternative='less') # enhancer down
+ t2,p_two=stats.ttest_ind(pert,ctrl,equal_var=False)
+ # fisher combine p_hi and p_down (both evidence for true enhancer)
+ chi=-2*(math.log(p_hi)+math.log(p_down)); fisher=stats.chi2.sf(chi,4)
+ st_z=statistics.NormalDist().inv_cdf(1-p_hi)+statistics.NormalDist().inv_cdf(1-p_down)
+ st_p=statistics.NormalDist().sf(st_z/math.sqrt(2))
+ rows.append((pid,d,k,l,p_hi,p_down,p_two,fisher,st_p))
+ print(f'{pid} hi_p={p_hi:.3g} down_p={p_down:.3g} two_p={p_two:.3g} fisher_combined={fisher:.3g} stouffer={st_p:.3g}')
+print('\\nrank by combined p (largest least true)')
+for r in sorted(rows,key=lambda x:-x[-1]):
+ print(r[0],'fisher',r[-2],'st',r[-1])
+PY"

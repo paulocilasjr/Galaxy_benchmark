@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import os, gzip
+import numpy as np
+from scipy import sparse
+from scipy.io import mmwrite
+z=np.load('allele_counts.npz'); keys=z['keys']; dp=z['dp'].astype(np.int64); ad=z['ad'].astype(np.int64); sites=z['sites']; cb=z['barcodes']; rows=keys>>16; cells=keys&65535; ns=len(sites)
+sp=np.bincount(rows,minlength=ns); sd=np.bincount(rows,weights=dp,minlength=ns); sa=np.bincount(rows,weights=ad,minlength=ns); f=sa/np.maximum(sd,1)
+for thr in [20,30,50,100]:
+ sel=(sp>=thr)&(sd>=50)&(f>=.05)&(f<=.5)
+ keep=np.flatnonzero(sel); rid={r:i for i,r in enumerate(keep)}
+ q=np.array([rid.get(int(r),-1) for r in rows]); ok=q>=0
+ dprow=q[ok]; cp=cells[ok]
+ out=f'cellSNP_{thr}'; os.makedirs(out,exist_ok=True)
+ mmwrite(os.path.join(out,'cellSNP.tag.AD.mtx'),sparse.coo_matrix((ad[ok],(dprow,cp)),shape=(len(keep),len(cb))))
+ mmwrite(os.path.join(out,'cellSNP.tag.DP.mtx'),sparse.coo_matrix((dp[ok],(dprow,cp)),shape=(len(keep),len(cb))))
+ with open(os.path.join(out,'cellSNP.samples.tsv'),'w') as fh:
+  fh.write('\\n'.join(map(str,cb.tolist()))+'\\n')
+ with open(os.path.join(out,'cellSNP.base.vcf'),'w') as fh:
+  fh.write('##fileformat=VCFv4.2\\n##source=local_pileup\\n')
+  fh.write('#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\n')
+  for j,r in enumerate(keep):
+   c,p,ref,alt=sites[r]
+   fh.write(f'{c}\\t{p}\\tS{r}\\t{ref}\\t{alt}\\t.\\tPASS\\t.\\n')
+ print(out,len(keep),ok.sum())
+PY
+ls -lh cellSNP_20 cellSNP_50 | sed -n '1,30p'"

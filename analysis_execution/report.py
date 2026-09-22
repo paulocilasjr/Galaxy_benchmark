@@ -38,7 +38,8 @@ def render(output: Path, evidence: dict) -> None:
              "| Model slug | Galaxy score mean | Code score mean | Difference (original metric unit) | Galaxy/code median input-token ratio |", "|---|---:|---:|---:|---:|"]
     for model, c in sorted(by_model.items()):
         s, t = c.get("score", {}), c.get("input_tokens", {})
-        difference = _fmt(s.get('estimate')) + (" pp" if s.get("estimate_unit", "").startswith("percentage points") else "")
+        estimate_unit = s.get("estimate_unit") or ""
+        difference = _fmt(s.get('estimate')) + (" pp" if estimate_unit.startswith("percentage points") else "")
         lines.append(f"| {model} | {_fmt(s.get('galaxy_mean'))} | {_fmt(s.get('code_mean'))} | {difference} | {_fmt(t.get('estimate'))} |")
     lines += ["", "These are descriptive within-task comparisons. A score difference is shown only when both conditions contain the same numeric original evaluator field. A token ratio divides the two condition medians; it is not the median of paired replicate ratios. No task-level confidence interval or equivalence conclusion is calculated from this one task.", "",
               "## 3. Results questions", "",

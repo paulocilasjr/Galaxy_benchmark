@@ -1,0 +1,78 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re
+
+def natural_key(chrom):
+    m=re.match(r'chr(\\d+|X|Y|M)',chrom)
+    if m:
+        s=m.group(1)
+        if s.isdigit(): return (0,int(s))
+        return (1,s)
+    return (2,chrom)
+
+# read blacklist
+black=[]
+with gzip.open('ENCFF356LFX.bed.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        chrom=p[0]; s=int(p[1]); e=int(p[2])
+        black.append((natural_key(chrom),chrom,s,e))
+black_by={}
+for _,chrom,s,e in black:
+    black_by.setdefault(chrom,[]).append((s,e))
+for chrom in black_by:
+    black_by[chrom].sort()
+
+intervals={}
+count=0
+with gzip.open('ENCFF333TAT.bed.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        chrom=p[0]; start=int(p[1]); summit=int(p[9])
+        center=start+summit
+        s=center-250; e=center+250
+        if s<0: s=0
+        intervals.setdefault(chrom,[]).append((s,e))
+        count+=1
+
+def merge(lst):
+    if not lst: return []
+    lst.sort()
+    out=[]
+    cs,ce=lst[0]
+    for s,e in lst[1:]:
+        if s<=ce:
+            if e>ce: ce=e
+        else:
+            out.append((cs,ce)); cs,ce=s,e
+    out.append((cs,ce))
+    return out
+
+def remove_overlap(lst, blacklst):
+    out=[]
+    j=0
+    for s,e in lst:
+        # advance black that ends <= s? overlap if black_s < e and black_e > s
+        while j<len(blacklst) and blacklst[j][1] <= s:
+            j+=1
+        k=j
+        overlaps=False
+        while k<len(blacklst) and blacklst[k][0] < e:
+            bs,be=blacklst[k]
+            if bs < e and be > s:
+                overlaps=True; break
+            k+=1
+        if not overlaps:
+            out.append((s,e))
+    return out
+
+total=0
+merged_count=0
+for chrom in sorted(intervals, key=natural_key):
+    m=merge(intervals[chrom])
+    merged_count+=len(m)
+    bl=black_by.get(chrom,[])
+    fin=remove_overlap(m,bl)
+    total+=sum(e-s for s,e in fin)
+print('peaks',count,'merged',merged_count,'final_count?',sum(len(remove_overlap(merge(intervals[c]),black_by.get(c,[])) for c in intervals)))
+print('total',total)
+PY"

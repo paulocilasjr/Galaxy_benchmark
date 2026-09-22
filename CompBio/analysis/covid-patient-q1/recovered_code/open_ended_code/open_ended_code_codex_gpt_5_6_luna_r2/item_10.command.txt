@@ -1,0 +1,50 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, pandas as pd, scipy.sparse as sp, time
+from sklearn.decomposition import PCA
+p='covid.patients.q1.h5ad'
+with h5py.File(p,'r') as f:
+ cats=f['obs/donor_id/categories'].asstr()[:]
+ codes=f['obs/donor_id/codes'][:]
+ n=f['X/indptr'].shape[0]-1; g=f['var/_index'].shape[0]
+ genes=f['var/feature_name/categories'].asstr()[:]
+ var_codes=f['var/feature_name/codes'][:]
+ names=genes[var_codes]
+ ip=f['X/indptr'][:]
+ donor_sum=np.zeros((len(cats),g),dtype=np.float64)
+ donor_cells=np.bincount(codes,minlength=len(cats))
+ lib=np.zeros(n,dtype=np.int64); ng=np.zeros(n,dtype=np.int32)
+ t=time.time()
+ block=5000
+ for r0 in range(0,n,block):
+  r1=min(n,r0+block)
+  a=ip[r0:r1+1]; s,e=int(a[0]),int(a[-1])
+  mat=sp.csr_matrix((f['X/data'][s:e], f['X/indices'][s:e], a-s), shape=(r1-r0,g))
+  donor_sum += np.asarray(mat.T.dot(np.eye(len(cats),dtype=np.float32)[codes[r0:r1]])).T if False else 0
+  # avoid eye: aggregate each donor in block
+  for d in np.unique(codes[r0:r1]):
+   mask=(codes[r0:r1]==d)
+   donor_sum[d] += np.asarray(mat[mask].sum(axis=0)).ravel()
+  lib[r0:r1]=np.asarray(mat.sum(axis=1)).ravel()
+  ng[r0:r1]=np.diff(mat.indptr)
+ print('aggregate seconds',time.time()-t,'nnz',int(ip[-1]))
+ print('cell lib quantiles',np.percentile(lib,[0,1,5,25,50,75,95,99,100]))
+ print('cell genes quantiles',np.percentile(ng,[0,1,5,25,50,75,95,99,100]))
+ # marker stats via sums and nonzero per cell in another pass? sum raw per donor marker can get from donor_sum
+ markers=['ISG15','IFIT1','IFIT2','IFIT3','IFITM1','IFITM3','MX1','OAS1','OAS2','OAS3','OASL','IFI6','IFI27','IFI44','IFI44L','IRF7','RSAD2','BST2','LY6E','CXCL10','CCL2','CCL3','CCL4','IL7R','CCR7','LST1','S100A8','S100A9','FCGR3A','MS4A1','CD79A','CD3D','CD3E','NKG7','GNLY','MALAT1','GAPDH','RPLP0','HLA-DRA','HLA-DPA1','HLA-DPB1','B2M','JUN','FOS']
+ # collapse duplicate gene names: first matching
+ idx={}
+ for i,x in enumerate(names): idx.setdefault(x,i)
+ found=[m for m in markers if m in idx]
+ print('found',found)
+ # log CPM-like normalized per-cell donor mean: raw sum / cell lib *1e4 average = donor sum/lib total*1e4? Use donor avg counts normalized per cell via cell-wise requires pass
+ # Pseudobulk log cpm
+ cpm=donor_sum/donor_sum.sum(axis=1,keepdims=True)*1e6
+ df=pd.DataFrame({'donor':cats,'cells':donor_cells,'lib_total':donor_sum.sum(axis=1)})
+ for m in found: df[m+'_cpm']=cpm[:,idx[m]]
+ print(df.to_string(index=False,float_format=lambda x:f'{x:.3f}'))
+ # PCA of log cpm highly variable genes
+ z=np.log1p(cpm*100) # arbitrary
+ pp=PCA(n_components=5).fit_transform(z-z.mean(0))
+ print('PCA')
+ print(pd.DataFrame(pp[:,:5],index=cats,columns=[f'PC{i+1}' for i in range(5)]).to_string(float_format=lambda x:f'{x:.3f}'))
+PY"

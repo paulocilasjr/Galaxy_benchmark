@@ -1,0 +1,38 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp, pandas as pd, time, resource, os
+f='covid.patients.q1.h5ad'
+A=ad.read_h5ad(f, backed='r')
+donors=A.obs['donor_id'].astype(str).values
+cats=A.obs['donor_id'].cat.categories.astype(str).values
+codes=A.obs['donor_id'].cat.codes.values
+n=A.shape[0]; g=A.shape[1]; nd=len(cats)
+sums=np.zeros((nd,g), dtype=np.float64)
+ncells=np.zeros(nd, dtype=np.int64)
+totals=np.zeros(nd, dtype=np.float64)
+chunk=20000
+t=time.time()
+for i in range(0,n,chunk):
+    j=min(n,i+chunk)
+    rows=np.arange(i,j)
+    c=codes[i:j]
+    X=A.X[i:j]
+    if hasattr(X,'toarray'):
+        X=X.toarray()
+    D=sp.csr_matrix((np.ones(j-i,dtype=np.float32), (np.arange(j-i), c)), shape=(j-i, nd))
+    block=D.T @ X  # dense (nd,g)
+    sums += block
+    # ncells counts and total counts
+    if sp.issparse(X):
+        rowtot=np.asarray(X.sum(axis=1)).ravel()
+    else:
+        rowtot=X.sum(axis=1)
+    np.add.at(ncells, c, 1)
+    np.add.at(totals, c, rowtot)
+    if i % 100000 < chunk:
+        print('chunk',i,'rss',resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e6, flush=True)
+print('done', time.time()-t)
+np.savez('pseudobulk_raw.npz', sums=sums, cats=cats, ncells=ncells, totals=totals)
+pd.DataFrame({'donor':cats,'ncells':ncells,'total':totals}).to_csv('donor_qc.csv',index=False)
+print('saved')
+PY
+python [REDACTED LOCAL PATH]"

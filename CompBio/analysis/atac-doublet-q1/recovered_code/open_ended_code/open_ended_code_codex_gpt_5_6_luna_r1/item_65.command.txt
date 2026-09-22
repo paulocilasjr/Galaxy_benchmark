@@ -1,0 +1,20 @@
+/bin/bash -lc "python3 -u - <<'PY'
+from doublet_scan import load_fragments
+import numpy as np, gc
+x,b,n=load_fragments('atac.doublet.q1.bed.gz',500,'start',False)
+agg=np.asarray(x.sum(0)).ravel();df0=np.bincount(x.indices,minlength=x.shape[1]);order=np.argsort(agg)[::-1]
+print('raw',x.shape,x.nnz,'agg q',np.quantile(agg[agg>0],[0,.5,.9,.99,1]),flush=True)
+N=len(b);p,q=np.triu_indices(N,1)
+names=['CCGTAATCATGTAAAA-1','CGCACGCGTACTGCAG-1','TCTGCAAAACGCTAAC-1','CACGGTTGACCTAGTG-1','TCTGCAAAACGCTAAC-1','GCTTGCACGCCTTCTC-1','GGGGCAAACAGGAATC-1']
+for k in [20000,50000,100000,200000,400000]:
+ sel=order[:k];y=x[:,sel].copy();y.data=np.log1p(y.data);df=np.bincount(y.indices,minlength=k);idf=np.log((N+1)/(df+1))+1;y=y.multiply(idf).tocsr();rs=np.asarray(y.sum(1)).ravel();y=y.multiply(1/np.maximum(rs,1e-12)[:,None]).tocsr();norm=np.sqrt(np.asarray(y.multiply(y).sum(1)).ravel());y=y.multiply(1/np.maximum(norm,1e-12)[:,None]).tocsr();S=np.asarray((y@y.T).toarray(),dtype=np.float32);np.fill_diagonal(S,-1);pd=S[p,q];den=np.sqrt(2+2*pd)
+ print('\\nk',k,'nnz',y.nnz,'simq',np.round(np.quantile(pd,[0,.01,.5,.99,1]),4),flush=True)
+ for fq in [.01,.05,.1]:
+  th=np.quantile(pd,fq);valid=pd<=th;fit=np.full(N,-1.,np.float32)
+  for i in range(N):
+   z=(S[i,p]+S[i,q])/den;z[~valid]=-2;z[(p==i)|(q==i)]=-2;fit[i]=z.max()
+  rank=np.argsort(fit)[::-1]
+  print('fq',fq,'top',[(b[i],round(float(fit[i]),5)) for i in rank[:10]])
+  print('ranks',[(name,int(np.where(rank==b.index(name))[0][0])+1,round(float(fit[b.index(name)]),5)) for name in names])
+ del y,S;gc.collect()
+PY"

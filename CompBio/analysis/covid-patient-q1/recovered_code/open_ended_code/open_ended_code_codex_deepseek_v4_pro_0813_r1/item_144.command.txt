@@ -1,0 +1,103 @@
+/bin/bash -lc "cat > classify_sigs.py <<'PY'
+import numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import cross_val_predict, StratifiedKFold, LeaveOneOut
+from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix
+from scipy.stats import pearsonr
+
+def load_working():
+    import anndata as ad
+    adata=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+    names=np.array([x for x in adata.var['feature_name']])
+    D=np.load('donor_sum.npz'); sums=D['sum']; cc=D['cell_counts']; cats=D['cats']
+    return names,sums,cc,cats
+
+def compute_scores(names, sums, cc):
+    lib=sums.sum(axis=0,keepdims=True); cpm=sums/lib*1e6; log=np.log1p(cpm)
+    mu=log.mean(axis=1,keepdims=True); sd=log.std(axis=1,keepdims=True); sd[sd==0]=1
+    Z=(log-mu)/sd
+    def score(genes):
+        idx=[]
+        for g in genes:
+            arr=np.where(np.array([x.upper() for x in names])==g.upper())[0]
+            if len(arr): idx.append(arr[0])
+        idx=np.array(idx)
+        return Z[idx].mean(axis=0) if len(idx) else None
+    sigs={
+    'ISG':['ISG15','IFI27','IFI44L','IFIT1','IFIT3','MX1','OAS1','IFITM3','IRF7','STAT1','RSAD2','OAS2','OAS3','IFI6'],
+    'Mono':['LYZ','S100A8','S100A9','CD14','FCGR3A','MS4A7','CSF1R','LILRB2'],
+    'T':['CD3D','CD3E','CD3G','IL7R','TRAC','CD2'],
+    'NK':['NKG7','GNLY','KLRD1','NCAM1','KLRB1','PRF1'],
+    'B':['MS4A1','CD19','CD79A','CD79B','IGHG1','JCHAIN'],
+    'pDC':['LILRA4','IL3RA','GZMB','TCF4'],
+    'Platelet':['PPBP','PF4','GP9','ITGA2B'],
+    'Erythroid':['HBB','HBA1','HBA2','ALAS2'],
+    'Neutro':['FCGR3B','S100A8','S100A9','CEACAM8','CSF3R'],
+    }
+    s={}
+    for k,gs in sigs.items(): s[k]=score(gs)
+    # up/down signatures
+    def read(path):
+        return [l.strip() for l in open(path) if l.strip()]
+    su=score(read('covid_up_genes.txt')); sdn=score(read('covid_dn_genes.txt'))
+    s['up']=su; s['down']=sdn; s['diff']=su-sdn
+    # ratios
+    def val(x): return np.expm1(x)
+    s['myel_lymph_ratio']=val(s['Mono'])/(val(s['T'])+val(s['NK'])+val(s['B'])+1e-3)
+    s['isg_lymph_ratio']=s['ISG']-((s['T']+s['NK']+s['B'])/3)
+    return s
+
+wnames,wsums,wcc,wcats=load_working()
+ws=compute_scores(wnames,wsums,wcc)
+wdf=pd.DataFrame(ws,index=wcats)
+
+# original
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array([x for x in orig.index.astype(str)])
+osums=orig.values.astype(float); occ=None
+# compute cell counts from metadata or column sums? not needed for scores except cc not used; use group sums
+os=compute_scores(onames,osums,occ)
+odf=pd.DataFrame(os,index=orig.columns.astype(str))
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False).drop_duplicates('Donor').set_index('Donor')
+labels=(meta.loc[odf.index,'Class']=='HC').astype(int)
+print('original labels', labels.value_counts().to_dict())
+# combine features
+features=['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro','myel_lymph_ratio','isg_lymph_ratio']
+Xo=odf[features].values
+Xw=wdf[features].values
+print('orig feature summary')
+print(odf[features].groupby(labels).mean().round(3).to_string())
+# normalize using original scaler
+scaler=StandardScaler().fit(Xo)
+Xo_z=scaler.transform(Xo); Xw_z=scaler.transform(Xw)
+# CV logistic L2
+clf=LogisticRegressionCV(Cs=10,cv=StratifiedKFold(5,shuffle=True,random_state=0),scoring='accuracy',max_iter=10000,class_weight='balanced',random_state=0).fit(Xo_z,labels)
+print('CV mean score',clf.scores_[1].mean())
+ypred=cross_val_predict(clf,Xo_z,labels,cv=StratifiedKFold(5,shuffle=True,random_state=0),method='predict_proba')[:,1]
+print('CV AUC',roc_auc_score(labels,ypred))
+print(classification_report(labels,cross_val_predict(clf,Xo_z,labels,cv=StratifiedKFold(5,shuffle=True,random_state=0))))
+# train final on all orig
+clf.fit(Xo_z,labels)
+proba=clf.predict_proba(Xw_z)[:,1]
+res=pd.DataFrame({'donor':wcats,'p_covid':proba,'pred_HC':(proba<0.5).astype(int)}).set_index('donor')
+res=res.sort_values('p_covid')
+print(res.to_string())
+# PCA of combined signatures to see
+from sklearn.decomposition import PCA
+allz=np.concatenate([Xo_z,Xw_z])
+pca=PCA(n_components=5).fit_transform(allz)
+print('PCA explained',PCA(n_components=5).fit(allz).explained_variance_ratio_)
+print('original coords first few')
+for i,(idx,row) in enumerate(odf.iterrows()):
+ print('orig',idx,'label',labels.iloc[i],'p',pca[i,:3].round(2))
+print('work coords')
+for i,(idx,row) in enumerate(wdf.iterrows()):
+ print('work',idx,'p',pca[len(odf)+i,:3].round(2))
+# save
+res.to_csv('classifier_probs.csv')
+odf.assign(label=labels.values).to_csv('orig_signature_scores.csv')
+wdf.to_csv('working_signature_scores2.csv')
+PY
+python3 classify_sigs.py"

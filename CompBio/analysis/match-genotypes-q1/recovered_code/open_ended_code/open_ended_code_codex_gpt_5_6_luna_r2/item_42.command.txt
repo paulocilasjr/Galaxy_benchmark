@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+from pgenlib import PgenReader
+import numpy as np
+
+def pvar_rows(fn, lo, hi):
+ rows=[]
+ with open(fn) as f:
+  next(f)
+  for i,line in enumerate(f):
+   a=line.rstrip('\\n').split('\\t')
+   if lo <= int(a[1]) <= hi:
+    rows.append((i,a)) # i is 0-based variant idx because header skipped? enumerate starts 0 after header next, yes line first data i=0
+ return rows
+lo,hi=133240000,133280000
+r1=pvar_rows('match.genotypes.1.1.pvar',lo,hi); r3=pvar_rows('match.genotypes.1.3.pvar',lo,hi)
+print('rows',len(r1),len(r3))
+# use exact key; map first occurrence only
+m1={(a[0],a[1],a[3],a[4]):(i,a) for i,a in r1}
+m3={(a[0],a[1],a[3],a[4]):(i,a) for i,a in r3}
+keys=[k for k in m1 if k in m3]
+# sorted by target idx
+keys.sort(key=lambda k:m1[k][0])
+idx1=[m1[k][0] for k in keys]; idx3=[m3[k][0] for k in keys]
+print('shared',len(keys),'missing target',len(m3)-len(keys))
+print('missing target keys',[(i,a) for i,a in r3 if (a[0],a[1],a[3],a[4]) not in m1][:10])
+# read list
+p1=PgenReader(b'match.genotypes.1.1.pgen'); p3=PgenReader(b'match.genotypes.1.3.pgen')
+a1=np.empty((len(keys),p1.get_raw_sample_ct()),dtype=np.int8); a3=np.empty((len(keys),p3.get_raw_sample_ct()),dtype=np.int8)
+p1.read_list(idx1,a1); p3.read_list(idx3,a3)
+# missing values likely -9; make mismatch/ibs
+x=a1[:,None,:].astype(int) # v,1,4
+# ref v,175
+z=a3[:,:,None].astype(int)
+valid=(x>=0)&(z>=0)
+# calls exact mismatch weighted, info variants where reference has variation? all shared. Distances each t vs ref
+mism=((x"'!=z)&valid).sum(axis=0) # 175,4
+ab=(np.abs(x-z)*valid).sum(axis=0)
+# mismatch normalized
+for ti in range(4):
+ order=np.argsort(mism[:,ti])
+ print('"'\\ntarget',ti+1)
+ for j in order[:15]:
+  # causal labels
+  def g(pos):
+   # target/reference genotype by key location first
+   arr=[]
+   for kk in keys:
+    if int(kk[1])==pos: arr.append(a3[keys.index(kk),j])
+   return arr
+  print(j+1,'mism',mism[j,ti],'abs',ab[j,ti], 'causal',g(133257521),g(133255935),g(133255928), 'other',g(133255801),g(133273813))
+# target genos proxies for key positions
+print('\\nTarget marker genotypes:')
+for pos in [133255801,133255853,133255902,133255929,133255960,133255963,133256028,133256085,133256205,133256264,133257129,133261703,133273813,133266456]:
+ rows=[(ii,k) for ii,k in enumerate(keys) if int(k[1])==pos]
+ print(pos,[(k[2],a1[ii].tolist()) for ii,k in rows])
+p1.close();p3.close()
+PY"

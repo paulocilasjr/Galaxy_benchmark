@@ -1,0 +1,23 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -u - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+y=mmread('matrix.mtx.gz').tocsr()[:,710].toarray().ravel()
+means=sc.assign(cell_type=md.cell_type).groupby('cell_type').mean()
+print('reference library means')
+print(sc.sum(1).groupby(md.cell_type).agg(['mean','std','min','max']).round(2))
+print('\\n50-gene block sums for spot:')
+for start in range(0,1000,50): print(f'{start:3}-{start+49:3}: {y[start:start+50].sum():.0f}',end='  ' if start%100 else '\\n')
+print('\\n\\ntype marker top50 enrich sums:')
+for t in means.index:
+ others=means.drop(t).mean()
+ top=np.argsort(-(means.loc[t].values-others.values))[:50]
+ print(t,'spot',y[top].sum(),'ref own',means.loc[t].values[top].sum().round(1),'ref other',others.values[top].sum().round(1), 'range', (top.min(),top.max()))
+# Fit leave-one-type combinations and SSE
+from scipy.optimize import nnls
+A=means.values.T; types=list(means.index)
+for omit in [None]+types:
+ inds=[i for i,t in enumerate(types) if t"'!=omit]
+ c,res=nnls(A[:,inds],y)
+ print('"'omit',omit,'res',round(res,3),dict(zip([types[i] for i in inds],np.round(c,3))))
+PY"

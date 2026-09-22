@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('phase.bam','rb')
+fasta=pysam.FastaFile('hg38.fa')
+events=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+# get deletion status per read at each event
+# For each read, call state for each event if read overlaps event coordinate; deletions indicated if event base deleted.
+reads={}  # name -> list of (event->state)
+def state_at(read,pos):
+    # returns None if not covered, else state A/C/G/T/D
+    for q,r in read.get_aligned_pairs(matches_only=False):
+        if r is not None and r+1==pos:
+            if q is None: return 'D'
+            return read.query_sequence[q]
+    return None
+for read in bam.fetch('chr22', min(events)-300, max(events)+300):
+    if read.is_unmapped or read.is_secondary or read.is_supplementary: continue
+    name=read.query_name
+    vec={}
+    for pos in events:
+        s=state_at(read,pos)
+        if s is not None: vec[pos]=s
+    reads.setdefault(name,[]).append(vec)
+# combine pair vectors per read name, per event choose if both agree else majority/random? print conflicts
+pair_vec={}
+for name,vecs in reads.items():
+    comb={}
+    for vec in vecs:
+        for pos,s in vec.items():
+            if pos not in comb: comb[pos]=[]
+            comb[pos].append(s)
+    final={}
+    for pos,ss in comb.items():
+        if len(set(ss))==1: final[pos]=ss[0]
+        else:
+            # choose most common
+            final[pos]=collections.Counter(ss).most_common(1)[0][0]
+    pair_vec[name]=final
+print('pairs',len(pair_vec))
+# Count allele per event among pairs
+for pos in events:
+    c=collections.Counter(v.get(pos) for v in pair_vec.values() if pos in v)
+    print(pos,c)
+# pairwise contingency for each pair of events among pair vectors covering both
+print('\\nPairwise:')
+for i in range(len(events)):
+  for j in range(i+1,len(events)):
+    p1,p2=events[i],events[j]
+    tab=collections.Counter()
+    for v in pair_vec.values():
+        if p1 in v and p2 in v:
+            tab[(v[p1],v[p2])]+=1
+    if tab:
+        print(p1,p2,dict(tab))
+PY"

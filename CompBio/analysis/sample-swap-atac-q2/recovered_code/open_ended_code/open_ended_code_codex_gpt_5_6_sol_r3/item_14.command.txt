@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv,math,heapq,re,bisect,statistics
+# totals from prior exact calc
+tot=[11836803,7530916,48403523,37015795,31640818,8155368,94395242,21014655,413545691]
+names=['AIIamacrine','Astrocyte','Cone','GABAamacrine','Horizontal','Microglia','Mullerglia','Retinalganglioncell','Rod']
+H=[[] for _ in names]
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ rd=csv.reader(f,delimiter='\\t'); next(rd)
+ for a in rd:
+  vals=[int(x) for x in a[3:]]
+  cpms=[v/t*1e6 for v,t in zip(vals,tot)]
+  if sum(cpms)<1: continue
+  logs=[math.log2(x+0.2) for x in cpms]
+  for i in range(9):
+   oth=statistics.median(logs[:i]+logs[i+1:])
+   score=logs[i]-oth
+   item=(score,sum(cpms),a[0],int(a[1]),int(a[2]))
+   if len(H[i])<100: heapq.heappush(H[i],item)
+   elif item>H[i][0]: heapq.heapreplace(H[i],item)
+# all gene TSS
+by={}
+try:
+ with gzip.open('gencode.v49.basic.annotation.gtf.gz','rt') as f:
+  for line in f:
+   if line.startswith('#'): continue
+   a=line.rstrip().split('\\t')
+   if len(a)<9 or a[2]"'!='"'gene' or 'gene_type \"protein_coding\"' not in a[8]: continue
+   m=re.search(r'gene_name \"(["'^"]+)"'"',a[8]);
+   if not m: continue
+   t=int(a[3])-1 if a[6]=='+' else int(a[4])-1
+   by.setdefault(a[0],[]).append((t,m.group(1)))
+except (EOFError,OSError): pass
+for ch in by: by[ch].sort()
+def nearest(ch,pos):
+ x=by.get(ch,[]); j=bisect.bisect_left(x,(pos,'')); cand=x[max(0,j-2):j+2]
+ return min(cand,key=lambda z:abs(z[0]-pos)) if cand else (0,'?')
+for i,n in enumerate(names):
+ print('\\n###',n)
+ seen=set(); out=[]
+ for sc,su,ch,st,en in sorted(H[i],reverse=True):
+  t,g=nearest(ch,(st+en)//2)
+  if g in seen: continue
+  seen.add(g); out.append((g,sc,ch,st,abs(t-(st+en)//2)))
+  if len(out)>=30: break
+ print(' '.join(f'{g}({sc:.1f})' for g,sc,*_ in out))
+PY"

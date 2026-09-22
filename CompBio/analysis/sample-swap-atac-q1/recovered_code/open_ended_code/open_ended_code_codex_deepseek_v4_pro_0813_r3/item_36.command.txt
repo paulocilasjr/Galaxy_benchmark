@@ -1,0 +1,58 @@
+/bin/bash -lc "cat > build_rna.py <<'PY'
+import glob, gzip, os, re, collections, numpy as np
+files=glob.glob('geo_bulk/*neotenic*.gz')
+print(len(files))
+# map tissue
+def tissue_from_fn(fn):
+    base=os.path.basename(fn)
+    parts=base.split('_')
+    # GSM5536000_B1_neotenic_Bladder_featurecounts.txt.gz => tissue at index 3? ['GSM5536000','B1','neotenic','Bladder','featurecounts.txt.gz']
+    return parts[3]
+# combine replicates: tissue -> list symbol count dict
+tissues=collections.defaultdict(list)
+for fn in files:
+    t=tissue_from_fn(fn)
+    d={}
+    with gzip.open(fn,'rt') as f:
+        header=next(f); header=next(f)
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            if len(p)<7: continue
+            gid=p[0]; count=int(p[6])
+            # symbol after last underscore
+            if '_' in gid:
+                sym=gid.rsplit('_',1)[1]
+            else:
+                sym=gid
+            if not sym: continue
+            # If multiple rows same symbol, sum? featureCounts gene_id should unique; but sum anyway
+            d[sym]=d.get(sym,0)+count
+    tissues[t].append(d)
+print('tissues', sorted(tissues.keys()))
+# Build average CPM? raw counts avg. Also TPM later.
+# Get union symbols present in all or at least some.
+all_syms=set()
+for t,ds in tissues.items():
+    for d in ds:
+        all_syms.update(d.keys())
+all_syms=sorted(all_syms)
+# tissue labels desired
+order=['Bladder','Brain','Cloacal_chamber','Fore_limb','Hind_limb','Gill','Heart','Intestine','Kidney','Liver','Lung','Spleen','Stomach']
+# use all tissues including eye etc maybe
+all_order=sorted(tissues.keys())
+# average raw counts across replicates
+out=open('bulk_rna_counts.tsv','w')
+out.write('symbol\\t'+'\\t'.join(all_order)+'\\n')
+for sym in all_syms:
+    vals=[]
+    for t in all_order:
+        ds=tissues[t]
+        vals.append(sum(d.get(sym,0) for d in ds)/len(ds))
+    # only keep if sum >0
+    if sum(vals)>0:
+        out.write(sym+'\\t'+'\\t'.join(str(v) for v in vals)+'\\n')
+out.close()
+print('symbols',len(all_syms))
+PY
+python3 build_rna.py
+head -5 bulk_rna_counts.tsv; wc -l bulk_rna_counts.tsv"

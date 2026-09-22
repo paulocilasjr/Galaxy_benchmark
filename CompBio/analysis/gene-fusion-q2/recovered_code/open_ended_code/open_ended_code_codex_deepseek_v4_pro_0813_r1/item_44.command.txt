@@ -1,0 +1,114 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, json, subprocess, re, collections
+genes=['SP1','MYC','ZIC2','CATSPER4']
+tr_exons={}
+for gene in genes:
+    data=requests.get(f'https://rest.ensembl.org/lookup/symbol/homo_sapiens/{gene}?expand=1',headers={'Content-Type':'application/json'}).json()
+    for tr in data.get('Transcript',[]):
+        tid=tr['id']; ex=tr.get('Exon',[]); bounds=[]; cum=0
+        for e in ex:
+            ln=e['end']-e['start']+1
+            bounds.append((cum+1,cum+ln)); cum+=ln
+        tr_exons[tid]=bounds
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip(); tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'): trans_gene[tid]=part.split(':',1)[1];break
+
+def cigar_bounds(cigar,pos):
+    m=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    ref=pos; covered=[]
+    for ln,op in m:
+        ln=int(ln)
+        if op in 'MDN=X': covered.append((ref,ref+ln-1)); ref+=ln
+        elif op in 'ISHP': pass
+    if not covered:return None
+    return (covered[0][0],covered[-1][1])
+
+def qint(cigar):
+    m=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    q=0;qs=None;qe=None
+    for ln,op in m:
+        ln=int(ln)
+        if op in 'SH': q+=ln
+        elif op in 'M=X':
+            if qs is None:qs=q
+            q+=ln;qe=q
+        elif op=='I':q+=ln
+    return (qs,qe)
+
+def bp_for(cigar,pos):
+    b=cigar_bounds(cigar,pos); m=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    if not b:return None
+    if m and m[0][1] in 'SH': return b[0]
+    if m and m[-1][1] in 'SH': return b[1]
+    return None
+
+def exon_of(tid,pos):
+    base=tid.split('.')[0]; bounds=tr_exons.get(base)
+    if not bounds:return None
+    for i,(s,e) in enumerate(bounds,1):
+        if s<=pos<=e:return i,(s,e)
+    return None
+
+def print_exon(e):
+    if e is None:return 'None'
+    i,b=e;return f'{i}:{b[0]}-{b[1]}'
+
+cand_pairs={frozenset(('SP1','MYC')),frozenset(('SP1','ZIC2')),frozenset(('SP1','CATSPER4'))}
+seen=set(); results=[]
+proc=subprocess.Popen(['samtools','view','-F','0x900','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+    p=line.rstrip().split('\\t'); flag=int(p[1]); rname=p[2]
+    tags={}
+    for f in p[11:]:
+        if ':' in f:
+            k,t,v=f.split(':',2);tags[k]=v
+    sa=tags.get('SA')
+    if not sa: continue
+    g1=trans_gene.get(rname,''); q1=qint(p[5]); strand1='-' if flag&16 else '+'
+    if not q1 or q1[0] is None:continue
+    for entry in sa.rstrip(';').split(';'):
+        if not entry:continue
+        parts=entry.split(',')
+        if len(parts)<6:continue
+        rt=parts[0];g2=trans_gene.get(rt,'')
+        if not g1 or not g2 or g1==g2:continue
+        if frozenset((g1,g2)) not in cand_pairs:continue
+        q2=qint(parts[3]); strand2=parts[2]
+        if not q2 or q2[0] is None:continue
+        ov=max(0,min(q1[1],q2[1])-max(q1[0],q2[0]))
+        if ov>8:continue
+        key=(p[0],tuple(sorted((g1,g2))))
+        if key in seen:continue
+        seen.add(key)
+        if q1[0] <= q2[0]:
+            left_g,right_g=g1,g2; left_strand,right_strand=strand1,strand2
+            left_tid,left_pos,left_cig=rname,int(p[3]),p[5]
+            right_tid,right_pos,right_cig=rt,int(parts[1]),parts[3]
+        else:
+            left_g,right_g=g2,g1; left_strand,right_strand=strand2,strand1
+            left_tid,left_pos,left_cig=rt,int(parts[1]),parts[3]
+            right_tid,right_pos,right_cig=rname,int(p[3]),p[5]
+        if left_strand==right_strand=='+': bio=(left_g,right_g)
+        elif left_strand==right_strand=='-': bio=(right_g,left_g)
+        else: continue
+        lbp=bp_for(left_cig,left_pos); rbp=bp_for(right_cig,right_pos)
+        le=exon_of(left_tid,lbp) if lbp else None
+        re=exon_of(right_tid,rbp) if rbp else None
+        results.append((p[0],bio,left_g,right_g,left_tid,left_pos,left_cig,lbp,le,right_tid,right_pos,right_cig,rbp,re,left_strand,right_strand))
+proc.wait()
+print('candidate unique reads',len(results))
+for pair in [('SP1','MYC'),('MYC','SP1'),('SP1','ZIC2'),('ZIC2','SP1'),('SP1','CATSPER4'),('CATSPER4','SP1')]:
+    sub=[r for r in results if r[1]==pair]
+    print('\\n===',pair,'n',len(sub))
+    cnt=collections.Counter()
+    for r in sub:
+        le=f'{r[2]} {r[7]}(ex{print_exon(r[8])})'
+        re=f'{r[3]} {r[12]}(ex{print_exon(r[13])})'
+        cnt[(le,re)]+=1
+    for k,c in cnt.most_common(20):print('  ',c,k)
+PY"

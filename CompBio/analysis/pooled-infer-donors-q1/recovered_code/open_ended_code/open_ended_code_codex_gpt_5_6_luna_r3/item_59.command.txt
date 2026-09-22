@@ -1,0 +1,20 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+A=np.load('cell_site_counts.npz')['counts']; D=A.sum(2); ALT=A[:,:,1]; C=D.shape[1]
+p=ALT.sum(1)/np.maximum(D.sum(1),1); good=(D.sum(1)>=20)&(ALT.sum(1)>=5)&(A[:,:,0].sum(1)>=5); ix=np.where(good)[0]
+rows=[];cols=[];vals=[]
+for j,i in enumerate(ix):
+ m=D[i]>0; v=(ALT[i]/np.maximum(D[i],1)-p[i])*np.sqrt(np.minimum(D[i],8)/8)
+ for c in np.where(m)[0]: rows.append(c);cols.append(j);vals.append(v[c])
+X=sparse.csr_matrix((vals,(rows,cols)),shape=(C,len(ix))); E=TruncatedSVD(20,random_state=7).fit_transform(X); L=KMeans(2,n_init=20,random_state=7).fit_predict(E)
+chrom=np.array([line.split('\\t')[0] for line in open('validated_candidates.tsv')])
+for k in [0,1]:
+ print('cluster',k,'n',sum(L==k))
+ for ch in sorted(set(chrom),key=lambda x:(len(x),x)):
+  idx=np.where(chrom==ch)[0]; print(ch, int(D[idx][:,L==k].sum()), end='; ')
+ print()
+print('total per chrom',[(ch,int(D[chrom==ch].sum())) for ch in sorted(set(chrom))])
+PY"

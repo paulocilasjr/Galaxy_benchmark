@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, gzip, collections, statistics, os, sys
+from pathlib import Path
+try:
+ import scipy
+ from scipy.io import mmread
+ print('scipy', scipy.__version__)
+except Exception as e:
+ print('no scipy', repr(e))
+# metadata
+with open('spatial_q_sc_metadata.csv', newline='') as f:
+ rows=list(csv.DictReader(f))
+print('meta', len(rows), rows[:3])
+# target barcode index
+with gzip.open('barcodes.tsv.gz','rt') as f:
+ bars=[x.rstrip('\\n') for x in f]
+idx=bars.index('Spot_710-1')
+print('target idx 0-based',idx)
+# read target matrix manually
+vals={}
+with gzip.open('matrix.mtx.gz','rt') as f:
+ for line in f:
+  if line.startswith('%'): continue
+  parts=line.split()
+  if len(parts)==3:
+   nrow,ncol,nnz=map(int,parts); break
+ for line in f:
+  i,j,v=line.split()
+  if int(j)-1==idx: vals[int(i)-1]=float(v)
+print('matrix dims',nrow,ncol,nnz,'target nnz',len(vals),'sum',sum(vals))
+# feature names
+with gzip.open('features.tsv.gz','rt') as f: genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+print('target top', sorted(((v,genes[i],i) for i,v in vals.items()), reverse=True)[:30])
+# csv counts, group sums/means
+with open('spatial_q_sc_counts.csv',newline='') as f:
+ rd=csv.reader(f); hdr=next(rd); genes_sc=hdr[1:]
+ type_sums=collections.defaultdict(lambda:[0]*len(genes_sc)); type_n=collections.Counter(); cell_rows=[]
+ for row,meta in zip(rd,rows):
+  typ=meta['cell_type']; type_n[typ]+=1
+  ar=list(map(float,row[1:]));
+  s=type_sums[typ]
+  for i,x in enumerate(ar): s[i]+=x
+  cell_rows.append((meta['cell_type'], ar))
+print('sc genes match', genes_sc[:3], genes_sc[-3:], len(genes_sc), genes[:3], genes[-3:])
+print('types',type_n)
+for typ in type_n:
+ s=type_sums[typ]; n=type_n[typ]
+ print('\\n',typ,'lib mean',sum(s)/n,'top mean genes',[(genes_sc[i],round(s[i]/n,3)) for i in sorted(range(len(s)),key=lambda i:s[i],reverse=True)[:15]])
+PY"

@@ -1,0 +1,47 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,gc
+from scipy import sparse
+from scipy.stats import rankdata
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+
+def aggregate_log(f):
+ print('loading',f,flush=True)
+ with h5py.File(root+'/'+f,'r') as h:
+  g=h['X']; x=sparse.csc_matrix((g['data'][()],g['indices'][()],g['indptr'][()]),shape=tuple(g.attrs['shape']))
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var/_index'][()]],object)
+  cats=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][()]]; gids=np.array([cats[z] for z in h['obs/guide/codes'][()]])
+ groups=np.unique(gids); codes=np.searchsorted(groups,gids)
+ M=np.zeros((len(gids),len(groups)),np.int8); M[np.arange(len(gids)),codes]=1
+ lib=np.asarray(x.sum(1)).ravel().astype(float)
+ # csc data entries row indices; normalized log values
+ vals=np.log1p(x.data.astype(float)/(lib[x.indices])*1e4)
+ lx=sparse.csc_matrix((vals,x.indices,x.indptr),shape=x.shape,copy=False)
+ sums=np.asarray(lx.T.dot(M))
+ means=sums/np.bincount(codes)[None,:]
+ nt=np.flatnonzero(np.char.startswith(groups,'NT-')); ctrl=means[:,nt].mean(1)
+ pert=[i for i,g in enumerate(groups) if not g.startswith('NT-')]
+ eff=means[:,pert].T-ctrl
+ # detection fraction via x bool dot M
+ det=np.asarray((x.astype(bool)).T.dot(M)) / np.bincount(codes)[None,:]
+ del x,lx,vals,M,sums;gc.collect()
+ return genes,groups[pert],eff,ctrl,det[:,pert].T,groups
+rgenes,rg,RL,RC,RD,ra=aggregate_log('perturb.seq.align.q1.ref.h5ad')
+qgenes,qg,QL,QC,QD,qa=aggregate_log('perturb.seq.align.q1.query.h5ad')
+rm={g:i for i,g in enumerate(rgenes)}; qm={g:i for i,g in enumerate(qgenes)}; common=[g for g in rgenes if g in qm]; ri=np.array([rm[g] for g in common]); qi=np.array([qm[g] for g in common])
+A=RL[:,ri];B=QL[:,qi]
+print('common',len(common),flush=True)
+
+def normcorr(A,B,ix):
+ a=A[:,ix].astype(float);b=B[:,ix].astype(float);a-=a.mean(1,keepdims=True);b-=b.mean(1,keepdims=True);a/=np.linalg.norm(a,axis=1,keepdims=True)+1e-12;b/=np.linalg.norm(b,axis=1,keepdims=True)+1e-12;return b@a.T
+
+def spearman(A,B,ix):
+ return normcorr(np.apply_along_axis(rankdata,1,A[:,ix]),np.apply_along_axis(rankdata,1,B[:,ix]),np.arange(len(ix)))
+# detection shared > thresholds in both controls; need get ctrl det from controls omitted. use effects variance
+v=np.var(np.vstack([A,B]),0)
+for sel,ix in [('all',np.arange(len(common))),('var100',np.argsort(v)[-100:]),('var300',np.argsort(v)[-300:]),('var1000',np.argsort(v)[-1000:]),('var3000',np.argsort(v)[-3000:]),('var6000',np.argsort(v)[-6000:])]:
+ for metric,sim in [('p',normcorr(A,B,ix)),('s',spearman(A,B,ix))]:
+  print('\\n',sel,metric,flush=True)
+  for t in ['PABPC1','NUDT21','LEO1']:
+   j=[i for i,g in enumerate(rg) if g.startswith(t+'-')][0]; top=np.argsort(sim[:,j])[::-1][:10]
+   print(rg[j],[(str(qg[k]),round(float(sim[k,j]),3)) for k in top])
+PY"

@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, itertools
+import numpy as np
+import pandas as pd
+
+def read(fn):
+    return pd.read_csv(fn, sep='\\t', compression='gzip', index_col=0)
+
+rna=read('multiome.match.atac.rna.q1.rna.tsv.gz')
+atac=read('multiome.match.atac.rna.q1.atac.tsv.gz')
+print(rna.shape, atac.shape)
+
+def corr_cols(X):
+    # X features x samples
+    return np.corrcoef(X, rowvar=False)
+
+def prep(X, mode):
+    A=X.astype(float).values
+    if mode.startswith('log'):
+        A=np.log1p(A)
+    if 'filter' in mode:
+        # keep features with variation across columns and nonzero somewhere
+        v=A.var(axis=1)
+        mu=A.mean(axis=1)
+        mask=(v>0)&(mu>0)
+        A=A[mask]
+    if 'topvar' in mode:
+        v=A.var(axis=1)
+        n=min(50000, len(v))
+        idx=np.argpartition(v, -n)[-n:]
+        A=A[idx]
+    if 'zfeat' in mode:
+        m=A.mean(axis=1, keepdims=True); s=A.std(axis=1, keepdims=True)
+        mask=s[:,0]>0
+        A=(A[mask]-m[mask])/s[mask]
+    return A
+
+def score(Cr,Ca,p):
+    Cp=Ca[np.ix_(p,p)]
+    # off diagonal correlation/sse
+    triu=np.triu_indices(8,1)
+    a=Cr[triu]; b=Cp[triu]
+    return np.corrcoef(a,b)[0,1], -np.mean((a-b)**2)
+
+modes=['raw_filter','log_filter','log_filter_zfeat','log_filter_topvar','log_filter_topvar_zfeat','raw_filter_topvar_zfeat']
+for mr in modes:
+  R=prep(rna,mr)
+  Cr=corr_cols(R)
+  print('\\nRNA mode',mr,'shape',R.shape,'Cr offdiag range',Cr[np.triu_indices(8,1)].min(),Cr[np.triu_indices(8,1)].max())
+  for ma in modes:
+    A=prep(atac,ma)
+    Ca=corr_cols(A)
+    best=[]
+    for p in itertools.permutations(range(8)):
+        sc=score(Cr,Ca,p)
+        best.append((sc,p))
+    best.sort(reverse=True, key=lambda x:(x[0][0],x[0][1]))
+    print(' ATAC',ma,'shape',A.shape,'best corr %.4f sse %.6f p %s second %.4f %s'% (best[0][0][0], -best[0][0][1], ';'.join(map(str,best[0][1])), best[1][0][0], ';'.join(map(str,best[1][1]))))
+PY"

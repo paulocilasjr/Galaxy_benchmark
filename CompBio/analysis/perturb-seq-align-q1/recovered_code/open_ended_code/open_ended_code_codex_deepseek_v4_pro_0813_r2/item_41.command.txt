@@ -1,0 +1,87 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from sklearn.decomposition import PCA
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from collections import Counter
+warnings.filterwarnings('ignore')
+
+def load_common():
+ files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+ for fn in files:
+  with h5py.File(fn,'r') as f:
+   n_obs,n_var=f['X'].attrs['shape']
+   X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+   gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+   gc=f['obs/guide/codes'][:]
+   g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+   tgt=None
+   if 'obs/target_gene' in f:
+    tcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/target_gene/categories'][:]]
+    tc=f['obs/target_gene/codes'][:]
+    tgt=np.array([tcats[i] for i in tc])
+   out.append((X,g,var,tgt))
+ (X1,g1,v1,t1),(X2,g2,v2,t2)=out
+ common=[x for x in v1 if x in set(v2)]
+ X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr(); X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+ return X1,g1,t1,X2,g2,common
+X1,g1,t1,X2,g2,var=load_common()
+def norm(X):
+ X=X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4); return X.tocsr()
+X1=norm(X1); X2=norm(X2)
+# filter genes by mean/variance in both
+m1=np.asarray(X1.mean(0)).ravel(); v1=np.asarray(X1.power(2).mean(0)).ravel()-m1**2
+m2=np.asarray(X2.mean(0)).ravel(); v2=np.asarray(X2.power(2).mean(0)).ravel()-m2**2
+keep=(m1>0.01)&(m2>0.01)&(v1+v2>0.005)
+X1=X1[:,keep]; X2=X2[:,keep]; var=[g for g,k in zip(var,keep) if k]
+# z-score per gene using NT within dataset
+nt1=np.char.startswith(g1.astype(str),'NT-'); nt2=np.char.startswith(g2.astype(str),'NT-')
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); sd1=np.sqrt(np.asarray(X1[nt1].power(2).mean(0)).ravel()-mu1**2)
+mu2=np.asarray(X2[nt2].mean(0)).ravel(); sd2=np.sqrt(np.asarray(X2[nt2].power(2).mean(0)).ravel()-mu2**2)
+sd1[sd1==0]=1; sd2[sd2==0]=1
+# Use dense for PCA; ~7.7k x maybe 11k = 90m floats ~700MB; maybe okay but use sparse centering hard. Let's select HVGs top 3000 first.
+hv=(v1[keep] if False else v1+v2) # no need
+# Actually select top 3000 by variance from combined before dense
+# recompute keep indices? We already filtered; use combined variance of zscored? approximate raw var
+comb_var=(v1+v2)
+# careful v1 currently filtered arrays; X1 filtered; compute var again
+m1=np.asarray(X1.mean(0)).ravel(); vv1=np.asarray(X1.power(2).mean(0)).ravel()-m1**2
+m2=np.asarray(X2.mean(0)).ravel(); vv2=np.asarray(X2.power(2).mean(0)).ravel()-m2**2
+comb_var=vv1+vv2
+top=np.argsort(comb_var)[::-1][:3000]
+X1=X1[:,top]; X2=X2[:,top]; var=[var[i] for i in top]
+# zscore arrays
+def zscore(X,mu,sd):
+ A=X.toarray()
+ A=(A-mu[None,:])/sd[None,:]
+ return A
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); sd1=np.sqrt(np.asarray(X1[nt1].power(2).mean(0)).ravel()-mu1**2)
+mu2=np.asarray(X2[nt2].mean(0)).ravel(); sd2=np.sqrt(np.asarray(X2[nt2].power(2).mean(0)).ravel()-mu2**2)
+sd1[sd1==0]=1; sd2[sd2==0]=1
+Z1=zscore(X1,mu1,sd1); Z2=zscore(X2,mu2,sd2)
+print('dense',Z1.shape,Z2.shape)
+# exclude NT for training? train ref all nonNT with target labels; query nonNT
+ref_non=np.where(~nt1)[0]; q_non=np.where(~nt2)[0]
+# target labels for ref nonNT from t1
+y=np.array([re.sub(r'-I\\d+"'$'"','',g1[i]) for i in ref_non]) # target from guide ID better
+# Actually target_gene available; use target gene labels
+y=t1[ref_non]
+for ncomp in [10,20,30,50,80,100]:
+ pca=PCA(n_components=ncomp, random_state=0)
+ R=pca.fit_transform(Z1[ref_non]); Q=pca.transform(Z2[q_non])
+ for k in [1,3,5,10,20,50]:
+  knn=KNeighborsClassifier(n_neighbors=k, weights='distance')
+  knn.fit(R,y)
+  pred=knn.predict(Q)
+  # aggregate majority per query guide
+  qg=g2[q_non]
+  assignments={}
+  for gg in np.unique(qg):
+   cnt=Counter(pred[qg==gg]); assignments[gg]=cnt.most_common(1)[0]
+  print('PCA',ncomp,'k',k,'PABPC1,NUDT21,LEO1 ->',
+        [assignments.get('guide'+str(i),None) for i in []], 
+        {t:[q for q,(a,c) in assignments.items() if a==t] for t in ['PABPC1','NUDT21','LEO1']})
+PY
+python [REDACTED LOCAL PATH]"

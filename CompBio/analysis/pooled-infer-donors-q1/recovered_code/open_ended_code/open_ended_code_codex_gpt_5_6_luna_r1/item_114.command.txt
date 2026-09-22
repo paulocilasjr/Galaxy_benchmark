@@ -1,0 +1,25 @@
+/bin/bash -lc "python3 - <<'PY'
+from scipy.io import mmread
+from scipy.sparse import csr_matrix
+import numpy as np
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+ad=mmread('cellsnp/cellSNP.tag.AD.mtx').tocsr(); dp=mmread('cellsnp/cellSNP.tag.DP.mtx').tocsr()
+alt_cells=np.diff(ad.indptr); td=np.asarray(dp.sum(axis=1)).ravel(); ta=np.asarray(ad.sum(axis=1)).ravel(); af=ta/td
+for name,mask in [('f3_05',(alt_cells>=3)&(af>=.05)),('f5_05',(alt_cells>=5)&(af>=.05)),('f5_08',(alt_cells>=5)&(af>=.08)),('f10_05',(alt_cells>=10)&(af>=.05))]:
+ X=ad[mask].T.tocsr().astype(np.float32)
+ X.data[:]=1
+ ni=np.asarray(X.sum(axis=1)).ravel()
+ print('\\n',name,'shape',X.shape,'nnz',X.nnz,'cell alt count quant',np.quantile(ni,[0,.1,.5,.9,1]))
+ # tfidf-ish SVD; center not necessary
+ svd=TruncatedSVD(n_components=20,random_state=1,n_iter=5)
+ Z=svd.fit_transform(X)
+ print('svd variance',svd.explained_variance_ratio_[:5],sum(svd.explained_variance_ratio_))
+ for k in [2,3,4,5,6,7,8,9,10,12,15,20]:
+  lab=KMeans(n_clusters=k,n_init=10,random_state=1).fit_predict(Z)
+  sil=silhouette_score(Z,lab,sample_size=min(2000,len(lab)),random_state=1)
+  sizes=np.bincount(lab)
+  print(k,round(sil,4),sizes.min(),sizes.max(),end='; ')
+ print()
+PY"

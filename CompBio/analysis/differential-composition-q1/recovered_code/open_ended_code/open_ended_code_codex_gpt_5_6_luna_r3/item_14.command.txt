@@ -1,0 +1,30 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,time,numpy as np
+from scipy.io import mmread
+from scipy.sparse import csc_matrix, csr_matrix, hstack
+from scipy.sparse.linalg import svds
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ next(f); genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+Xs=[]
+for fn in ['differential.composition.q1.1.mtx.gz','differential.composition.q1.2.mtx.gz']:
+ with gzip.open(fn,'rb') as f: M=csc_matrix(mmread(f))
+ lib=np.asarray(M.sum(axis=0)).ravel()
+ X=M.multiply(1e4/lib).tocsr().astype(np.float32)
+ X.data=np.log1p(X.data)
+ Xs.append(X.T.tocsr())
+ print(fn,'ready',X.shape, 'nnz',X.nnz,flush=True)
+X=vstack = __import__('scipy.sparse',fromlist=['vstack']).vstack(Xs,format='csr')
+print('combined',X.shape,X.nnz,flush=True)
+# gene variance across cells from sparse X; E[x2]-E[x]"'^2
+mu=np.asarray(X.mean(axis=0)).ravel(); mu2=np.asarray(X.multiply(X).mean(axis=0)).ravel(); var=mu2-mu*mu
+# top variable; exclude tiny ubiquitous etc
+for n in [2000,4000,8000]:
+ ind=np.argsort(var)[-n:]
+ Xn=X[:,ind]
+ print('"'svd n',n,flush=True)
+ t=time.time(); u,s,vt=svds(Xn,k=30,which='LM',return_singular_vectors=True,tol=1e-3,maxiter=500); order=np.argsort(s)[::-1]; u=u[:,order]; s=s[order]
+ print('done',time.time()-t,'s',s[:10],flush=True)
+ # save coords? print cluster marker correlations maybe save npz only workspace allowed
+ np.savez('pca_tmp.npz',coords=u*s,genes=np.array([genes[i] for i in ind]),var=var[ind])
+ break
+PY"

@@ -1,0 +1,88 @@
+import collections
+import gzip
+import re
+import sys
+
+
+def open_text(path):
+    with open(path, "rb") as handle:
+        magic = handle.read(2)
+    if magic == b"\x1f\x8b":
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return open(path, "rt", encoding="utf-8", errors="replace")
+
+
+def parse_attributes(field):
+    return dict((key, value) for key, value in re.findall(r'([A-Za-z_][A-Za-z0-9_]*)\s+"([^"]*)"', field))
+
+
+def main(path, output):
+    seqnames = collections.Counter()
+    features = collections.Counter()
+    sources = collections.Counter()
+    attribute_keys = collections.Counter()
+    tag_values = collections.Counter()
+    transcript_rows = {}
+    transcript_feature_rows = collections.Counter()
+    data_records = 0
+    comments = 0
+
+    with open_text(path) as handle:
+        for line in handle:
+            if line.startswith("#"):
+                comments += 1
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) != 9:
+                continue
+            data_records += 1
+            seqname, source, feature = fields[:3]
+            attrs = parse_attributes(fields[8])
+            seqnames[seqname] += 1
+            features[feature] += 1
+            sources[source] += 1
+            for key in attrs:
+                attribute_keys[key] += 1
+            if "tag" in attrs:
+                for tag in attrs["tag"].split(","):
+                    tag_values[tag.strip()] += 1
+            tid = attrs.get("transcript_id")
+            if tid:
+                transcript_feature_rows[feature] += 1
+                rec = transcript_rows.setdefault(tid, {"seqname": seqname, "features": set(), "tags": set()})
+                rec["features"].add(feature)
+                if "tag" in attrs:
+                    rec["tags"].update(tag.strip() for tag in attrs["tag"].split(","))
+
+    mane = [tid for tid, rec in transcript_rows.items() if "MANE_Select" in rec["tags"]]
+    mane_by_seq = collections.Counter(transcript_rows[tid]["seqname"] for tid in mane)
+    mane_feature_sets = collections.Counter(",".join(sorted(transcript_rows[tid]["features"])) for tid in mane)
+
+    with open(output, "w", encoding="utf-8") as out:
+        out.write("metric\tvalue\n")
+        out.write(f"comments\t{comments}\n")
+        out.write(f"data_records\t{data_records}\n")
+        out.write(f"unique_transcript_ids\t{len(transcript_rows)}\n")
+        out.write(f"mane_select_transcripts\t{len(mane)}\n")
+        out.write("\nfeature\tcount\n")
+        for key, value in sorted(features.items()):
+            out.write(f"{key}\t{value}\n")
+        out.write("\nseqname\trecord_count\tmane_select_transcripts\n")
+        for key in sorted(seqnames):
+            out.write(f"{key}\t{seqnames[key]}\t{mane_by_seq[key]}\n")
+        out.write("\nattribute_key\tcount\n")
+        for key, value in sorted(attribute_keys.items()):
+            out.write(f"{key}\t{value}\n")
+        out.write("\ntag_value\tcount\n")
+        for key, value in sorted(tag_values.items()):
+            out.write(f"{key}\t{value}\n")
+        out.write("\nsource\tcount\n")
+        for key, value in sorted(sources.items()):
+            out.write(f"{key}\t{value}\n")
+        out.write("\nmane_feature_set\ttranscript_count\n")
+        for key, value in sorted(mane_feature_sets.items()):
+            out.write(f"{key}\t{value}\n")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1], sys.argv[2])

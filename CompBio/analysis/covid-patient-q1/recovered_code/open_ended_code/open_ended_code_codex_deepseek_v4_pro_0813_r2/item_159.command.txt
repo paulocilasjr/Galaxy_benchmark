@@ -1,0 +1,109 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp, os, json
+from collections import defaultdict
+
+# gene sets
+sets={
+'ISG':['IFI27','IFIT1','IFIT2','IFIT3','ISG15','MX1','MX2','OAS1','OAS2','OAS3','OASL','RSAD2','IFI6','IFI44','IFI44L','XAF1','IRF7','STAT1','SIGLEC1'],
+'Inflam':['S100A8','S100A9','S100A12','IL1B','CCL3','CCL4','CXCL8','FCN1','VCAN','LST1','LYZ'],
+'Plasma':['MZB1','JCHAIN','XBP1','IGHG1','IGKC','SDC1'],
+'NaiveT':['CCR7','LEF1','TCF7','IL7R','LTB'],
+'Cyto':['NKG7','GNLY','GZMB','PRF1','KLRD1','KLRF1'],
+'cDC':['FCER1A','CLEC10A','CD1C','HLA-DRA','CST3'],
+'pDC':['LILRA4','CLEC4C','IL3RA','TCF4','GZMB'],
+'Mono':['CD14','LYZ','S100A8','S100A9','FCN1','LST1'],
+'B':['MS4A1','CD79A','CD79B','CD19','BANK1'],
+'T':['CD3D','CD3E','CD2','TRAC','IL7R'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1','KLRF1'],
+}
+
+def compute_donor_features(path, disease_col='disease', type_mode='cell_group', max_cells=None):
+    A=ad.read_h5ad(path,backed='r')
+    ens=np.asarray(A.var_names); sym=np.asarray(A.var['feature_name'].astype(str))
+    sym_to_idx={}
+    for i,s in enumerate(sym):
+        if s not in sym_to_idx: sym_to_idx[s]=i
+    # donor codes
+    donors=A.obs['donor_id'].astype(str).values
+    cats=np.array(sorted(pd.unique(donors), key=lambda s:(s not in [], s)))
+    # map disease per donor (use obs column)
+    dis_vals=A.obs[disease_col].astype(str).values
+    # aggregate donor sums for all selected genes
+    all_genes=[]
+    for gs in sets.values():
+        for g in gs:
+            if g in sym_to_idx and g not in all_genes: all_genes.append(g)
+    idx=[sym_to_idx[g] for g in all_genes]
+    n=A.shape[0]; nd=len(cats)
+    sums=np.zeros((nd,len(idx)),dtype=np.float64); totals=np.zeros(nd,dtype=np.float64)
+    cat_index={d:i for i,d in enumerate(cats)}
+    codes=np.array([cat_index[d] for d in donors])
+    chunk=20000
+    for i in range(0,n,chunk):
+        j=min(n,i+chunk); c=codes[i:j]
+        X=A.X[i:j, idx]
+        if sp.issparse(X): X=X.toarray().astype(np.float64)
+        else: X=np.asarray(X,dtype=np.float64)
+        D=sp.csr_matrix((np.ones(j-i,dtype=np.float32),(np.arange(j-i),c)),shape=(j-i,nd))
+        sums += D.T @ X
+        totals += np.asarray(D.T @ X.sum(axis=1,keepdims=True)).ravel()
+    logcpm=np.log1p(sums / totals[:,None] * 1e6)
+    feats={}
+    gpos={g:i for i,g in enumerate(all_genes)}
+    for name,gs in sets.items():
+        cols=[gpos[g] for g in gs if g in gpos]
+        feats[name]=logcpm[:,cols].mean(axis=1)
+    # donor disease labels
+    labels=[]
+    for d in cats:
+        vals=dis_vals[donors==d]
+        # map
+        u,cnt=np.unique(vals,return_counts=True); lab=u[np.argmax(cnt)]
+        labels.append(lab)
+    df=pd.DataFrame(feats,index=cats); df['disease_orig']=labels
+    df['y']=(df['disease_orig'].str.lower().str.contains('healthy|control|normal')).astype(int)
+    # cell type proportions if available
+    try:
+        cell_col='Cell.group' if 'Cell.group' in A.obs.columns else ('cell_type_coarse' if 'cell_type_coarse' in A.obs.columns else None)
+        if cell_col:
+            ct=A.obs[cell_col].astype(str).values
+            type_map={}
+            # map broad manually
+            for d in cats:
+                vals=ct[donors==d]
+                counts=pd.Series(vals).value_counts()
+                total=len(vals)
+                def prop(keys): return sum(counts.get(k,0) for k in keys)/total
+                type_map[d]={'T':prop(['CD4+ T cell','CD8+ T cell','Other T']),
+                              'NK':prop(['NK cell','NK']),
+                              'B':prop(['B cell','B']),
+                              'Mono':prop(['CD14+ Monocyte','CD16+ Monocyte','Monocyte']),
+                              'DC':prop(['cDC','pDC','Dendritic']),
+                              'Plasma':prop(['Plasmablast']),
+                              'Platelet':prop(['Platelet']),
+                              'RBC':prop(['RBC']),
+                              'Neutrophil':prop(['Neutrophil','Granulocyte'])}
+            for key in ['T','NK','B','Mono','DC','Plasma','Platelet','RBC','Neutrophil']:
+                df['prop_'+key]=[type_map[d][key] for d in cats]
+    except Exception as e:
+        print('no props',path,e)
+    # donor id numeric maybe
+    return df, all_genes, idx
+
+# our file features already computed separately
+refs=[]
+for name in ['schulte','wilk','lee','arun']:
+    path=f'ref_{name}.h5ad'
+    print('processing',name)
+    df,genes,idx=compute_donor_features(path)
+    df['dataset']=name
+    refs.append(df)
+    print(df.y.value_counts().to_dict(), df.shape)
+    df.to_csv(f'ref_{name}_features.csv')
+# combine
+allref=pd.concat(refs)
+allref.to_csv('ref_features_all.csv')
+print(allref.y.value_counts())
+print(allref.columns.tolist())
+PY
+python [REDACTED LOCAL PATH]"

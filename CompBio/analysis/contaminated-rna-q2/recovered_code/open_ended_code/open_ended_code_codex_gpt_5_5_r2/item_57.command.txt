@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, urllib.parse, time, re, xml.etree.ElementTree as ET, sys
+# take first 80 from unmapped_sample.fa
+records=[]
+with open('unmapped_sample.fa') as f:
+    h=None
+    for line in f:
+        line=line.strip()
+        if line.startswith('>'):
+            h=line[1:]
+        elif h:
+            records.append((h,line)); h=None
+records=records[:80]
+query='\\n'.join(f'>{h}\\n{s}' for h,s in records)
+url='https://blast.ncbi.nlm.nih.gov/Blast.cgi'
+params={'CMD':'Put','PROGRAM':'blastn','DATABASE':'nt','QUERY':query,'MEGABLAST':'on','HITLIST_SIZE':'5','EXPECT':'10','FILTER':'F','WORD_SIZE':'16','FORMAT_TYPE':'XML'}
+resp=urllib.request.urlopen(url, data=urllib.parse.urlencode(params).encode(), timeout=60).read().decode('utf-8','replace')
+print(resp[:500])
+rid=re.search(r'RID = (\\S+)', resp)
+rtoe=re.search(r'RTOE = (\\d+)', resp)
+print('rid', rid.group(1) if rid else None, 'rtoe', rtoe.group(1) if rtoe else None)
+if not rid: sys.exit(1)
+rid=rid.group(1); wait=int(rtoe.group(1)) if rtoe else 30
+for i in range(40):
+    time.sleep(max(10, min(wait,30)))
+    txt=urllib.request.urlopen(url+'?'+urllib.parse.urlencode({'CMD':'Get','RID':rid,'FORMAT_TYPE':'XML','HITLIST_SIZE':'5'}),timeout=120).read().decode('utf-8','replace')
+    if 'Status=WAITING' in txt:
+        print('waiting',i,len(txt)); continue
+    open('unmapped_80_blast.xml','w').write(txt)
+    print('got', len(txt), txt[:200].replace('\\n',' '))
+    try:
+        root=ET.fromstring(txt)
+    except Exception as e:
+        print('parse err',e, txt[:1000]); break
+    counts={}
+    for it in root.findall('.//Iteration'):
+        q=it.findtext('Iteration_query-def')
+        hit=it.find('.//Hit')
+        if hit is not None:
+            d=hit.findtext('Hit_def') or ''
+            acc=hit.findtext('Hit_accession') or ''
+            hsp=hit.find('.//Hsp')
+            ident=hsp.findtext('Hsp_identity') if hsp is not None else ''
+            alen=hsp.findtext('Hsp_align-len') if hsp is not None else ''
+            print(q, acc, ident+'/'+alen, d[:180])
+    break
+PY"

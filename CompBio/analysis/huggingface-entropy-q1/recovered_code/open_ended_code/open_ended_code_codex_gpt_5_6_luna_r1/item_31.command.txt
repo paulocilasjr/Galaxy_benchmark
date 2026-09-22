@@ -1,0 +1,21 @@
+/bin/bash -lc "PYTHONPATH='deps/mamba_ssm-2.2.2:.' python - <<'PY'
+import torch
+import torch.nn.functional as F
+from model.configuration_caduceus import CaduceusConfig
+from model.modeling_caduceus import CaduceusForMaskedLM
+config=CaduceusConfig.from_pretrained('model'); config.fused_add_norm=False
+model=CaduceusForMaskedLM.from_pretrained('model',config=config,local_files_only=True).eval()
+with torch.no_grad():
+ ids=torch.tensor([[7,8,9,10]*250],dtype=torch.long)
+ h=model.caduceus.backbone.embeddings(ids); res=None
+ for li,layer in enumerate(model.caduceus.backbone.layers):
+  res=h+res if res is not None else h
+  hn=layer.norm(res); m=layer.mixer.mamba_fwd
+  xz=(m.in_proj.weight @ hn.transpose(1,2)).reshape(2*m.d_inner,1000).unsqueeze(0)
+  x,z=xz.chunk(2,dim=1); x=m.act(m.conv1d(x)[...,:1000])
+  xd=m.x_proj(x.transpose(1,2).reshape(-1,m.d_inner))
+  dt= m.dt_proj.weight @ xd[:,:m.dt_rank].T
+  dt=F.softplus(dt+m.dt_proj.bias[:,None])
+  print(li, float(dt.min()),float(dt.max()),float(dt.mean()),flush=True)
+  h,res=layer(h,res)
+PY"

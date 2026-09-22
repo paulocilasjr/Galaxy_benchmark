@@ -1,0 +1,110 @@
+/bin/bash -lc "cat > train_sgd_classifier.py <<'PY'
+import anndata as ad
+import numpy as np
+import scipy.sparse as sp
+from sklearn.linear_model import SGDClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.preprocessing import StandardScaler
+from sklearn.utils import shuffle
+
+ref_path='luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad'
+our_path='lung.cancer.sc.h5ad'
+ref=ad.read_h5ad(ref_path, backed='r')
+our=ad.read_h5ad(our_path, backed='r')
+rg=ref.var.index.to_numpy()
+og=our.var['symbol'].astype(str).to_numpy()
+rpos={g:i for i,g in enumerate(rg)}
+oidx=np.array([i for i,g in enumerate(og) if g in rpos])
+ridx=np.array([rpos[g] for g in og if g in rpos])
+print('common',len(oidx))
+
+immune_labels=set('''T cell CD4
+T cell CD4 dividing
+T cell CD8 activated
+T cell CD8 dividing
+T cell CD8 effector memory
+T cell CD8 naive
+T cell CD8 terminally exhausted
+T cell NK-like
+T cell regulatory
+NK cell
+NK cell dividing
+B cell
+B cell dividing
+Plasma cell
+Plasma cell dividing
+Macrophage
+Macrophage alveolar
+Monocyte classical
+Monocyte non-classical
+myeloid dividing
+Mast cell
+Neutrophils
+cDC1
+cDC2
+pDC
+DC mature'''.split('\\n'))
+
+# Build training sample indices stratified-ish
+nref=ref.n_obs
+rng=np.random.default_rng(0)
+idx=np.arange(nref)
+# take 300k random
+train_idx=shuffle(idx, random_state=0)[:300000]
+print('train_idx',len(train_idx))
+
+def get_X(dataset, row_indices, cols):
+    X=dataset.X[row_indices,:][:,cols]
+    if sp.issparse(X): X=X.tocsr()
+    else: X=sp.csr_matrix(X)
+    X.data=np.log1p(X.data)
+    return X
+
+def labels_from_ref(idx_arr):
+    obs=ref.obs
+    ct=obs['cell_type_tumor'].to_numpy()[idx_arr]
+    y_non=np.where(np.isin(ct,list(immune_labels)),0,1)
+    y_lusc=(ct=='Tumor cells LUSC').astype(int)
+    y_mit=(ct=='Tumor cells LUSC mitotic').astype(int)
+    return y_non,y_lusc,y_mit
+
+X_train=get_X(ref, train_idx, ridx)
+y_non,y_lusc,y_mit=labels_from_ref(train_idx)
+# validation 50k remaining
+val_idx=shuffle(np.setdiff1d(np.arange(nref),train_idx), random_state=1)[:50000]
+X_val=get_X(ref,val_idx,ridx)
+yv_non,yv_lusc,yv_mit=labels_from_ref(val_idx)
+
+# scale sparse using max/min? Use StandardScaler with_mean=False (online)
+scaler=StandardScaler(with_mean=False)
+X_train=scaler.fit_transform(X_train)
+X_val=scaler.transform(X_val)
+
+models={}
+for name,y,vy in [('nonimmune',y_non,yv_non),('lusc',y_lusc,yv_lusc),('lusc_mitotic',y_mit,yv_mit)]:
+    clf=SGDClassifier(loss='log_loss', penalty='l2', alpha=1e-5, max_iter=1000, tol=1e-3, random_state=0, n_jobs=-1)
+    clf.fit(X_train,y)
+    pred=clf.predict(X_val)
+    acc=accuracy_score(vy,pred)
+    print(name,'val acc',acc)
+    print(classification_report(vy,pred, digits=3, zero_division=0))
+    models[name]=clf
+
+# Save scaler/models maybe not necessary; predict our data in chunks
+our_n=our.n_obs
+preds={k:np.zeros(our_n,dtype=np.int8) for k in models}
+# For our data, scale with same scaler (transform)
+chunk=20000
+for s in range(0,our_n,chunk):
+    e=min(s+chunk,our_n)
+    rows=np.arange(s,e)
+    X=get_X(our,rows,oidx)
+    X=scaler.transform(X)
+    for name,clf in models.items():
+        preds[name][s:e]=clf.predict(X)
+    if s%100000==0: print('pred our',s)
+np.savez_compressed('sgd_preds.npz',**preds)
+# Also save training labels for maybe use
+print('done')
+PY
+python train_sgd_classifier.py"

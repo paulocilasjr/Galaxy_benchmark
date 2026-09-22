@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, requests, pyBigWig, numpy as np, concurrent.futures, csv, collections, time, sys
+# candidate groups with QC total 65-90m and matching encode4 per-replicate peak bigWig
+bams=[]
+for l in open('encode4_join.tsv'):
+ f=l.rstrip('\\n').split('\\t')
+ if len(f)<8: continue
+ exp,bam,rep,total,rl,run,summary,bw=f
+ if bw=='NO_BW': continue
+ bams.append((exp,bam,rep,int(total),rl,run,summary,bw))
+groups=collections.defaultdict(list)
+for x in bams: groups[x[0]].append(x)
+# group total from candidates
+groups={e:xs for e,xs in groups.items() if 65_000_000 <= sum(x[3] for x in xs) <= 90_000_000}
+print('groups',len(groups),'files',sum(map(len,groups.values())),flush=True)
+# target windows are exact 10kb bins
+T={}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.rstrip().split('\\t'); s=int(s)
+ if c in ('chr10','chr1','chr19') and s<1_000_000: T.setdefault(c,[]).append(float(v))
+target=np.concatenate([T[c] for c in ('chr10','chr1','chr19')])
+regions=[('chr10',0,1_000_000,100),('chr1',0,1_000_000,100),('chr19',0,1_000_000,100)]
+def fetch(x):
+ exp,bam,rep,total,rl,run,summary,bw=x
+ try:
+  u=f'https://www.encodeproject.org/files/{bw}/@@download/{bw}.bigWig'
+  rr=requests.get(u,allow_redirects=False,timeout=30)
+  if rr.status_code not in (301,302,303,307,308): raise RuntimeError(f'redirect {rr.status_code}')
+  b=pyBigWig.open(rr.headers['location'])
+  arr=[]
+  for c,s,e,n in regions:
+   z=b.stats(c,s,e,nBins=n,type='sum',exact=False)
+   arr.extend(0.0 if v is None else v for v in z)
+  b.close()
+  return x,np.array(arr),''
+ except Exception as ex:
+  return x,None,repr(ex)
+start=time.time(); data={}
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+ futs=[pool.submit(fetch,x) for xs in groups.values() for x in xs]
+ for j,f in enumerate(concurrent.futures.as_completed(futs),1):
+  x,a,err=f.result(); data[x[7]]=a
+  if j%10==0: print('done',j,'/',len(futs),round(time.time()-start,1),flush=True)
+# score each group using sums; normalize each file to its array sum before sum? report both
+out=[]
+for exp,xs in groups.items():
+ arrs=[data.get(x[7]) for x in xs]
+ if any(a is None for a in arrs): continue
+ # weighted raw signal sum, and per-file normalized sum
+ raw=sum(arrs)
+ norm=sum(a/a.sum() for a in arrs)
+ for label,a in [('raw',raw),('norm',norm)]:
+  p=float(np.corrcoef(target,a)[0,1]) if np.std(a)>0 else -1
+  lp=float(np.corrcoef(np.log1p(target),np.log1p(a))[0,1])
+  # rank correlation via rankdata not scipy
+  def rank(v): return np.argsort(np.argsort(v))
+  sp=float(np.corrcoef(rank(target),rank(a))[0,1])
+  out.append((p,lp,sp,exp,label,','.join(x[7] for x in xs),','.join(x[1] for x in xs),sum(x[3] for x in xs),','.join(x[6] for x in xs)))
+for row in sorted(out,reverse=True)[:40]: print('\\t'.join(map(str,row)))
+PY"

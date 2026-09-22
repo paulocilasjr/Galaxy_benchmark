@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from scipy import sparse
+z=np.load('allele_counts.npz');keys=z['keys'];dp=z['dp'].astype(int);ad=z['ad'].astype(int);rows=keys>>16;cells=keys&65535;cb=z['barcodes'].astype(str)
+
+def gt(path):
+ G=[]
+ with gzip.open(path,'rt') as fh:
+  for line in fh:
+   if line.startswith('#'):continue
+   a=[]
+   for x in line.rstrip().split('\\t')[9:]:
+    g=x.split(':')[0];a.append(0 if g in ('0/0','0|0') else 1 if g in ('1/1','1|1') else .5)
+   G.append(a)
+ return np.array(G)
+for seed in [20260809,17,27,37]:
+ cs=np.load('cv_cell_sets.npz' if seed==20260809 else f'cv_cell_sets_s{seed}.npz');keep=cs['keep'];test=np.array(cs['test']);
+ testset=set(test.tolist()); rmap={int(r):i for i,r in enumerate(keep)}; cmap={int(c):i for i,c in enumerate(test)}
+ hm=np.array([(int(r) in rmap and int(c) in cmap) for r,c in zip(rows,cells)]); rr=np.array([rmap[int(r)] for r in rows[hm]]);cc=np.array([cmap[int(c)] for c in cells[hm]]);dd=dp[hm];aa=ad[hm]
+ AD=sparse.coo_matrix((aa,(rr,cc)),shape=(len(keep),len(test))).tocsr();DP=sparse.coo_matrix((dd,(rr,cc)),shape=(len(keep),len(test))).tocsr();read=np.asarray(DP.sum(axis=0)).ravel();ok=read>=20
+ print('\\nseed',seed,'test',len(test),'usable',ok.sum(),'reads',int(read[ok].sum()))
+ for n in range(3,8):
+  pth=f'cv_cells_train_N{n}/GT_donors.vireo.vcf.gz' if seed==20260809 else f'cv_cells_train_s{seed}_N{n}/GT_donors.vireo.vcf.gz'; G=gt(pth)
+  vals=[]
+  for e in [.01,.03,.05,.1]:
+   ll=np.zeros((len(test),n))
+   for j in range(len(test)):
+    a=AD[:,j].toarray().ravel();d=DP[:,j].toarray().ravel();q=d>0
+    for g in range(n):
+     p=e+(1-2*e)*G[:,g];ll[j,g]=np.sum(a[q]*np.log(p[q])+(d[q]-a[q])*np.log1p(-p[q]))
+   best=ll.max(axis=1); vals.append((round(best[ok].sum()/read[ok].sum(),5),np.bincount(ll.argmax(1)[ok],minlength=n).tolist()))
+  print('N',n,vals)
+PY"

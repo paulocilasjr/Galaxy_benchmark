@@ -1,0 +1,58 @@
+/bin/bash -c "cat > robust_classify.py <<'PY'
+import numpy as np, pandas as pd
+from scipy.cluster.hierarchy import linkage, fcluster
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+PB=np.load('pb_dense.npy')
+donors=np.load('donor_names.npy', allow_pickle=True)
+genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy', allow_pickle=True)])
+lib=PB.sum(axis=0,keepdims=True)
+log=np.log2(PB/lib*1e6+1)
+# curated healthy vs covid signatures from DE and literature
+healthy_genes=['FCER1A','CLEC4C','CD1C','CLEC10A','CCR7','SELL','TCF7','LEF1','IL7R','GIMAP7','S1PR1','LTB','PLD4','LILRA4','IRF7','TNFRSF13B','CD79A','MS4A1','IGHD','TCL1A','IL3RA','CST3','FCGR2B']
+covid_genes=['IFI27','IFITM3','ISG15','MX1','OAS1','IFI44L','IFIT1','RSAD2','S100A8','S100A9','S100A12','SOCS3','ADM','HP','MKI67','TOP2A','IGHG1','IGHG3','IGHA1','MZB1','XBP1','CD38','TNFRSF17','FCGR1A','CLU','RNASE1','RNASE2']
+def score(gs):
+    idx=[np.where(genes==g)[0][0] for g in gs if g in genes]
+    return log[idx,:].mean(axis=0)
+hs=score(healthy_genes); cs=score(covid_genes)
+score=hs-cs
+print('donor\\thealthy_score\\tcovid_score\\tdiff')
+for j in np.argsort(score)[::-1]:
+    d=donors[j]
+    print(f'{d}\\t{hs[j]:.2f}\\t{cs[j]:.2f}\\t{score[j]:.2f}')
+# gap ordering
+order=np.argsort(score)[::-1]
+print('ordered IDs', [int(d[5:]) for d in donors[order]])
+# Try threshold by largest gap between consecutive sorted scores (assuming binary)
+vals=score[order]
+gaps=np.diff(vals)
+k=np.argmin(gaps) # largest negative? Actually gap from high to low, largest drop
+print('gaps', np.round(gaps,3))
+# largest negative (drop)
+drop=np.argmin(gaps)
+print('largest drop after rank',drop, 'IDs high', [int(d[5:]) for d in donors[order][:drop+1]])
+# kmeans on PCA top 2000 as before, multiple
+mean=log.mean(axis=1); var=log.var(axis=1)
+for feat in ['all','hv2000','hv1000','sig50']:
+    if feat=='all': idx=np.where(mean>0.2)[0]
+    elif feat.startswith('hv'):
+        n=int(feat[2:]); mask=mean>0.2; ii=np.where(mask)[0]; idx=ii[np.argsort(var[mask])[::-1][:n]]
+    else:
+        gs=healthy_genes+covid_genes; idx=[np.where(genes==g)[0][0] for g in gs if g in genes]
+    X=log[idx,:].T
+    Xs=StandardScaler().fit_transform(X)
+    for method in ['ward','complete','average']:
+        Z=linkage(Xs,method=method,metric='euclidean')
+        labels=fcluster(Z,2,criterion='maxclust')
+        groups={}
+        for d,l in zip(donors,labels): groups.setdefault(l,[]).append(int(d[5:]))
+        # identify healthy group as higher mean score
+        gl=[]
+        for l,ids in groups.items():
+            js=[np.where(donors==f'donor{i}')[0][0] for i in ids]
+            gl.append((np.mean(score[js]), sorted(ids)))
+        gl.sort(reverse=True)
+        print(feat,method, 'groups_health_likely', gl[0][1], 'other', gl[1][1], 'scores', [round(x,2) for x,_ in gl])
+PY
+python robust_classify.py"

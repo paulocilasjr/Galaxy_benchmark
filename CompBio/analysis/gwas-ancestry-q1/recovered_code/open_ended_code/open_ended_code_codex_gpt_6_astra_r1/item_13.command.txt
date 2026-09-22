@@ -1,0 +1,24 @@
+/bin/bash -lc "cat > score_blocks.py <<'PY'
+import numpy as np,pandas as pd,glob
+from scipy.stats import norm
+panel=pd.read_csv('integrated_call_samples_v3.20130502.ALL.panel',sep='\\t').set_index('sample')
+gwas=pd.read_csv('gwas.ancestry.q1.tsv.gz',sep='\\t').set_index('POS')
+pops=['AFR','EUR','EAS','SAS','AMR']; totals=np.zeros((len(pops),4))
+for file in sorted(glob.glob('block_*.npz')):
+ x=np.load(file); g=gwas.loc[x['pos']]; z=norm.isf(g.P.to_numpy()/2); lead=np.nanargmax(z); p=panel.loc[x['samples']]
+ out=[]
+ for k,pop in enumerate(pops):
+  gt=x['geno'][:,(p.super_pop==pop).to_numpy()].astype(float)
+  gt-=gt.mean(axis=1,keepdims=True); sd=np.linalg.norm(gt,axis=1); gt/=np.maximum(sd[:,None],1e-10)
+  rr=gt@gt.T; r=rr[:,lead]; use=np.isfinite(z)&(sd>0)
+  err=np.mean((np.abs(r[use])*z[lead]-z[use])**2)
+  ii,jj=np.triu_indices(len(z),1); keep=use[ii]&use[jj]&(abs(x['pos'][ii]-x['pos'][jj])<100000)&(abs(rr[ii,jj])>.8)
+  ii=ii[keep];jj=jj[keep];rs=np.abs(rr[ii,jj])*.995
+  # folded bivariate normal likelihood of absolute test statistics
+  a=z[ii];b=z[jj];ll=-.5*np.log1p(-rs**2)-(a*a+b*b)/(2*(1-rs**2))+np.logaddexp(rs*a*b/(1-rs**2),-rs*a*b/(1-rs**2))
+  totals[k]+=[err,1,np.sum((a-b)**2),len(a)]
+  out.append(round(err,3))
+ print(file,'leadZ',round(z[lead],2),'errors',out,flush=True)
+print('POPS',pops,'avg lead error',totals[:,0]/totals[:,1],'high-LD pair diff',totals[:,2]/totals[:,3],flush=True)
+PY
+python -u score_blocks.py"

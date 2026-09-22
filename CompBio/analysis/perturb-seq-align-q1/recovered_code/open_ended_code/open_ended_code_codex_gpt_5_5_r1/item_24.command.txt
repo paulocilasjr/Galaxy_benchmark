@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+# Calculate CDC73 row rank of guide29 under raw common signature for several k; include direct CDC73 effect ranks.
+# Use cached no; compact enough.
+import h5py, numpy as np, collections
+from scipy import sparse
+
+def dec(a): return np.array([x.decode() if isinstance(x,(bytes,bytearray)) else str(x) for x in a])
+def read(fn):
+ with h5py.File(fn,'r') as f:
+  return (sparse.csc_matrix((f['X/data'][()].astype(np.float32),f['X/indices'][()],f['X/indptr'][()]),shape=tuple(f['X'].attrs['shape'])), dec(f['var/_index'][()]), dec(f['obs/guide/categories'][()]), None if 'target_gene' not in f['obs'] else dec(f['obs/target_gene/categories'][()]), f['obs/guide/codes'][()], None if 'target_gene' not in f['obs'] else f['obs/target_gene/codes'][()])
+def lognorm(X):
+ tot=np.asarray(X.sum(1)).ravel().astype(np.float32); tot[tot==0]=1; coo=X.tocoo(copy=True); coo.data=np.log1p(coo.data/tot[coo.row]*1e4).astype(np.float32); return coo.tocsr()
+def means(X,labels,groups): return np.vstack([np.asarray(X[labels==g].mean(0)).ravel() for g in groups]).astype(np.float32)
+def corr(A,B):
+ A=A.astype(float); B=B.astype(float); A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True); return A@B.T/(np.linalg.norm(A,axis=1)[:,None]*np.linalg.norm(B,axis=1)[None,:]+1e-12)
+Xr,vr,grc,tc,grcodes,trcodes=read('perturb.seq.align.q1.ref.h5ad'); gr=grc[grcodes]; tr=tc[trcodes]
+Xq,vq,gqc,_,gqcodes,_=read('perturb.seq.align.q1.query.h5ad'); gq=gqc[gqcodes]
+qpos={g:i for i,g in enumerate(vq)}; ridx=[]; qidx=[]; names=[]
+for i,g in enumerate(vr):
+ if g in qpos: ridx.append(i); qidx.append(qpos[g]); names.append(g)
+Mr=means(lognorm(Xr)[:,ridx],gr,grc); Mq=means(lognorm(Xq)[:,qidx],gq,gqc)
+ref_non=[i for i,g in enumerate(grc) if not g.startswith('NT-')]; q_non=[i for i,g in enumerate(gqc) if not g.startswith('NT-')]
+ref_nt=[i for i,g in enumerate(grc) if g.startswith('NT-')]; q_nt=[i for i,g in enumerate(gqc) if g.startswith('NT-')]
+refnames=[grc[i] for i in ref_non]; qnames=[gqc[i] for i in q_non]
+refmap={g:collections.Counter(tr[gr==g]).most_common(1)[0][0] for g in grc}
+Er=Mr[ref_non]-Mr[ref_nt].mean(0); Eq=Mq[q_non]-Mq[q_nt].mean(0); score=np.maximum(abs(Er).max(0),abs(Eq).max(0))
+for target,qtrue in [('CDC73','guide29'),('PABPC1','guide18'),('NUDT21','guide13'),('LEO1','guide14')]:
+ rg=[g for g,t in refmap.items() if t==target][0]; ri=refnames.index(rg)
+ print('\\n',target,rg)
+ for k in [50,100,200,500,1000,2000,5000,11858]:
+  idx=np.argsort(score)[-k:] if k<score.size else np.arange(score.size)
+  C=corr(Er[:,idx],Eq[:,idx]); ord=np.argsort(C[ri])[::-1]
+  qi=qnames.index(qtrue)
+  print('k',k,'best',qnames[ord[0]],round(float(C[ri,ord[0]]),3),'candidate',qtrue,'rank',int(np.where(ord==qi)[0][0]+1),'score',round(float(C[ri,qi]),3))
+PY"

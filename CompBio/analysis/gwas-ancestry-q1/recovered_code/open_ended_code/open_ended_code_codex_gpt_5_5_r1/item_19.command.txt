@@ -1,0 +1,101 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, math, csv
+from collections import defaultdict
+import numpy as np
+from scipy.stats import chi2, spearmanr, pearsonr
+from cyvcf2 import VCF
+
+# Load panel
+pop_by_sample={}
+super_by_sample={}
+with open('refs/integrated_call_samples_v3.20130502.ALL.panel') as f:
+    next(f)
+    for line in f:
+        parts=line.split()
+        if len(parts)>=3:
+            s,p,sp=parts[:3]
+            pop_by_sample[s]=p; super_by_sample[s]=sp
+
+# Load GWAS variants in windows
+windows=[('locus1',16500000,18000000),('locus2',171500000,172500000)]
+gwas_by_id={}
+region_ids=defaultdict(list)
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        if row['P']=='NA': continue
+        pos=int(row['POS'])
+        p=float(row['P'])
+        if p<=0 or p>1: continue
+        # cap huge chi if needed
+        val=chi2.isf(p,1)
+        rec={'id':row['RSID'], 'pos':pos, 'p':p, 'chi':val, 'snpid':row['SNPID']}
+        gwas_by_id[row['RSID']]=rec
+        for name,a,b in windows:
+            if a<=pos<=b:
+                region_ids[name].append(row['RSID'])
+
+vcf=VCF('refs/kg_chr1_loci.vcf.gz')
+samples=vcf.samples
+superpops=sorted(set(super_by_sample.values()))
+idx_by_super={sp:np.array([i for i,s in enumerate(samples) if super_by_sample.get(s)==sp], dtype=int) for sp in superpops}
+print('sample counts', {k:len(v) for k,v in idx_by_super.items()})
+
+# Store dosages for GWAS variants only
+geno_by_id={}
+pos_by_id={}
+for v in vcf:
+    if v.ID not in gwas_by_id: continue
+    if len(v.REF)"'!=1 or len(v.ALT)!=1 or len(v.ALT[0])!=1: continue
+    gt=v.genotypes  # list [a,b,phased]
+    arr=np.array([(a+b if a>=0 and b>=0 else np.nan) for a,b,*_ in gt], dtype=float)
+    geno_by_id[v.ID]=arr
+    pos_by_id[v.ID]=v.POS
+
+print('"'gwas matched', len(geno_by_id), 'of', len(gwas_by_id))
+for name,ids in region_ids.items():
+    ids2=[i for i in ids if i in geno_by_id]
+    top=sorted([gwas_by_id[i] for i in ids2], key=lambda x:x['p'])[:5]
+    print('\\n',name,'gwas ids',len(ids),'matched',len(ids2),'top',[(t['id'],t['pos'],t['p'],round(t['chi'],2)) for t in top])
+    y=np.array([gwas_by_id[i]['chi'] for i in ids2])
+    # Use log chi maybe; raw dominated by lead. Rank too.
+    for sp,idx in idx_by_super.items():
+        X=np.vstack([geno_by_id[i][idx] for i in ids2])
+        # filter variants polymorphic in pop and nonmissing
+        means=np.nanmean(X,axis=1)
+        vars_=np.nanvar(X,axis=1)
+        keep=np.isfinite(y) & (vars_>1e-6)
+        ids_keep=[id_ for id_,k in zip(ids2,keep) if k]
+        X=X[keep]; yy=y[keep]
+        if len(ids_keep)<20: continue
+        # standardize all variants across samples (no missing expected)
+        X=(X-X.mean(axis=1,keepdims=True))/X.std(axis=1,keepdims=True)
+        # candidates: top 100 chi among available, plus all p<1e-5
+        order=np.argsort(-yy)
+        cand_idx=set(order[:min(100,len(order))])
+        for j,val in enumerate(yy):
+            if val>chi2.isf(1e-5,1): cand_idx.add(j)
+        best=None
+        for ci in cand_idx:
+            r=(X @ X[ci])/(X.shape[1]-1)
+            r2=np.clip(r*r,0,1)
+            # Use yy vs r2 over SNPs within +/-500kb of candidate to reduce multi-locus noise
+            cpos=pos_by_id[ids_keep[ci]]
+            locmask=np.array([abs(pos_by_id[id_]-cpos)<=500000 for id_ in ids_keep])
+            if locmask.sum()<20: continue
+            yy2=yy[locmask]
+            r22=r2[locmask]
+            if np.std(r22)==0: continue
+            # linear fit y = a+b*r2, b positive; score Pearson and SSE after fit
+            pr=pearsonr(yy2,r22).statistic
+            sr=spearmanr(yy2,r22).statistic
+            A=np.vstack([np.ones_like(r22),r22]).T
+            coef=np.linalg.lstsq(A,yy2,rcond=None)[0]
+            pred=A@coef
+            sse=float(((yy2-pred)**2).sum())
+            r2fit=1-sse/float(((yy2-yy2.mean())**2).sum()) if len(yy2)>1 else -np.inf
+            score=(0 if math.isnan(pr) else pr)+(0 if math.isnan(sr) else sr)+r2fit
+            if best is None or score>best[0]:
+                best=(score, ids_keep[ci], pos_by_id[ids_keep[ci]], pr, sr, r2fit, coef.tolist(), locmask.sum())
+        print(sp, 'best', best)
+PY"

@@ -1,0 +1,23 @@
+/bin/bash -c "cat > scrublet_peaks.py <<'PY'
+import numpy as np, time, snapatac2 as snap, scrublet as scr, gc
+from scipy.sparse import csr_matrix
+adata=snap.read('atac_peaks_scrub.h5ad')
+X=adata.X[:].tocsr().astype(np.float32)
+cell_ids=np.array(adata.obs_names)
+print('X',X.shape,X.nnz)
+# frequency filter simple
+freq=np.asarray((X>0).sum(axis=0)).ravel()
+keep=np.where((freq>=5)&(freq<=700))[0]
+print('keep',len(keep))
+X=X[:,keep]
+print('subset nnz',X.nnz, X.shape)
+# run scrublet with raw counts
+scrub=scr.Scrublet(X, expected_doublet_rate=0.06, sim_doublet_ratio=2.0)
+scores,pred=scrub.scrub_doublets(min_counts=1,min_cells=2,min_gene_variability_pctl=85, use_approx_neighbors=False, n_prin_comps=30)
+print('done')
+print('pred rate',pred.mean(),'score quantiles',np.quantile(scores,[0,.25,.5,.75,.9,.95,.99,1]),'max',scores.max())
+idx=np.argsort(-scores)
+for i in idx[:50]: print(cell_ids[i], scores[i], pred[i])
+np.savetxt('scrublet_peaks_scores.txt',np.c_[cell_ids,scores,pred.astype(int)],fmt='%s')
+PY
+python3 scrublet_peaks.py"

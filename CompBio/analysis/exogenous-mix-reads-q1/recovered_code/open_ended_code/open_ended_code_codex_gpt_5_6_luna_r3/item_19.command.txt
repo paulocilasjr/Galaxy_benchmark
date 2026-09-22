@@ -1,0 +1,21 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess,urllib.request,collections,re
+ref=urllib.request.urlopen('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.4&rettype=fasta&retmode=text',timeout=30).read()
+for name in ('exo','endo','mix'):
+  fq=f'exogenous.mix.reads.q1.{name}.fq'
+  p=subprocess.run(['minimap2','-ax','sr','/dev/stdin',fq],input=ref,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+  bins=collections.Counter(); nms=collections.Counter(); poss=[]
+  for line in p.stdout.decode().splitlines():
+    if not line or line[0]=='@': continue
+    f=line.split('\\t'); flag=int(f[1]);
+    if flag & 4: bins['unmapped']+=1; continue
+    pos=int(f[3])-1; cigar=f[5]; nm=next((int(x[5:]) for x in f[11:] if x.startswith('NM:i:')),None)
+    span=sum(int(n)*len(op) for n,op in re.findall(r'(\\d+)([MIDNSHP=X])',cigar) if op in 'MDN=X')
+    end=pos+span
+    if end<=600: b='5UTR'
+    elif pos>=1983: b='3UTR'
+    elif pos>=600 and end<=1983+50: b='CDS'
+    else: b='boundary'
+    bins[b]+=1; nms[nm]+=1; poss.append(pos)
+  print(name, 'total',sum(bins.values()),'bins',dict(bins),'NM',dict(sorted(nms.items())),'posrange', (min(poss),max(poss)))
+PY"

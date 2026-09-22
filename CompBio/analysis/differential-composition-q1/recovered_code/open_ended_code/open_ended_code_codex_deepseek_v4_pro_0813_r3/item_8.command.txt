@@ -1,0 +1,31 @@
+/bin/bash -lc "cat > run_pipeline.py <<'PY'
+import scanpy as sc, anndata as ad
+import numpy as np, pandas as pd
+sc.settings.verbosity=3
+adata=sc.read_h5ad('combined_raw.h5ad')
+print(adata.shape)
+# ensure raw counts
+sc.pp.filter_genes(adata, min_cells=3)
+print('after genes', adata.shape)
+# basic cell filter maybe n_genes 200-8000, counts < 50000
+sc.pp.filter_cells(adata, min_genes=200)
+# no max by default? do max counts 60000
+adata=adata[adata.obs.total_counts < 60000, :].copy()
+print('after cells', adata.shape)
+# mitochondrial not necessary
+adata.layers['counts']=adata.X.copy()
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+sc.pp.highly_variable_genes(adata, n_top_genes=3000, batch_key='individual')
+print('HVG', adata.var.highly_variable.sum())
+sc.tl.pca(adata, n_comps=50, svd_solver='arpack')
+import harmonypy as hm
+ho=hm.run_harmony(adata.obsm['X_pca'], adata.obs, 'individual', max_iter_harmony=20)
+adata.obsm['X_pca_harmony']=ho.Z_corr.T
+sc.pp.neighbors(adata, use_rep='X_pca_harmony', n_neighbors=20)
+sc.tl.umap(adata)
+sc.tl.leiden(adata, resolution=1.0)
+print(adata.obs.leiden.value_counts())
+adata.write_h5ad('processed.h5ad')
+PY
+python3 run_pipeline.py"

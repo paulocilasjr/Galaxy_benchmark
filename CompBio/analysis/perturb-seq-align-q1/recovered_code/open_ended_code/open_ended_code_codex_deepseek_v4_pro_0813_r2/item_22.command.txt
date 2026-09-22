@@ -1,0 +1,66 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import pearsonr, spearmanr
+warnings.filterwarnings('ignore')
+
+def load():
+ files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']
+ out=[]
+ for fn in files:
+  with h5py.File(fn,'r') as f:
+   n_obs,n_var=f['X'].attrs['shape']
+   X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+   gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+   gc=f['obs/guide/codes'][:]
+   g=np.array([gcats[i] for i in gc])
+   var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+   out.append((X,g,var))
+ (X1,g1,v1),(X2,g2,v2)=out
+ common=[x for x in v1 if x in set(v2)]
+ X1=X1[:,[v1.index(x) for x in common]]
+ X2=X2[:,[v2.index(x) for x in common]]
+ return X1,g1,X2,g2,common
+X1,g1,X2,g2,var=load()
+print('common',len(var))
+def norm(X):
+ X=X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4); return X.tocsr()
+X1=norm(X1); X2=norm(X2)
+nt1=np.array([g.startswith('NT-') for g in g1]); nt2=np.array([g.startswith('NT-') for g in g2])
+ref_nt=X1[nt1]; q_nt=X2[nt2]
+mu_nt1=np.asarray(ref_nt.mean(0)).ravel(); mu_nt2=np.asarray(q_nt.mean(0)).ravel()
+
+def guide_sig(X,guides,mu_nt):
+ cats=[g for g in sorted(set(guides)) if not g.startswith('NT-')]
+ sig={}
+ for g in cats:
+  idx=np.where(guides==g)[0]
+  sig[g]=np.asarray(X[idx].mean(0)).ravel()-mu_nt
+ return sig
+rs=guide_sig(X1,g1,mu_nt1); qs=guide_sig(X2,g2,mu_nt2)
+ref_cats=list(rs); q_cats=list(qs)
+# markers for each ref target: top N abs logFC across guides? Actually specific top genes from target signature sorted by abs logFC
+for target_guide in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+ print('\\n===',target_guide)
+ sig=rs[target_guide]
+ # top up and down in ref target vs NT by abs logFC, but filter baseline mean >? 
+ order=np.argsort(-np.abs(sig))
+ top=order[:200]
+ # also tstat? simple
+ print('top genes (ref):')
+ for i in top[:20]:
+  print(var[i], round(sig[i],4))
+ # correlations of these top genes between ref target and all query guides
+ for metric,fn in [('pearson',lambda a,b:pearsonr(a,b)[0]),('spearman',lambda a,b:spearmanr(a,b).correlation)]:
+  vals=[]
+  for q in q_cats:
+   vals.append((fn(qs[q][top],sig[top]),q))
+  print(metric, sorted(vals,reverse=True)[:10])
+ # Use top 50 ref markers, top 100, etc
+ for n in [20,50,100,200,500]:
+  top=order[:n]
+  for metric,fn in [('pearson',lambda a,b:pearsonr(a,b)[0]),('spearman',lambda a,b:spearmanr(a,b).correlation)]:
+   vals=sorted([(fn(qs[q][top],sig[top]),q) for q in q_cats],reverse=True)
+   print('n',n,metric,vals[:5])
+PY
+python [REDACTED LOCAL PATH]"

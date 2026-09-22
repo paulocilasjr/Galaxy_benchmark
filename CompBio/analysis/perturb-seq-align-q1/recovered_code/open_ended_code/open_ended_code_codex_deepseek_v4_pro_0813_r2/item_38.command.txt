@@ -1,0 +1,45 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import pearsonr, spearmanr
+warnings.filterwarnings('ignore')
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']
+  X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+  gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  out.append((X,g,var))
+X1,g1,v1=out[0]; X2,g2,v2=out[1]
+common=[x for x in v1 if x in set(v2)]
+X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr(); X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+for X in [X1,X2]:
+ lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1; X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4)
+nt1=np.char.startswith(g1.astype(str),'NT-'); nt2=np.char.startswith(g2.astype(str),'NT-')
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); mu2=np.asarray(X2[nt2].mean(0)).ravel()
+def sigs(X,g,mu):
+ return {gg:np.asarray(X[g==gg].mean(0)).ravel()-mu for gg in set(g) if not gg.startswith('NT-')}
+rs=sigs(X1,g1,mu1); qs=sigs(X2,g2,mu2)
+complex_guides=['LEO1-I2','CTR9-I7','PAF1-I6','CDC73-I2']
+# Build LEO1-specific signature: LEO1 minus mean of other complex guides (and perhaps NT already subtracted)
+others=np.mean([rs[g] for g in complex_guides if g"'!='"'LEO1-I2'],axis=0)
+specific=rs['LEO1-I2']-others
+# Also regular LEO1 vs NT
+order_specific=np.argsort(-np.abs(specific))
+print('top specific genes for LEO1 vs complex:')
+for i in order_specific[:30]: print(var[i],round(specific[i],4))
+for n in [20,50,100,200,500,1000]:
+ order=order_specific[:n]
+ print('\\nn',n)
+ # query correlation with specific signature (higher => LEO1), and with regular LEO1 sig
+ reg=rs['LEO1-I2']
+ for label,sig in [('specific',specific),('regular',reg)]:
+  vals=sorted([(pearsonr(qs[q][order],sig[order])[0],q) for q in qs],reverse=True)
+  print(label,vals[:8])
+ # also correlation with mean other complex signature using genes specific? maybe
+ other_reg=others
+ vals=sorted([(pearsonr(qs[q][order],other_reg[order])[0],q) for q in qs],reverse=True)
+ print('other',vals[:8])
+PY
+python [REDACTED LOCAL PATH]"

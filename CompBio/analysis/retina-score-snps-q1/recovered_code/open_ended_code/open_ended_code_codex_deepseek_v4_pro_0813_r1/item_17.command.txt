@@ -1,0 +1,48 @@
+/bin/bash -lc "cat > download_rod.py <<'PY'
+import requests, zlib, os, struct, concurrent.futures, time
+url='https://zenodo.org/api/records/6330053/files/retina_models.zip/content'
+# parse central dir from local file
+cd=open('central_dir.bin','rb').read()
+entries={}
+pos=0
+while pos+46 <= len(cd):
+    vals=struct.unpack('<4s6H3L5H2L',cd[pos:pos+46])
+    (_,vmake,vneed,flags,method,mtime,mdate,crc,csize,usize,fnlen,extralen,commentlen,disk,intattr,extattr,lho)=vals
+    name=cd[pos+46:pos+46+fnlen].decode('utf8','replace')
+    if name.endswith('/Rod.h5') and not name.startswith('__MACOSX'):
+        entries[int(name.split('/')[2].replace('fold',''))]=(name,csize,usize,lho,method,flags)
+    pos += 46+fnlen+extralen+commentlen
+
+def get_range(start,end):
+    headers={'Range':f'bytes={start}-{end}'}
+    for attempt in range(5):
+        r=requests.get(url,headers=headers,timeout=120)
+        if r.status_code in (200,206):
+            return r.content
+        print('status',r.status_code,'retry',attempt)
+        time.sleep(2*attempt+2)
+    raise RuntimeError('failed range')
+
+def fetch(fold):
+    name,csize,usize,lho,method,flags=entries[fold]
+    # fetch local header first 200 bytes
+    h=get_range(lho,lho+199)
+    fnlen=struct.unpack('<H',h[26:28])[0]
+    extralen=struct.unpack('<H',h[28:30])[0]
+    data_off=lho+30+fnlen+extralen
+    print('fold',fold,'local header len',30+fnlen+extralen,'data_off',data_off,'csize',csize)
+    raw=get_range(data_off,data_off+csize-1)
+    print('fold',fold,'got raw',len(raw))
+    out=f'models_Rod_fold{fold}.h5'
+    with open(out,'wb') as f:
+        d=zlib.decompressobj(-15)
+        decomp=d.decompress(raw)
+        decomp+=d.flush()
+        f.write(decomp)
+    print('fold',fold,'wrote',out,'size',os.path.getsize(out),'expected',usize)
+    return out
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+    list(ex.map(fetch, range(5)))
+PY
+python download_rod.py"

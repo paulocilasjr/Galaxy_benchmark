@@ -1,0 +1,33 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, snapatac2 as snap
+adata=snap.read('atac.snap.h5ad')
+names=np.array(adata.obs_names); leiden=np.array(adata.obs['leiden'])
+# load clusters saved maybe same; but use obs
+D=adata.obsp['distances'].tocsr()
+# D includes distances only to kNN? nonzero; indices
+n=len(names); entropy=np.zeros(n); purity=np.zeros(n)
+for i in range(n):
+    inds=D.indices[D.indptr[i]:D.indptr[i+1]]
+    labs=leiden[inds]
+    counts=np.bincount(labs,minlength=len(np.unique(leiden)))
+    p=counts/counts.sum()
+    entropy[i]=-(p[p>0]*np.log(p[p>0])).sum()
+    purity[i]=p.max()
+# print top entropy
+idx=np.argsort(-entropy)
+for i in idx[:80]: print(names[i], entropy[i], purity[i], leiden[i])
+# compare to scrublet pred lists
+for tag,file in [('peaks','scrublet_peaks_scores.txt'),('tile','scrublet_tile_scores.txt')]:
+ d=np.loadtxt(file,dtype=str); b=d[:,0]; pred=d[:,2].astype(int)
+ pred_b=set(b[pred==1])
+ top_ent=set(names[idx[:20]])
+ print(tag, 'pred n',len(pred_b),'top20 ent overlap',len(pred_b & top_ent), list(pred_b & top_ent)[:20])
+ # entropy among pred
+ e=np.array([entropy[np.where(names==x)[0][0]] for x in pred_b])
+ print(tag,'entropy of pred',e.mean(),e.max(), 'mean rank?')
+ # top candidates by entropy that are predicted
+ pred_ent=[]
+ for x in pred_b:
+  j=np.where(names==x)[0][0]; pred_ent.append((x,entropy[j],purity[j]))
+ for x,e,p in sorted(pred_ent,key=lambda z:-z[1])[:20]: print(' ',x,e,p)
+PY"

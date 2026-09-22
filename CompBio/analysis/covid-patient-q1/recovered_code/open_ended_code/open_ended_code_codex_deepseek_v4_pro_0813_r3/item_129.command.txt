@@ -1,0 +1,48 @@
+/bin/bash -c "cat > raw_pb_match.py <<'PY'
+import tarfile, io, numpy as np, json, time
+outer=tarfile.open('GSE180578_RAW.tar','r')
+members=outer.getmembers()
+names=[m.name for m in members if m.name.endswith('GEX.tar.gz') and 'CITEseq' not in m.name]
+print('n',len(names))
+# get feature symbols from first file
+def get_features(name):
+    f=outer.extractfile(name); inner=tarfile.open(fileobj=f,mode='r:gz')
+    feat=None
+    for x in inner.getmembers():
+        if x.name.endswith('/features.tsv'): feat=x
+    text=io.TextIOWrapper(inner.extractfile(feat),encoding='utf-8')
+    syms=[]
+    for line in text:
+        p=line.strip().split('\\t'); syms.append(p[1] if len(p)>=2 else p[0])
+    text.detach(); inner.close(); f.close(); return syms
+syms=get_features(names[0]); syms=np.array(syms)
+print('features',len(syms))
+# our genes
+our_genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy',allow_pickle=True)])
+PB=np.load('pb_dense.npy')
+# Build raw sample sums full genes
+raw_counts=np.zeros((len(names),len(syms)),dtype=np.float64)
+for si,name in enumerate(names):
+    t=time.time(); f=outer.extractfile(name); inner=tarfile.open(fileobj=f,mode='r:gz')
+    mm=None
+    for x in inner.getmembers():
+        if x.name.endswith('/matrix.mtx'): mm=x
+    text=io.TextIOWrapper(inner.extractfile(mm),encoding='utf-8')
+    # skip comments and header
+    line=text.readline()
+    while line and (line.startswith('%') or line.strip()==''): line=text.readline()
+    header=line.strip().split(); genes=int(header[0]); cells=int(header[1]); nnz=int(header[2])
+    for line in text:
+        p=line.split()
+        if len(p)<3: continue
+        gi=int(p[0])-1; val=float(p[2])
+        if 0<=gi<len(syms): raw_counts[si,gi]+=val
+    text.detach(); inner.close(); f.close()
+    print(name,'sum',raw_counts[si].sum(),'time',round(time.time()-t,1),flush=True)
+outer.close()
+np.save('GSE180578_raw_counts.npy',raw_counts)
+np.save('GSE180578_raw_names.npy',np.array(names,dtype=object))
+np.save('GSE180578_raw_syms.npy',syms)
+print('saved')
+PY
+python raw_pb_match.py"

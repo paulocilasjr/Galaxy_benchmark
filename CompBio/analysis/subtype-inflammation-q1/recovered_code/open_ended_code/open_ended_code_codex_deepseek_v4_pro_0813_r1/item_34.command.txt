@@ -1,0 +1,32 @@
+/bin/bash -c "cat > de_compare.py <<'PY'
+import scanpy as sc, pandas as pd, numpy as np
+adata=sc.read_h5ad('combined.h5ad')
+# assign broad type based on cluster map manually to compare inflammation
+cluster_to_type={
+'0':'rod cell','1':'rod cell','2':'rod cell','3':'rod cell','4':'rod cell','5':'rod cell','6':'rod cell','7':'rod cell',
+'8':'cone cell','28':'cone cell',
+'9':'bipolar cell','12':'bipolar cell','13':'bipolar cell','16':'bipolar cell','17':'bipolar cell','18':'bipolar cell','21':'bipolar cell','22':'bipolar cell','26':'bipolar cell','27':'bipolar cell',
+'10':'muller glia cell','11':'muller glia cell',
+'14':'horizontal cell','15':'horizontal cell','19':'horizontal cell','23':'horizontal cell','24':'horizontal cell','29':'horizontal cell',
+'20':'RGC','25':'fibroblast'
+}
+adata.obs['broad']=adata.obs['leiden'].map(cluster_to_type).fillna('other')
+inf=['C1QA','C1QB','C1QC','HLA-DRA','HLA-DRB1','HLA-DPA1','CD74','CXCL8','IL1B','TNF','NFKBIA','CXCL10','CCL2','CCL3','CCL4','STAT1','IRF1','ISG15','IFITM3','SOD2','FOS','JUN','B2M']
+present=[g for g in inf if g in adata.var_names]
+adata.obs['raw_inf']=np.asarray(adata[:,present].X.mean(axis=1)).ravel()
+r=adata.obs.groupby(['broad','sample']).agg(n=('raw_inf','size'), mean=('raw_inf','mean')).reset_index()
+p=r.pivot(index='broad',columns='sample',values='mean')
+p['n_eye1']=r[r['sample']=='eye1'].set_index('broad')['n']
+p['n_eye2']=r[r['sample']=='eye2'].set_index('broad')['n']
+p['diff']=p['eye1']-p['eye2']
+print('Broad inflammation mean/diff:')
+print(p.sort_values('diff',ascending=False).round(4).to_string())
+# top DEGs for muller clusters between eyes using scanpy rank_genes_groups sample
+sub=adata[adata.obs['leiden'].isin(['10','11'])].copy()
+sc.tl.rank_genes_groups(sub,'sample',groups=['eye1'],reference='eye2',method='wilcoxon',n_genes=30)
+res=sub.uns['rank_genes_groups']
+print('\\nTop DEGs eye1 vs eye2 in muller clusters (scores):')
+for g,s in zip(res['names']['eye1'][:30],res['scores']['eye1'][:30]):
+ print(g, round(float(s),2))
+PY
+python3 de_compare.py"

@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, itertools, json
+# Load score from top200 and tissues from rna_matrix
+score=np.load('rna_score_top200.npy')
+rna_tissues=list(np.load('rna_matrix.npz',allow_pickle=True)['tissues'])
+atac_names=['Bladder','Brain','Cloaca','GallBladder','Gill','Heart','Intestine','Kidney','Limb','Liver','Lung','Pancreas','Prostate','Spleen','Stomach']
+# Filter RNA tissues that exactly correspond to ATAC labels
+common=[t for t in rna_tissues if t in atac_names]
+print('common',common)
+idx_r=[rna_tissues.index(t) for t in common]
+idx_a=[atac_names.index(t) for t in common]
+S=score[np.ix_(idx_r,idx_a)]  # rows common RNA, cols common ATAC order
+print('S shape',S.shape)
+labels=common
+# Current metrics
+def metrics(S):
+ diag=np.diag(S).sum()
+ row_rank=np.mean([np.sum(S[i]>S[i,i])+1 for i in range(len(labels))])
+ col_match=sum(1 for j in range(len(labels)) if np.argmax(S[:,j])==j)
+ row_match=sum(1 for i in range(len(labels)) if np.argmax(S[i])==i)
+ # correlation between S and identity via flattened
+ import scipy.stats as st
+ r_flat,_=st.pearsonr(S.flatten(), np.eye(len(labels)).flatten())
+ return diag,row_rank,col_match,row_match,r_flat
+print('current',metrics(S))
+res=[]
+for a,b in itertools.combinations(range(len(labels)),2):
+    S2=S.copy(); S2[:,[a,b]]=S2[:,[b,a]]
+    res.append((metrics(S2),a,b,S2))
+# sort by diag desc
+for key,label in [(lambda x:-x[0][0],'diag'),(lambda x:(-x[0][2]-x[0][3],x[0][1],-x[0][0]),'matches')]:
+ arr=sorted(res,key=key)
+ print('\\nTop',label)
+ for met,a,b,S2 in arr[:20]:
+  print(f'{labels[a]:12s} {labels[b]:12s}',met)
+PY"

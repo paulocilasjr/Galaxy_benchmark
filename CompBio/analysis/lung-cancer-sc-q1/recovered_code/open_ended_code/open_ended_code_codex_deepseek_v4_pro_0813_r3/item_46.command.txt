@@ -1,0 +1,62 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp, time
+from scipy.sparse import csr_matrix, issparse
+
+def norm_means(X, group):
+    # X sparse; returns group x n_genes mean of log1p(CPM*1e4)
+    groups, inv = np.unique(group.values, return_inverse=True)
+    lib=np.asarray(X.sum(axis=1)).ravel().astype(np.float64)
+    lib[lib==0]=1
+    if issparse(X):
+        # scale rows by 1e4/lib
+        Xn=X.multiply((1e4/lib)[:,None]).tocsr()
+        Xn.data=np.log1p(Xn.data)
+    else:
+        Xn=np.log1p(X* (1e4/lib)[:,None])
+    # aggregate using bincount per gene? X @ onehot
+    O=csr_matrix((np.ones(X.shape[0]), (np.arange(X.shape[0]), inv)), shape=(X.shape[0], len(groups)))
+    M=Xn.T @ O
+    means=M.T / np.bincount(inv, minlength=len(groups))[:,None]
+    return pd.DataFrame(means, index=pd.Index(groups, name='sample'), columns=None)
+
+t=time.time()
+print('loading ours')
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+# map symbols to indices; use first occurrence of each unique symbol
+sym=a.var['symbol'].values
+# build unique mapping retaining first index
+uniq, first = np.unique(sym, return_index=True)
+first_sorted=first[np.argsort(uniq)]
+# load LUCA var
+print('loading luca')
+l=ad.read_h5ad('luca_scanvi_adata.h5ad', backed='r')
+lvar=l.var
+lgenes=lvar.index.values  # var index symbols? Need check; model var names likely symbols
+print('luca var head',lgenes[:10], 'len',len(lgenes))
+# ensure our order to lgenes
+oursym_to_idx=pd.Series(np.arange(a.n_vars), index=sym)
+idx=[]; missing=[]
+for g in lgenes:
+    if g in oursym_to_idx.index:
+        idx.append(oursym_to_idx[g])
+    else:
+        missing.append(g)
+print('missing',len(missing),missing[:10])
+idx=np.array(idx)
+Xo=a.X[:,idx]
+print('ours X subset shape',Xo.shape,'nnz',Xo.nnz)
+Mo=norm_means(Xo, a.obs['sampleID'])
+print('Mo shape',Mo.shape, 'time',time.time()-t)
+# LUCA raw_counts (6000)
+Xl=l.layers['raw_counts']
+print('luca raw type',type(Xl),Xl.shape)
+Ml=norm_means(Xl, l.obs['sample'])
+print('Ml shape',Ml.shape, 'time',time.time()-t)
+# save
+np.save('Mo.npy', Mo.values)
+np.save('Ml.npy', Ml.values)
+np.save('our_samples.npy', Mo.index.values)
+np.save('luca_samples.npy', Ml.index.values)
+print('saved')
+PY
+python [REDACTED LOCAL PATH]"

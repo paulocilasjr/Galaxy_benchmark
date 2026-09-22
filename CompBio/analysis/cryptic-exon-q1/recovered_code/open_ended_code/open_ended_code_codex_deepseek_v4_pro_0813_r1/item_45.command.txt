@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, re, collections, time
+# Build known introns per gene from GTF
+known=collections.defaultdict(set)
+exons=collections.defaultdict(lambda: collections.defaultdict(list))
+for line in open('gencode.v47.annotation.gtf'):
+    if line.startswith('#'): continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<9 or f[2]"'!='"'exon': continue
+    attrs=dict(re.findall(r'(\\S+?) \"(["'^"]*)"'"', f[8]))
+    tx=attrs.get('transcript_id',''); gn=attrs.get('gene_name','')
+    exons[gn][tx].append((int(f[3]), int(f[4])))
+for gn, txs in exons.items():
+    for tx, es in txs.items():
+        es=sorted(es)
+        for (s1,e1),(s2,e2) in zip(es,es[1:]):
+            if s2>e1+1:
+                known[gn].add((e1+1,s2-1))
+obs=collections.defaultdict(list)
+for line in subprocess.Popen(['samtools','view','-F','4','cand_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6: continue
+    flag=int(f[1]); mapq=int(f[4])
+    if flag & 0x900: continue
+    if mapq<10: continue
+    rname=f[2]; pos=int(f[3]); cigar=f[5]
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"', rname)
+    if not m: continue
+    gene,chrom,ref_start,ref_end=m.group(1),m.group(2),int(m.group(3)),int(m.group(4))
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])', cigar)
+    left=0
+    for n,op in ops:
+        n=int(n)
+        if op=='N':
+            gs=ref_start+(pos-1)+left
+            ge=gs+n-1
+            obs[gene].append((gs,ge,n,mapq))
+            left += n
+        elif op in 'MDN=X': left += n
+# summarize
+print('Gene\\tobs_uniq\\tknown_junctions\\tnovel_unique\\tnovel_reads\\texamples')
+for gene in sorted(obs, key=lambda g: len(set((a,b) for a,b,n,q in obs[g])-known.get(g,set())), reverse=True):
+    allj=[(a,b) for a,b,n,q in obs[gene]]
+    uniq_obs=set(allj)
+    knownj=known.get(gene,set())
+    novel=[j for j in allj if j not in knownj]
+    uniq_novel=sorted(set(novel))
+    if not uniq_novel: continue
+    cnt=collections.Counter(novel)
+    print(f'{gene}\\t{len(uniq_obs)}\\t{len(knownj)}\\t{len(uniq_novel)}\\t{len(novel)}\\t' + '; '.join(f'{a}-{b}({cnt[(a,b)]})' for a,b in uniq_novel[:20]))
+PY"

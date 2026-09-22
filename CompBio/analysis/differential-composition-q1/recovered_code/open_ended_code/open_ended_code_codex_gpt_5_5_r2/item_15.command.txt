@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+from collections import defaultdict
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ f.readline(); genes=[l.rstrip('\\n').split('\\t')[1] for l in f]
+X1=mmread('differential.composition.q1.1.mtx.gz').tocsc().astype(np.float32).T.tocsr()
+X2=mmread('differential.composition.q1.2.mtx.gz').tocsc().astype(np.float32).T.tocsr()
+def norm(X):
+ lib=np.asarray(X.sum(axis=1)).ravel(); Y=X.copy().astype(np.float32); rows=np.repeat(np.arange(Y.shape[0]), np.diff(Y.indptr)); Y.data=np.log1p(Y.data*10000/lib[rows]); return Y
+Y1=norm(X1); Y2=norm(X2)
+mean1=np.asarray(Y1.mean(axis=0)).ravel(); mean2=np.asarray(Y2.mean(axis=0)).ravel()
+# Welch approximate t? use mean difference only and gene marker print
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','SOX9'],
+'microglial cell':['P2RY12','CX3CR1','C1QA','C1QB','C1QC','AIF1','TYROBP','CSF1R'],
+'RPE cell':['RPE65','BEST1','PMEL','TYR','MITF','RDH5','LRAT','TTR'],
+'cone cell':['OPN1LW','OPN1MW','OPN1SW','GNAT2','ARR3','PDE6H','PDE6C','CNGA3'],
+'rod cell':['RHO','NRL','GNAT1','PDE6A','PDE6B','SAG','GNGT1','NR2E3'],
+'horizontal cell':['PROX1','ONECUT1','ONECUT2','LHX1','CALB1','CALB2','TFAP2A','TFAP2B'],
+'bipolar cell':['VSX2','GRM6','TRPM1','PKD2L1','CABP5','PRKCA','PCP2'],
+'RGC':['RBPMS','POU4F1','POU4F2','SNCG','THY1','NEFL','NEFM'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','TRBC1','TRBC2','IL7R','LCK','CD2'],
+'macrophage':['CD68','LYZ','CD14','FCGR3A','FCGR1A','LST1','S100A8','S100A9'],
+'Schwann cell':['MPZ','SOX10','PLP1','MBP','PMP22','S100B','ERBB3','NGFR'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','ACTA2','NOTCH3','MYH11','TAGLN'],
+'B cell':['MS4A1','CD79A','CD79B','CD19','CD74','BANK1','CD37','IGHM'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA','FBLN1','C7','DPT'],
+'endothelial cell':['PECAM1','VWF','KDR','CLDN5','FLT1','RAMP2','EMCN','ESAM','CDH5'],
+'muller glia cell':['RLBP1','GLUL','VIM','SLC1A3','SLC1A2','APOE','CLU','CRYAB','AQP4','SOX9']}
+sym=defaultdict(list)
+for i,g in enumerate(genes): sym[g.upper()].append(i)
+print('celltype marker mean lognorm sample1/sample2 and diff; negative means higher in sample2')
+for ct,ms in markers.items():
+ vals=[]
+ for m in ms:
+  for i in sym.get(m.upper(),[]): vals.append((m,mean1[i],mean2[i],mean1[i]-mean2[i]))
+ print('\\n'+ct)
+ for m,a,b,d in sorted(vals,key=lambda x:x[3], reverse=True):
+  print(f' {m:8s} {a:.4f} {b:.4f} diff {d:.4f} ratio {(a+1e-4)/(b+1e-4):.2f}')
+ # summary median diff
+ if vals: print(' summary mean diff', np.mean([v[3] for v in vals]), 'median', np.median([v[3] for v in vals]))
+# top depleted in sample2 by diff positive with marker names maybe
+order=np.argsort(mean1-mean2)[::-1]
+print('\\ntop genes sample1>sample2')
+for i in order[:80]:
+ if mean1[i]>.02:
+  print(genes[i], mean1[i], mean2[i], mean1[i]-mean2[i])
+PY"

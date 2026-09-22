@@ -1,0 +1,62 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv,re,numpy as np
+from collections import defaultdict
+# parse genes and atac, compute gene body activity, print markers
+gene_list=defaultdict(list)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        m=re.search(r'gene_name \"(["'^"]+)"'"',p[8]); b=re.search(r'gene_biotype \"(["'^"]+)"'"',p[8])
+        if not m: continue
+        gene_list[m.group(1)].append((p[0],int(p[3]),int(p[4]),p[6],b.group(1) if b else ''))
+def choose(ents):
+    pc=[e for e in ents if e[4]=='protein_coding']
+    return max(pc if pc else ents,key=lambda e:e[2]-e[1])
+genes={}
+for gn,ents in gene_list.items():
+    c,s,e,st,bt=choose(ents)
+    if not c.startswith('chr'): c='chr'+c
+    tss=s if st=='+' else e
+    genes[gn]=(c,s,e,st,tss)
+
+chr_starts=defaultdict(list); chr_vals=defaultdict(list)
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        c,s,e=row[0].split('_'); s=int(s)
+        chr_starts[c].append(s); chr_vals[c].append(np.array([float(x) for x in row[1:9]]))
+for c in chr_starts:
+    idx=np.argsort(chr_starts[c]); chr_starts[c]=np.array(chr_starts[c])[idx]; chr_vals[c]=np.array(chr_vals[c])[idx]
+def act(c,s,e):
+    st=chr_starts.get(c); va=chr_vals.get(c)
+    if st is None:return None
+    li=np.searchsorted(st,s-10000,side='right'); ri=np.searchsorted(st,e,side='right')
+    if li>=ri:return None
+    return va[li:ri].sum(axis=0)
+
+markers=['MS4A1','CD79A','CD79B','CD19','CD3D','CD3E','CD4','CD8A','CD8B','NKG7','GNLY','NCAM1','CD14','LYZ','FCGR3A','CD68','CST3','FCER1A','CLEC9A','IL3RA','TCF4','LILRA4','JCHAIN','MZB1','HBA1','HBA2','S100A8','S100A9','PPBP','PF4','TPSAB1','TPSB2','CPA3','KIT']
+# load rna map
+rna_expr={}
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        if row[0] in markers:
+            rna_expr[row[0]]=np.array([float(x) for x in row[1:9]])
+print('RNA markers')
+print('gene\\t'+ '\\t'.join(str(i) for i in range(8)))
+for g in markers:
+    if g in rna_expr:
+        vals=rna_expr[g]
+        print(g+'\\t'+'\\t'.join(f'{v:.3f}' for v in vals))
+# ATAC gene body marker activity
+print('\\nATAC gene-body activity raw cols 0..7')
+print('gene\\t'+ '\\t'.join(str(i) for i in range(8)))
+for g in markers:
+    ge=genes.get(g)
+    if ge:
+        a=act(ge[0],ge[1],ge[2])
+        if a is not None:
+            print(g+'\\t'+'\\t'.join(f'{v:.3f}' for v in a))
+PY"

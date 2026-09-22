@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import fisher_exact
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+f=pd.read_csv('motif_features_peaks.tsv',sep='\\t')
+meta=[]
+for lab in ['gain','loss','neutral']:
+ b=pd.read_csv(lab+'.peaks.bed',sep='\\t',header=None,names=['chrom','start','end','name'])
+ b['group']=lab;b['width']=b.end-b.start
+ s=pd.read_csv(lab+'.peaks.seq.tsv',sep='\\t',header=None,names=['name2','seq'])
+ s['name']=s.name2.str.split('::').str[0]
+ s['gc']=s.seq.str.upper().str.count('[GC]')/s.seq.str.len()
+ m=b.merge(s,on='name')
+ q=pd.read_csv(lab+'.peaks.tsv',sep='\\t',header=None,names=['name','chrom2','st2','en2','orig','ref','pert','lfc','z'])
+ m=m.merge(q[['name','ref','pert']],on='name')
+ meta.append(m[['name','group','width','gc','ref','pert']])
+meta=pd.concat(meta,ignore_index=True)
+f=f.merge(meta,on=['name','group'])
+print('rows',len(f),'group distributions')
+print(meta.groupby('group')[['width','gc','ref','pert']].median())
+for tf in sorted(f.TF.unique()):
+ x=f[f.TF==tf].copy()
+ print('\\n',tf)
+ for a,b in [('gain','loss'),('gain','neutral')]:
+  u=x[x.group==a].has_hit.sum(); v=(x.group==a).sum()-u; w=x[x.group==b].has_hit.sum(); y=(x.group==b).sum()-w
+  print(a,b,'rates',round(u/(u+v),4),round(w/(w+y),4),'OR',round(fisher_exact([[u,v],[w,y]])[0],2))
+ x=x[x.group.isin(['gain','loss','neutral'])].copy(); x['gainbin']=(x.group=='gain').astype(int)
+ X=x[['gainbin','width','gc','ref','pert']].copy(); X[['width','ref','pert']]=np.log1p(X[['width','ref','pert']]); X=X[['gainbin','width','gc','ref','pert']]
+ model=LogisticRegression(max_iter=1000).fit(StandardScaler().fit_transform(X),x.has_hit)
+ print('stdcoef gain width gc ref pert',np.round(model.coef_[0],3))
+PY"

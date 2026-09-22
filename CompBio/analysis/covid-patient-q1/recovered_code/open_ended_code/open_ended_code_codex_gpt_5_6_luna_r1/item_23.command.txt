@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import AgglomerativeClustering
+from scipy.stats import zscore
+z=np.load('donor_aggregate.npz',allow_pickle=True); S=z['sums']; d=z['donor_names'].astype(str); g=z['gene_names'].astype(str); u=z['donor_umis']
+X=np.log1p(S/u[:,None]*1e6)
+# remove ubiquitous and genes with low var, standardize gene-wise
+for mode in ['raw','std']:
+ Y=X.copy()
+ if mode=='std':
+  # genes with variation
+  Y=(Y-Y.mean(0))/(Y.std(0)+1e-6)
+  Y=np.nan_to_num(Y)
+ p=PCA(n_components=10,random_state=0).fit_transform(Y)
+ print('\\n',mode,'explained',PCA(n_components=10,random_state=0).fit(Y).explained_variance_ratio_[:5])
+ for j in range(5):
+  print('PC',j+1, ' '.join(f'{x}:{p[i,j]:.2f}' for i,x in sorted(enumerate(d), key=lambda q:q[1])))
+# top per gene std loading on PC1/2 maybe
+pca=PCA(n_components=5,random_state=0); P=pca.fit_transform(np.nan_to_num((X-X.mean(0))/(X.std(0)+1e-6)))
+for j in range(5):
+ print('\\nPC',j+1)
+ # gene corr with PC
+ cor=np.corrcoef(np.nan_to_num((X-X.mean(0))/(X.std(0)+1e-6)).T,P[:,j])[:-1,-1]
+ for ix in np.argsort(cor)[-20:][::-1]: print(g[ix],f'{cor[ix]:.3f}',end='; ')
+ print('\\nnegative')
+ for ix in np.argsort(cor)[:20]: print(g[ix],f'{cor[ix]:.3f}',end='; ')
+ print()
+# clusters standardized 2-5? 
+Y=np.nan_to_num((X-X.mean(0))/(X.std(0)+1e-6))
+for k in [2,3,4,5]:
+ lab=AgglomerativeClustering(n_clusters=k,linkage='ward').fit_predict(Y)
+ print('cluster',k,[(int(x),','.join(sorted(d[lab==x],key=lambda s:int(s[5:])))) for x in sorted(set(lab))])
+PY"

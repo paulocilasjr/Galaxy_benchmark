@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.spatial.distance import cdist
+# marker raw
+sp=mmread('matrix.mtx.gz').toarray()
+blocks=[('Tumor_Core',0,50),('Fibroblast_Stroma',50,100),('T_Cell',100,150),('B_Cell',150,200),('Macrophage',200,250),('Endothelial',250,300)]
+M=pd.DataFrame(index=pd.read_csv('barcodes.tsv.gz',sep='\\t',header=None)[0])
+for name,s,e in blocks: M[name]=sp[s:e,:].sum(axis=0)
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode')
+coords=pos.loc[M.index,['pxl_row_in_fullres','pxl_col_in_fullres']].values
+R=pd.read_csv('deconv_raw.csv',index_col=0)
+for thr in [200,220,250,280,300]:
+    tidx=np.where(M['Tumor_Core'].values>thr)[0]
+    if len(tidx)==0: continue
+    d=cdist(coords,coords[tidx]).min(axis=1)
+    print('\\nmarker tumor thr',thr,'n',len(tidx))
+    for ct in ['Fibroblast_Stroma','Macrophage','B_Cell','Endothelial','T_Cell']:
+        # presence from NNLS >.5
+        pres=R[ct].values>0.5
+        print(ct,'mean',d[pres].mean().round(1),'diff all non', (d[pres].mean()-d[~np.isin(np.arange(len(d)),tidx)].mean()).round(1))
+PY"

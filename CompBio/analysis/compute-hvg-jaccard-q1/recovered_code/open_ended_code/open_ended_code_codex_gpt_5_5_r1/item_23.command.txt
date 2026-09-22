@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import warnings
+warnings.filterwarnings('ignore')
+import scanpy as sc
+import numpy as np
+
+files = ['pbmc3k.h5ad', '10x_pbmc68k_reduced.h5ad']
+adatas = [sc.read_h5ad(f) for f in files]
+
+# No gene_symbols columns are present; if present, only non-missing rows would be retained.
+filtered = []
+for ad in adatas:
+    if 'gene_symbols' in ad.var.columns:
+        mask = ~ad.var['gene_symbols'].isna()
+        ad = ad[:, mask].copy()
+    filtered.append(ad)
+adatas = filtered
+
+common = set(map(str, adatas[0].var_names))
+for ad in adatas[1:]:
+    common &= set(map(str, ad.var_names))
+print('common', len(common), flush=True)
+
+hvg_sets = []
+true_values = {'True', '1', 'TRUE'}
+for f, ad in zip(files, adatas):
+    common_order = [g for g in map(str, ad.var_names) if g in common]
+    sub = ad[:, common_order].copy()
+    sc.pp.highly_variable_genes(sub, flavor='seurat')
+    hv = sub.var['highly_variable'].astype(str).isin(true_values)
+    hvg = set(map(str, sub.var_names[hv]))
+    print(f, sub.shape, len(hvg), flush=True)
+    print('first_hvg', sorted(hvg)[:10], flush=True)
+    hvg_sets.append(hvg)
+
+union = hvg_sets[0] | hvg_sets[1]
+inter = hvg_sets[0] & hvg_sets[1]
+print('inter', len(inter), 'union', len(union), flush=True)
+if len(union) == 0:
+    print('answer NaN')
+else:
+    j = len(inter)/len(union)
+    print('jaccard', j, 'rounded', f'{j:.2f}', flush=True)
+PY"

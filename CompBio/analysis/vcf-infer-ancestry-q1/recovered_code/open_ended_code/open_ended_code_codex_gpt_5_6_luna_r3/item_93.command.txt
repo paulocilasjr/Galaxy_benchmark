@@ -1,0 +1,28 @@
+/bin/bash -lc "/opt/miniconda3/envs/benchmark_codex_ede3d7ec20244f319297/bin/python3 - <<'PY'
+import numpy as np
+D=np.load('ref_target_spaced.npz',allow_pickle=True); R=D['R']; T=D['T']; pos=D['pos'];
+samples=[]; pops=[]; supers=[]
+with open('1000G_samples.panel') as f:
+ next(f)
+ for line in f:
+  s,p,sp,*_=line.rstrip().split('\\t'); samples.append(s); pops.append(p); supers.append(sp)
+mean=R.mean(1); maf=np.minimum(mean/2,1-mean/2); keep=(R>=0).all(1)&(maf>.02)&(maf<.98)
+X=R[keep].astype(float).T; mu=X.mean(0); sd=np.sqrt(2*(mu/2)*(1-mu/2)); sd[sd==0]=1; Z=(X-mu)/sd
+C=Z@Z.T/(Z.shape[1]-1); ev,U=np.linalg.eigh(C); o=np.argsort(ev)[::-1]; ev=ev[o]; U=U[:,o]; k=10
+# Scores normalized to variance eigenvalues
+ref=U[:,:k]*np.sqrt(ev[:k])
+load=Z.T@U[:,:k]/((Z.shape[1]-1)*np.sqrt(ev[:k]))
+target=((T[:,keep]-mu)/sd)@load
+print('N',R.shape,'keep',keep.sum(),'ev',np.round(ev[:10],3))
+for i in range(4): print('TARGET',i+1,np.round(target[i,:8],3))
+for sp in ['AFR','EUR','EAS','SAS']:
+ ix=np.array([x==sp for x in supers]); print('CENT',sp,ix.sum(),np.round(ref[ix,:8].mean(0),3), 'sd',np.round(ref[ix,:4].std(0),3))
+for dims in [2,3,4,6,10]:
+ print('DIMS',dims)
+ cents={sp:ref[np.array([x==sp for x in supers]),:dims].mean(0) for sp in ['AFR','EUR','EAS','SAS']}
+ for i in range(4):
+  di={sp:float(np.linalg.norm(target[i,:dims]-c)) for sp,c in cents.items()}; print(i+1,sorted(di.items(),key=lambda z:z[1]))
+for i in range(4):
+ d=np.linalg.norm(ref[:,:6]-target[i,:6],axis=1); ix=np.argsort(d)[:10]
+ print('NN',i+1,[(samples[j],pops[j],supers[j],round(float(d[j]),3)) for j in ix])
+PY"

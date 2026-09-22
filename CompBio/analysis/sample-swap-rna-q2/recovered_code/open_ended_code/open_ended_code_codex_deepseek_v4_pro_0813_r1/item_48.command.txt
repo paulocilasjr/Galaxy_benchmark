@@ -1,0 +1,54 @@
+/bin/bash -lc "cat > fetch_xrefs.py <<'PY'
+import requests, json, sys, concurrent.futures, time
+
+def get(gene):
+    for attempt in range(3):
+        try:
+            r=requests.get(f'https://rest.ensembl.org/xrefs/id/{gene}?content-type=application/json',headers={'Content-Type':'application/json'},timeout=20)
+            if r.status_code==200:
+                return gene, r.json()
+            elif r.status_code==400:
+                return gene, []
+            time.sleep(1)
+        except Exception as e:
+            time.sleep(2)
+    return gene, []
+if __name__=='__main__':
+    genes=[l.strip() for l in sys.stdin if l.strip()]
+    out={}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        for gene,res in ex.map(get,genes):
+            out[gene]=res
+    json.dump(out,sys.stdout,indent=2)
+PY
+python3 - <<'PY'
+import gzip,csv,numpy as np, json, subprocess, textwrap
+genes=[]; data=[]
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+ r=csv.reader(f,delimiter='\\t'); h=next(r)
+ for row in r: genes.append(row[0]); data.append(list(map(float,row[1:])))
+A=np.array(data); cols=h[1:]
+sets={}
+for col in ['meristems','pericycle','root_hair']:
+ ci=cols.index(col)
+ vals=A[:,ci]; rowsum=A.sum(1); ratio=vals/(rowsum+1e-9); ismax=A.argmax(1)==ci
+ order=sorted(np.where(ismax & (vals>50))[0],key=lambda i:ratio[i],reverse=True)[:80]
+ sets[col]=[genes[i] for i in order]
+allgenes=[]
+for col,gs in sets.items():
+ allgenes += gs
+open('candidate_ids.txt','w').write('\\n'.join(allgenes))
+print('candidates',len(set(allgenes)))
+PY
+python3 fetch_xrefs.py < candidate_ids.txt > xrefs_three.json
+python3 - <<'PY'
+import json
+x=json.load(open('xrefs_three.json'))
+for g, arr in x.items():
+ desc=[]
+ for a in arr:
+  d=a.get('db_display_name','')
+  if d in ['UniProtKB Gene Name','UniProtKB/Swiss-Prot','WikiGene','NCBI gene (formerly Entrezgene)','UniParc'] or a.get('description'):
+   desc.append(f\"{d}:{a.get('display_id','')}/{a.get('description','')}\")
+ print(g,'|','; '.join(desc[:5]))
+PY"

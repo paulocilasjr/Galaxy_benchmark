@@ -1,0 +1,87 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, requests, pysam, os, tempfile, time, math, random
+j=json.load(open('gwasinfo.json')); dc=j['datasets_compressed']
+cands=[]
+for id,v in dc.items():
+    if len(v)<2 or not isinstance(v[1],dict): continue
+    main=v[0]
+    if len(main)<=10: continue
+    try: n=int(main[10]); ns=int(v[1].get('nsnp') or 0)
+    except: continue
+    pmid=v[1].get('pmid')
+    if main[1]==0 and 40000<=n<=70000 and pmid:
+        cands.append((id,n,main[0],pmid))
+# sort maybe prioritize nsnp around?
+print('candidates',len(cands), flush=True)
+proxies=[line.strip() for line in open('[REDACTED LOCAL PATH]') if line.strip()]
+random.shuffle(proxies)
+tmp=tempfile.mkdtemp(prefix='gwas_idx_')
+targets={
+ 'rs1150779':('6',34215919,39.3347,-0.0886096,0.00669,0.703),
+ 'rs6909732':('6',34219010,33.9083,0.0855989,0.00697,0.258),
+}
+def req_json(url, method='get', payload=None, timeout=15, proxy=None):
+    kw={'timeout':timeout}
+    if proxy: kw['proxies']={'https':'http://'+proxy,'http':'http://'+proxy}
+    if method=='post':
+        r=requests.post(url,json=payload,**kw)
+    else:
+        r=requests.get(url,**kw)
+    if r.status_code==200: return r
+    return None
+
+for idx,(id,n,trait,pmid) in enumerate(cands):
+    urls=None; used=None
+    # try proxies for trial
+    for proxy in proxies[:30]:
+        try:
+            r=req_json('https://api.opengwas.io/api/gwasinfo/files/trial', method='post', payload={'id':id,'type':'vcf'}, timeout=15, proxy=proxy)
+            if r is not None:
+                urls=r.json(); used=proxy; break
+        except Exception:
+            pass
+    if urls is None:
+        print(f\"{idx}\\t{id}\\tN={n}\\t{trait}\\tpmid={pmid}\\tNO_URL\", flush=True)
+        continue
+    vcf,tbi=urls[0],urls[1]
+    local=os.path.join(tmp,id+'.tbi')
+    # download index direct, fallback proxy
+    ok=False
+    try:
+        rr=requests.get(tbi,timeout=20)
+        if rr.status_code==200:
+            open(local,'wb').write(rr.content); ok=True
+    except Exception: pass
+    if not ok:
+        try:
+            rr=requests.get(tbi,timeout=20,proxies={'https':'http://'+used,'http':'http://'+used})
+            if rr.status_code==200:
+                open(local,'wb').write(rr.content); ok=True
+        except Exception: pass
+    if not ok:
+        print(f\"{idx}\\t{id}\\tN={n}\\t{trait}\\tpmid={pmid}\\tTBI_FAIL\", flush=True); continue
+    try:
+        tb=pysam.TabixFile(vcf,index=local)
+    except Exception as e:
+        print(f\"{idx}\\t{id}\\tERROR_OPEN {e}\", flush=True); continue
+    vals=[]
+    for rs,(chrom,pos,tlp,tes,tse,taf) in targets.items():
+        try: recs=list(tb.fetch(chrom,pos-1,pos))
+        except Exception: recs=[]
+        if not recs:
+            vals.append(f\"{rs}=NO\"); continue
+        f=recs[0].split('\\t'); keys=f[8].split(':'); sample=f[9].split(':'); d=dict(zip(keys,sample))
+        def fn(x):
+            try:return float(x)
+            except:return None
+        es,se,lp,af=fn(d.get('ES')),fn(d.get('SE')),fn(d.get('LP')),fn(d.get('AF'))
+        close=''
+        if lp is not None:
+            if abs(lp-tlp)<0.5 and es is not None and abs(es-tes)<0.01:
+                close='<<<CLOSE'
+            elif abs(lp-tlp)<2:
+                close='~'
+        vals.append(f\"{rs}:LP={lp},ES={es},SE={se},AF={af}{close}\")
+    print(f\"{idx}\\t{id}\\tN={n}\\t{trait}\\tpmid={pmid}\\t\"+\" | \".join(vals), flush=True)
+    time.sleep(0.1)
+PY"

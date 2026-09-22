@@ -1,0 +1,66 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+p='covid.patients.q1.h5ad'
+marker_sets = {
+ 'ifn':['ISG15','IFI6','IFIT1','IFIT2','IFIT3','IFI44L','MX1','OAS1','OAS2','OAS3','RSAD2','IRF7','STAT1'],
+ 'inflam':['S100A8','S100A9','IL1B','CXCL10','LYZ','LST1'],
+ 'mono':['LYZ','LST1','S100A8','S100A9','FCGR3A'],
+ 'tcell':['CD3D','CD3E','CD8A'],
+ 'nk':['NKG7','GNLY'],
+ 'bcell':['MS4A1'],
+ 'platelet':['PPBP','PF4'],
+ 'rbc':['HBB','HBA1','HBA2'],
+}
+all_markers=[]
+for v in marker_sets.values():
+    for g in v:
+        if g not in all_markers: all_markers.append(g)
+with h5py.File(p,'r') as f:
+    cats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/donor_id/categories'][:]]
+    codes=f['obs/donor_id/codes'][:].astype(np.int16)
+    gcats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['var/feature_name/categories'][:]]
+    gcodes=f['var/feature_name/codes'][:]
+    idxraw=f['var/_index'][:]
+    genes=[gcats[c] if c>=0 else (idx.decode() if isinstance(idx,bytes) else str(idx)) for c,idx in zip(gcodes, idxraw)]
+    gene_to_idx={g:i for i,g in enumerate(genes)}
+    sel_names=[g for g in all_markers if g in gene_to_idx]
+    sel=np.array([gene_to_idx[g] for g in sel_names], dtype=np.int32)
+    name_to_pos={g:i for i,g in enumerate(sel_names)}
+    set_pos={k:[name_to_pos[g] for g in vs if g in name_to_pos] for k,vs in marker_sets.items()}
+    n, ng = f['X'].attrs['shape']; n_d=len(cats)
+    cells=np.bincount(codes, minlength=n_d).astype(np.float64)
+    sums=np.zeros((n_d,len(sel_names)), dtype=np.float64)
+    sums_score={k:np.zeros(n_d,dtype=np.float64) for k in marker_sets}
+    total_counts=np.zeros(n_d,dtype=np.float64)
+    indptr=f['X/indptr'][:]
+    data=f['X/data']; indices=f['X/indices']
+    chunk=10000
+    for start in range(0,n,chunk):
+        end=min(n,start+chunk); st=int(indptr[start]); en=int(indptr[end])
+        ip=indptr[start:end+1].astype(np.int64)-st
+        X=csr_matrix((data[st:en], indices[st:en], ip), shape=(end-start,ng))
+        row_sums=np.asarray(X.sum(axis=1)).ravel()
+        row_sums[row_sums==0]=1
+        cc=codes[start:end]
+        np.add.at(total_counts, cc, row_sums)
+        Xs=X[:, sel].toarray().astype(np.float64)
+        Xs=np.log1p(Xs / row_sums[:,None] * 1e4)
+        D=csr_matrix((np.ones(end-start,dtype=np.float32),(np.arange(end-start), cc)), shape=(end-start,n_d))
+        sums += (D.T @ csr_matrix(Xs)).toarray()
+        for k,pos in set_pos.items():
+            if pos:
+                score=Xs[:,pos].mean(axis=1)
+                np.add.at(sums_score[k], cc, score)
+    means=sums/cells[:,None]
+    print('donor,num,cells,totalpc,'+','.join(marker_sets.keys()))
+    for di,don in enumerate(cats):
+        num=int(don.replace('donor',''))
+        vals=[sums_score[k][di]/cells[di] for k in marker_sets]
+        print(don,num,int(cells[di]),f'{total_counts[di]/cells[di]:.1f}',','.join(f'{v:.4f}' for v in vals),sep=',')
+    print('\\nTop/bottom IFN sorted')
+    order=sorted(range(n_d), key=lambda i:sums_score['ifn'][i]/cells[i])
+    for i in order:
+        vals=[sums_score[k][i]/cells[i] for k in ['ifn','inflam','mono','tcell','nk','bcell','platelet','rbc']]
+        print(cats[i], int(cells[i]), ' '.join(f'{v:.3f}' for v in vals))
+PY"

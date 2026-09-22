@@ -1,0 +1,90 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, pandas as pd
+from scipy.stats import spearmanr
+from collections import defaultdict
+np.random.seed(0)
+
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        n_obs,n_var=f['X'].attrs['shape']
+        X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+        gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+        gc=f['obs/guide/codes'][:]
+        guides=np.array([gcats[i] for i in gc])
+        var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+        target=None
+        if 'obs/target_gene' in f:
+            tcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/target_gene/categories'][:]]
+            tc=f['obs/target_gene/codes'][:]
+            target=np.array([tcats[i] for i in tc])
+        return X,guides,var,target
+
+ref,ref_guides,var,ref_target=load('perturb.seq.align.q1.ref.h5ad')
+query,q_guides,var2,_=load('perturb.seq.align.q1.query.h5ad')
+assert var==var2
+
+# basic filter
+gene_sums_ref=np.asarray(ref.sum(axis=0)).ravel()
+gene_sums_q=np.asarray(query.sum(axis=0)).ravel()
+keep=(gene_sums_ref>0)&(gene_sums_q>0)
+print('genes expressed both', keep.sum())
+ref=ref[:,keep]; query=query[:,keep]; var=np.array(var)[keep]
+# further filter genes total > 20 maybe
+gene_tot=gene_sums_ref[keep]+gene_sums_q[keep]
+keep2=gene_tot>20
+print('genes >20',keep2.sum())
+ref=ref[:,keep2]; query=query[:,keep2]; var=var[keep2]
+
+def lognorm(X, scale=1e4):
+    X=X.astype(np.float64).tocsr()
+    lib=np.asarray(X.sum(axis=1)).ravel()
+    lib[lib==0]=1
+    X=X.multiply(1.0/lib[:,None]).tocsr()
+    X.data=np.log1p(X.data*scale)
+    return X.tocsr()
+
+ref_n=lognorm(ref); q_n=lognorm(query)
+# pseudo bulk means
+def guide_means(Xn, guides):
+    cats=sorted(set(guides))
+    M=np.zeros((len(cats), Xn.shape[1]))
+    for i,g in enumerate(cats):
+        idx=np.where(guides==g)[0]
+        M[i]=np.asarray(Xn[idx].mean(axis=0)).ravel()
+    return cats,M
+rcats,refM=guide_means(ref_n,ref_guides)
+qcats,qM=guide_means(q_n,q_guides)
+# NT masks
+r_nt=[g for g in rcats if g.startswith('NT-')]
+q_nt=[g for g in qcats if g.startswith('NT-')]
+r_nt_mean=refM[[rcats.index(g) for g in r_nt]].mean(axis=0)
+q_nt_mean=qM[[qcats.index(g) for g in q_nt]].mean(axis=0)
+# signatures
+rsig={}; qsig={}
+for i,g in enumerate(rcats):
+    if not g.startswith('NT-'):
+        rsig[g]=refM[i]-r_nt_mean
+for i,g in enumerate(qcats):
+    if not g.startswith('NT-'):
+        qsig[g]=qM[i]-q_nt_mean
+# correlations spearman
+rows=[]
+for qg,qv in qsig.items():
+    best=[]; 
+    for rg,rv in rsig.items():
+        corr=spearmanr(qv,rv).correlation
+        best.append((corr,rg))
+    best.sort(reverse=True)
+    rows.append((qg,[(rg,round(c,4)) for c,rg in best[:5]]))
+for qg,b in rows:
+    print(qg, b)
+print('\\nTop corr assignment for each query guide:')
+for qg,b in rows:
+    print(qg, '->', b[0])
+# Also show for ref targets PABPC1,NUDT21,LEO1 their closest query guides
+for t in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+    print('\\nREF target',t,'closest query:')
+    arr=sorted([(spearmanr(rsig[t],qv).correlation,qg) for qg,qv in qsig.items()], reverse=True)
+    print(arr[:10])
+PY
+python [REDACTED LOCAL PATH]"

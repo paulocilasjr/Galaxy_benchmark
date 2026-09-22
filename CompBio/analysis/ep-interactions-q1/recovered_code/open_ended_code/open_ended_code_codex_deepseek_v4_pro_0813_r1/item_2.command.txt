@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+from collections import defaultdict
+
+hic_rows=list(csv.DictReader(open('ep.interactions.q1.hic.csv')))
+expr_rows=list(csv.DictReader(open('ep.interactions.q1.expr.csv')))
+bg=[]
+cand=[]
+for r in hic_rows:
+    counts=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+    total=sum(counts)
+    if r['set']=='background': bg.append((int(r['distance_bp']),counts,total))
+    else: cand.append((r['pair_id'],int(r['distance_bp']),counts,total))
+
+# expression by pair, guide, condition
+from collections import defaultdict
+pairs=defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+for r in expr_rows:
+    pairs[r['pair_id']][r['guide_id']][r['condition']].append(int(r['rna_count']))
+
+print('candidates HiC and nearest background')
+for pair_id,d,counts,total in cand:
+    nearest=sorted(bg,key=lambda x:abs(x[0]-d))[:15]
+    nt=[x[2] for x in nearest]
+    print(pair_id,d,counts,total,'nearest bg totals mean %.2f median %.1f'%(statistics.mean(nt),statistics.median(nt)),'near distances',[x[0] for x in nearest])
+
+print('\\nbackground total by distance bins')
+bins=[(0,250000),(250000,500000),(500000,750000),(750000,1000000),(1000000,1250000),(1250000,1500000),(1500000,2000000)]
+for lo,hi in bins:
+    vals=[x[2] for x in bg if lo<=x[0]<hi]
+    if vals: print(lo,hi,'n',len(vals),'mean',round(statistics.mean(vals),2),'med',statistics.median(vals),'q',sorted(vals)[len(vals)//4], sorted(vals)[3*len(vals)//4])
+
+# expression summaries with effect: log2 perturb/control per guide and ttest-ish simple
+print('\\nExpr effects (perturbed/control means)')
+for pair_id in sorted(pairs):
+    print(pair_id)
+    for g in sorted(pairs[pair_id]):
+        c=pairs[pair_id][g]['control']; p=pairs[pair_id][g]['perturbed']
+        print(' ',g,'ctrl mean',round(statistics.mean(c),1),'pert',round(statistics.mean(p),1),'log2FC',round(math.log2((statistics.mean(p)+1)/(statistics.mean(c)+1)),3),'frac',round(statistics.mean(p)/statistics.mean(c),3))
+PY"

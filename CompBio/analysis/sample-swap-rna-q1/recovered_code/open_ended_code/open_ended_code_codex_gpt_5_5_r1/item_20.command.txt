@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, time, os
+ann=pd.read_csv('GSE255742_Amphioxus_21hpf_sc_annotations.tsv.gz',sep='\\t')
+# define mapping options
+base_map={
+'endoderm':['endoderm'],
+'endostyle_csg':['endostyle_csg'],
+'epidermal_neural':['epidermal_neural1','epidermal_neural2'],
+'epidermis':['epidermis_1','epidermis_2'],
+'mesodermal_notochord':['mesodermal_notochord'],
+'muscular_somites':['muscular_somites'],
+'neural':['neural'],
+'neural_like':['neural_like1','neural_like2'],
+'putative_neuro_endo':['putative_neuro_endo'],
+'somite':['somite'],
+'tailbud':['tailbud'],
+'tailbud_neural':['tailbud_neural'],
+}
+# add alternative neural incl DiMes HyTh for later as neural_plus
+map2=dict(base_map); map2['neural_plus']=['neural','DiMes','HyTh']
+# cells in ann only
+cell_to_type=ann.set_index('cell')['cell_type'].to_dict()
+# read header for cells
+import gzip
+with gzip.open('GSE255742_Amphioxus_21hpf_sc_UMI_counts.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+print('n cells header',len(header),'ann',len(cell_to_type))
+# group indices (columns in data excluding index start at pandas cols)
+groups={k:set(v) for k,v in map2.items()}
+# make vector group label per cell for all map groups, for separate cell_types duplicated OK? Each cell assigned one group except neural_plus overlaps neural.
+# For base agg only
+base_cols=list(base_map.keys())
+agg=None
+idx_all=[]
+start=time.time()
+for ci,chunk in enumerate(pd.read_csv('GSE255742_Amphioxus_21hpf_sc_UMI_counts.tsv.gz',sep='\\t',index_col=0,chunksize=1000,compression='gzip')):
+    # initialize output with row index
+    out=pd.DataFrame(index=chunk.index)
+    # sum per group by selecting columns whose cell_type in list; could precompute col lists once
+    if ci==0:
+        col_lists={g:[c for c in chunk.columns if cell_to_type.get(c) in types] for g,types in base_map.items()}
+        col_lists['neural_plus']=[c for c in chunk.columns if cell_to_type.get(c) in map2['neural_plus']]
+        print({g:len(v) for g,v in col_lists.items()})
+    for g,cols in col_lists.items():
+        out[g]=chunk[cols].sum(axis=1)
+    if agg is None:
+        agg=out
+    else:
+        agg=pd.concat([agg,out])
+    if ci%5==0: print('chunk',ci,'rows',agg.shape[0],'elapsed',round(time.time()-start,1), flush=True)
+print('done',agg.shape,'time',time.time()-start)
+# normalize CPM for each group
+cpm=agg.div(agg.sum(axis=0),axis=1)*1e6
+cpm.to_csv('public_pseudobulk_cpm.tsv.gz',sep='\\t',compression='gzip')
+print('sums',agg.sum())
+# compare to local
+local=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0,compression='gzip')
+common=local.index.intersection(cpm.index)
+print('common',len(common),'local rows',local.shape[0],'cpm rows',cpm.shape[0])
+# correlations local x public base (incl neural_plus)
+cor=pd.DataFrame(index=local.columns,columns=cpm.columns,dtype=float)
+for lc in local.columns:
+    for pc in cpm.columns:
+        cor.loc[lc,pc]=np.corrcoef(local.loc[common,lc],cpm.loc[common,pc])[0,1]
+print(cor.round(6).to_string())
+# also max absolute diff after matching names
+for name in local.columns:
+    pc='neural_plus' if name=='neural' else name
+    if pc in cpm:
+        diff=(local[name]-cpm.loc[local.index,pc]).abs()
+        print('diff',name,pc,'max',diff.max(),'mean',diff.mean(),'corr',cor.loc[name,pc])
+PY"

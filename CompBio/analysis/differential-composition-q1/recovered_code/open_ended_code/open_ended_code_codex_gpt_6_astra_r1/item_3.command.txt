@@ -1,0 +1,43 @@
+/bin/bash -lc "cat > analyze.py <<'PY'
+import gzip
+import numpy as np
+import pandas as pd
+from scipy.io import mmread
+from scipy.sparse import save_npz
+G=pd.read_csv('differential.composition.q1.genes.txt.gz',sep='\\t').gene_symbols.values
+panels={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A2','PAX2'],
+'microglial cell':['P2RY12','TMEM119','C1QA','C1QB','CX3CR1','AIF1'],
+'RPE cell':['RPE65','BEST1','LRAT','RGR','PMEL','TYR'],
+'cone cell':['ARR3','GNAT2','PDE6H','OPN1LW','OPN1MW','OPN1SW'],
+'rod cell':['RHO','GNAT1','PDE6A','PDE6B','CNGA1','NRL'],
+'horizontal cell':['ONECUT1','ONECUT2','LHX1','PROX1','CALB1'],
+'bipolar cell':['VSX2','VSX1','TRPM1','GRM6','CABP5','OTX2'],
+'RGC':['RBPMS','SNCG','NEFL','NEFM','POU4F1','POU4F2'],
+'T cells':['CD3D','CD3E','TRAC','CD2'],
+'macrophage':['CD163','MRC1','LYZ','CD68','LST1'],
+'Schwann cell':['MPZ','PMP22','PRX','SOX10'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','ABCC9','KCNJ8'],
+'B cell':['MS4A1','CD79A','CD79B','CD19'],
+'fibroblast':['COL1A1','COL1A2','COL3A1','DCN','LUM'],
+'endothelial cell':['PECAM1','VWF','CLDN5','EMCN','KDR'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','CLU','SOX9'],
+}
+for s in [1,2]:
+ X=mmread(f'differential.composition.q1.{s}.mtx.gz').tocsr().T.tocsr()
+ save_npz(f'counts{s}.npz',X)
+ total=np.asarray(X.sum(1)).ravel()
+ Y=X.multiply(1e4/total[:,None]).tocsr();Y.data=np.log1p(Y.data)
+ scores=[]
+ print('\\nSAMPLE',s,'cells',X.shape[0])
+ for k,gs in panels.items():
+  ids=[np.where(G==g)[0][0] for g in gs if g in G]
+  score=np.asarray(Y[:,ids].mean(1)).ravel()
+  scores.append(score)
+  print(k, 'mean',round(score.mean(),3),'score>1',sum(score>1),'score>2',sum(score>2), 'genes:',[(g,int((X[:,np.where(G==g)[0][0]]>0).sum())) for g in gs if g in G])
+ S=np.array(scores).T
+ labels=np.array(list(panels))[S.argmax(1)]
+ print('TOP PANEL',pd.Series(labels).value_counts().to_string())
+ np.save(f'scores{s}.npy',S)
+PY
+OPENBLAS_NUM_THREADS=4 python analyze.py"

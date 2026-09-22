@@ -1,0 +1,79 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp, pandas as pd
+from scipy.stats import rankdata
+
+# load query/ref h5ad as before
+def load(f):
+ with h5py.File(f,'r') as h:
+  X=sp.csr_matrix((h['X/data'][:],h['X/indices'][:],h['X/indptr'][:]),shape=(len(h['var/_index']),len(h['obs/_index']))).T.tocsr()
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+  targets=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/target_gene/categories'][:]]) if 'obs/target_gene/categories' in h else None
+  tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+ return X,guides,codes,genes,targets,tcodes
+Xr,gr,cr,gr_genes,tr,tcr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,gq_genes,tq,tcq=load('perturb.seq.align.q1.query.h5ad')
+
+# load original K562 target and guide profiles
+target_csv=pd.read_csv('k562_target_profiles.csv',index_col=0)
+guide_csv=pd.read_csv('k562_guide_profiles.csv',index_col=0)
+print('target csv',target_csv.shape,'guide csv',guide_csv.shape)
+print('target cols',target_csv.columns.tolist()[:40])
+
+# align query genes to original profiles common; original profiles columns are genes? Actually index=genes, columns targets.
+common, qi, ti = np.intersect1d(gq_genes, target_csv.index.values, return_indices=True)
+print('common with original',len(common))
+
+# normalize query logCPM
+def norm_log(X):
+ s=np.asarray(X.sum(1)).ravel().astype(float); s[s==0]=1
+ return np.log1p(X.multiply(1/s[:,None]*1e6).tocsr()).toarray()
+Lq=norm_log(Xq[:,qi])
+uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]
+Eq=uq-uq[ntq].mean(0)
+pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+
+# original target effects = target - NT (if NT column exists)
+prof=target_csv.iloc[ti].values # genes x targets (target_csv index genes)
+target_names=target_csv.columns.values
+if 'NT' in target_names:
+ nt_col=target_names.tolist().index('NT')
+ Eorig=prof-prof[:,[nt_col]]
+else:
+ # use mean of target columns? no
+ Eorig=prof
+# restrict to target names that are in ref guide mapping? For desired.
+# query effect vectors, scale/rank
+A=Eq[pq]  # 32 x common genes
+
+def corr_rank(A,B):
+ Ar=np.apply_along_axis(rankdata,1,A); Br=np.apply_along_axis(rankdata,0,B) # B columns
+ # Actually B is genes x targets, want rank per gene across targets? We'll rank per column (gene across targets), then center each target vector? For correlation between row query and each target column, rank-transform each gene across targets maybe.
+ # Simpler Pearson and Spearman per target vector
+ pass
+
+for metric in ['pearson','spearman']:
+ print('\\nmetric',metric)
+ results=[]
+ for target in ['PABPC1','NUDT21','LEO1']:
+  if target not in target_names:
+   print('missing target',target); continue
+  j=np.where(target_names==target)[0][0]
+  y=Eorig[:,j]
+  scores=[]
+  for ii,qidx in enumerate(pq):
+   x=A[ii]
+   if metric=='pearson':
+    # centered correlation
+    xc=x-x.mean(); yc=y-y.mean(); den=np.sqrt((xc*xc).sum())*np.sqrt((yc*yc).sum())+1e-12
+    sc=(xc*yc).sum()/den
+   else:
+    xr=rankdata(x); yr=rankdata(y)
+    xc=xr-xr.mean(); yc=yr-yr.mean(); den=np.sqrt((xc*xc).sum())*np.sqrt((yc*yc).sum())+1e-12
+    sc=(xc*yc).sum()/den
+   scores.append((gq[qidx],sc))
+  scores.sort(key=lambda z:z[1],reverse=True)
+  print(target, [(g,round(s,3)) for g,s in scores[:12]])
+PY"

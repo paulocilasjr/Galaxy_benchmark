@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from bs4 import BeautifulSoup
+from collections import defaultdict
+
+markers=[]
+for f in ['wheatomics_markers.html']+[f'page_{p}.html' for p in range(2,11)]:
+    soup=BeautifulSoup(open(f).read(),'html.parser')
+    for table in soup.find_all('table'):
+        for r in table.find_all('tr')[1:]:
+            c=[x.get_text(' ', strip=True) for x in r.find_all(['td','th'])]
+            if len(c)>=6 and c[4].startswith('Traes'):
+                markers.append((c[4],c[5]))
+seen=set(); mk=[]
+for x in markers:
+    if x not in seen: seen.add(x); mk.append(x)
+
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+# log1p and zscore across columns per gene
+log=np.log1p(df)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+# score as mean z of marker set
+by=defaultdict(list)
+for g,ct in mk: by[ct].append(g)
+print('Mean log expression')
+means=pd.DataFrame({ct: log.loc[by[ct]].mean() for ct in by}).T
+print(means.round(2))
+print('\\nBest by mean log for each column:')
+for col in df.columns:
+    print(col, means[col].idxmax(), means[col].max().round(2))
+print('\\nMean zscore')
+zs=pd.DataFrame({ct: z.loc[by[ct]].mean() for ct in by}).T
+print(zs.round(2))
+print('\\nBest by z for each column:')
+for col in df.columns:
+    print(col, zs[col].idxmax(), zs[col].max().round(2))
+print('\\nZscore matrix marker sets x columns with best')
+print(zs.idxmax(axis=1))
+# column confusion: for each marker set which column max
+PY"

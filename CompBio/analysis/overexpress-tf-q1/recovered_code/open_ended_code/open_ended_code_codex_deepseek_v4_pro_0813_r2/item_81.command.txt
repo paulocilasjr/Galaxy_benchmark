@@ -1,0 +1,39 @@
+/bin/bash -c "python3 - <<'EOF'
+import pandas as pd, numpy as np, os
+from scipy.spatial import cKDTree
+res=pd.read_csv('diff_peaks.tsv', sep='\\t')
+gc=pd.read_csv('union_gc.txt', sep='\\t', skiprows=1, header=None, names=['chr','start','end','pct_at','pct_gc','A','C','G','T','N','oth','len'])
+for c in ['start','end','pct_gc','len']: gc[c]=pd.to_numeric(gc[c], errors='coerce')
+res=res.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end'])
+res['is_gained_all']=((res.log2FC>1.5)&(res.cpm_max>=3)&(res.perturb_count>=10)).astype(int)
+cand=res[res.is_gained_all==0].dropna(subset=['pct_gc','len']).copy()
+cand_gc=cand.pct_gc.values; cand_len=cand.len.values
+tree=cKDTree(cand_gc.reshape(-1,1))
+rng=np.random.default_rng(0)
+for k in [500,1000,2000,5000]:
+    g=pd.read_csv(f'gained_top{k}.bed', sep='\\t', header=None, names=['chr','start','end'])
+    g=g.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end']).dropna()
+    chosen=[]
+    for _,row in g.iterrows():
+        # find up to 100 candidates within GC 0.01
+        dists,idxs=tree.query([[row.pct_gc]], k=min(100,len(cand)))
+        idxs=idxs[0]
+        sub_gc=cand_gc[idxs]; sub_len=cand_len[idxs]
+        tol=0.01
+        mask=np.abs(sub_gc-row.pct_gc)<=tol
+        if mask.sum()>0:
+            pool=idxs[mask]
+            # nearest length among pool, random top 5
+            lpool=cand_len[pool]
+            order=np.argsort(np.abs(lpool-row.len))
+            pool=pool[order[:min(5,len(order))]]
+            chosen.append(pool[rng.integers(len(pool))])
+        else:
+            # nearest gc
+            chosen.append(idxs[rng.integers(min(5,len(idxs)))])
+    bg=cand.iloc[np.unique(chosen)][['chr','start','end']].drop_duplicates()
+    bg.to_csv(f'gc_len_bg{k}.bed', sep='\\t', header=False, index=False)
+    bggc=bg.merge(gc,on=['chr','start','end'])
+    print(k,'g',len(g),'bg',len(bg),'gc mean',round(bggc.pct_gc.mean(),3),'med',round(bggc.pct_gc.median(),3),'g mean',round(g.pct_gc.mean(),3),'len med',round(bggc.len.median(),1),'g len med',round(g.len.median(),1))
+EOF
+ls -lh gc_len_bg*.bed"

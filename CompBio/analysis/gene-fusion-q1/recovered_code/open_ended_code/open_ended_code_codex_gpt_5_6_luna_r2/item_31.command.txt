@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,pysam,collections
+f='Homo_sapiens.GRCh38.cdna.all.fa.gz'
+t2g={}; t2desc={}
+with gzip.open(f,'rt') as h:
+    for line in h:
+        if line.startswith('>'):
+            x=line[1:].rstrip().split(' ',1)
+            tid=x[0]
+            m=re.search(r'gene_symbol:(["'^ ]+)'"', line)
+            t2g[tid]=m.group(1) if m else '?'
+            t2desc[tid]=line.rstrip()
+print('transcripts',len(t2g))
+bam=pysam.AlignmentFile('cdna.aln.bam')
+# Gather supplementaries and reads with SA
+supp=[]; sa=[]; qcounts=collections.Counter()
+for a in bam.fetch(until_eof=True):
+    if a.is_supplementary:
+        supp.append(a)
+    if a.has_tag('SA'):
+        sa.append(a)
+    if a.is_primary and not a.is_unmapped:
+        qcounts[a.query_name]+=1
+print('supp',len(supp),'SA records',len(sa),'primary mapped qnames',len(qcounts))
+for a in supp[:100]:
+    print(a.query_name, 'R1' if a.is_read1 else 'R2', a.flag, a.reference_name, a.reference_start+1, a.cigarstring, 'mapq',a.mapping_quality,'gene',t2g.get(a.reference_name), 'SA',a.get_tag('SA') if a.has_tag('SA') else '')
+PY"

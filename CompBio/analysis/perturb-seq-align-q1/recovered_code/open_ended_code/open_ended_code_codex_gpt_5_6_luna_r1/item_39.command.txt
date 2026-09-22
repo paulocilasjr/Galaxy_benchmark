@@ -1,0 +1,16 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy import sparse
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def agg(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  z=h['X'];x=sparse.csc_matrix((z['data'][()],z['indices'][()],z['indptr'][()]),shape=tuple(z.attrs['shape']))
+  genes=np.array([v.decode() if isinstance(v,bytes) else str(v) for v in h['var/_index'][()]],object);cats=[v.decode() if isinstance(v,bytes) else str(v) for v in h['obs/guide/categories'][()]];g=np.array([cats[v] for v in h['obs/guide/codes'][()]])
+ groups=np.unique(g);c=np.searchsorted(groups,g);M=np.zeros((len(g),len(groups)),np.int8);M[np.arange(len(g)),c]=1;lib=np.asarray(x.sum(1)).ravel().astype(float);vals=np.log1p(x.data.astype(float)/lib[x.indices]*1e4);lx=sparse.csc_matrix((vals,x.indices,x.indptr),shape=x.shape,copy=False);m=np.asarray(lx.T@M)/np.bincount(c)[None,:];nt=np.flatnonzero(np.char.startswith(groups,'NT-'));p=[i for i,s in enumerate(groups) if not s.startswith('NT-')];return genes,groups[p],(m[:,p]-m[:,nt].mean(1)[:,None]).T
+for f in ['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']:
+ genes,groups,E=agg(f);print('\\n',f)
+ for gene in ['CDC73','LEO1','PABPC1','NUDT21','PABPC4','PABPC1L','PABPN1','PAF1','CTR9','RBBP6','THOC5']:
+  if gene not in genes:continue
+  j=list(genes).index(gene); vals=sorted([(float(E[i,j]),str(groups[i])) for i in range(len(groups))])
+  print(gene,'range',[(g,round(v,3)) for v,g in vals[:8]],'high',[(g,round(v,3)) for v,g in vals[-8:]])
+PY"

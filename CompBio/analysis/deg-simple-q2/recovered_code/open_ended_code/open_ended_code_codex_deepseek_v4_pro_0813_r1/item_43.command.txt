@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+# Recompute unique counts summary, filter total unique reads >=20
+import pysam, gzip, re, collections
+hdr={}
+with gzip.open('ref/Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as f:
+    for line in f:
+        if line.startswith('>'):
+            tid=line.split()[0][1:]
+            gs=re.search(r'gene_symbol:(\\S+)', line); gene=re.search(r'gene:(\\S+)', line)
+            hdr[tid]=(gs.group(1) if gs else '', gene.group(1) if gene else '')
+alluni={}
+for s in ['sampleA','sampleB']:
+    bam=pysam.AlignmentFile(f'align/{s}.cdna.bam','rb')
+    uni=collections.Counter()
+    for r in bam.fetch(until_eof=True):
+        if not r.is_unmapped and not r.is_secondary and not r.is_supplementary and r.mapping_quality>=60:
+            uni[r.reference_name]+=1
+    alluni[s]=uni
+genes=collections.defaultdict(lambda: [0,0,[]])
+for t in set(hdr)&(set(alluni['sampleA'])|set(alluni['sampleB'])):
+    a=alluni['sampleA'].get(t,0); b=alluni['sampleB'].get(t,0)
+    if a+b>0:
+        gs,g=hdr[t]
+        genes[g][0]+=a; genes[g][1]+=b; genes[g][2].append((gs,t,a,b))
+print('Genes with total unique reads >=10, sorted by total:')
+for g,(a,b,rows) in sorted(genes.items(), key=lambda x:-(x[1][0]+x[1][1])):
+    if a+b<10: continue
+    gs=rows[0][0]
+    l1=sum(abs(x/(a or 1)-y/(b or 1)) for _,_,x,y in rows) if a and b else 2
+    print(f'{gs:15s} {g} tot={a+b} A={a} B={b} L1={l1:.3f} ntx={len(rows)}')
+    for gs,t,x,y in sorted(rows, key=lambda r:-(r[2]+r[3])):
+        print('   ',t,x,y)
+PY"

@@ -1,0 +1,28 @@
+/bin/bash -lc "PYTHONPATH=./pydeps python -u - <<'PY'
+import pandas as pd,numpy as np
+x=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+m=pd.read_csv('gene_map.txt',sep='\\t',low_memory=False)
+mp=dict(zip(m.ID_v1.2,m['new_ID_v2.1']))
+mk=pd.read_excel('markers.xlsx',sheet_name='Table S2',skiprows=3,engine='openpyxl')
+mk['v2']=mk.Gene.map(mp)
+print('markers',len(mk),'mapped',mk.v2.notna().sum(),'present',mk.v2.isin(x.index).sum())
+# Score each original cluster: average within-gene standardized logCPM
+L=np.log1p(x)
+Z=L.sub(L.mean(axis=1),axis=0).div(L.std(axis=1).replace(0,np.nan),axis=0)
+scores={}
+for k,d in mk.groupby('Cluster'):
+ g=d.v2.dropna();g=g[g.isin(x.index)].unique()
+ scores[k]=Z.loc[g].mean()
+S=pd.DataFrame(scores).T
+print('\\nCLUSTER scores')
+print(S.round(2).to_string())
+# grouped labels
+G={'cortex':[0,12], 'endodermis':[10,17], 'epidermis':[8], 'meristems':[2,3,7,18], 'pericycle':[1,4,9], 'phloem':[14,16,21], 'provascular':[5], 'root_cap':[15,19,20], 'root_hair':[6], 'xylem':[11,13]}
+A=pd.DataFrame({k:S.loc[v].mean() for k,v in G.items()}).T
+print('\\nGROUP scores rows true ref type / cols observed profile')
+print(A.round(2).to_string())
+print('\\nBest profile per marker group')
+for k,row in A.iterrows():print(k,row.sort_values(ascending=False).round(3).to_dict())
+print('\\nBest marker group per profile')
+for c in A: print(c,A[c].sort_values(ascending=False).round(3).to_dict())
+PY"

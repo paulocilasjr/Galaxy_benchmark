@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import glob, os, subprocess, pyBigWig, statistics
+peaks='dnase/dnase_peaks.merged.bed'
+bw=pyBigWig.open('dnase/ENCFF723WAJ.bigWig')
+for f in sorted(glob.glob('macs_peaks_q001/*_rep*_peaks.narrowPeak')):
+    name=os.path.basename(f).replace('_peaks.narrowPeak','')
+    parsed=[]
+    with open(f) as fh:
+        for line in fh:
+            p=line.rstrip().split('\\t')
+            if len(p)>=10:
+                # use qvalue col9 (index 8) lower better; score index 8? narrowPeak col9 q
+                q=float(p[8]); sig=float(p[6])
+                parsed.append((q,sig,line))
+    if not parsed: continue
+    parsed.sort(key=lambda x:x[0]) # q lower better
+    for k in [5000,10000,20000]:
+        if len(parsed)<k: continue
+        tmp=f'[REDACTED LOCAL PATH]'
+        with open(tmp,'w') as o:
+            for q,sig,line in parsed[:k]: o.write(line+'\\n')
+        p=subprocess.Popen(['bedtools','intersect','-a',tmp,'-b',peaks,'-wa','-u'],stdout=subprocess.PIPE)
+        open_count=sum(1 for _ in p.stdout); p.wait()
+        # dnase mean over peak intervals
+        vals=[]
+        with open(tmp) as fh:
+            for line in fh:
+                c=line.split('\\t'); chrom=c[0]; start=int(c[1]); end=int(c[2])
+                try: s=bw.stats(chrom,start,end,type='mean',exact=True)[0]
+                except: continue
+                if s is not None: vals.append(s)
+        print(f'{name:12s} top{k:5d} open_frac={open_count/k:.3f} resistant={1-open_count/k:.3f} dnase_mean={statistics.mean(vals):.4f}')
+    print()
+bw.close()
+PY"

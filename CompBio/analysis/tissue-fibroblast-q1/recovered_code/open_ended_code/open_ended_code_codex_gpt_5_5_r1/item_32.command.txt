@@ -1,0 +1,43 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(Matrix)
+set.seed(1)
+obj <- readRDS('tissue.fibroblast.q1.rds')
+# normalize counts per 10k, log1p
+libs <- Matrix::colSums(obj)
+# variable genes using sparse-friendly mean/variance raw normalized approximate
+means <- Matrix::rowMeans(obj)
+# E[x"'^2]-mean''^2
+vars <- Matrix::rowMeans(obj''^2) - means''^2
+keep <- means > 0.005
+hv <- order(vars[keep]/(means[keep]+1e-6), decreasing=TRUE)[1:3000]
+hv_genes <- rownames(obj)[keep][hv]
+mat <- as.matrix(obj[hv_genes,])
+mat <- t(t(mat) / libs * 10000)
+mat <- log1p(mat)
+# scale genes
+mat <- t(scale(t(mat)))
+mat[is.na(mat)] <- 0
+pca <- prcomp(t(mat), center=FALSE, scale.=FALSE, rank.=30)
+pc <- pca$x[,1:20]
+for (k in c(10,15,20,30,40)) {
+  km <- kmeans(pc, centers=k, nstart=20, iter.max=100)
+  cat('"'k',k,' targets clusters ', km"'$cluster[c('"'Cell_11249_MCI','Cell_10369_WXV')], '\\n')
+  print(sort(table(km"'$cluster), decreasing=TRUE)[1:10])
+}
+# choose k=20 and print marker genes for target clusters
+km <- kmeans(pc, centers=20, nstart=50, iter.max=100)
+clus <- km$cluster
+targets <- c('"'Cell_11249_MCI','Cell_10369_WXV')
+for (tc in unique(clus[targets])) {
+  cells.in <- names(clus)[clus==tc]
+  cells.out <- names(clus)[clus"'!=tc]
+  avg.in <- Matrix::rowMeans(obj[, cells.in, drop=FALSE])
+  avg.out <- Matrix::rowMeans(obj[, cells.out, drop=FALSE])
+  pct.in <- Matrix::rowMeans(obj[, cells.in, drop=FALSE] > 0)
+  pct.out <- Matrix::rowMeans(obj[, cells.out, drop=FALSE] > 0)
+  score <- log2((avg.in+0.01)/(avg.out+0.01)) * pmax(pct.in - pct.out, 0)
+  top <- head(order(score, decreasing=TRUE), 40)
+  cat('"'\\ncluster',tc,'n',length(cells.in),'targets',intersect(targets,cells.in),'\\n')
+  print(data.frame(gene=rownames(obj)[top], avg_in=round(avg.in[top],3), pct_in=round(pct.in[top],2), avg_out=round(avg.out[top],3), pct_out=round(pct.out[top],2), score=round(score[top],2)), row.names=FALSE)
+}
+RS"

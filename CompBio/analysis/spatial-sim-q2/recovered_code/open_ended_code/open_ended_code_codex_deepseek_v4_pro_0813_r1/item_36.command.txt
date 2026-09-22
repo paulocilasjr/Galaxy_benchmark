@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, itertools, time
+from scipy.io import mmread
+from scipy.stats import poisson
+sp=mmread('matrix.mtx.gz').toarray() # genes x spots
+features=pd.read_csv('features.tsv.gz',sep='\\t',header=None,names=['ens','gene','type'])
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+means=sc.groupby(meta['cell_type']).mean()
+cts=means.index.tolist()
+X=means.loc[:,features['gene']].values # genes x types, rows genes
+# candidate counts for 6 types, nonneg sum 1..5
+combos=[c for c in itertools.product(range(6), repeat=6) if 0 < sum(c) <=5]
+combos=np.array(combos)
+print('n combos',len(combos))
+# Precompute log lambdas: genes x combos = X @ combos.T
+lam = X @ combos.T  # genes x combos (1000,462)
+# for each spot, compute log poisson pmf sum over genes. y shape genes x spots => y"'^T log lam - sum lam - loggamma
+Y=sp
+log_lam=np.log(np.maximum(lam,1e-12))
+# log_factorial per gene values 0..max, can use gammaln
+maxv=Y.max()
+logfac=np.zeros(maxv+1); logfac[1:]=np.cumsum(np.log(np.arange(1,maxv+1)))
+# score = Y.T @ log_lam - sum_lam per combo
+score = Y.T @ log_lam - lam.sum(axis=0)[None,:] # spots x combos
+# subtract? Actually poisson logpmf = y loglam - lam - logfactorial(y), constant per spot irrelevant for combo. Correct.
+best=combos[score.argmax(axis=1)]
+print('"'best counts total stats', pd.Series(best.sum(axis=1)).describe())
+bestdf=pd.DataFrame(best,index=pd.read_csv('barcodes.tsv.gz',sep='\\t',header=None)[0],columns=cts)
+print(bestdf.sum(axis=0).to_dict())
+print('tumor spots', (bestdf['Tumor_Core']>0).sum(), 'tumor cells', bestdf['Tumor_Core'].sum())
+bestdf.to_csv('mle_counts.csv')
+# compare NNLS rounded
+R=pd.read_csv('deconv_raw.csv',index_col=0)
+for ct in cts:
+    nn=(R[ct]>0.5).astype(int)
+    bb=(bestdf[ct]>0).astype(int)
+    print(ct,'mismatch presence', (nn"'!=bb).sum(), '"'corr', np.corrcoef(R[ct],bestdf[ct])[0,1])
+print('tumor presence mismatch', ((R['Tumor_Core']>0.85)"'!=(bestdf['"'Tumor_Core']>0)).sum())
+PY"

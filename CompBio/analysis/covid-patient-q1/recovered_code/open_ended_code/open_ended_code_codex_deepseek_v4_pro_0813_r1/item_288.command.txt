@@ -1,0 +1,84 @@
+/bin/bash -lc "cat > match_cells.py <<'PY'
+import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp, hashlib, struct, time, pickle
+# load match genes and original hashes
+genes=[l.strip() for l in open('match_genes.txt') if l.strip()]
+g2c={g.lower():i for i,g in enumerate(genes)}
+print('ngenes',len(genes))
+orig_hashes=np.load('orig_cell_hashes.npy') # shape n x 8 bytes
+orig_dict={}
+for i in range(orig_hashes.shape[0]):
+    h=orig_hashes[i].tobytes()
+    orig_dict.setdefault(h,[]).append(i)
+print('orig unique hashes',len(orig_dict),'total',orig_hashes.shape[0])
+# map h5ad var
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array([str(x) if x is not None else '' for x in A.var['feature_name']])
+gene_col=np.full(len(wnames),-1,dtype=np.int32)
+for i,name in enumerate(wnames):
+    c=g2c.get(name.lower())
+    if c is not None: gene_col[i]=c
+print('mapped h5ad genes',np.sum(gene_col>=0))
+# Load original metadata donor/class in same order as Seurat matrix columns (seurat_meta row order)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False)
+orig_donor=meta['Donor'].astype(str).values
+orig_class=meta['Class'].astype(str).values
+print('meta length',len(orig_donor), 'unique donors',len(set(orig_donor)))
+# process working cells chunks, compute hash and match
+N=A.shape[0]
+chunk=10000
+matches=[]
+no_match=0
+match_indices=[]
+start_all=time.time()
+for start in range(0,N,chunk):
+    X=A.X[start:start+chunk]
+    if sp.issparse(X): X=X.tocsr()
+    else: X=sp.csr_matrix(X)
+    data=X.data.astype(np.int64)
+    ind=X.indices.astype(np.int32)
+    ptr=X.indptr
+    for local_i in range(X.shape[0]):
+        s=ptr[local_i]; e=ptr[local_i+1]
+        # build filtered pairs (col, val) sorted by col
+        pairs=[]
+        for k in range(s,e):
+            c=gene_col[ind[k]]
+            if c<0: continue
+            v=int(data[k])
+            pairs.append((int(c),v))
+        if not pairs:
+            h=b''
+        else:
+            pairs.sort()
+            buf=bytearray(len(pairs)*8)
+            pos=0
+            for c,v in pairs:
+                struct.pack_into('<iI',buf,pos,v,c)
+                pos+=8
+            h=hashlib.blake2b(buf,digest_size=8).digest()
+        if h in orig_dict:
+            for oi in orig_dict[h]:
+                matches.append((start+local_i,oi,orig_donor[oi],orig_class[oi]))
+        else:
+            no_match+=1
+    if start%50000==0:
+        print('processed',start,'matches',len(matches),'no',no_match,'elapsed',round(time.time()-start_all,1),flush=True)
+print('done matches',len(matches),'no_match',no_match)
+# save matches
+mdf=pd.DataFrame(matches,columns=['work_cell','orig_cell','orig_donor','orig_class'])
+mdf.to_csv('cell_matches.csv',index=False)
+print('match counts by orig donor')
+print(mdf.orig_donor.value_counts().to_string())
+print('by class',mdf.orig_class.value_counts().to_dict())
+# summarize by working donor: assign majority orig donor/class
+obs=A.obs['donor_id'].astype(str).values
+mdf['work_donor']=obs[mdf.work_cell.values]
+print('mapping working donor -> top original donor, majority class, match n')
+for wd,g in mdf.groupby('work_donor'):
+    top=g.orig_donor.mode().iloc[0]
+    cls=g.orig_class.mode().iloc[0]
+    cls_frac=(g.orig_class==cls).mean()
+    print(wd,len(g),top,cls,round(cls_frac,3))
+# save mapping
+PY
+python3 match_cells.py"

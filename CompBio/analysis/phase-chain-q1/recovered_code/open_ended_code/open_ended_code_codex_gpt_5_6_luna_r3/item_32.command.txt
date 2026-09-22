@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+# Show alignment columns around low complexity site for representative reads
+import gzip,urllib.parse,urllib.request,edlib,re
+from Bio.Seq import Seq
+u='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'+urllib.parse.urlencode({'db':'nuccore','id':'AL008638.1','seq_start':'60000','seq_stop':'70000','rettype':'fasta','strand':'1','retmode':'text'})
+o=urllib.request.urlopen(u).read().decode();ref=''.join(x.strip() for x in o.splitlines() if not x.startswith('>'))
+def read(i):
+ with gzip.open('phase.chain.q1.R1.fq.gz','rt') as f:
+  for j in range(1,i+1):
+   h=f.readline().strip();s=f.readline().strip();f.readline();f.readline()
+ return s
+def parse(c):return [(op,int(n)) for n,op in re.findall(r'(\\d+)([=XID])',c)]
+def best(s):
+ a=[]
+ for ori,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+  x=edlib.align(q,ref,mode='HW',task='path',k=-1)
+  a.append((x['editDistance'],ori,q,x['locations'][0],x['cigar']))
+ return min(a,key=lambda z:(z[0],z[3][0]))
+def cols(q,st,c,lo,hi):
+ t=st; qi=0; out=[]
+ for op,n in parse(c):
+  if op in '=X':
+   for j in range(n):
+    if lo<=t<hi: out.append((60000+t,ref[t],q[qi],op))
+    t+=1;qi+=1
+  elif op=='I':
+   if lo<=t<=hi:out.append((60000+t,'-',q[qi:qi+n],'I'))
+   qi+=n
+  else:
+   for j in range(n):
+    if lo<=t<hi:out.append((60000+t,ref[t],'-','D'))
+    t+=1
+ return out
+for i in [2,3,4,5,14,39,42,46,51,55,61,100]:
+ d,o,q,(st,en),c=best(read(i)); cs=cols(q,st,c,4110,4145)
+ print('\\nREAD',i,'d',d,o,'range',60000+st,60000+en,'cigar',c)
+ print('pos ', ' '.join(f'{p:05d}' for p,_,_,_ in cs))
+ print('ref ', ' '.join(f'{r:>5}' for _,r,_,_ in cs))
+ print('read', ' '.join(f'{x:>5}' for _,_,x,_ in cs))
+ print('ops ', ' '.join(f'{z:>5}' for *_,z in cs))
+PY"

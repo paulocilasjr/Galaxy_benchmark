@@ -1,0 +1,27 @@
+/bin/bash -c "python3 - <<'EOF'
+import pandas as pd, numpy as np
+from scipy.stats import spearmanr, mannwhitneyu
+res=pd.read_csv('diff_peaks.tsv', sep='\\t')
+scores=np.load('all_motif_scores.npz')
+gc=pd.read_csv('union_gc.txt', sep='\\t', skiprows=1, header=None, names=['chr','start','end','pct_at','pct_gc','A','C','G','T','N','oth','len'])
+for c in ['start','end','pct_gc','len']: gc[c]=pd.to_numeric(gc[c], errors='coerce')
+res=res.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end'])
+print('n',len(res))
+rows=[]
+for tf in scores.files:
+    s=scores[tf]
+    finite=np.isfinite(s)
+    # Spearman corr
+    corr,p=spearmanr(res.log2FC, s)
+    # mean log2FC top 5% score vs bottom 50%
+    top=s>=np.quantile(s[finite],0.95)
+    bot=s<=np.quantile(s[finite],0.5)
+    mean_top=res.log2FC[top].mean(); mean_bot=res.log2FC[bot].mean()
+    # high motif vs low motif peak mean normalized perturb
+    nf=res[['ref_norm','perturb_norm']].values
+    logfc=res.log2FC.values
+    rows.append((tf,corr,p,mean_top,mean_bot,mean_top-mean_bot,np.mean(s[finite])))
+rows.sort(key=lambda x:-x[1])
+for r in rows:
+    print(f'{r[0]:8s} corr={r[1]:.4f} p={r[2]:.3g} top5_logFC={r[3]:.3f} bot50={r[4]:.3f} diff={r[5]:.3f}')
+EOF"

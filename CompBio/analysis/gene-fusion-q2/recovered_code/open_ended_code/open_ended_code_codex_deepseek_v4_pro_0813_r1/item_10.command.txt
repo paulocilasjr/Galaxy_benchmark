@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict, Counter
+# parse headers for transcript->gene symbol
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip()
+            tid=h.split()[0]
+            gs=''
+            for part in h.split():
+                if part.startswith('gene_symbol:'):
+                    gs=part.split(':',1)[1]
+                    break
+            trans_gene[tid]=gs
+print('transcripts',len(trans_gene))
+# parse primary alignments
+import subprocess
+gene_counts=Counter()
+tid_counts=Counter()
+n_unmapped=0
+proc=subprocess.Popen(['samtools','view','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+    p=line.split('\\t')
+    flag=int(p[1]); rname=p[2]
+    if flag & 0x4: n_unmapped+=1; continue
+    if flag & 0x100: continue # secondary
+    # include supplementary too? primary only
+    gs=trans_gene.get(rname)
+    if gs: gene_counts[gs]+=1
+    tid_counts[rname]+=1
+proc.wait()
+print('unmapped primary',n_unmapped)
+print('top genes by primary alignments:')
+for g,c in gene_counts.most_common(30): print(c,g)
+print('top transcripts:')
+for t,c in tid_counts.most_common(30): print(c,t,trans_gene.get(t))
+PY"

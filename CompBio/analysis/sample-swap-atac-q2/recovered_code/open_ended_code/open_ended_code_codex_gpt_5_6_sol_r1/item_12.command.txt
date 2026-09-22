@@ -1,0 +1,39 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,csv,concurrent.futures,requests
+M={
+'AIIamacrine':'GJD2 GRIK1 SLC6A9 DAB1 PCP4 PROX1 TFAP2A TFAP2B'.split(),
+'Astrocyte':'GFAP ALDH1L1 AQP4 SLC1A3 SLC1A2 GJA1 SOX9 CLU'.split(),
+'Cone':'ARR3 GNAT2 PDE6C PDE6H CNGB3 OPN1SW GUCA1C THRB'.split(),
+'GABAamacrine':'GAD1 GAD2 SLC6A1 SLC32A1 DLX1 DLX2 TFAP2A TFAP2B'.split(),
+'Horizontal':'LHX1 ONECUT1 ONECUT2 PROX1 CALB1 RELN SEMA6A EPHA7'.split(),
+'Microglia':'CX3CR1 P2RY12 C1QA C1QB C1QC AIF1 TMEM119 TYROBP'.split(),
+'Mullerglia':'RLBP1 GLUL SLC1A3 SLC1A2 SOX9 CLU VIM APOE'.split(),
+'Retinalganglioncell':'RBPMS SNCG POU4F1 POU4F2 NEFL NEFM ISL1 THY1'.split(),
+'Rod':'RHO GNAT1 PDE6A PDE6B CNGA1 NRL SAG GNGT1'.split()}
+G=sorted(set(sum(M.values(),[])))
+def one(g):
+ x=requests.get('https://mygene.info/v3/query',params={'q':'symbol:'+g,'species':'human','fields':'symbol,genomic_pos','size':3},timeout=20).json()
+ for h in x.get('hits',[]):
+  if h.get('symbol')"'!=g: continue
+  ps=h.get('"'genomic_pos',[]); ps=ps if isinstance(ps,list) else [ps]
+  for p in ps:
+   if str(p.get('chr')) in [str(i) for i in range(1,23)]+['X','Y']:
+    t=p['start'] if p['strand']==1 else p['end']; return g,'chr'+str(p['chr']),t
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex: C={g:(c,t) for g,c,t in ex.map(one,G)}
+target={(c,t//10000*10000):g for g,(c,t) in C.items()}
+vals={}
+tot=None
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ r=csv.reader(f,delimiter='\\t'); hdr=next(r); cols=hdr[3:]; tot=[0]*len(cols)
+ for row in r:
+  x=list(map(int,row[3:])); tot=[a+b for a,b in zip(tot,x)]
+  g=target.get((row[0],int(row[1])))
+  if g: vals[g]=x
+print('TOTAL',' '.join(f'{c}:{n}' for c,n in zip(cols,tot)))
+for typ,gs in M.items():
+ print('\\n###',typ)
+ for g in gs:
+  v=[x/n*1e6 for x,n in zip(vals[g],tot)]
+  top=sorted(zip(v,cols),reverse=True)
+  print(g,' '.join(f'{c}:{x:.2f}' for x,c in top[:5]))
+PY"

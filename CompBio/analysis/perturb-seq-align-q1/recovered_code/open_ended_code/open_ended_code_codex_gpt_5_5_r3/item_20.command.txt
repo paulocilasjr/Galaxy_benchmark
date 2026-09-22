@@ -1,0 +1,72 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy import sparse
+from collections import defaultdict
+
+def dec(ds): return [x.decode() if isinstance(x,bytes) else str(x) for x in ds[:]]
+def load(fn):
+    f=h5py.File(fn,'r')
+    shape=tuple(f['X'].attrs['shape'])
+    X=sparse.csc_matrix((f['X/data'][:].astype(np.float64), f['X/indices'][:], f['X/indptr'][:]), shape=shape).tocsr()
+    guides=dec(f['obs/guide/categories']); codes=f['obs/guide/codes'][:].astype(int)
+    genes=dec(f['var/_index'])
+    f.close()
+    return X,guides,codes,genes
+
+def norm_log(X):
+    lib=np.asarray(X.sum(axis=1)).ravel()
+    scale=np.divide(1e4, lib, out=np.zeros_like(lib, dtype=float), where=lib>0)
+    Y=X.multiply(scale[:,None]).tocsr()
+    Y.data=np.log1p(Y.data)
+    return Y
+
+def group_sigs(Y, guides, codes):
+    nt_idx=[i for i,g in enumerate(guides) if g.startswith('NT-')]
+    ntmask=np.isin(codes, nt_idx)
+    ntmean=np.asarray(Y[ntmask].mean(axis=0)).ravel()
+    sigs={}
+    ns={}
+    means={}
+    for i,g in enumerate(guides):
+        m=codes==i
+        if m.sum()==0: continue
+        mean=np.asarray(Y[m].mean(axis=0)).ravel()
+        means[g]=mean
+        sigs[g]=mean-ntmean
+        ns[g]=int(m.sum())
+    return sigs,means,ns,ntmean
+Xr,gr,cr,genesr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,genesq=load('perturb.seq.align.q1.query.h5ad')
+Yr=norm_log(Xr); Yq=norm_log(Xq)
+sigr,meanr,nr,ntr=group_sigs(Yr,gr,cr); sigq,meanq,nq,ntq=group_sigs(Yq,gq,cq)
+common=sorted(set(genesr)&set(genesq))
+ri=np.array([genesr.index(g) for g in common])
+qi=np.array([genesq.index(g) for g in common])
+ref_guides=[g for g in gr if not g.startswith('NT-')]
+query_guides=[g for g in gq if not g.startswith('NT-')]
+R=np.vstack([sigr[g][ri] for g in ref_guides])
+Q=np.vstack([sigq[g][qi] for g in query_guides])
+# zscore per signature for Pearson
+def zrow(A):
+    A=A.copy()
+    A-=A.mean(axis=1,keepdims=True)
+    sd=A.std(axis=1,keepdims=True)
+    sd[sd==0]=1
+    return A/sd
+C=zrow(R)@zrow(Q).T/R.shape[1]
+print('common genes',len(common),'R',R.shape,'Q',Q.shape)
+for target in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+    i=ref_guides.index(target)
+    order=np.argsort(C[i])[::-1]
+    print('\\nREF',target,'n',nr[target])
+    print([(query_guides[j], float(C[i,j]), nq[query_guides[j]]) for j in order[:10]])
+# reciprocal top matches for all
+print('\\nTop ref->query')
+for i,rg in enumerate(ref_guides):
+    j=int(np.argmax(C[i]));
+    print(rg, '->', query_guides[j], C[i,j])
+print('\\nTop query->ref')
+for j,qg in enumerate(query_guides):
+    i=int(np.argmax(C[:,j]));
+    print(qg, '->', ref_guides[i], C[i,j])
+PY"

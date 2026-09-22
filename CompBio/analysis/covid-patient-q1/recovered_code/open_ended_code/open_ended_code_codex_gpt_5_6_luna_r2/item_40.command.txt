@@ -1,0 +1,38 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,pandas as pd,scipy.sparse as sp,time
+p='covid.patients.q1.h5ad'
+with h5py.File(p,'r') as f:
+ cats=f['obs/donor_id/categories'].asstr()[:]; codes=f['obs/donor_id/codes'][:]
+ n=f['X/indptr'].shape[0]-1; g=f['var/_index'].shape[0]
+ names=f['var/feature_name/categories'].asstr()[:][f['var/feature_name/codes'][:]]
+ idx={}
+ for i,x in enumerate(names): idx.setdefault(x,i)
+ ip=f['X/indptr'][:]; data=f['X/data']; inds=f['X/indices']
+ ds=np.zeros((len(cats),g),np.float64)
+ t=time.time(); block=3000
+ for r0 in range(0,n,block):
+  r1=min(n,r0+block); a=ip[r0:r1+1]; s,e=int(a[0]),int(a[-1]); mat=sp.csr_matrix((data[s:e],inds[s:e],a-s),shape=(r1-r0,g))
+  oh=sp.csr_matrix((np.ones(r1-r0,np.float32),(np.arange(r1-r0),codes[r0:r1])),shape=(r1-r0,len(cats)))
+  ds += (mat.T@oh).T.toarray()
+ print('sec',time.time()-t,flush=True)
+ cpm=ds/ds.sum(1,keepdims=True)*1e6
+ # candidate high based on robust ISG genes
+ isgs=['ISG15','IFIT1','IFIT2','IFIT3','MX1','OAS1','OAS2','OASL','IFI6','IFI27','IFI44','IFI44L','RSAD2','BST2','LY6E','IRF7','SAMD9L','EPSTI1','USP18','XAF1','PARP9']
+ ii=[idx[x] for x in isgs if x in idx]
+ isg=np.log1p(cpm[:,ii]*100).mean(1)
+ order=np.argsort(isg)[::-1]
+ print('isg ranks')
+ for i in order: print(cats[i],f'{isg[i]:.3f}')
+ # contrasts several cutoffs
+ for label,mask in [('high7',isg>=np.sort(isg)[-7]),('high5',isg>=np.sort(isg)[-5]),('low10',isg<=np.sort(isg)[9]),('low15',isg<=np.sort(isg)[14])]:
+  a=np.log1p(cpm[mask]*100).mean(0); b=np.log1p(cpm[~mask]*100).mean(0); diff=a-b
+  ix=np.argsort(diff)[::-1]
+  print('\\nCONTRAST',label,'donors',','.join(cats[mask]))
+  print('UP',[(names[j],round(float(diff[j]),3),round(float(np.exp(diff[j])),2)) for j in ix[:50]])
+  print('DOWN',[(names[j],round(float(diff[j]),3),round(float(np.exp(diff[j])),2)) for j in ix[-50:][::-1]])
+ # show selected genes all donors standardized, sorted high isg
+ sel=['ISG15','IFIT1','IFIT2','IFIT3','MX1','OAS1','OAS2','OASL','IFI6','IFI27','IFI44','IFI44L','RSAD2','BST2','LY6E','IRF7','SAMD9L','EPSTI1','USP18','XAF1','PARP9','S100A8','S100A9','FCGR3A','LST1','HLA-DRA','MS4A1','CD3D','NKG7','GNLY','CCL2','IL1B','CCL3','CCL4','CXCL10','GZMB','MKI67','B2M','HLA-A','HLA-B','TYROBP','CTSS','LGALS3','FOS','JUN','TNFAIP3','DUSP1','IFITM3']
+ tab=pd.DataFrame({x:cpm[:,idx[x]] if x in idx else np.nan for x in sel},index=cats).loc[cats[order]]
+ print('\\nSELECTED CPM sorted ISG')
+ print(tab.to_string(float_format=lambda x:f'{x:.1f}'))
+PY"

@@ -1,0 +1,60 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python - <<'PY'
+import gzip, pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+# load
+features=pd.read_csv('data/filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+barcodes=pd.read_csv('data/filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+X=mmread('data/filtered_feature_bc_matrix/matrix.mtx.gz').tocsr()  # genes x cells
+calls=pd.read_csv('data/protospacer_calls_per_cell.csv')
+fr=pd.read_csv('data/feature_reference.csv')
+call_to_target=fr.set_index('id')['target_gene_name'].to_dict()
+calls['target']=calls.feature_call.map(call_to_target)
+# align order
+bc_to_target=calls.set_index('cell_barcode')['target']
+targets=barcodes['barcode'].map(bc_to_target).to_numpy()
+print('missing',pd.isna(targets).sum())
+# normalize cells
+lib=np.asarray(X.sum(axis=0)).ravel()
+Xc=X.tocsc(copy=True).astype(float)
+Xc.data *= np.repeat(1e4/lib, np.diff(Xc.indptr))
+Xlog=Xc.copy(); Xlog.data=np.log1p(Xlog.data)
+# dense pathway subset
+path_genes=['STAT1','ISG15','IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','CXCL10','CXCL11','IRF7','BST2','IFI6','STAT2','EIF2AK2','GBP1','GBP2','IDO1']
+idx=[features.index[features.name==g][0] for g in path_genes]
+sub=Xlog[idx,:].toarray().T
+nt=targets=='Non-Targeting'
+# multiple scores
+raw_score=sub.mean(axis=1)
+nt_mean=sub[nt].mean(axis=0); nt_sd=sub[nt].std(axis=0,ddof=1); nt_sd[nt_sd==0]=1
+z_score=((sub-nt_mean)/nt_sd).mean(axis=1)
+# target gene self expression maybe
+rows=[]
+for target in sorted(set(targets)):
+ mask=targets==target
+ if mask.sum()<10: continue
+ rows.append({
+  'target':target, 'n':int(mask.sum()),
+  'raw_mean':raw_score[mask].mean(), 'raw_median':np.median(raw_score[mask]),
+  'raw_delta':raw_score[mask].mean()-raw_score[nt].mean(),
+  'z_mean':z_score[mask].mean(), 'z_median':np.median(z_score[mask]),
+ })
+res=pd.DataFrame(rows).sort_values('z_mean')
+print(res.head(20).to_string(index=False))
+print('\\nNT score mean', raw_score[nt].mean(), 'z', z_score[nt].mean())
+# include STAT1 n=5 as well
+rows=[]
+for target in sorted(set(targets)):
+ mask=targets==target
+ rows.append({'target':target,'n':int(mask.sum()),'z_mean':z_score[mask].mean(),'raw_delta':raw_score[mask].mean()-raw_score[nt].mean(),'median':np.median(z_score[mask])})
+print('\\nall incl small')
+print(pd.DataFrame(rows).sort_values('z_mean').head(15).to_string(index=False))
+# per gene diffs for top few
+for target in pd.DataFrame(rows).sort_values('z_mean').target.head(8):
+ mask=targets==target
+ dif=sub[mask].mean(axis=0)-sub[nt].mean(axis=0)
+ print('\\n',target,'n',mask.sum(),'mean z',z_score[mask].mean())
+ print(pd.Series(dif,index=path_genes).sort_values().to_string())
+PY"

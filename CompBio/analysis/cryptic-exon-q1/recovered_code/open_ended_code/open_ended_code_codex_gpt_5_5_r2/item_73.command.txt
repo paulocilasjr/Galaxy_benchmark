@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY' > results/novel_junction_counts.tsv
+import re, collections, gzip
+# gene locus metadata from fetched FASTA headers
+locus={}
+for line in open('ref/top_coding_loci.fa'):
+    if line.startswith('>'):
+        h=line[1:].strip().split('|')
+        gene=h[0]
+        chrom,coords=h[1].split(':')
+        start,end=map(int,coords.split('-'))
+        strand=h[2]
+        locus[gene]=(chrom,start,end,strand,h[1])
+# transcript exons per gene
+exons=collections.defaultdict(lambda: collections.defaultdict(list))
+with gzip.open('ref/gencode.v46.annotation.gtf.gz','rt') as fh:
+    for line in fh:
+        if line.startswith('#'): continue
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<9 or f[2]"'!='"'exon': continue
+        attrs={}
+        parts=f[8].split(';')
+        for p in parts:
+            p=p.strip()
+            if not p: continue
+            k,v=p.split(' ',1)
+            attrs[k]=v.strip('\"')
+        gene=attrs.get('gene_name')
+        tx=attrs.get('transcript_id')
+        if gene in locus:
+            exons[gene][tx].append((int(f[3])-1,int(f[4])))
+known=collections.defaultdict(set)
+for gene,txs in exons.items():
+    chrom,start0,end0,strand,locstr=locus[gene]
+    for tx,es in txs.items():
+        es=sorted(es)
+        for (s1,e1),(s2,e2) in zip(es,es[1:]):
+            known[gene].add((e1-start0, s2-start0))
+# observed junctions
+obs=collections.Counter()
+allc=collections.Counter()
+for line in open('work/top_loci.splice.sam'):
+    if line.startswith('@'): continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<6 or f[2]=='*' or 'N' not in f[5]: continue
+    gene=f[2].split('|')[0]
+    pos=int(f[3])-1
+    mapq=int(f[4])
+    for n,op in re.findall(r'(\\d+)([MIDNSHP=X])', f[5]):
+        n=int(n)
+        if op in 'M=XDN':
+            if op=='N' and n>=20:
+                allc[(gene,pos,pos+n)] += 1
+                if (pos,pos+n) not in known.get(gene,set()):
+                    obs[(gene,pos,pos+n)] += 1
+            pos += n
+for (gene,s,e),c in obs.most_common():
+    chrom,start0,end0,strand,locstr=locus[gene]
+    print(c,gene,locstr,strand,s,e,start0+s,start0+e,sep='\\t')
+PY
+head -100 results/novel_junction_counts.tsv"

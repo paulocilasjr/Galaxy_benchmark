@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, requests, json, time
+p='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-0bb2941c0318233f7b766bc0/workspace/gwas.ancestry.q1.tsv'
+df=pd.read_csv(p,sep='\\t')
+na=df[df['P'].isna()].copy()
+url='https://gnomad.broadinstitute.org/api'
+query='''query V("'$rsid: String!, $dataset: DatasetId!) {
+ variant(rsid: $rsid, dataset: $dataset) {
+  variant_id rsids chrom pos ref alt
+  exome { ac an af populations { id ac an } }
+  genome { ac an af populations { id ac an } }
+ }
+}'"'''
+results=[]
+for _,r in na.iterrows():
+    rsid=r['RSID']
+    variables={'rsid':rsid,'dataset':'gnomad_r4'}
+    for attempt in range(3):
+        resp=requests.post(url,json={'query':query,'variables':variables},timeout=30)
+        if resp.ok:
+            data=resp.json().get('data',{}).get('variant')
+            break
+        time.sleep(1)
+    else:
+        print('failed',rsid,resp.status_code,resp.text[:200])
+        data=None
+    # choose genome else exome
+    seq=(data or {}).get('genome') or (data or {}).get('exome')
+    pops={}
+    if seq:
+        for pop in seq.get('populations',[]):
+            pops[pop['id']]=pop['ac']/pop['an'] if pop['an'] else None
+    results.append({'rsid':rsid,'variant_id':(data or {}).get('variant_id'),'af':seq.get('af') if seq else None,'pops':pops})
+    print(rsid,(data or {}).get('variant_id'), 'AF', seq.get('af') if seq else None, 'pops', {k:round(v,5) for k,v in pops.items() if k in ['afr','amr','eas','nfe','fin','sas','asj','mid','remaining','oth']})
+import pickle
+with open('gnomad_na.pkl','wb') as f: pickle.dump(results,f)
+print('\\nSummary counts zero among', len(results))
+# for superpop-like groups: amr, afr, eas, nfe, fin, sas, asj, mid, remaining/oth
+for group in ['amr','afr','eas','nfe','fin','sas','asj','mid','remaining','oth']:
+    vals=[res['pops'].get(group) for res in results]
+    known=[v for v in vals if v is not None]
+    zero=sum(1 for v in known if v==0)
+    non=sum(1 for v in known if v>0)
+    print(group,'present',len(known),'zero',zero,'non',non,'max',max(known) if known else None)
+PY"

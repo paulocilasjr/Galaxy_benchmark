@@ -1,0 +1,58 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv,math
+from collections import defaultdict
+import numpy as np
+from scipy.stats import chi2, pearsonr, spearmanr
+from cyvcf2 import VCF
+super_by_sample={}
+with open('refs/integrated_call_samples_v3.20130502.ALL.panel') as f:
+    next(f)
+    for line in f:
+        p=line.split()
+        if len(p)>=3: super_by_sample[p[0]]=p[2]
+loci=[('locus1',17311190,16811190,17811190,'refs/kg_chr1_loci.vcf.gz'),('locus2',172122601,171622601,172622601,'refs/kg_chr1_loci.vcf.gz'),('locus218',218624533,218124533,219124533,'refs/kg_chr1_locus218.vcf.gz'),('locus53',53514728,53014728,54014728,'refs/kg_chr1_locus53.vcf.gz'),('locus103',103551918,103051918,104051918,'refs/kg_chr1_locus103.vcf.gz'),('locus168',168737147,168237147,169237147,'refs/kg_chr1_locus168.vcf.gz')]
+gwas={}; keys_by_locus=defaultdict(list)
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+    r=csv.DictReader(f,delimiter='\\t')
+    for row in r:
+        if row['P']=='NA': continue
+        chrom,pos,a,b=row['SNPID'].split(':'); pos=int(pos); p=float(row['P'])
+        key=(pos,frozenset([a,b])); gwas[key]={'pos':pos,'id':row['RSID'],'p':p,'chi':chi2.isf(p,1)}
+        for name,lead,lo,hi,path in loci:
+            if lo<=pos<=hi: keys_by_locus[name].append(key)
+genos={}; samples=None
+for path in sorted(set(x[4] for x in loci)):
+    vcf=VCF(path)
+    if samples is None: samples=vcf.samples
+    for v in vcf:
+        if len(v.REF)"'!=1 or len(v.ALT)!=1 or len(v.ALT[0])!=1: continue
+        key=(v.POS,frozenset([v.REF,v.ALT[0]]))
+        if key in gwas and key not in genos:
+            genos[key]=np.array([(a+b if a>=0 and b>=0 else np.nan) for a,b,*_ in v.genotypes],float)
+idxs={sp:np.array([i for i,s in enumerate(samples) if super_by_sample.get(s)==sp]) for sp in sorted(set(super_by_sample.values()))}
+tot={sp:0 for sp in idxs}; per=[]
+for lname,leadpos,lo,hi,path in loci:
+    keys=[k for k in keys_by_locus[lname] if k in genos]
+    y=np.array([gwas[k]['"'chi'] for k in keys])
+    locscores={}
+    for sp,idx in idxs.items():
+        X=np.vstack([genos[k][idx] for k in keys]); keep=np.nanvar(X,axis=1)>1e-6
+        kk=[k for k,m in zip(keys,keep) if m]; X=X[keep]; yy=y[keep]
+        X=(X-X.mean(axis=1,keepdims=True))/X.std(axis=1,keepdims=True)
+        best=-9
+        for ci in np.argsort(-yy)[:10]:
+            r=(X@X[ci])/(X.shape[1]-1); r2=np.clip(r*r,0,1)
+            A=np.vstack([np.ones_like(r2),r2]).T; pred=A@np.linalg.lstsq(A,yy,rcond=None)[0]
+            fit=1-((yy-pred)**2).sum()/((yy-yy.mean())**2).sum()
+            pr=pearsonr(yy,r2).statistic; sr=spearmanr(yy,r2).statistic
+            mask=yy>=chi2.isf(1e-3,1)
+            tail=pearsonr(yy[mask],r2[mask]).statistic if mask.sum()>2 and np.std(r2[mask])>0 else 0
+            best=max(best,fit+pr+sr+0.5*tail)
+        tot[sp]+=best; locscores[sp]=best
+    per.append((lname,locscores))
+print('per-locus winners')
+for lname,scores in per:
+    print(lname, sorted((round(v,3),k) for k,v in scores.items())[::-1])
+print('total')
+for sp,v in sorted(tot.items(), key=lambda x:-x[1]): print(sp,round(v,3))
+PY"

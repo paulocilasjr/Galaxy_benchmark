@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request,re,html
+samples={
+'Bladder':'GSM8426940','Brain':'GSM8426943','Cloaca':'GSM8426946','GallBladder':'GSM8426949','Gill':'GSM8426952','Heart':'GSM8426953','Intestine':'GSM8426954','Kidney':'GSM8426957','Limb':'GSM8426960','Liver':'GSM8426963','Lung':'GSM8426966','Pancreas':'GSM8426967','Spleen':'GSM8426970','Stomach':'GSM8426973','Prostate':'GSM9059487'}
+# local libs
+import gzip, numpy as np
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    header=f.readline().strip().split('\\t'); cols=header[3:]; libs=np.zeros(len(cols),dtype=np.int64)
+    for line in f:
+        vals=np.fromstring(line.rstrip('\\n').split('\\t',3)[3],sep='\\t',dtype=np.int64)
+        libs+=vals
+libdict=dict(zip(cols,libs))
+rows=[]
+for tissue,gsm in samples.items():
+    txt=urllib.request.urlopen(f'https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gsm}',timeout=20).read().decode('utf-8','replace')
+    m=re.search(r'Fragments\\.bed\\.gz</td>\\s*<td["'^>]*title="('"\\d+)\"["'^>]*>([''^<]+)</td>'"',txt)
+    t=re.search(r'<td style=\"text-align: justify\">UUATAC-seq datasets of (["'^<]+)</td>'"',txt)
+    if not t:
+        mtitle=re.search(r'<tr valign=\"top\"><td nowrap>Title</td>\\s*<td style=\"text-align: justify\">(["'^<]+)</td>'"',txt)
+        title=html.unescape(mtitle.group(1)) if mtitle else '?'
+    else:title=t.group(1)
+    size=int(m.group(1)) if m else None
+    rows.append((tissue,gsm,size,libdict.get(tissue)))
+for r in rows:
+    tissue,gsm,size,lib=r
+    print(f'{tissue}\\t{gsm}\\t{size}\\t{size/1e9 if size else None:.3f}\\tlib={lib}\\tratio={lib/size if size else None:.4f}')
+# correlations between size and lib for all labels, and try all swaps
+names=[r[0] for r in rows if r[2] and r[3]]
+sizes=np.array([dict((x[0],x[2]) for x in rows)[n] for n in names],float)
+libs_arr=np.array([libdict[n] for n in names],float)
+def corr(a,b): return np.corrcoef(a,b)[0,1]
+print('corr noswap',corr(sizes,libs_arr))
+best=[]
+for i in range(len(names)):
+ for j in range(i+1,len(names)):
+    l=libs_arr.copy(); l[i],l[j]=l[j],l[i]
+    best.append((corr(sizes,l),names[i],names[j]))
+print('top swaps by size-lib corr')
+for c,a,b in sorted(best,reverse=True)[:10]: print(c,a,b)
+PY"

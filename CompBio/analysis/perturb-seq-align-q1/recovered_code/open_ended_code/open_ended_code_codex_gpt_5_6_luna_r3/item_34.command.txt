@@ -1,0 +1,22 @@
+/bin/bash -lc "python -u - <<'PY'
+print('start',flush=True)
+import h5py,numpy as np,gc
+from scipy.sparse import csc_matrix
+print('imports',flush=True)
+base='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-19bbba4fe4429f9f5da451cf/workspace/'
+def agg(fn):
+ print('opening',fn,flush=True)
+ with h5py.File(base+fn,'r') as f:
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=tuple(f['X'].attrs['shape']))
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['var/_index'][...]],dtype=str)
+  g=f['obs']['guide']; cats=[x.decode() if isinstance(x,bytes) else str(x) for x in g['categories'][...]]; groups=np.array([cats[i] for i in g['codes'][...]],dtype=str)
+ print('loaded',X.shape,X.nnz,flush=True)
+ names=np.unique(groups); O=np.zeros((len(names),X.shape[1]),dtype=np.float32)
+ for i,n in enumerate(names):
+  v=np.asarray(X[groups==n,:].sum(axis=0)).ravel(); O[i]=np.log1p(v/max(v.sum(),1)*1e6)
+ print('aggregated',flush=True)
+ del X,groups,cats,g;gc.collect();return genes,names,O
+rg,rn,R=agg('perturb.seq.align.q1.ref.h5ad');print('ref done',flush=True)
+qg,qn,Q=agg('perturb.seq.align.q1.query.h5ad');print('query done',flush=True)
+common=sorted(set(rg)&set(qg)); print('common',len(common),flush=True)
+PY"

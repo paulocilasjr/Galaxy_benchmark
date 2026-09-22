@@ -1,0 +1,72 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, math, time
+from PIL import Image, ImageDraw, ImageFont
+from skimage.transform import rotate
+from scipy.ndimage import distance_transform_edt, gaussian_filter, binary_closing
+coords=[]; ca=[]
+for line in open('protein.shape.q1.pdb'):
+ if line.startswith('ATOM'):
+  x,y,z=map(float,[line[30:38],line[38:46],line[46:54]]); coords.append((x,y,z))
+  if line[12:16].strip()=='CA': ca.append((x,y,z))
+coords=np.array(coords); ca=np.array(ca)
+letters='BDFHJLNPRTVXZ'; N=64; fp='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+angles=np.arange(0,180,10)
+def make_template(ch):
+ im=Image.new('L',(N,N),0); d=ImageDraw.Draw(im); fs=100; f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; scale=.82*N/max(w,h); fs=max(1,int(fs*scale)); f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; d.text(((N-w)/2-bb[0],(N-h)/2-bb[1]),ch,font=f,fill=255); return np.array(im)>40
+print('precompute templates')
+templates={}
+for ch in letters:
+ base=make_template(ch)
+ arr=[]
+ for ang in angles:
+  r=rotate(base.astype(np.float32),ang,order=1,mode='constant',cval=0,preserve_range=True)>0.5
+  dq=distance_transform_edt(~r)
+  arr.append((r,dq))
+ templates[ch]=arr
+print('done')
+def fib(k):
+ i=np.arange(k); z=1-(2*i+1)/k; phi=np.arccos(np.clip(z,-1,1)); theta=math.pi*(1+5**0.5)*i
+ return np.stack([np.sin(phi)*np.cos(theta),np.sin(phi)*np.sin(theta),z],axis=1)
+def project(pts,n):
+ n=np.asarray(n,float); n/=np.linalg.norm(n); a=np.array([0.,0.,1.]) if abs(n[2])<.9 else np.array([1.,0.,0.]); u=np.cross(n,a); u/=np.linalg.norm(u); v=np.cross(n,u); v/=np.linalg.norm(v); p=pts-pts.mean(0); x=p@u;y=p@v; margin=4; span=max(x.max()-x.min(),y.max()-y.min()); scale=(N-2*margin)/span; xi=((x-x.min())*scale+margin).astype(np.int32); yi=((y-y.min())*scale+margin).astype(np.int32); im=np.zeros((N,N),np.float32)
+ for xx,yy in zip(xi,yi):
+  if 0<=xx<N and 0<=yy<N: im[yy,xx]=1
+ im=gaussian_filter(im,1.0); im=im>0.05; im=binary_closing(im,iterations=2)
+ return im.astype(np.uint8)
+def score_view(imgp):
+ if imgp.sum()==0: return []
+ Dp=distance_transform_edt(~(imgp>0)); area_p=imgp.sum(); fp=np.fft.rfft2(imgp.astype(np.float32)); fdp=np.fft.rfft2(Dp.astype(np.float32))
+ out=[]
+ for ch in letters:
+  best=1e9; bestang=0
+  for idx,(oq,dq) in enumerate(templates[ch]):
+   # cost pq
+   cpq=np.fft.irfft2(fp*np.conj(np.fft.rfft2(dq.astype(np.float32))),s=imgp.shape).real
+   cqp=np.fft.irfft2(np.fft.rfft2(oq.astype(np.float32))*np.conj(fdp),s=imgp.shape).real
+   area_q=oq.sum()
+   if area_p>0 and area_q>0:
+    score=(cpq.min()/area_p + cqp.min()/area_q)/2
+   else: score=999
+   if score<best: best=score; bestang=angles[idx]
+  out.append((best,ch,bestang))
+ out.sort(key=lambda z:z[0])
+ return out
+for mode,pts in [('all',coords),('ca',ca)]:
+ print('\\nMODE',mode,flush=True)
+ dirs=fib(500); best_letter={ch:[1e9,None,None] for ch in letters}; global_best=[]
+ t0=time.time()
+ for k,n in enumerate(dirs):
+  imgp=project(pts,n)
+  sc=score_view(imgp)
+  if sc:
+   for d,ch,ang in sc:
+    if d<best_letter[ch][0]: best_letter[ch]=[d,k,n.copy()]
+   global_best.append((sc[0][0],sc[0][1],sc[0][2],k,n.copy()))
+  if (k+1)%100==0: print('k',k+1,'elapsed',time.time()-t0,'global',sorted(global_best,key=lambda z:z[0])[:5],flush=True)
+ print('BEST BY LETTER')
+ for ch,(d,k,n) in sorted(best_letter.items(), key=lambda kv:kv[1][0]): print(ch,round(d,4),'dir',k,'n',np.round(n,3))
+ global_best.sort(key=lambda z:z[0])
+ print('TOP global')
+ for d,ch,ang,k,n in global_best[:15]: print(ch,round(d,4),'ang',ang,'dir',k,'n',np.round(n,3))
+PY
+python3 [REDACTED LOCAL PATH]"

@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+p='10x_pbmc68k_reduced.h5ad'
+with h5py.File(p,'r') as f:
+ obs=f['obs'][:]
+ cats=[x.decode() for x in f['uns/bulk_labels_categories'][:]]
+ genes=[x.decode() for x in f['var']['index'][:]]
+ rawgenes=[x.decode() for x in f['raw.var']['index'][:]]
+ print('categories', list(enumerate(cats)))
+ print('gene idx', {g:genes.index(g) for g in ['SRM','MRPS21']})
+ print('raw gene idx', {g:rawgenes.index(g) for g in ['SRM','MRPS21']})
+ code=cats.index('CD19+ B')
+ mask=(obs['bulk_labels']==code)&(obs['percent_mito']<0.04)
+ ix=np.flatnonzero(mask)
+ print('selected', len(ix), 'code', code, 'all B', np.sum(obs['bulk_labels']==code))
+ X=f['X'][:]
+ d=X[ix,genes.index('SRM')]-X[ix,genes.index('MRPS21')]
+ print('X counts >1 <-1 within',np.sum(d>1),np.sum(d < -1),np.sum((d>=-1)&(d<=1)), 'sum',len(d))
+ print('X differences sorted', np.sort(d))
+ # sparse raw values for the two columns
+ dat=f['raw.X/data'][:]; inds=f['raw.X/indices'][:]; ptr=f['raw.X/indptr'][:]
+ vals=np.zeros((len(ix),2),dtype=float)
+ targets=[rawgenes.index('SRM'),rawgenes.index('MRPS21')]
+ for out_i,row in enumerate(ix):
+  ri=inds[ptr[row]:ptr[row+1]]; rd=dat[ptr[row]:ptr[row+1]]
+  for j,t in enumerate(targets):
+   hit=np.where(ri==t)[0]
+   if hit.size: vals[out_i,j]=rd[hit[0]]
+ dr=vals[:,0]-vals[:,1]
+ print('raw counts >1 <-1 within',np.sum(dr>1),np.sum(dr < -1),np.sum((dr>=-1)&(dr<=1)), 'sum',len(dr))
+ print('raw values and diff')
+ print(np.c_[vals,dr])
+PY"

@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import requests,json,time
+ids=[]
+for retstart in range(0,500,200):
+ r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',params={'db':'gds','term':'((\"neural tube\"[All Fields] OR \"spinal cord\"[All Fields] OR \"hindbrain\"[All Fields] OR \"midbrain\"[All Fields] OR \"neural plate\"[All Fields]) AND \"single cell\"[All Fields] AND Mus musculus[Organism] AND gse[Entry Type])','retmax':200,'retstart':retstart,'retmode':'json'})
+ js=r.json()['esearchresult']; ids+=js['idlist']
+ if len(js['idlist'])<200: break
+ time.sleep(.4)
+print(len(ids),len(set(ids)))
+summ={}
+for i in range(0,len(ids),100):
+ chunk=ids[i:i+100]
+ r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi',params={'db':'gds','id':','.join(chunk),'retmode':'json'})
+ data=r.json()['result']
+ for uid in data['uids']: summ[uid]=data[uid]
+ time.sleep(.3)
+print('summ',len(summ))
+open('neuraltube_summaries.json','w').write(json.dumps(summ,indent=2))
+# filter
+for uid,x in summ.items():
+ supp=(x.get('suppfile') or '').upper()
+ if not any(k in supp for k in ['MTX','TSV','TAR','H5','H5AD']): continue
+ low=(x.get('title','')+' '+(x.get('summary') or '')).lower()
+ if any(w in low for w in ['develop','embry','e9','e10','e11','e12','e13','e14','neural tube','neural plate','spinal cord','hindbrain','midbrain','motor neuron','progenitor','temporal','spatial','nervous system']):
+  if any(w in low for w in ['injury','als','multiple sclerosis','eae','microglia','pain','infection','tumor','glioma','leukemia','adult']): continue
+  print(uid,x.get('accession'),'n',x.get('n_samples'),'supp',x.get('suppfile'),'pdat',x.get('pdat'))
+  print(' ',x.get('title'))
+PY"

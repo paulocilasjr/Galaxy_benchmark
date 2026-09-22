@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+import statsmodels.api as sm
+h=pd.read_csv('ep.interactions.q1.hic.csv')
+long=h.melt(['pair_id','set','distance_bp'],var_name='rep',value_name='count')
+b=long[long['set']=='background'].copy(); X=sm.add_constant(np.log(b.distance_bp))
+for fam in [sm.families.Poisson(), sm.families.NegativeBinomial(alpha=0.3)]:
+ m=sm.GLM(b['count'],X,family=fam).fit()
+ c=long[long['set']=='candidate'].copy(); mu=m.predict(sm.add_constant(np.log(c.distance_bp)))
+ c['mu']=mu; c['resid']=(c['count']-mu)/np.sqrt(fam.variance(mu))
+ print(type(fam).__name__,m.params.to_dict())
+ print(c.groupby('pair_id').agg(distance=('distance_bp','first'),obs=('count','mean'),mu=('mu','mean'),ratio=('count',lambda x: x.mean())).assign(ratio=lambda z:z.obs/z.mu, z=('resid','mean')).to_string())
+print('\\nNearest +/-25% distance empirical candidate sum percentile/p')
+h['sum']=h.filter(like='count_').sum(axis=1)
+for _,r in h[h.set=='candidate'].iterrows():
+ bg=h[(h.set=='background') & (h.distance_bp.between(r.distance_bp*.75,r.distance_bp*1.25))]
+ print(r.pair_id,r.distance_bp,r['sum'],len(bg),round(bg['sum'].mean(),2),round((1+(bg['sum']>=r['sum']).sum())/(len(bg)+1),3),np.quantile(bg['sum'],[.1,.5,.9]))
+
+e=pd.read_csv('ep.interactions.q1.expr.csv')
+p=e.pivot_table(index=['pair_id','guide_id','replicate'],columns='condition',values='rna_count').reset_index()
+p['log2fc']=np.log2(p.perturbed/p.control)
+print('\\nExpression log2FC stats across 12 matched obs')
+for ep,g in p.groupby('pair_id'):
+ print(ep,'mean',round(g.log2fc.mean(),3),'sd',round(g.log2fc.std(),3),'t-p',f'{stats.ttest_1samp(g.log2fc,0).pvalue:.3g}','guide means',np.round(g.groupby('guide_id').log2fc.mean().values,3))
+PY"

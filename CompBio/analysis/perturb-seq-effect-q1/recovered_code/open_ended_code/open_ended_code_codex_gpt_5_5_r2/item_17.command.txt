@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.stats import mannwhitneyu, ttest_ind
+features=pd.read_csv('data/filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+barcodes=pd.read_csv('data/filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+X=mmread('data/filtered_feature_bc_matrix/matrix.mtx.gz').tocsc().astype(float)
+lib=np.asarray(X.sum(axis=0)).ravel()
+X.data *= np.repeat(1e4/lib, np.diff(X.indptr))
+X.data=np.log1p(X.data)
+calls=pd.read_csv('data/protospacer_calls_per_cell.csv')
+fr=pd.read_csv('data/feature_reference.csv')
+targets=barcodes.barcode.map(calls.assign(target=calls.feature_call.map(fr.set_index('id').target_gene_name)).set_index('cell_barcode').target).to_numpy()
+# gene sets
+sets={
+ 'first20':['STAT1','ISG15','IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','CXCL10','CXCL11','IRF7','BST2','IFI6','STAT2','EIF2AK2','GBP1','GBP2','IDO1'],
+ 'first19_no_target_ISG15':['STAT1','IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','CXCL10','CXCL11','IRF7','BST2','IFI6','STAT2','EIF2AK2','GBP1','GBP2','IDO1'],
+ 'first18_no_STAT1_ISG15':['IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','CXCL10','CXCL11','IRF7','BST2','IFI6','STAT2','EIF2AK2','GBP1','GBP2','IDO1'],
+ 'top16_no_STAT1_ISG15_STAT2':['IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','CXCL10','CXCL11','IRF7','BST2','IFI6','EIF2AK2','GBP1','GBP2','IDO1'],
+}
+nt=targets=='Non-Targeting'
+for setname, genes in sets.items():
+ idx=[features.index[features.name==g][0] for g in genes]
+ sub=X[idx,:].toarray().T
+ ntm=sub[nt].mean(axis=0); nts=sub[nt].std(axis=0,ddof=1); nts[nts==0]=1
+ score=((sub-ntm)/nts).mean(axis=1)
+ rows=[]
+ for target in sorted(set(targets)):
+  mask=targets==target
+  if target=='Non-Targeting': continue
+  # p vs NT
+  try: p=mannwhitneyu(score[mask], score[nt], alternative='less').pvalue
+  except Exception as e: p=np.nan
+  rows.append((target,mask.sum(),score[mask].mean(),np.median(score[mask]),p))
+ print('\\nSET',setname)
+ print(pd.DataFrame(rows,columns=['target','n','mean_z','median_z','mw_p']).sort_values('mean_z').head(10).to_string(index=False))
+PY"

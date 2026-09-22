@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter,defaultdict
+import math, statistics
+
+def records(path):
+    out=[]
+    with open(path) as f:
+        while True:
+            h=f.readline().strip()
+            if not h: break
+            s=f.readline().strip(); f.readline(); q=f.readline().strip()
+            out.append((s,q))
+    return out
+R={n:records(f'exogenous.mix.reads.q1.{n}.fq') for n in ['mix','exo','endo']}
+seqs={n:[s for s,q in arr] for n,arr in R.items()}
+# Remove exact known pairs greedily from mix assigning first to exo or endo? no pair overlap between src.
+exo_pairs=Counter(R['exo']); endo_pairs=Counter(R['endo'])
+unknown=[]; known=[]
+for s,q in R['mix']:
+    if exo_pairs[(s,q)]>0:
+        exo_pairs[(s,q)]-=1; known.append(('exo',s,q))
+    elif endo_pairs[(s,q)]>0:
+        endo_pairs[(s,q)]-=1; known.append(('endo',s,q))
+    else:
+        unknown.append(s)
+print('known',Counter(k for k,_,__ in known),'unknown',len(unknown))
+# build kmer sets from controls excluding shared kmers, classify unknown by unique kmer counts
+for k in [15,21,27,31,35,41,45]:
+    def kmerset(reads):
+        st=set()
+        for r in reads:
+            for i in range(len(r)-k+1): st.add(r[i:i+k])
+        return st
+    ex=kmerset(seqs['exo']); en=kmerset(seqs['endo'])
+    cats=Counter(); scores=[]
+    for r in unknown:
+        toks=[r[i:i+k] for i in range(len(r)-k+1)]
+        eu=sum(t in ex and t not in en for t in toks)
+        du=sum(t in en and t not in ex for t in toks)
+        e=sum(t in ex for t in toks); d=sum(t in en for t in toks)
+        if eu>du: cats['exo_score']+=1
+        elif du>eu: cats['endo_score']+=1
+        else: cats['tie']+=1
+        scores.append(eu-du)
+    print('k',k,cats,'mean_score',statistics.mean(scores))
+# Naive Bayes with kmer counts (presence). Leave-one? Predict unknown posterior.
+def nb_predict(train_exo, train_endo, test, k=21, alpha=1):
+    vocab=set(); ce=Counter(); cd=Counter(); Ne=0; Nd=0
+    for r in train_exo:
+        toks=[r[i:i+k] for i in range(len(r)-k+1)]
+        ce.update(toks); Ne+=len(toks); vocab.update(toks)
+    for r in train_endo:
+        toks=[r[i:i+k] for i in range(len(r)-k+1)]
+        cd.update(toks); Nd+=len(toks); vocab.update(toks)
+    V=len(vocab)
+    preds=[]
+    for r in test:
+        toks=[r[i:i+k] for i in range(len(r)-k+1)]
+        le=ld=0.0
+        for t in toks:
+            le += math.log((ce[t]+alpha)/(Ne+alpha*V))
+            ld += math.log((cd[t]+alpha)/(Nd+alpha*V))
+        # no prior
+        p=1/(1+math.exp(ld-le)) if abs(ld-le)<700 else (1.0 if le>ld else 0.0)
+        preds.append(p)
+    return preds
+for k in [11,15,21,27,31]:
+    p=nb_predict(seqs['exo'],seqs['endo'],unknown,k,0.1)
+    print('NB k',k,'sum exo posterior unknown',sum(p),'mean',sum(p)/len(p),'hard',sum(x>0.5 for x in p),'total frac incl known',(583+sum(p))/1965)
+PY"

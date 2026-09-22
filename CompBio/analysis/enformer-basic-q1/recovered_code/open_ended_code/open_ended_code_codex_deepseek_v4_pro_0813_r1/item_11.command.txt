@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+C=1536
+filters=[768,896,1024,1152,1280,1536]
+
+def conv(in_ch,out_ch,width,with_bias=True):
+    return in_ch*out_ch*width + (out_ch if with_bias else 0)
+
+def bn(ch): return 2*ch
+
+def pool(ch): return ch*ch
+
+def conv_block_params(in_ch,out_ch,width):
+    return bn(in_ch) + conv(in_ch,out_ch,width)
+
+# stem
+stem=0
+stem += conv(4,768,15)
+# residual conv_block(768,width1)
+stem += conv_block_params(768,768,1)
+stem += pool(768)
+print('stem', stem, f'{stem:,}')
+
+# conv tower
+tower=0
+prev=768
+for f in filters:
+    block = conv_block_params(prev,f,5)
+    block += conv_block_params(f,f,1)
+    block += pool(f)
+    print('block f', f, 'params', block)
+    tower += block
+    prev=f
+print('tower', tower, f'{tower:,}')
+
+# transformer per block
+mha = conv(C,512,1,False) + conv(C,512,1,False) + conv(C,C,1,False) + conv(C,C,1,True) + conv(192,512,1,False) + 512 + 512
+mlp = 2*C + conv(C,2*C,1,True) + conv(2*C,C,1,True)
+trans_block = 4*C + mha + mlp
+print('mha', mha, 'mlp', mlp, 'trans block', trans_block, f'{trans_block:,}')
+trans=trans_block*11
+print('trans', trans, f'{trans:,}')
+
+final = bn(C) + conv(C,2*C,1,True)
+print('final', final, f'{final:,}')
+head_h = conv(2*C,5313,1,True)
+head_m = conv(2*C,1643,1,True)
+print('heads',head_h,head_m)
+total=stem+tower+trans+final+head_h+head_m
+print('TOTAL', total, f'{total:,}')
+PY"

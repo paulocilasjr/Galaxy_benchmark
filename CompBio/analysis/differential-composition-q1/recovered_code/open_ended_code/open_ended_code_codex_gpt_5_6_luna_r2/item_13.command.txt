@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip, scipy.io, numpy as np, pandas as pd
+base='differential.composition.q1'
+with gzip.open(base+'.genes.txt.gz','rt') as f:
+ f.readline(); genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+idx={g:i for i,g in enumerate(genes)}
+markers={
+'astrocyte':['GFAP','AQP4','SLC1A3','CLDN11','VIM','GJA1','ALDOC','S100B'],
+'microglial cell':['AIF1','C1QA','C1QB','C1QC','TYROBP','P2RY12','TMEM119','CX3CR1','CSF1R','C3'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MERTK','LRAT','MITF','SERPINF1','TTR'],
+'cone cell':['ARR3','OPN1SW','OPN1MW','OPN1LW','GNGT2','PDE6H','GUCA1C','CNGB3','GNAT2','RXRG'],
+'rod cell':['RHO','SAG','GNAT1','PDE6A','PDE6B','NRL','NR2E3','ROM1','GPR37L1','GUCA1B'],
+'horizontal cell':['LHX1','ONECUT1','ONECUT2','CALB1','VSX1','GAD1','GAD2','SLC32A1'],
+'bipolar cell':['VSX2','GRM6','CABP5','PRKCA','PCP4','TRPM1','GNG13','ISL1','SLC24A2'],
+'RGC':['RBPMS','SNCG','POU4F1','POU4F2','THY1','NEFL','NEFM','ISL1','BRN3A','OPN4'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','CD2','IL7R','CCL5','LTB'],
+'macrophage':['LYZ','CTSD','FCER1G','TYROBP','CD68','C1QC','LST1','MS4A7','AIF1','LGALS3'],
+'Schwann cell':['S100B','SOX10','MPZ','PLP1','GFAP','NCAM1','FABP7','CLDN11'],
+'Pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ACTA2','COL4A1','COL4A2','NOTCH3','ABCC9','KCNJ8'],
+'B cell':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD83','CD22','CD69','CD48'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','COL6A2','PDGFRA','FBLN1'],
+'endothelial cell':['EMCN','KDR','ESAM','PECAM1','VWF','CLDN5','RAMP2','ENG','PLVAP'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','SOX9','AQP4','VIM','KCNJ10','SLC1A6','FABP7']}
+allm={k:[(idx[g],g) for g in v if g in idx] for k,v in markers.items()}
+for j in [1,2]:
+ print('\\nSAMPLE',j)
+ m=scipy.io.mmread(base+f'.{j}.mtx.gz').tocsr().astype(np.float32)
+ lib=np.asarray(m.sum(axis=0)).ravel(); norm=m.multiply(1e4/(lib+1e-9)).tocsr(); log=norm.copy(); log.data=np.log1p(log.data)
+ scores={}
+ for typ, pairs in allm.items():
+  ids=[x[0] for x in pairs]
+  a=log[ids].toarray()
+  scores[typ]=a.mean(axis=0)
+ sc=pd.DataFrame(scores)
+ assigned=sc.columns[np.argmax(sc.values,axis=1)]
+ print('threshold counts (score > 0.5 / 1 / 2 / 3 / 4)')
+ for typ in sc.columns:
+  x=sc[typ].values
+  print(f'{typ:20s}',*(int((x>t).sum()) for t in [.5,1,2,3,4]),'max',round(x.max(),2),'q99',round(np.quantile(x,.99),2),'mean',round(x.mean(),3),'topassign',int((assigned==typ).sum()))
+ print('top assigned counts:',pd.Series(assigned).value_counts().to_dict())
+ for typ in sc.columns:
+  x=sc[typ].values; ids=np.argsort(-x)[:3]
+  print(typ,[(int(i),round(x[i],2),int(lib[i]),int((log[[p[0] for p in allm[typ]],i]>0).sum())) for i in ids])
+PY"

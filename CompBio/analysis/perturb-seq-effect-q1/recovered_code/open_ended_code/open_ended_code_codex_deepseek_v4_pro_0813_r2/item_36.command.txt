@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import PCA
+from scipy.stats import mannwhitneyu
+mat=scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv'); g2g=dict(zip(ref.id,ref.target_gene_name))
+bc['pos']=np.arange(len(bc)); calls=calls.merge(bc,left_on='cell_barcode',right_on='barcode')
+totals=np.asarray(mat.sum(axis=0)).ravel(); cpm=mat.multiply(1.0/totals).tocsr()*10000
+logcpm=cpm.copy(); logcpm.data=np.log1p(logcpm.data)
+# scale path genes across cells to z scores; PCA
+X=logcpm[:20,:].toarray().T
+X=(X-X.mean(axis=0))/X.std(axis=0)
+pca=PCA(n_components=5, random_state=0).fit(X)
+print('explained variance ratio', pca.explained_variance_ratio_)
+print('PC1 loadings top:')
+for i,g in enumerate(feat['name'][:20]):
+    print(g, round(pca.components_[0,i],3))
+pc1=pca.transform(X)[:,0]
+nt=calls[calls.feature_call.str.startswith('guide_00')]
+ntpc=pc1[nt.pos.values]
+for guide in ['guide_011','guide_012','guide_019']:
+    grp=calls[calls.feature_call==guide]
+    a=pc1[grp.pos.values]
+    u,p=mannwhitneyu(a,ntpc)
+    print(guide,g2g[guide],a.mean(),np.median(a),a.std(),p)
+# print top guides by pc1 mean
+rows=[]
+for guide,grp in calls.groupby('feature_call'):
+    gene=g2g[guide]
+    if gene=='Non-Targeting': continue
+    a=pc1[grp.pos.values]
+    u,p=mannwhitneyu(a,ntpc)
+    rows.append((gene,len(a),a.mean(),a.median(),p))
+print(pd.DataFrame(rows,columns=['gene','n','mean','median','p']).sort_values('mean').head(10).to_string(index=False))
+PY"

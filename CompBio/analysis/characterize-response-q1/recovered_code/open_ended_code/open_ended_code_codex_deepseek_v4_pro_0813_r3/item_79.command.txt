@@ -1,0 +1,44 @@
+/bin/bash -c "python3 - <<'PY'
+import re, requests, json, statistics
+r=open('sample-select.js').read()
+start=r.find('var treeData_ImmGen_ULI_RNASeq = ['); end=r.find('var treeData_Microarray', start); seg=r[start:end]
+entries=[]
+for m in re.finditer(r'\\{(.*?)\\}', seg, re.S):
+ s=m.group(1); title=re.search(r'title\\s*:\\s*\"(["'^"]*)"'"',s); key=re.search(r'key\\s*:\\s*\"(["'^"]*)"'"',s); tool=re.search(r'tooltip\\s*:\\s*\"(["'^"]*)"'"',s,re.S)
+ if title and key: entries.append((title.group(1),key.group(1),tool.group(1).replace('\\\\n',' ') if tool else ''))
+# map group names normalized to option categories
+group_keywords={
+ 'Monocytes':['Group Name: Monocytes'],
+ 'Neutrophils':['Group Name: Granulocytes'],
+ 'Dendritic':['Group Name: Dendritic cells'],
+ 'B':['Group Name: B cells'],
+ 'CD8':['Group Name: ab T cells'],
+ 'CD4':['Group Name: ab T cells'],
+ 'NK':['Group Name: Innate Lymphocytes'],
+ 'Macrophages':['Group Name: Macrophages'],
+}
+keys_by={k:[] for k in group_keywords}
+for title,key,tool in entries:
+ for cat,pats in group_keywords.items():
+  if any(p.lower() in tool.lower() for p in pats):
+   # skip group parent entries whose title contains spaces/generic and key same as title with spaces? still maybe not actual samples
+   if ' ' not in key and key not in ['Check All']:
+    keys_by[cat].append(key)
+# de-dup
+for k,v in keys_by.items(): keys_by[k]=list(dict.fromkeys(v))
+print({k:len(v) for k,v in keys_by.items()})
+print('samples', {k:v[:10] for k,v in keys_by.items()})
+allkeys=[]
+for k,v in keys_by.items(): allkeys += v
+allkeys=list(dict.fromkeys(allkeys))
+print('all',len(allkeys))
+# query API
+genes='\\n'.join(open('characterize.response.q1.txt').read().split())
+data={'type':'rnaseq','groups':','.join(allkeys),'groups_num':str(len(allkeys)),'genes':genes,'dataset':'ULI_RNASeq'}
+r=requests.post('https://rstats.immgen.org/MyGeneSet_New/wplot_get_data.php',data=data,timeout=180)
+print(r.status_code,len(r.content),r.text[:200])
+if r.status_code==200:
+ open('immgen_wplot.json','w').write(r.text)
+ ds=json.loads(r.text)
+ print(type(ds),len(ds),ds[0] if ds else None)
+PY"

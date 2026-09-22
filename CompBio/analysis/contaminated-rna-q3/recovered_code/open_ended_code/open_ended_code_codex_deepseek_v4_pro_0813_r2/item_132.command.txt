@@ -1,0 +1,15 @@
+/bin/bash -c 'for q in q1 q2; do echo ===$q; gzip -cd contaminated.rna.$q.fq.gz | minimap2 -ax sr -t 12 human_genome.mmi /dev/stdin > ${q}_all_hg38.sam; samtools view -f4 -F256 -b ${q}_all_hg38.sam | samtools fastq -n > ${q}_all_hg38_unmapped.fq; # remove those mapping to human cDNA (already in q1_unmapped? hmm q_all_hg38_unmapped includes both cDNA-mapped and not)
+ samtools view -f4 -b minimap_${q}.sam | samtools fastq -n > ${q}_unmapped.fq;
+ # candidate = reads in both q_all_hg38_unmapped and q_unmapped (not human cDNA)
+ python3 - <<PY
+from Bio.SeqIO.QualityIO import FastqGeneralIterator
+def load(fn):
+ s=set()
+ for t,seq,q in FastqGeneralIterator(open(fn)): s.add(seq)
+ return s
+a=load('"'"'${q}_all_hg38_unmapped.fq'"'); b=load('"'${q}_unmapped.fq'"'); c=a&b
+print('all_hg38_unmapped',len(a),'unmapped_cdna',len(b),'candidate',len(c))
+with open('"'${q}_candidates.fq'"','w') as out:
+ for seq in c: out.write('@x\\n'+seq+'\\n+\\n'+'I'*len(seq)+'\\n')
+PY
+ minimap2 -ax sr -t 12 pan_mt.mmi "'${q}_candidates.fq > ${q}_candidates_panmt.sam; echo -n '"'cand panmt '; samtools flagstat "'${q}_candidates_panmt.sam | grep '"'primary mapped'; done"

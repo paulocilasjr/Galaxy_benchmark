@@ -1,0 +1,44 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+X=a.X
+lib=np.asarray(X.sum(axis=1)).ravel(); med=np.median(lib)
+Xn=X.multiply(1.0/lib[:,None]).tocsr()*med
+Xn.data=np.log1p(Xn.data)
+sym=a.var.symbol.values
+sym_to_idx=pd.Series(np.arange(a.n_vars),index=sym)
+sets={
+'immune_CD45':['PTPRC'],
+'Tcell':['CD3D','CD3E','CD3G','CD2','TRAC','TRBC1','CD4','CD8A','CD8B'],
+'NK':['NKG7','GNLY','KLRD1','KLRB1','NCAM1','NCR1','FCGR3A','PRF1'],
+'Bcell':['CD19','MS4A1','CD79A','CD79B','BANK1','MZB1'],
+'myeloid':['LYZ','CD14','FCGR3A','CD68','CSF1R','ITGAM','MARCO','MRC1'],
+'Mast':['TPSAB1','TPSB2','CPA3','KIT','MS4A2'],
+'cDC1':['CLEC9A','XCR1','BATF3','IRF8','CADM1','THBD','CLNK','WDFY4'],
+'cDC2':['CD1C','CLEC10A','FCER1A','CD1E','SIRPA','ITGAX','FCGR2B'],
+'pDC':['LILRA4','IL3RA','CLEC4C','IRF7','TCF4','GZMB','SPIB'],
+'DC_mature':['LAMP3','CCR7','FSCN1','CD83','CD40','IDO1','CD80','CD86'],
+'DC_general':['ITGAX','FLT3','HLA-DPA1','HLA-DPB1','HLA-DQA1','HLA-DQB1','HLA-DRA','CD74','CST3'],
+'epithelial':['EPCAM','KRT18','KRT8','CDH1'],
+'LUAD':['NKX2-1','NAPSA','SFTPA1','SFTPA2','SFTPB','SFTPC','AGER','SCGB1A1','SCGB3A2','MUC1','KRT7'],
+'LUSC_basal':['KRT5','KRT6A','KRT6B','KRT13','KRT14','KRT17','TP63','DSC3','DSG3','SOX2','SERPINB3','SERPINB4'],
+'endothelial':['VWF','PECAM1','CDH5','CLDN5','FLT1','KDR','ENG'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','PDGFRA','PDGFRB','FBLN1'],
+'smooth_muscle':['ACTA2','MYH11','TAGLN','RGS5','DES'],
+'neutrophil':['FCGR3B','CSF3R','S100A8','S100A9','CXCR2'],
+}
+def score(genes):
+ idx=[sym_to_idx[g] for g in genes if g in sym_to_idx.index]
+ return np.asarray(Xn[:,idx].mean(axis=1)).ravel()
+S=pd.DataFrame({k:score(g) for k,g in sets.items()},index=a.obs.index)
+S['sampleID']=a.obs.sampleID.values
+for col in ['immune_CD45','Tcell','NK','Bcell','myeloid','Mast','DC_general','cDC1','cDC2','pDC','DC_mature','epithelial','endothelial','fibroblast','smooth_muscle','neutrophil']:
+ q=S[col].quantile([0,.1,.25,.5,.75,.9,.95,.99,.995,.999,1])
+ print(col, q.round(3).to_dict())
+# proportion with expression above thresholds
+for col in ['immune_CD45','Tcell','NK','Bcell','myeloid','Mast','DC_general','epithelial','endothelial','fibroblast','smooth_muscle','neutrophil']:
+ print('\\n',col)
+ for t in [0.05,0.1,0.2,0.3,0.5,1.0,1.5]:
+  print(t,(S[col]>t).mean().round(4),end='; ')
+ print()
+PY"

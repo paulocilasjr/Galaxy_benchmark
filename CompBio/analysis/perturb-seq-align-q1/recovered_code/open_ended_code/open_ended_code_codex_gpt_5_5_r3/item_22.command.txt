@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+# Recompute signatures once, then compare scoring variants and Hungarian assignment.
+import h5py, numpy as np
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+
+def dec(ds): return [x.decode() if isinstance(x,bytes) else str(x) for x in ds[:]]
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        shape=tuple(f['X'].attrs['shape'])
+        X=sparse.csc_matrix((f['X/data'][:].astype(float), f['X/indices'][:], f['X/indptr'][:]), shape=shape).tocsr()
+        guides=dec(f['obs/guide/categories']); codes=f['obs/guide/codes'][:].astype(int); genes=dec(f['var/_index'])
+    return X,guides,codes,genes
+
+def lognorm(X, scale=1e4):
+    lib=np.asarray(X.sum(axis=1)).ravel(); s=np.divide(scale,lib,out=np.zeros_like(lib),where=lib>0)
+    Y=X.multiply(s[:,None]).tocsr(); Y.data=np.log1p(Y.data); return Y
+
+def sigs(Y,guides,codes):
+    nt=np.array([i for i,g in enumerate(guides) if g.startswith('NT-')])
+    ntm=np.isin(codes,nt)
+    base=np.asarray(Y[ntm].mean(axis=0)).ravel()
+    out={}; mean={}
+    for i,g in enumerate(guides):
+        m=codes==i
+        if m.sum():
+            mu=np.asarray(Y[m].mean(axis=0)).ravel(); mean[g]=mu; out[g]=mu-base
+    return out,mean,base
+
+def corr(A,B):
+    A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True)
+    A=A/np.maximum(A.std(1,keepdims=True),1e-12); B=B/np.maximum(B.std(1,keepdims=True),1e-12)
+    return A@B.T/A.shape[1]
+Xr,gr,cr,genr=load('perturb.seq.align.q1.ref.h5ad'); Xq,gq,cq,genq=load('perturb.seq.align.q1.query.h5ad')
+Yr=lognorm(Xr); Yq=lognorm(Xq)
+sigr,meanr,baser=sigs(Yr,gr,cr); sigq,meanq,baseq=sigs(Yq,gq,cq)
+ref=[g for g in gr if not g.startswith('NT-')]; que=[g for g in gq if not g.startswith('NT-')]
+common=list(set(genr)&set(genq)); ri=np.array([genr.index(g) for g in common]); qi=np.array([genq.index(g) for g in common])
+variants=[]
+# all common
+variants.append(('all', ri, qi))
+# exclude mitochondrial/ribo? and genes with low signal? compute top variance in ref+query signatures
+Rall=np.vstack([sigr[g][ri] for g in ref]); Qall=np.vstack([sigq[g][qi] for g in que])
+var=(Rall.var(0)+Qall.var(0))
+for k in [500,1000,2000,5000,10000]:
+    idx=np.argsort(var)[-k:]
+    variants.append((f'topvar{k}', ri[idx], qi[idx]))
+# top abs ref PAB/NUDT/LEO separately? later
+for name,rii,qii in variants:
+    R=np.vstack([sigr[g][rii] for g in ref]); Q=np.vstack([sigq[g][qii] for g in que]); C=corr(R,Q)
+    print('\\nVAR',name,'n',len(rii))
+    for rg in ['PABPC1-I1','NUDT21-I3','LEO1-I2','CDC73-I2','CTR9-I7','PAF1-I6']:
+        i=ref.index(rg); top=np.argsort(C[i])[::-1][:5]
+        print(rg, [(que[j], round(float(C[i,j]),3)) for j in top])
+    # Hungarian (rectangular: 33 ref,32 query, assigns all query to subset refs max sum)
+    rows,cols=linear_sum_assignment(-C) # assigns min(dim)=32 rows? rows length 32, subset of rows
+    pairs=sorted(zip(rows,cols), key=lambda x: ref[x[0]])
+    lookup={ref[i]:que[j] for i,j in zip(rows,cols)}
+    print('assign requested', {rg:lookup.get(rg) for rg in ['PABPC1-I1','NUDT21-I3','LEO1-I2','CDC73-I2','CTR9-I7','PAF1-I6']})
+PY"

@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.io, scipy.sparse, scipy.optimize, json, os
+sc=pd.read_csv('data/spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('data/spatial_q_sc_metadata.csv', index_col=0)
+cts=sorted(meta['cell_type'].unique())
+means=pd.DataFrame({ct: sc.values[meta['cell_type']==ct].mean(axis=0) for ct in cts}, index=sc.columns)
+Y=scipy.io.mmread('data/matrix.mtx.gz').toarray().T # spots x genes
+spot_sums=Y.sum(axis=1,keepdims=True)
+# CPM normalize
+Ycpm=Y/spot_sums*1e4
+# zscore each gene
+Yz=(Ycpm-Ycpm.mean(axis=0))/(Ycpm.std(axis=0)+1e-9)
+scores={}
+for ct in cts:
+    spec=means[ct]/(means.sum(axis=1)+1e-9)
+    genes=spec[spec>0.5].index.tolist()
+    scores[ct]=Yz[:, [sc.columns.get_loc(g) for g in genes]].mean(axis=1)
+    print(ct,len(genes))
+Scores=pd.DataFrame(scores,index=[f'Spot_{i}' for i in range(Y.shape[0])])
+print(Scores.describe())
+print(Scores.idxmax(axis=1).value_counts())
+# save
+Scores.to_csv('marker_scores.csv')
+np.save('Y_raw.npy',Y)
+# nnls proportions
+S=np.column_stack([sc.values[meta['cell_type']==ct].mean(axis=0) for ct in cts])
+P=np.zeros((len(cts),Y.shape[0]))
+for j in range(Y.shape[0]):
+ p,_=scipy.optimize.nnls(S,Y[j]); P[:,j]=p
+Pnorm=P/P.sum(axis=0,keepdims=True)
+pd.DataFrame(Pnorm.T,columns=cts).to_csv('nnls_props.csv',index=False)
+pd.DataFrame(P.T,columns=cts).to_csv('nnls_weights.csv',index=False)
+# raw weights correlation with sums etc
+PY"

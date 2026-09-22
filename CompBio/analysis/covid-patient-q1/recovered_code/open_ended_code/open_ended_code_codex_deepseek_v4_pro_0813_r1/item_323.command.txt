@@ -1,0 +1,26 @@
+/bin/bash -lc "cat > de_rank.py <<'PY'
+import numpy as np,pandas as pd,anndata as ad
+from scipy.stats import ttest_ind
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r'); wnames=np.array([str(x) if x is not None else '' for x in A.var['feature_name']]); wl=np.char.lower(wnames.astype('U')); D=np.load('donor_sum.npz'); Wraw=D['sum']; cats=D['cats']
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0); onames=np.array([str(x) for x in orig.index]); ocols=np.array(orig.columns.astype(str)); O=orig.values.astype(float); ol=np.char.lower(onames.astype('U')); common,wi,oi=np.intersect1d(wl,ol,return_indices=True)
+W=Wraw[wi,:].astype(float); Or=O[oi,:].astype(float)
+def logcpm(X): return np.log1p(X/X.sum(axis=0,keepdims=True)*1e6)
+W=logcpm(W); Or=logcpm(Or)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False).drop_duplicates('Donor').set_index('Donor'); labels=meta.loc[ocols,'Class'].values
+hc=Or[:,labels=='HC']; covid=Or[:,labels=='COVID']
+t,p=ttest_ind(covid,hc,axis=1,equal_var=False)
+fc=covid.mean(1)-hc.mean(1)
+# within working zscore
+Wz=(W-W.mean(1,keepdims=True))/(W.std(1,keepdims=True)+1e-8)
+rows=[]
+for n in [20,50,100,200,500,1000,2000,5000]:
+ up_idx=np.argsort(-t)[:n]; dn_idx=np.argsort(t)[:n]
+ su=Wz[up_idx].mean(0); sd=Wz[dn_idx].mean(0); diff=su-sd
+ df=pd.DataFrame({'donor':[int(x[5:]) for x in cats],'diff':diff,'up':su,'down':sd}).sort_values('diff')
+ top=df.head(14).donor.tolist(); bottom=df.tail(14).donor.tolist()
+ print('\\nn',n,'top14 healthy',','.join(map(str,top)))
+ print('bottom14 covid',','.join(map(str,bottom)))
+ # print sorted around top20
+ print(df.head(18).to_string(index=False))
+PY
+python3 de_rank.py"

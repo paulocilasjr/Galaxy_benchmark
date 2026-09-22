@@ -1,0 +1,38 @@
+/bin/bash -lc "cat > scripts/make_snp_filter.py <<'PY'
+import gzip, sys, json
+# load peak top intervals computed in same process from file
+peakfile='data/ENCFF717TCQ.bed.gz'
+peaks=[]
+with gzip.open(peakfile,'rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        peaks.append((float(p[8]), p[0], int(p[1]), int(p[2])))
+peaks.sort(key=lambda x:x[0], reverse=True)
+chr1_intervals=sorted((x[2],x[3]) for x in peaks[:1000] if x[1]=='chr1')
+# collapse/merge intervals optional not needed
+# points binary search
+starts=[a for a,b in chr1_intervals]
+ends=[b for a,b in chr1_intervals]
+import bisect
+out=open('data/snp151Common_chr1_biallelic.tsv','w')
+count=0
+for line in sys.stdin:
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<10: continue
+    chrom=p[1]; start=int(p[2]); observed=p[9]
+    if chrom"'!='"'chr1': continue
+    i=bisect.bisect_right(starts, start)-1
+    if i>=0 and start < ends[i]:
+        bases=set(c for c in observed if c"'!='"'/')
+        if len(bases)==2 and bases <= set('ACGT'):
+            pos=start+1
+            out.write(f\"chr1\\t{pos}\\t.\\t{''.join(sorted(bases))}\\n\") # bases for debug not used maybe
+            count+=1
+out.close()
+print(count, file=sys.stderr)
+PY
+# run streaming download with curl, using gzip -dc
+curl -sL --retry 3 'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/snp151Common.txt.gz' | gzip -dc | python3 scripts/make_snp_filter.py
+wc -l data/snp151Common_chr1_biallelic.tsv
+head -5 data/snp151Common_chr1_biallelic.tsv
+tail -5 data/snp151Common_chr1_biallelic.tsv"

@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > doublets.py <<'PY'
+import json,time
+import numpy as np
+from scipy import sparse
+from scipy.stats import rankdata
+from sklearn.decomposition import TruncatedSVD
+from sklearn.neighbors import NearestNeighbors
+meta=json.load(open('metadata.json')); bcs=list(meta['barcodes']); n=len(bcs)
+x=sparse.load_npz('bins5k.npz'); x.data[:]=1
+freq=np.asarray(x.sum(axis=0)).ravel()
+keep=(freq>=max(5,n*.005))&(freq<=n*.8)
+x=x[:,keep].tocsr()
+print('MATRIX',x.shape,x.nnz,flush=True)
+rng=np.random.default_rng(42); ns=n*5; parents=rng.integers(n,size=(ns,2))
+xs=x[parents[:,0]]+x[parents[:,1]]; xs.data[:]=1
+idf=np.log1p(n/np.asarray(x.sum(axis=0)).ravel())
+def tfidf(m):
+ m=sparse.diags(1/np.asarray(m.sum(axis=1)).ravel())@m
+ m=m.multiply(idf).tocsr(); m.data=np.log1p(m.data*1e4); return m
+xt=tfidf(x); st=tfidf(xs)
+svd=TruncatedSVD(n_components=50,random_state=42,n_iter=7)
+z=svd.fit_transform(xt); zs=svd.transform(st)
+print('SVD',svd.explained_variance_ratio_[:10],flush=True)
+counts=np.array([meta['counts'][bc] for bc in bcs]); print('DEPTH CORR',np.corrcoef(np.c_[np.log(counts),z].T)[0,1:11],flush=True)
+results=[]
+for dims in [15,25,35,49]:
+ scale=np.std(z[:,1:dims+1],axis=0)
+ zz=np.r_[z[:,1:dims+1]/scale,zs[:,1:dims+1]/scale]
+ for metric in ['euclidean','cosine']:
+  nn=NearestNeighbors(n_neighbors=151,metric=metric,n_jobs=4).fit(zz)
+  ds,ii=nn.kneighbors(zz[:n]); ii=ii[:,1:]; ds=ds[:,1:]
+  for k in [30,75,150]:
+   score=(ii[:,:k]>=n).mean(axis=1)
+   results.append(score)
+   print('TOP',dims,metric,k,[(bcs[i],round(float(score[i]),3),int(counts[i])) for i in np.argsort(score)[-10:][::-1]],flush=True)
+np.savez('doublet_lsi.npz',z=z,zs=zs,parents=parents,scores=np.array(results))
+rank=np.mean([rankdata(v)/n for v in results],axis=0)
+order=np.argsort(rank)[::-1]
+print('CONSENSUS',flush=True)
+for i in order[:40]: print(bcs[i],round(float(rank[i]),4),int(counts[i]),np.array(results)[:,i].round(3).tolist(),flush=True)
+PY"

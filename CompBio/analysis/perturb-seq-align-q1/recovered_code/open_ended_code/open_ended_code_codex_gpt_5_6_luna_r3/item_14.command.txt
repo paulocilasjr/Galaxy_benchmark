@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix
+
+def read(fn):
+ with h5py.File(fn,'r') as f:
+  shape=tuple(f['X'].attrs['shape'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=shape)
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['var/_index'][...]])
+  cats={}
+  for col0 in f['obs'].attrs['column-order']:
+   col=col0.decode() if isinstance(col0,bytes) else str(col0)
+   g=f['obs'][col]
+   cats[col]=[x.decode() if isinstance(x,bytes) else str(x) for x in g['categories'][...]]
+  guides=np.array([cats['guide'][i] for i in f['obs']['guide/codes'][...]],dtype=str)
+ return X,genes,guides
+for fn in ['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']:
+ print('\\n',fn,flush=True)
+ X,genes,groups=read(fn)
+ lib=np.asarray(X.sum(axis=1)).ravel()
+ geneidx={g:i for i,g in enumerate(genes)}
+ names=np.unique(groups)
+ targets=['PABPC1','NUDT21','LEO1']
+ vals={t:np.asarray(X[:,geneidx[t]].toarray()).ravel()*1e4/np.maximum(lib,1) for t in targets}
+ base={t:np.mean(vals[t][np.char.startswith(groups,'NT-')]) for t in targets}
+ for t in targets:
+  print('target',t,'base',round(base[t],3))
+  for g in names:
+   if not g.startswith('NT-'):
+    v=np.mean(vals[t][groups==g]); fc=np.log2((v+0.1)/(base[t]+0.1))
+    print(g,len(vals[t][groups==g]),round(v,3),round(float(fc),3))
+ del X
+PY"

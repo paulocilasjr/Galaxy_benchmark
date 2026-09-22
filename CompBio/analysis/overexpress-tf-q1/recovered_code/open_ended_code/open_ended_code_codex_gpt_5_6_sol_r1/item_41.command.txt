@@ -1,0 +1,26 @@
+/bin/bash -lc "PYTHONPATH=pydeps python3 - <<'PY'
+import json,numpy as np
+import MOODS.tools
+names=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']; ids=['MA0148.5','MA1100.3','MA0003.5','MA0002.3','MA0039.5','MA0680.3','MA0769.3','MA0138.3','MA0080.7','MA0037.5']; bg=MOODS.tools.flat_bg(4); mats=[]
+for mid in ids:
+ d=json.load(open('refs/'+mid+'.json')); mats.append(MOODS.tools.log_odds([[float(x) for x in d['pfm'][b]] for b in 'ACGT'],bg,.1))
+s=np.load('results/candidate_motif_scores.npy'); x=np.loadtxt('results/union_counts.tsv',usecols=(1,2,3,4)); lens=x[:,1]-x[:,0];r=x[:,2];p=x[:,3];n=len(r);lfc=np.log2((p+5)/(11257343+5*n))-np.log2((r+5)/(10141848+5*n));tot=r+p
+seq=[];chunks=[]
+for l in open('results/union_peaks.fa'):
+ if l[0]=='>':
+  if chunks:seq.append(''.join(chunks));chunks=[]
+ else:chunks.append(l.strip().upper())
+if chunks:seq.append(''.join(chunks))
+gc=np.array([(z.count('G')+z.count('C'))/len(z) for z in seq]); use=tot>=30; y=(lfc>2)&use; control=(lfc<=2)&use
+# strata: fine GC, peak length, total count; require both outcome types
+gb=np.clip((gc/.02).astype(int),0,49); lb=np.clip((np.log2(lens)-6).astype(int),0,7); cb=np.clip((np.log2(tot)-4).astype(int),0,12); strata=gb*1000+lb*20+cb
+for pv in [1e-3,1e-4,1e-5]:
+ print('p',pv)
+ for j,nm in enumerate(names):
+  cut=MOODS.tools.threshold_from_p(mats[j],bg,pv); hit=s[:,j]>=cut; num=den=0.; nstr=0
+  for st in np.unique(strata[use]):
+   z=(strata==st)&use; a=np.sum(z&y&hit); b=np.sum(z&y&~hit); c=np.sum(z&control&hit); d=np.sum(z&control&~hit); nt=a+b+c+d
+   if (a+b)>0 and (c+d)>0:
+    num += a*d/nt; den += b*c/nt; nstr+=1
+  print(nm,round(num/den,3),nstr)
+PY"

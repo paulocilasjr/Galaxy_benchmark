@@ -1,0 +1,27 @@
+/bin/bash -lc "cat > compute_cell_qc.py <<'PY'
+import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp, time
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+N=A.shape[0]
+sums=np.zeros(N,dtype=np.float32)
+ng=np.zeros(N,dtype=np.int32)
+chunk=5000
+for start in range(0,N,chunk):
+    X=A.X[start:start+chunk]
+    if sp.issparse(X):
+        sums[start:start+X.shape[0]]=np.asarray(X.sum(axis=1)).ravel()
+        ng[start:start+X.shape[0]]=np.asarray((X>0).sum(axis=1)).ravel()
+    else:
+        sums[start:start+len(X)]=X.sum(axis=1)
+        ng[start:start+len(X)]=(X>0).sum(axis=1)
+    if start%50000==0: print('chunk',start)
+np.savez_compressed('working_cell_qc.npz', sums=sums, ng=ng)
+print('done',N,sums[:5],ng[:5])
+# load original meta qc
+meta=pd.read_csv('seurat_meta.csv',low_memory=False)
+print('meta shape',meta.shape)
+# exact pair counts
+wpairs=set(zip(sums.astype(int),ng.astype(int)))
+opairs=set(zip(meta['nCount_RNA'].astype(int),meta['nFeature_RNA'].astype(int)))
+print('working unique pairs',len(wpairs),'orig unique pairs',len(opairs),'overlap',len(wpairs&opairs))
+PY
+python3 compute_cell_qc.py"

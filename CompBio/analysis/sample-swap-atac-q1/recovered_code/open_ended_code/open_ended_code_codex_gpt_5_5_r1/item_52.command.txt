@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reuse logic but produce individual gene scores for 50kb around TSS, choosing max z per gene across TSS windows instead of aggregate sum
+import pandas as pd, numpy as np, re, glob, bisect, collections
+path='sample.swap.atac.q1.tsv.gz'
+cols=pd.read_csv(path,sep='\\t',nrows=0).columns.tolist(); samples=cols[3:]
+lib=np.array([701506327,1168148790,484000505,565994637,1094125058,868549497,699794434,745602917,1147926115,398317869,877686879,1398702406,973845979,497829833,455786546],dtype=np.float64)
+# chunks
+sizes=[line.split() for line in open('sample.swap.atac.q1.chrom.sizes')]
+chrom_chunks=collections.defaultdict(list)
+for c,s in sizes: chrom_chunks[c.rsplit('_',1)[0]].append((c,int(s)))
+orig_chunks={}
+for base,lst in chrom_chunks.items():
+    off=0; orig_chunks[base]=[]
+    for c,s in lst:
+        orig_chunks[base].append((off,off+s,c)); off+=s
+
+def to_chunk(chrom,start,end):
+    for a,b,c in orig_chunks.get(chrom,[]):
+        st=max(start,a); en=min(end,b)
+        if st<en: yield c,st-a,en-a
+marker_list=['Upk1a','Upk1b','Upk2','Upk3a','Krt7','Krt8','Krt13','Foxa1','Krt5','Krt14','Tp63','Foxi1','Atp1a1','Cftr','Aqp3','Cldn10','Nkx3-1','Msmb','Hoxb13','Ar','Cdx2','Muc2','Muc5ac','Gkn1','Pgc','Atp4b','Epcam','Hnf1b','Krt19','Muc1','Sox17','Muc5b','Vil1','Fabp2','Alpi','Si','Krt20']
+key_to_gene={m.upper().replace('-','').replace('.',''):m for m in marker_list}
+records=[]
+for fn in glob.glob('*.primary.tsv'):
+    df=pd.read_csv(fn,sep='\\t')
+    if not {'name','txStart','txEnd'}.issubset(df.columns): continue
+    for _,r in df.iterrows():
+        for p in str(r['name']).split('|'):
+            nm=re.sub(r'\\s*\\[["'^'"\\]]+\\]','',p).strip()
+            key=nm.upper().replace('-','').replace('.','')
+            if key in key_to_gene:
+                gene=key_to_gene[key]
+                tss=int(r['txStart']) if r['strand']=='+' else int(r['txEnd'])
+                records.append((gene,str(r['chrom']),tss,str(r['strand']),str(r['name'])))
+# unique gene/chrom/tss
+seen=set(); rec=[]
+for x in records:
+    k=x[:3]
+    if k not in seen: seen.add(k); rec.append(x)
+print('rec',len(rec), 'genes', sorted({r[0] for r in rec}))
+for win in [10000,50000,100000]:
+    loc_ids=[]; intervals=collections.defaultdict(list)
+    for idx,(gene,chrom,tss,_,name) in enumerate(rec):
+        loc_ids.append((gene,chrom,tss,name))
+        for c,st,en in to_chunk(chrom,max(0,tss-win),tss+win): intervals[c].append((st,en,idx))
+    starts={}
+    for c,l in intervals.items(): l.sort(); starts[c]=[x[0] for x in l]
+    sums=np.zeros((len(loc_ids),len(samples))); nb=np.zeros(len(loc_ids),int)
+    for chunk in pd.read_csv(path,sep='\\t',chunksize=200000):
+        arr=chunk[samples].to_numpy(dtype=np.float64); ch=chunk['chrom'].to_numpy(); st=chunk['start'].to_numpy(); en=chunk['end'].to_numpy()
+        for i,(c,a,b) in enumerate(zip(ch,st,en)):
+            if c not in intervals: continue
+            l=intervals[c]; ss=starts[c]; j=bisect.bisect_left(ss,b)
+            for x,y,gid in l[:j]:
+                if y>a and x<b:
+                    sums[gid]+=arr[i]; nb[gid]+=1
+    log=np.log2(sums/lib*1e6+1); z=(log-log.mean(1,keepdims=True))/(log.std(1,keepdims=True)+1e-9)
+    # collapse gene by max specificity (max z per sample across loci? print all loci top)
+    print('\\nWIN',win)
+    for gene in marker_list:
+        idx=[i for i,(g,_,_,_) in enumerate(loc_ids) if g==gene and nb[i]>0]
+        if not idx: continue
+        # for each gene use location with largest max z
+        best=max(idx, key=lambda i: z[i].max())
+        order=np.argsort(-z[best])[:6]
+        print(f'{gene:8s}', loc_ids[best][1],loc_ids[best][2], 'top', ' '.join(f'{samples[j]}:{z[best,j]:.2f}' for j in order))
+PY"

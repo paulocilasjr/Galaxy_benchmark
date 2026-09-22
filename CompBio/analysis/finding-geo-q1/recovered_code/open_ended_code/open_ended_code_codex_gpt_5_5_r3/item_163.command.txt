@@ -1,0 +1,26 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+from urllib.request import urlopen
+from urllib.parse import urlencode
+import json, time, re, os
+query='(Mus musculus[Organism] OR mouse[All Fields]) AND (10x[All Fields] OR 10X[All Fields] OR Chromium[All Fields] OR \"Cell Ranger\"[All Fields]) AND (brain[All Fields] OR neuron[All Fields] OR neural[All Fields] OR embryo[All Fields] OR embryonic[All Fields] OR hypothalamus[All Fields] OR midbrain[All Fields]) AND gse[Entry Type]'
+base='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
+url=base+'esearch.fcgi?'+urlencode({'db':'gds','term':query,'retmax':1000,'retmode':'json'})
+data=json.load(urlopen(url)); ids=data['esearchresult']['idlist']; print('count',data['esearchresult']['count'],'got',len(ids))
+rows=[]
+for i in range(0,len(ids),100):
+    url=base+'esummary.fcgi?'+urlencode({'db':'gds','id':','.join(ids[i:i+100]),'retmode':'json'})
+    s=json.load(urlopen(url))['result']
+    for uid in s['uids']:
+        d=s[uid]
+        acc=d.get('accession','')
+        if not acc.startswith('GSE'): continue
+        rows.append({k:d.get(k,'') for k in ['accession','title','summary','taxon','suppfile','ftplink','n_samples','relations','pdat']})
+    time.sleep(0.15)
+print('rows',len(rows))
+for r in rows[:30]: print(r['accession'], r['taxon'], r['n_samples'], r['title'][:120], 'supp', str(r['suppfile'])[:100])
+import csv
+with open('geo_candidates_neural_10x.tsv','w',newline='') as f:
+    w=csv.DictWriter(f,fieldnames=rows[0].keys(),delimiter='\\t'); w.writeheader(); w.writerows(rows)
+PY"

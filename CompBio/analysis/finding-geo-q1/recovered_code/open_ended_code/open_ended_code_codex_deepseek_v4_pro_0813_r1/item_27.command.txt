@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+# raw H5 genes x barcodes
+with h5py.File('check125620/GSM3578982_raw_gene_bc_matrices_h5.h5','r') as f:
+    g=f['output_genome2']
+    raw_genes=[x.decode() for x in g['genes'][:]]
+    raw_bc=[x.decode() for x in g['barcodes'][:]]
+    raw_data=g['data'][:]; raw_idx=g['indices'][:]; raw_indptr=g['indptr'][:]
+    raw_nrows=len(raw_genes); raw_ncols=len(raw_bc)
+with h5py.File('finding.geo.q1.h5ad','r') as f:
+    h_obs=[x.decode() for x in f['obs/_index'][:]]
+    h_var=[x.decode() for x in f['var/_index'][:]]
+    X=csr_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]), shape=(f['X'].attrs['shape'][0], f['X'].attrs['shape'][1]))
+# mapping raw gene index to h5ad var index (var subset order same)
+gene_pos={g:i for i,g in enumerate(raw_genes)}
+var_indices=np.array([gene_pos[g] for g in h_var], dtype=np.int64)
+# raw column indices for h5ad barcodes
+bc_pos={b:i for i,b in enumerate(raw_bc)}
+col_indices=np.array([bc_pos[b] for b in h_obs], dtype=np.int64)
+# For each h5ad cell, sum raw data where raw gene in var
+# raw CSC or CSR? raw_indptr length nrows+1, indices gene? Let's inspect CellRanger old H5 format: data, indices, indptr shape genes x barcodes, so CSR rows=genes. Good.
+# We need raw[:, col] for columns, use CSC view.
+R=csr_matrix((raw_data, raw_idx, raw_indptr), shape=(raw_nrows, raw_ncols))
+Rsub=R[np.ix_(var_indices, col_indices)]
+# Rsub shape (28692, 20072) genes x cells, transpose for cell sums
+cell_sums=np.asarray(Rsub.sum(axis=0)).ravel() # sum genes per cell
+h_sums=np.asarray(X.sum(axis=1)).ravel()
+print(len(cell_sums), len(h_sums))
+print('first raw/h5', list(zip(cell_sums[:20], h_sums[:20])))
+print('max diff', np.max(np.abs(cell_sums-h_sums)))
+print('equal all', np.array_equal(cell_sums, h_sums))
+# check total nonzero and values maybe all equal
+# compare row counts of selected barcodes/gene nonzero
+PY"

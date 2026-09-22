@@ -1,0 +1,30 @@
+/bin/bash -lc 'set -e
+mkdir -p afgr_experiments
+while read e; do
+  curl -L -s "https://www.encodeproject.org/experiments/$e/?format=json" > "afgr_experiments/$e.json"
+done < afgr_atac_exp_accessions.txt
+python3 - <<'"'PY'
+import json, glob, re, pathlib
+rows=[]
+for fn in glob.glob('afgr_experiments/*.json'):
+    d=json.load(open(fn))
+    exp=d['accession']
+    summ=d.get('biosample_summary','')
+    # examples: Homo sapiens HG02763; Homo sapiens GM18907
+    sample=summ.split()[-1]
+    candidates=[sample]
+    if re.fullmatch(r'GM\\d+', sample):
+        candidates.append('NA'+sample[2:])
+    bams=[f for f in d.get('files',[]) if f.get('file_format')=='bam' and f.get('output_type')=='alignments' and f.get('assembly')=='GRCh38' and f.get('status')=='released']
+    if len(bams)"'!=1:
+        print('"'BAD_BAMS', exp, sample, [(f.get('accession'),f.get('output_type'),f.get('assembly'),f.get('status')) for f in d.get('files',[]) if f.get('file_format')=='bam'])
+    else:
+        rows.append((sample, candidates, exp, bams[0]['accession'], bams[0]['md5sum']))
+print('rows', len(rows))
+with open('afgr_atac_bams.tsv','w') as out:
+    out.write('display_sample\\tcandidate_ids\\texperiment\\tbam_accession\\tmd5sum\\n')
+    for r in sorted(rows):
+        out.write('\\t'.join([r[0], ','.join(r[1]), r[2], r[3], r[4]])+'\\n')
+PY
+wc -l afgr_atac_bams.tsv
+head -10 afgr_atac_bams.tsv"

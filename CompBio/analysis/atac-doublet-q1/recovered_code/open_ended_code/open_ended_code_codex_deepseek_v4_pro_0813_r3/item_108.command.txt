@@ -1,0 +1,51 @@
+/bin/bash -c "python3 - <<'PY'
+import snapatac2 as snap, numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.sparse import csr_matrix
+
+# load peak matrix
+adata=snap.read('atac_peaks_scrub.h5ad')
+X=adata.X[:].tocsr().astype(np.float32)
+X.data[:]=1 # binary peak
+names=np.array(adata.obs_names)
+# cluster labels from tile snap
+at=snap.read('atac.snap.h5ad')
+# align order? both imported sorted by barcode likely same. Verify names match
+names2=np.array(at.obs_names)
+if not np.array_equal(names,names2):
+    print('names differ, align')
+    idx=[np.where(names2==n)[0][0] for n in names]
+else:
+    idx=np.arange(len(names))
+leiden_raw=np.array(at.obs['leiden'])[idx]
+uniq,clusters=np.unique(leiden_raw,return_inverse=True)
+ncl=len(uniq)
+# cluster means
+means=[]
+for c in range(ncl):
+    m=X[clusters==c].mean(axis=0)
+    means.append(np.asarray(m).ravel())
+means=np.vstack(means)
+# cosine similarity of each cell to each cluster mean
+sim=np.zeros((X.shape[0],ncl),dtype=np.float32)
+# process chunks
+for i in range(X.shape[0]):
+    v=np.asarray(X[i].toarray()).ravel().astype(np.float32)
+    # cosine = dot/(||v|| ||mean||), but means not sparse
+    denom=np.linalg.norm(v)*np.linalg.norm(means,axis=1)
+    sim[i]= (means @ v)/denom
+# For each cell top2 and gap
+order=np.argsort(-sim,axis=1)
+top1=order[:,0]; top2=order[:,1]
+s1=sim[np.arange(len(sim)),top1]; s2=sim[np.arange(len(sim)),top2]
+score=s2/s1
+idx=np.argsort(-score)
+print('top cells by second/primary cluster similarity:')
+for i in idx[:60]:
+    print(names[i], 'cluster',uniq[clusters[i]], 'top',uniq[top1[i]],uniq[top2[i]], 'sim',s1[i],s2[i], 'ratio',score[i], 'leiden',leiden_raw[i])
+# Check specific candidates
+for b in ['GCGACACGCCGGGCAC-1','TTCGAGACGTAGAAAA-1','CGCACGCGTACTGCAG-1','CGAGCAATAGAGGTGG-1','GGCGACCTCTACGTAG-1']:
+    j=np.where(names==b)[0][0]
+    if j<len(names):
+        print('candidate',b,'cl',uniq[clusters[j]],'tops',[(uniq[order[j,k]],round(sim[j,order[j,k]],3)) for k in range(5)],'ratio',round(score[j],3))
+PY"

@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import permutation_test
+sc=pd.read_csv('extracted/spatial_q_sc_counts.csv',index_col=0);meta=pd.read_csv('extracted/spatial_q_sc_metadata.csv',index_col=0);sp=mmread('extracted/matrix.mtx.gz').tocsr().toarray().T;pos=pd.read_csv('extracted/tissue_positions.csv');types=sorted(meta.cell_type.unique())
+ref=meta.join(sc.div(sc.sum(1),axis=0)).groupby('cell_type')[sc.columns].mean().loc[types].T.values;ref/=ref.sum(0,keepdims=True);co=np.array([nnls(ref,x/sp.sum(1)[i] if False else x)[0] for i,x in enumerate(sp/sp.sum(1,keepdims=True))]);co/=co.sum(1,keepdims=True);n=np.rint(sp.sum(1)/sc.sum(1).mean()).astype(int);cnt=np.rint(co*n[:,None]).astype(int)
+xy=pos[['array_row','array_col']].values;D=cdist(xy,xy);tm=cnt[:,types.index('Tumor_Core')]>0; dt=D[:,tm].min(1)
+# randomized mean distance under random spots with same size n? for each type choose same number presence spots / cells count weighted
+rng=np.random.default_rng(0)
+print('tumor set',tm.sum(),'d all spots mean',dt.mean())
+for t in types:
+ j=types.index(t); m=cnt[:,j]>0; obs=dt[m].mean(); obs_w=np.average(dt,weights=cnt[:,j])
+ # permutation spot presence with same n
+ vals=[]; valsw=[]
+ for z in range(5000):
+  ix=rng.choice(900,size=m.sum(),replace=False);vals.append(dt[ix].mean())
+  # random weights by shuffle count vector? use type counts assign permuted
+  valsw.append(np.average(dt,weights=rng.permutation(cnt[:,j])))
+ vals=np.array(vals);valsw=np.array(valsw)
+ print(t,'presence n',m.sum(),'obs',obs,'null',vals.mean(),vals.std(),'p lower',(np.sum(vals<=obs)+1)/5001,'weighted obs',obs_w,'nullw',valsw.mean(),valsw.std(),'p',(np.sum(valsw<=obs_w)+1)/5001)
+# pairwise type distances: spots distribution of min d to tumor, normalized effect relative all non-tumor
+PY"

@@ -1,0 +1,63 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, glob, re, os
+# assemble feature matrix from earlier using logs and robustly standardize
+D={}
+with open('feature_counts.tsv') as f:
+ for line in f:
+  ann,file,n=line.split(); D[(ann,int(file))]=int(n)
+with open('ccre_counts.tsv') as f:
+ for line in f:
+  ann,file,n=line.split(); D[(ann,int(file))]=int(n)
+lengths={}
+for cat in ['PLS','pELS','dELS','CTCF_only','DNase_H3K4me3']:
+ lengths[cat]=sum(int(l.split('\\t')[2])-int(l.split('\\t')[1]) for l in open('ccre_'+cat+'_lex.bed'))
+genome=sum(int(line.split()[1]) for line in open('hg38.chrom.sizes') if not line.startswith('_'))
+keys=[]
+feat=[]
+for b in range(1,11):
+ row=[]
+ def add(name,val): keys.append(name); row.append(val)
+ add('log_gene_frac',np.log(D[('genes',b)]/1e7))
+ add('log_tss_frac',np.log(D[('tss',b)]/1e7))
+ add('log_exon_frac',np.log(D[('exons',b)]/1e7))
+ add('log_intron_frac',np.log(D[('introns',b)]/1e7))
+ add('log_tss_over_gene',np.log(D[('tss',b)]/D[('genes',b)]))
+ add('log_intron_over_gene',np.log(D[('introns',b)]/D[('genes',b)]))
+ for cat in ['PLS','pELS','dELS','CTCF_only','DNase_H3K4me3']:
+  add('log_enr_'+cat,np.log((D[(cat,b)]/lengths[cat])/(1e7/genome)))
+ # tss profile moments
+ a=np.loadtxt(f'tss_counts_{b}.bed',usecols=6,dtype=float).reshape(-1,100)
+ prof=a.mean(0); p=prof/prof.mean()
+ add('tss_peak',np.log(p[40:61].mean()))
+ add('tss_enrich',np.log(p[40:61].mean()/max(1e-9,(p[0:20].mean()+p[80:100].mean())/2)))
+ add('tss_width',np.log(np.sum(p>2)/100+1e-9))
+ # counts moments
+ c=np.loadtxt(f'counts10k_{b}.bed',usecols=3,dtype=float); q=c/c.sum()
+ add('bins_zero',np.log(np.mean(c==0)+1e-9))
+ add('bins_max',np.log(c.max()/c.sum()+1e-9))
+ add('bins_top1',np.log(np.sort(q)[::-1][:int(len(q)*0.01)].sum()+1e-9))
+ add('entropy',np.log(-np.sum(q[q>0]*np.log(q[q>0]))/np.log(len(q))+1e-9))
+ feat.append(row)
+X=np.array(feat); keys=np.array(keys)
+# standardize each column using median/MAD
+med=np.median(X,axis=0); mad=np.median(np.abs(X-med),axis=0); Z=(X-med)/(1.4826*mad+1e-9)
+# covariance robust
+C=np.cov(Z.T)
+# leave-one-out Mahalanobis to other centroid
+print('keys')
+for k in keys: print(k)
+print('\\nLOO mahalanobis:')
+for i in range(10):
+ mask=np.ones(10,bool); mask[i]=False
+ mu=Z[mask].mean(0)
+ C=np.cov(Z[mask].T)
+ inv=np.linalg.pinv(C)
+ d=(Z[i]-mu)@inv@(Z[i]-mu)
+ print(i+1,d)
+# print top feature zscores for extreme
+print('\\nfeature zscores')
+for i in range(10):
+ print('\\n',i+1)
+ idx=np.argsort(-np.abs(Z[i]))[:10]
+ for j in idx: print(keys[j],round(Z[i,j],2))
+PY"

@@ -1,0 +1,71 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import gzip, csv, math, os
+import numpy as np
+import pandas as pd
+from scipy.io import mmread
+from scipy import sparse, stats
+
+# Load feature names and barcodes
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        features.append(parts[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    for line in f:
+        barcodes.append(line.strip())
+
+X = mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc().astype(float) # genes x cells
+lib = np.asarray(X.sum(axis=0)).ravel()
+# normalize CPM-ish and log1p
+scale = np.divide(1e4, lib, out=np.zeros_like(lib), where=lib"'!=0)
+Xn = X @ sparse.diags(scale)
+Xlog = Xn.copy()
+Xlog.data = np.log1p(Xlog.data)
+
+fr = pd.read_csv('"'feature_reference.csv')
+calls = pd.read_csv('protospacer_calls_per_cell.csv')
+# align calls with barcode order
+calls = calls.set_index('cell_barcode').loc[barcodes].reset_index()
+meta = calls.merge(fr[['id','name','target_gene_name']], left_on='feature_call', right_on='id', how='left')
+print('cells', len(meta), 'features', len(features))
+print(meta['target_gene_name'].value_counts().head(15).to_string())
+
+# candidate IFNg genes: first 20 appear to be canonical IFN response genes
+sig20 = features[:20]
+# Hallmark IFNG response gene set subset commonly represented in expression list
+hallmark_ifng = '''ADAR APOL6 ARID5B ARL4A AUTS2 B2M BANK1 BATF2 BPGM BST2 BTG1 C1R C1S CASP1 CASP3 CASP4 CASP7 CASP8 CCL2 CCL5 CCL7 CD274 CD38 CD40 CD69 CD74 CD86 CDKN1A CIITA CMKLR1 CMPK2 CMTR1 CSF2RB CXCL10 CXCL11 CXCL9 DDX58 DHX58 EIF2AK2 EPSTI1 FAS FCGR1A FGL2 GBP4 GBP6 GCH1 GPR18 GZMA HELZ2 HERC6 HIF1A HLA-A HLA-B HLA-DMA HLA-DQA1 HLA-DRB1 HLA-G ICAM1 IDO1 IFI27 IFI30 IFI35 IFI44 IFI44L IFIH1 IFIT1 IFIT2 IFIT3 IFITM2 IFITM3 IFNAR2 IL10RA IL15 IL15RA IL18BP IL2RB IL4R IL6 IRF1 IRF2 IRF4 IRF5 IRF7 IRF8 IRF9 ISG15 ISG20 ISOC1 ITGB7 JAK2 KLRK1 LAP3 LATS2 LCP2 LGALS3BP LY6E LYSMD2 MT2A MX1 MX2 MYD88 NAMPT NCOA3 NFKB1 NFKBIA NLRC5 NMI NOD1 NUP93 OAS2 OAS3 OASL OGFR P2RY14 PARP12 PARP14 PARP9 PFKP PIM1 PLA2G4A PLSCR1 PNP PSMB10 PSMB2 PSMB8 PSMB9 PTPN1 PTPN2 PTPN6 RAPGEF6 RIPK1 RIPK2 RNF213 SAMD9L SAMHD1 SECTM1 SELP SERPING1 SLAMF7 SOCS1 SOCS3 SOD2 SP110 STAT1 STAT2 STAT3 STAT4 TAP1 TAPBP TNFAIP2 TNFAIP3 TNFAIP6 TNFSF10 TOR1B TRIM14 TRIM21 TRIM25 TRIM26 TXNIP UBE2L6 USP18 VAMP5 VAMP8 VCAM1 WARS1 XAF1 XCL1 ZBP1'''.split()
+feat_index={g:i for i,g in enumerate(features)}
+sig_h=[g for g in hallmark_ifng if g in feat_index]
+print('sig20', sig20)
+print('hallmark subset', len(sig_h), sig_h)
+
+for label,sig in [('first20',sig20),('hallmark_subset',sig_h),('first20_no_targetgenes',[g for g in sig20 if g not in set(fr.target_gene_name)])]:
+    idx=[feat_index[g] for g in sig]
+    scores=np.asarray(Xlog[idx,:].mean(axis=0)).ravel()
+    meta[label]=scores
+    nt=meta.target_gene_name.eq('Non-Targeting').values
+    nt_scores=scores[nt]
+    rows=[]
+    for guide,grp in meta.groupby('feature_call', sort=True):
+        m=grp.index.values
+        target=grp.target_gene_name.iloc[0]
+        vals=scores[m]
+        if target == 'Non-Targeting': continue
+        # effect: mean difference, z via pooled nt sd, mannwhitney p
+        diff=vals.mean()-nt_scores.mean()
+        fc=diff
+        z=diff/nt_scores.std(ddof=1)
+        try: p=stats.mannwhitneyu(vals, nt_scores, alternative='less').pvalue
+        except Exception: p=np.nan
+        rows.append((target,guide,len(vals),vals.mean(),diff,z,p,np.median(vals),np.quantile(vals,0.25),np.quantile(vals,0.75)))
+    res=pd.DataFrame(rows, columns='target guide n mean diff z p median q25 q75'.split()).sort_values(['diff'])
+    print('\\n==',label,'n_genes',len(sig),'NT mean',nt_scores.mean(),'sd',nt_scores.std(ddof=1),'==')
+    print(res.head(15).to_string(index=False, float_format=lambda x:f'{x:.4g}'))
+    res.to_csv(f'{label}_guide_effects.csv',index=False)
+
+# Expression changes for top target for individual signature genes
+PY"

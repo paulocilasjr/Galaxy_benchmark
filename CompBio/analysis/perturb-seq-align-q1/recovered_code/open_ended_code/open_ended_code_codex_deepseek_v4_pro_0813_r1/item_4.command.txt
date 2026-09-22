@@ -1,0 +1,80 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from scipy.stats import pearsonr, spearmanr
+
+def load(f):
+    with h5py.File(f,'r') as h:
+        X=sp.csr_matrix((h['X/data'][:], h['X/indices'][:], h['X/indptr'][:]), shape=(len(h['obs/_index']), len(h['var/_index'])))
+        guides=h['obs/guide/categories'][:].astype(str)
+        codes=h['obs/guide/codes'][:]
+        if 'obs/target_gene/categories' in h:
+            targets=h['obs/target_gene/categories'][:].astype(str)
+            tcodes=h['obs/target_gene/codes'][:]
+        else:
+            targets=None; tcodes=None
+    return X, guides, codes, targets, tcodes
+
+Xr, gr, cr, tr, tcr = load('perturb.seq.align.q1.ref.h5ad')
+Xq, gq, cq, tq, tcq = load('perturb.seq.align.q1.query.h5ad')
+
+def norm_log(X):
+    sums=np.asarray(X.sum(1)).ravel()
+    sums[sums==0]=1
+    return np.log1p(X.multiply(1/sums[:,None]*1e6).tocsr())
+
+Lr=norm_log(Xr).toarray()
+Lq=norm_log(Xq).toarray()
+# means by guide
+ur=[]
+for i,g in enumerate(gr):
+    m=Lr[cr==i].mean(0); ur.append(m)
+ur=np.array(ur)
+uq=[]
+for i,g in enumerate(gq):
+    m=Lq[cq==i].mean(0); uq.append(m)
+uq=np.array(uq)
+# ref NT means and query NT means
+ntr=np.where(np.char.startswith(gr,'NT-'))[0]; ntq=np.where(np.char.startswith(gq,'NT-'))[0]
+ref_ctrl=ur[ntr].mean(0); q_ctrl=uq[ntq].mean(0)
+# top variable genes based on ref control+pert expression maybe
+gene_mean=ur.mean(0); gene_var=ur.var(0)
+# choose genes with mean > 0.01? Actually log normalized; use var top 2000
+ngenes=2000
+top=np.argsort(gene_var)[::-1][:ngenes]
+# effect signatures centered
+Er=ur-ref_ctrl; Eq=uq-q_ctrl
+# normalize per gene? correlation
+for name, Ea, ga, ctrl, targets_list, tc in [
+    ('ref',Er,gr,ref_ctrl,tr,tcr),
+    ('query',Eq,gq,q_ctrl,tq,tcq)]:
+    pass
+# only perturb guides
+pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')]
+pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+print('perturb ref',len(pr),'perturb query',len(pq))
+# correlation of effect across top genes between each query guide and ref perturb target
+C=np.zeros((len(pq),len(pr)))
+Cabs=np.zeros_like(C)
+for ii,q in enumerate(pq):
+    for jj,r in enumerate(pr):
+        x=Eq[q,top]; y=Er[r,top]
+        C[ii,jj]=pearsonr(x,y)[0]
+# best ref for each query
+best=C.argmax(1)
+for ii,q in enumerate(pq):
+    j=best[ii]
+    print('query',gq[q], 'best_ref',gr[pr[j]], 'target',tr[tcr==pr[j]][0] if tr is not None else '?', 'corr',C[ii,j].round(3), 'top2', C[ii].argsort()[-3:][::-1])
+# also for desired targets, top query per target
+print('\\nDesired targets query ranking:')
+for target in ['PABPC1','NUDT21','LEO1']:
+    # ref index(s)
+    rinds=[pr[j] for j in range(len(pr)) if tr[tcr==pr[j]][0]==target]
+    print(target, rinds)
+    for ri in rinds:
+        scores=C[:,rinds.index(ri) if False else np.where(np.array(pr)==ri)[0][0]]
+        # recompute scores all query for this ri
+        scores=np.array([pearsonr(Eq[q,top],Er[ri,top])[0] for q in pq])
+        order=np.argsort(scores)[::-1][:10]
+        for k in order:
+            print(' ',gq[pq[k]], scores[k].round(3), gr[pr[k] if False else ri])
+PY"

@@ -1,0 +1,56 @@
+/bin/bash -c "cat > match_ann.py <<'PY'
+import numpy as np, pandas as pd
+annX=np.load('ann_X.npy')
+ann_var=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in np.load('ann_var.npy',allow_pickle=True)])
+ann_pid=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in np.load('ann_pid.npy',allow_pickle=True)])
+ann_dis=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in np.load('ann_disease.npy',allow_pickle=True)])
+PB=np.load('pb_dense.npy')
+donors=np.load('donor_names.npy',allow_pickle=True)
+genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy',allow_pickle=True)])
+# our gene names uppercase
+our_upper=np.array([g.upper() for g in genes])
+ann_upper=np.array([g.upper() for g in ann_var])
+common, our_idx, ann_idx = np.intersect1d(our_upper, ann_upper, return_indices=True)
+print('common genes',len(common))
+# our pseudobulk log
+lib=PB.sum(axis=0,keepdims=True)
+our_log=np.log2(PB/lib*1e6+1)
+our_sig=our_log[our_idx,:] # genes x donors
+ann_sig=annX[:,ann_idx] # cells x genes
+# patient mean signatures
+pids=np.unique(ann_pid)
+ann_mean=np.zeros((len(pids),len(common)))
+ann_disease=[]
+for i,p in enumerate(pids):
+    mask=ann_pid==p
+    ann_mean[i]=ann_sig[mask].mean(axis=0)
+    ann_disease.append(ann_dis[mask][0])
+ann_mean=ann_mean.T # genes x patients
+# zscore rows (genes) across samples for each matrix separately
+def zscore_rows(M):
+    return (M-M.mean(axis=1,keepdims=True))/(M.std(axis=1,keepdims=True)+1e-9)
+Zour=zscore_rows(our_sig)
+Zann=zscore_rows(ann_mean)
+# pearson corr donors x patients
+corr=Zour.T @ Zann / len(common)  # if z-scored across cols? Wait rows zscore, corr across genes = sum row products/n
+corr=corr
+print('corr shape',corr.shape)
+# top matches
+for j,d in enumerate(donors):
+    k=np.argmax(corr[j])
+    k2=np.argsort(corr[j])[::-1][:5]
+    print(d, 'top', [(pids[t], ann_disease[t], round(corr[j,t],3)) for t in k2])
+    print('  best', pids[k], ann_disease[k], corr[j,k])
+# summarize confusion of predicted disease using top match
+pred=[]
+for j,d in enumerate(donors):
+    k=np.argmax(corr[j]); pred.append(ann_disease[k])
+print('pred counts',pd.Series(pred).value_counts())
+print('healthy predicted ids', [int(d[5:]) for d,p in zip(donors,pred) if p=='healthy'])
+# for each annotated patient, top donor match
+for i,p in enumerate(pids):
+    j=np.argmax(corr[:,i])
+    if ann_disease[i]=='healthy':
+        print('ann healthy',p,'top donor',donors[j],corr[j,i])
+PY
+python match_ann.py"

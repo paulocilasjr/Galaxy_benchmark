@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np,pandas as pd,anndata as ad
+from sklearn.preprocessing import StandardScaler
+from sklearn.mixture import GaussianMixture
+from scipy.stats import zscore
+adata=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+names=np.array([x for x in adata.var['feature_name']])
+D=np.load('donor_sum.npz'); sums=D['sum']; cc=D['cell_counts']; cats=D['cats']
+lib=sums.sum(axis=0,keepdims=True); log=np.log1p(sums/lib*1e6)
+mu=log.mean(axis=1,keepdims=True); sd=log.std(axis=1,keepdims=True); sd[sd==0]=1
+Z=(log-mu)/sd
+def sc(genes):
+ idx=[]
+ for g in genes:
+  a=np.where(names==g)[0]
+  if len(a): idx.append(a[0])
+ return Z[np.array(idx)].mean(axis=0)
+signatures={
+'ISG_core':['ISG15','IFI27','IFI44L','IFIT1','IFIT3','MX1','OAS1','RSAD2','IFI6'],
+'ISG_broad':['ISG15','IFI27','IFI44L','IFIT1','IFIT3','MX1','OAS1','OAS2','OAS3','IFITM3','IRF7','STAT1','STAT2','RSAD2','IFI6','IFITM1','IFIT2','ISG20','BST2'],
+'inflam_mono':['S100A8','S100A9','S100A12','IL1B','CCL2','CXCL8','LYZ','VCAN'],
+'HLA_DR':['HLA-DRA','HLA-DRB1','HLA-DPA1','HLA-DPB1','CD74'],
+'T':['CD3D','CD3E','CD3G','IL7R','TRAC','CD2'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1','KLRB1','PRF1'],
+'B':['MS4A1','CD19','CD79A','CD79B','IGHG1','JCHAIN'],
+'naiveT':['CCR7','SELL','TCF7','LEF1','CD27','CD28'],
+'Plasmablast':['MZB1','XBP1','PRDM1','TNFRSF17','SDC1'],
+'Neutrophil':['FCGR3B','CEACAM8','CSF3R','ELANE','MPO'],
+'Megakaryocyte':['PPBP','PF4','GP9','ITGA2B'],
+}
+S={k:sc(v) for k,v in signatures.items()}
+S['lymph']=(S['T']+S['NK']+S['B'])/3
+S['covid_score']=S['ISG_broad']+0.8*S['inflam_mono']+0.6*S['Neutrophil']+0.4*S['Plasmablast']-S['lymph']-0.5*S['HLA_DR']
+df=pd.DataFrame(S,index=cats)
+# standardize manually? just print sorted
+print(df.sort_values('covid_score',ascending=False).round(3).to_string())
+# zscore composite and gmm
+val=df['covid_score'].values
+valz=(val-val.mean())/val.std()
+for comp in [2,3]:
+ g=GaussianMixture(n_components=comp,random_state=0,n_init=50).fit(valz.reshape(-1,1))
+ order=np.argsort(g.means_.ravel())
+ labs=g.predict(valz.reshape(-1,1))
+ print('\\nGMM',comp,'means',g.means_.ravel())
+ for rank,c in enumerate(order):
+  mem=sorted([int(x[5:]) for x in cats[labs==c]])
+  print(rank,mem)
+# hierarchical top/bottom 15
+print('\\nbottom 15')
+print(df.sort_values('covid_score').head(15).round(3).to_string())
+PY"

@@ -1,0 +1,45 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, spearmanr, pearsonr
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0).iloc[:,0]
+X=mmread('matrix.mtx.gz').toarray().T; pos=pd.read_csv('tissue_positions.csv')
+cts=sorted(meta.unique()); A=np.column_stack([sc.loc[meta.eq(c)].mean().values for c in cts]); co=np.rint(np.array([nnls(A,x)[0] for x in X])).astype(int)
+coords=pos[['array_row','array_col']].values
+T=co[:,cts.index('Tumor_Core')]>0
+d=cdist(coords,coords[T]).min(1)
+# exclude tumor spots distance to nearest OTHER tumor? irrelevant
+print('Tumor spots',T.sum(),'centroid',coords[T].mean(0),'rowrange',coords[T,0].min(),coords[T,0].max(),'colrange',coords[T,1].min(),coords[T,1].max())
+print('all d quantiles',np.quantile(d,[0,.25,.5,.75,.9,1]),'mean',d.mean())
+print('\\nType proximity summaries; presence incl overlaps')
+rng=np.random.default_rng(1)
+for j,c in enumerate(cts[:-1]):
+ P=co[:,j]>0; weights=co[:,j]
+ obs=d[P].mean(); rand=np.array([d[rng.choice(900,P.sum(),replace=False)].mean() for z in range(10000)])
+ # cell weighted null perm values
+ obsw=np.average(d,weights=weights)
+ randw=np.array([np.average(d,weights=rng.permutation(weights)) for z in range(10000)])
+ u=mannwhitneyu(d[P],d[~P],alternative='less')
+ print(f'{c:18s} spots={P.sum():3d} overlapT={np.sum(P&T):2d} meanD={obs:6.3f} rand={rand.mean():6.3f} z={(obs-rand.mean())/rand.std():6.2f} p={(np.sum(rand<=obs)+1)/10001:.5f} weighted={obsw:6.3f} wz={(obsw-randw.mean())/randw.std():6.2f} MWp={u.pvalue:.3g}')
+ print('  by d bins',[(q,int(P[d==q].sum()),int((d==q).sum()),round(P[d==q].mean(),3)) for q in np.unique(d)[:8]])
+# abundance proportions by distance values
+print('\\nMean prop by distance rounded bins')
+prop=co/co.sum(1,keepdims=True)
+for j,c in enumerate(cts):
+ print(c,[(b,round(prop[(d>=b)&(d<b+1),j].mean(),3),int(((d>=b)&(d<b+1)).sum())) for b in range(0,10)])
+# spatial adjacent cross counts: for radii; random perm abundance maps
+D=cdist(coords,coords)
+for rad in [1.01,1.5,2.01,3.01,5.01]:
+ W=(D>0)&(D<=rad)
+ targetNbr=(W[:,T].sum(1)>0) # any tumor spot nearby excludes same spot only
+ print('\\nradius',rad,'targetNbr spots',targetNbr.sum())
+ for j,c in enumerate(cts[:-1]):
+  P=co[:,j]>0
+  obs=np.mean(targetNbr[P])
+  rr=[]
+  for z in range(2000): rr.append(np.mean(targetNbr[rng.permutation(P)]))
+  rr=np.asarray(rr)
+  print(c,'rate',round(obs,3),'null',round(rr.mean(),3),'z',round((obs-rr.mean())/rr.std(),2),'p high',round((np.sum(rr>=obs)+1)/2001,4))
+PY"

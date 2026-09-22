@@ -1,0 +1,74 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, urllib.request, concurrent.futures, time
+base='https://www.ebi.ac.uk/gwas/rest/api'
+# get accessions
+with urllib.request.urlopen(f'{base}/studies/search/findByPublicationIdPubmedId?pubmedId=40593539&size=400', timeout=60) as r:
+    accs=[s['accessionId'] for s in json.load(r)['_embedded']['studies']]
+print('accs',len(accs), flush=True)
+# target positions set
+target_positions={(1,161530617),(1,161531006),(1,161540726),(1,161530615),(1,161595363),(1,161558222),(1,161533223),(1,161642443),(1,161513694),(1,161530922),(1,161540644),(1,161522877),(1,161522385),(1,161545536),(1,161523491),(1,161517662),(1,161515469),(1,161510859),(1,161537658),(4,3445429),(6,32067917),(17,16939677),(19,49525049)}
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=60) as r:
+        return json.load(r)
+
+def get_assocs(acc):
+    try:
+        d=fetch(f'{base}/studies/{acc}/associations?size=1000')
+        return acc,d.get('_embedded',{}).get('associations',[])
+    except Exception:
+        return acc,[]
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+    futs=[ex.submit(get_assocs,a) for a in accs]
+    pairs=[]
+    for fut in concurrent.futures.as_completed(futs):
+        acc,ass=fut.result()
+        if ass:
+            pairs.append((acc,ass))
+print('studies with assoc',len(pairs), flush=True)
+# collect unique snp names and assoc mapping
+snp_names=set()
+assoc_list=[]
+for acc,ass in pairs:
+    for x in ass:
+        for l in x.get('loci',[]):
+            for a in l.get('strongestRiskAlleles',[]):
+                name=a.get('riskAlleleName')
+                if name and name.startswith('rs'):
+                    # riskAlleleName like rs34562254-A, split
+                    rs=name.split('-')[0]
+                    snp_names.add(rs)
+                    assoc_list.append((acc,x.get('pvalue'),rs))
+print('unique rs',len(snp_names),'assoc entries',len(assoc_list), flush=True)
+
+def get_snp(rs):
+    try:
+        d=fetch(f'{base}/singleNucleotidePolymorphisms/{rs}')
+        locs=[]
+        for loc in d.get('locations',[]):
+            try:
+                locs.append((int(loc['chromosomeName']), int(loc['chromosomePosition'])))
+            except: pass
+        return rs,locs
+    except Exception:
+        return rs,[]
+
+snp_pos={}
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+    futs={ex.submit(get_snp,rs):rs for rs in snp_names}
+    for fut in concurrent.futures.as_completed(futs):
+        rs,locs=fut.result(); snp_pos[rs]=locs
+print('snp positions fetched',len(snp_pos), flush=True)
+for acc,p,rs in assoc_list:
+    for chrom,pos in snp_pos.get(rs,[]):
+        if (chrom,pos) in target_positions:
+            print('MATCH_POS',acc,p,rs,chrom,pos)
+        elif chrom==1 and 161400000 <= pos <= 161700000:
+            print('NEAR_CHR1',acc,p,rs,chrom,pos)
+        elif chrom==4 and 3300000 <= pos <= 3600000:
+            print('NEAR_CHR4',acc,p,rs,chrom,pos)
+        elif chrom==6 and 31000000 <= pos <= 33000000:
+            print('NEAR_CHR6',acc,p,rs,chrom,pos)
+        elif chrom==19 and 48000000 <= pos <= 50500000:
+            print('NEAR_CHR19',acc,p,rs,chrom,pos)
+PY"

@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io, numpy as np, pandas as pd, statsmodels.api as sm
+from scipy.sparse import csr_matrix
+mat=scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv'); g2g=dict(zip(ref.id,ref.target_gene_name))
+bc['pos']=np.arange(len(bc)); calls=calls.merge(bc,left_on='cell_barcode',right_on='barcode')
+totals=np.asarray(mat.sum(axis=0)).ravel(); path_counts=np.asarray(mat[:20,:].sum(axis=0)).ravel()
+calls['path_counts']=path_counts[calls.pos.values]; calls['total']=totals[calls.pos.values]
+# create factor target, with NT baseline
+calls['pert']=calls.feature_call.map(g2g)
+# For each gene target vs NT separately using NB? statsmodels GLM negative binomial maybe.
+import warnings; warnings.filterwarnings('ignore')
+rows=[]
+nt=calls[calls.pert=='Non-Targeting']
+for gene,grp in calls[calls.pert"'!='"'Non-Targeting'].groupby('pert'):
+    sub=pd.concat([nt,grp])
+    X=sm.add_constant((sub.pert==gene).astype(float))
+    # negative binomial GLM with log total offset
+    try:
+        mod=sm.GLM(sub.path_counts, X, family=sm.families.NegativeBinomial(), offset=np.log(sub.total))
+        res=mod.fit()
+        p=res.pvalues.iloc[1]
+        coef=res.params.iloc[1]
+        rows.append(dict(gene=gene,n=len(grp),coef=coef,p=p))
+    except Exception as e:
+        rows.append(dict(gene=gene,n=len(grp),coef=np.nan,p=np.nan,err=str(e)))
+res=pd.DataFrame(rows).sort_values('p')
+res['fdr']=sm.stats.multipletests(res.p, method='fdr_bh')[1]
+print(res.to_string(index=False))
+PY"

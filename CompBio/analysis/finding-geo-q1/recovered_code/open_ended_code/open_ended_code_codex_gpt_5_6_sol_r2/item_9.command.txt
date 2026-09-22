@@ -1,0 +1,24 @@
+/bin/bash -lc "python -u - <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+A=ad.read_h5ad('finding.geo.q1.h5ad'); X=A.X.tocsr(); sy=A.var.gene_symbols.astype(str).values
+cs=np.asarray(X.sum(1)).ravel(); keep=cs>=2000; X=X[keep].astype(float); cs=cs[keep]
+# CPM log
+X=sp.diags(1e4/cs)@X; X.data=np.log1p(X.data)
+# feature variance and exclude mito/ribo
+mean=np.asarray(X.mean(0)).ravel(); mean2=np.asarray(X.power(2).mean(0)).ravel(); var=mean2-mean**2
+ok=np.array([not (g.startswith(('Rpl','Rps','mt-')) or g in {'Malat1'}) for g in sy])
+sel=np.argsort(np.where(ok,var,-1))[-3000:]
+Z=TruncatedSVD(40,random_state=1).fit_transform(X[:,sel]); Z=Z[:,1:]
+lab=KMeans(18,random_state=1,n_init=20).fit_predict(Z)
+# specificity by average normalized log expression
+for k in range(18):
+ idx=lab==k; rest=~idx
+ av=np.asarray(X[idx].mean(0)).ravel(); rv=np.asarray(X[rest].mean(0)).ravel(); frac=np.asarray((X[idx]>0).mean(0)).ravel()
+ score=(av-rv)*np.minimum(1,frac/.25)
+ ii=np.argsort(np.where(ok,score,-99))[::-1][:25]
+ print('\\nCLUSTER',k,'n',idx.sum())
+ print(' '.join(f'{sy[i]}({av[i]:.2f},{frac[i]:.2f})' for i in ii))
+PY"

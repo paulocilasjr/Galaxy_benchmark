@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+z=np.load('donor_aggregate.npz',allow_pickle=True)
+S=z['sums']; donors=z['donor_names'].astype(str); genes=z['gene_names'].astype(str); cells=z['donor_cells']; umis=z['donor_umis']
+# duplicate names report
+from collections import Counter
+ct=Counter(genes)
+print('donors/cells/umis')
+for d,n,u in zip(donors,cells,umis): print(f'{d:8s} {n:6d} {u:12.0f}')
+# map name aggregate (sum duplicate columns)
+def vals(names):
+ ix=[]
+ for n in names:
+  ix.extend(np.where(genes==n)[0].tolist())
+ return S[:,ix].sum(1) if ix else np.zeros(len(donors))
+# normalized counts per cell (total UMIs donor)
+CPM=S/(umis[:,None])*1e6
+panels={
+'IFN':['ISG15','IFIT1','IFIT2','IFIT3','IFI6','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI44','IFI44L','RSAD2','IRF7','STAT1','IFITM1','IFITM2','IFITM3','DDX58','IFIH1','USP18','SAMD9L','BST2','EPSTI1','RTP4','XAF1','IFIT5','PARP9','CMPK2'],
+'inflam':['S100A8','S100A9','LYZ','FCGR3A','MS4A7','LGALS3','CTSD','LILRB1','IFITM3','HLA-DRA','HLA-DPA1','HLA-DPB1','TYMP','CTSS'],
+'lymph':['CD3D','CD3E','IL7R','LTB','TRBC1','TRBC2','MALAT1','NKG7','GNLY','CCL5','GZMB','GZMH','MS4A1','CD79A','CD37'],
+'eryth':['HBB','HBA1','HBA2','HBD','ALAS2']}
+for p,gs in panels.items():
+ scores=[]
+ for d in range(len(donors)):
+  gix=[]
+  for g in gs: gix.extend(np.where(genes==g)[0].tolist())
+  # mean log1p normalized expr among genes present
+  scores.append(np.log1p(CPM[:,gix]).mean(1) if gix else np.zeros(len(donors)))
+ scores=np.array(scores).T
+ print('\\nPANEL',p)
+ order=np.argsort(scores[:,0])
+ for i in order: print(f'{donors[i]:8s}', ' '.join(f'{scores[i,j]:6.3f}' for j in range(scores.shape[1])), 'umis/cell',umis[i]/cells[i])
+# individual selected values sorted ISG15+IFIT1 etc
+sel=['ISG15','IFIT1','IFIT2','IFIT3','IFI6','MX1','OAS1','OAS2','OAS3','IFI44L','RSAD2','S100A8','S100A9']
+gix=[np.where(genes==g)[0][0] if np.any(genes==g) else None for g in sel]
+print('\\nSelected CPM, each donor')
+for i in np.argsort(CPM[:,gix].mean(1)):
+ print(donors[i], ' '.join(f'{CPM[i,j]:.1f}' if j is not None else 'NA' for j in gix), 'mean',np.nanmean([CPM[i,j] if j is not None else np.nan for j in gix]))
+PY"

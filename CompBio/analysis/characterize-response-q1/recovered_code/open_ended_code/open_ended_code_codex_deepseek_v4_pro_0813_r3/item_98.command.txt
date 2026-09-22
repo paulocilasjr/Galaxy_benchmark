@@ -1,0 +1,76 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, mygene, os, re, json
+mg=mygene.MyGeneInfo()
+query=[g.strip() for g in open('characterize.response.q1.txt')]
+qset=set(g.upper() for g in query)
+
+def parse_series(path):
+ lines=open(path).read().splitlines()
+ for i,l in enumerate(lines):
+  if l.startswith('"'!series_matrix_table_begin'"'): start=i+1
+  if l.startswith('"'!series_matrix_table_end'"'): end=i
+ header=lines[start].split('\\t'); data=[l.split('\\t') for l in lines[start+1:end]]
+ sample_line=None
+ for l in lines:
+  if l.startswith('"'!Sample_title'"'): sample_line=l.split('\\t'); break
+ titles=[s.strip('\"') for s in sample_line[1:]]
+ geo=None
+ for l in lines:
+  if l.startswith('"'!Sample_geo_accession'"'): geo=l.split('\\t')[1:]; break
+ return header,data,titles,geo
+def compute(path, groupdefs, platform=None):
+ header,data,titles,geo=parse_series(path)
+ # columns correspond to header[1:]
+ cols=header[1:]
+ idx={c.strip('\"'):j for j,c in enumerate(header)}
+ # data rows have id + values
+ rows=[]
+ for row in data:
+  probe=row[0].strip('\"')
+  try: vals=np.array([float(x) for x in row[1:]])
+  except: continue
+  rows.append((probe,vals))
+ # map probes to symbols
+ probes=[r[0] for r in rows]
+ res=mg.querymany(probes, scopes='reporter', species='mouse', fields='symbol', returnall=True, verbose=False)
+ sym={o['query']:o.get('symbol') for o in res['out'] if o.get('symbol')}
+ # build sample index by title patterns
+ def group_indices(patterns):
+  inds=[]
+  for pat in patterns:
+   inds += [i for i,t in enumerate(titles) if re.search(pat,t,re.I)]
+  return sorted(set(inds))
+ results={}
+ for name,(patA,patB) in groupdefs.items():
+  ia=group_indices(patA); ib=group_indices(patB)
+  if not ia or not ib:
+   print(name,'missing',ia,ib); continue
+  lf=[]
+  for probe,vals in rows:
+   a=vals[ia].mean(); b=vals[ib].mean(); lf.append(np.log2((b+1)/(a+1)))
+  lf=np.array(lf)
+  order=np.argsort(-np.abs(lf))
+  # top 200 symbols unique
+  top=[]
+  seen=set()
+  for i in order:
+   s=sym.get(probes[i])
+   if s and s.upper() not in seen:
+    seen.add(s.upper()); top.append(s)
+    if len(top)>=250: break
+  inter=[g for g in top if g.upper() in qset]
+  # rank correlation for overlapping query positions
+  print('\\n###',path,name,'A',patA,'B',patB,'nA',len(ia),'nB',len(ib),'overlap top250',len(inter))
+  print('top50:', ','.join(top[:50]))
+  print('query overlap order:',','.join(inter[:60]))
+  # overlap in top 112
+  print('overlap top112:',len([g for g in top[:112] if g.upper() in qset]))
+
+# GSE17721 control vs LPS each time
+path='GSE17721.txt'
+# patterns: Control, X_hours; LPS, X_hours
+for t in ['0.5','1','2','4','6','8','12','16','24']:
+ # controls with same time exist for 0,2,4,6,12 only; for others use all controls
+ ctrl=[rf'Control, {re.escape(t)}_hours'] if t in ['0','2','4','6','12'] else [r'Control,']
+ compute(path, {f'LPS_{t}h_vs_ctrl':(ctrl,[rf'Lps, {re.escape(t)}_hours'])})
+PY"

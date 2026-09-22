@@ -1,0 +1,92 @@
+/bin/bash -lc "cat > pwm_score.py <<'PY'
+import gzip, math
+import pysam
+fasta=pysam.FastaFile('hg38.fa')
+
+# Build standard PFMs
+NSTD=200000
+step=40
+counts_start=[[0]*4 for _ in range(21)]
+counts_end=[[0]*4 for _ in range(21)]
+n=0; lines=0
+with gzip.open('std_part.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        lines+=1
+        if (lines-1)%step"'!=0: continue
+        p=line.rstrip().split('"'\\t')
+        if len(p)<3: continue
+        ch=p[0]; s=int(p[1]); e=int(p[2])
+        try:
+            seq=fasta.fetch(ch,s-10,s+11).upper()
+            seqe=fasta.fetch(ch,e-1-10,e-1+11).upper()
+        except:
+            continue
+        if len(seq)"'!=21 or len(seqe)!=21: continue
+        bd={'"'A':0,'C':1,'G':2,'T':3}
+        for j,b in enumerate(seq):
+            if b in bd: counts_start[j][bd[b]]+=1
+        for j,b in enumerate(seqe):
+            if b in bd: counts_end[j][bd[b]]+=1
+        n+=1
+        if n>=NSTD: break
+print('std n',n,flush=True)
+# total bg from all standard
+tot=[0]*4
+for mat in [counts_start,counts_end]:
+ for pos in mat:
+  for i in range(4): tot[i]+=pos[i]
+Ntot=sum(tot)
+bg=[(x+1)/(Ntot+4) for x in tot]
+print('bg',bg,flush=True)
+
+def make_pwm(counts):
+    pwm=[]
+    for pos in counts:
+        n=sum(pos)
+        pwm.append([math.log2(((pos[i]+0.01)/(n+0.04))/bg[i]) for i in range(4)])
+    return pwm
+pwm_start=make_pwm(counts_start)
+pwm_end=make_pwm(counts_end)
+# print top consensus maybe
+for name,pwm in [('start',pwm_start),('end',pwm_end)]:
+    cons=''.join('ACGT'[max(range(4),key=lambda i:pwm[j][i])] for j in range(21))
+    print(name,'cons',cons,flush=True)
+
+def extract(ch,c,flank=45):
+    lo=c-flank; hi=c+flank+1
+    if lo<0:return None
+    try:s=fasta.fetch(ch,lo,hi).upper()
+    except:return None
+    return s if len(s)==2*flank+1 else None
+
+def score_pos(pos_type, dmin=-20,dmax=20):
+    pwm=pwm_start if pos_type=='start' else pwm_end
+    sums=[0.0]*(dmax-dmin+1)
+    cnts=[0]*(dmax-dmin+1)
+    with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+        for line in f:
+            p=line.rstrip().split('\\t'); ch=p[0]; s=int(p[1]); e=int(p[2])
+            c=s if pos_type=='start' else e-1
+            seq=extract(ch,c)
+            if seq is None: continue
+            ci=45
+            for di,d in enumerate(range(dmin,dmax+1)):
+                center=ci-d; lo=center-10; hi=lo+21
+                if lo<0 or hi>len(seq): continue
+                sc=0.0
+                for j,b in enumerate(seq[lo:hi]):
+                    idx='ACGT'.find(b)
+                    if idx>=0:
+                        sc += pwm[j][idx]
+                sums[di]+=sc
+                cnts[di]+=1
+    avg=[sums[i]/cnts[i] if cnts[i] else -999 for i in range(len(sums))]
+    return list(zip(range(dmin,dmax+1),avg,cnts))
+for pos in ['start','end']:
+    vals=score_pos(pos)
+    print('\\nSCORES',pos)
+    for d,a,c in sorted(vals,key=lambda x:x[1],reverse=True)[:20]:
+        print(d,round(a,4),c)
+PY
+python3 pwm_score.py"

@@ -1,0 +1,31 @@
+/bin/bash -lc "cat > verify_junction.py <<'PY'
+import gzip,pysam,collections
+refs={};name=None
+with gzip.open('gencode.v48.transcripts.fa.gz','rt') as f:
+ for l in f:
+  if l.startswith('>'):
+   name=l[1:].strip();keep=name.split('|')[5] in ['GAPDH','SOX2']
+   if keep: refs[name]=''
+  elif keep:refs[name]+=l.strip()
+with open('candidate_transcripts.fa','w') as f:
+ for n,s in refs.items():f.write('>'+n+'\\n'+s+'\\n')
+count=0
+with open('junction_evidence.tsv','w') as out:
+ for fn in ['r1.sam','r2.sam']:
+  with pysam.AlignmentFile(fn) as f:
+   for a in f:
+    if a.is_unmapped or a.is_secondary or a.is_supplementary:continue
+    if a.reference_name.split('|')[5]"'!='"'SOX2' or a.reference_start"'!=1006:continue
+    if a.cigartuples[0][0]!=4 or a.cigartuples[0][1]<15:continue
+    clip=a.cigartuples[0][1];prefix=a.query_sequence[:clip]
+    matches=[]
+    for n,s in refs.items():
+     if n.split('"'|')[5]=='GAPDH' and prefix in s:
+      pos=s.index(prefix);matches.append((n.split('|')[0],pos,pos+clip))
+    if matches:
+     count+=1
+     line=(fn,a.query_name,a.cigarstring,prefix+'|'+a.query_sequence[clip:],matches)
+     print(line);out.write(str(line)+'\\n')
+print('Perfect GAPDH prefixes adjoining SOX2 position 1006:',count)
+PY
+python3 verify_junction.py"

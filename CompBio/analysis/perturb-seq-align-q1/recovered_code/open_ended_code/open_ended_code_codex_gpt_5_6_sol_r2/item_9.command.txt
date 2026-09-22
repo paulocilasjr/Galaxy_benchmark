@@ -1,0 +1,16 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad,numpy as np
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+r=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad');q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+g=r.var_names.intersection(q.var_names);R=r.X[:,r.var_names.get_indexer(g)].tocsr().astype(float);Q=q.X[:,q.var_names.get_indexer(g)].tocsr().astype(float)
+def nl(X):
+ z=np.asarray(X.sum(1)).ravel();X=sparse.diags(1e4/np.maximum(z,1))@X;X.data=np.log1p(X.data);return X
+R=nl(R);Q=nl(Q)
+def sig(X,o):
+ gs=[x for x in o.guide.cat.categories if not x.startswith('NT')];c=np.flatnonzero(o.guide.astype(str).str.startswith('NT').to_numpy());cm=np.asarray(X[c].mean(0)).ravel();return gs,np.vstack([np.asarray(X[np.flatnonzero((o.guide==x).to_numpy())].mean(0)).ravel()-cm for x in gs])
+rg,A=sig(R,r.obs);qg,B=sig(Q,q.obs);m=(np.asarray(R.mean(0)).ravel()>.02)&(np.asarray(Q.mean(0)).ravel()>.02);A=A[:,m];B=B[:,m];A-=A.mean(1)[:,None];B-=B.mean(1)[:,None];A/=np.linalg.norm(A,axis=1)[:,None];B/=np.linalg.norm(B,axis=1)[:,None];C=A@B.T
+rr,cc=linear_sum_assignment(-C);ass={rg[i]:(qg[j],C[i,j]) for i,j in zip(rr,cc)}
+for i,x in enumerate(rg):
+ j=np.argmax(C[i]); h=ass.get(x,('UNASSIGNED',np.nan));print(f'{x:12s} direct={qg[j]:8s} {C[i,j]:.3f}  global={h[0]:8s} {h[1]:.3f}')
+PY"

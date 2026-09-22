@@ -1,0 +1,21 @@
+/bin/bash -lc "python3 -u - <<'PY'
+from doublet_scan import load_fragments
+import numpy as np, gc, time
+for bs,mode in [(5000,'mid'),(2000,'mid'),(1000,'start')]:
+ print('loading',bs,mode,flush=True);x,b,n=load_fragments('atac.doublet.q1.bed.gz',bs,mode)
+ S=np.asarray((x@x.T).toarray(),dtype=np.float32);np.fill_diagonal(S,-1)
+ N=len(b);p,q=np.triu_indices(N,1); pd=S[p,q]; den=np.sqrt(np.maximum(2+2*pd,1e-5))
+ print('sim q',np.quantile(S,[0,.01,.5,.99,1]),'pair q',np.quantile(pd,[0,.1,.5,.9,1]),flush=True)
+ out=[]
+ for threshold in [None,np.quantile(pd,.5),np.quantile(pd,.1)]:
+  valid=np.ones(len(p),bool) if threshold is None else pd<=threshold
+  fit=np.full(N,-1.,np.float32); pp=np.zeros((N,2),np.int32)
+  for i in range(N):
+   z=(S[i,p]+S[i,q])/den
+   z[~valid]=-2
+   z[(p==i)|(q==i)]=-2
+   j=z.argmax();fit[i]=z[j];pp[i]=[p[j],q[j]]
+  print('threshold',threshold,'fit q',np.quantile(fit,[0,.01,.5,.99,1]),'top',flush=True)
+  for i in np.argsort(fit)[-20:][::-1]:print(round(float(fit[i]),5),b[i],b[pp[i,0]],b[pp[i,1]],'single',round(float(max(S[i])),5),'pairdot',round(float(S[pp[i,0],pp[i,1]]),5),'count?',flush=True)
+ del x,S,p,q,pd,den;gc.collect()
+PY"

@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re
+g=pd.read_csv('gene_pseudobulk.tsv',sep='\\t',index_col=0)
+cols=g.columns.tolist()
+log=np.log1p(g)
+# marker sets, gene names in matrix (uppercase or regex)
+marker_sets={
+'endoderm':['FOXA2','FOXA1','HHEX','GATA4','GATA5','GATA6','NKX2-2','PDX1','CDX4','SOX17','HNF4A'],
+'endostyle_csg':['NKX2-1','FOXE1','PAX9','SIX1','EYA4','TBX1','FOXQ1','TPO','RSPO2','FOXL1'],
+'epidermal_neural':['DLX1','PAX2','ZIC1','WNT3','HOXB6','TMPRSS5','SIX3','SOX2','FOXQ2'],
+'epidermis':['KRT13','KRT75','KRT84','FOXJ1','TP63','SHH','DSP','COL17A1','SPINT1'],
+'mesodermal_notochord':['T','FOXA2','COL1A2','SHH','CHRD','SOX9','NOG','TGFB2','PTPRQ','LOXL1'],
+'muscular_somites':['MYOD1','MYF5','MYL1','ACTC1','MYH7','CKM','MEOX2','NEXN','MYLK','TNNI2'],
+'neural':['ELAVL4','SOX2','TUBB2B','NEUROD4','CHAT','SLC32A1','OLIG3','CELF3','NCAM1','PRDM8'],
+'neural_like':['ASCL1','PRDM12','POU4F3','NTRK2','SYT2','LHFPL4','SHH','ELAVL4','SOX14','POU4F3'],
+'putative_neuro_endo':['PAX2','CDX4','HOXB6','EVX1','OLIG3','TBX6','TBX16','SOX2','WNT3','MSGN1'],
+'somite':['ALX4','TCF21','PODN','FOXF1','WNT5A','NEUROD4','FOXG1','EN2','FERD3L','RIPPLY2'],
+'tailbud':['WNT1','FGF17','T','OTP','EMX2','ZSCAN22','MAP3K10','EVX2','CDX1','CDX4'],
+'tailbud_neural':['ELAVL4','SOX2','PAX2','CDX4','HOXB6','WNT3','EVX2','ZIC1','NEUROD4','TUBB2B'],
+}
+# For each set, score each column as mean of z-scored or log expression; use robust scaled log per gene across columns then mean
+scores=pd.DataFrame(index=marker_sets.keys(), columns=cols)
+for ct, ms in marker_sets.items():
+    # find genes present, choose exact case-insensitive; for slash etc handle later
+    genes=[]
+    for m in ms:
+        hits=[x for x in g.index if x.upper()==m.upper()]
+        if not hits:
+            pat=re.compile('"'^'"'+re.escape(m), re.I)
+            hits=[x for x in g.index if pat.search(x)]
+        genes += hits[:2]
+    genes=list(dict.fromkeys(genes))
+    print('\\n',ct,'genes',len(genes),genes[:20])
+    if not genes: continue
+    sub=log.loc[genes]
+    # zscore each gene across columns
+    z=sub.sub(sub.mean(axis=1),axis=0).div(sub.std(axis=1)+1e-9,axis=0)
+    # mean zscore (negative genes hurt)
+    scores.loc[ct]=z.mean(axis=0)
+print('\\nScores (rows true labels, cols predicted)')
+print(scores.round(2).to_string())
+print('\\nBest predicted per column')
+for c in cols:
+    print(c, scores[c].idxmax(), scores[c].max().round(2))
+print('\\nFor each label, best column')
+for ct in marker_sets:
+    print(ct, scores.loc[ct].idxmax(), scores.loc[ct].max().round(2))
+PY"

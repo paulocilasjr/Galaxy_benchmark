@@ -1,0 +1,35 @@
+/bin/bash -lc "cat > retrieve.py <<'PY'
+import urllib.request,urllib.parse,json,concurrent.futures,time
+from pathlib import Path
+
+def get(url,path):
+ p=Path(path)
+ if p.exists(): return json.loads(p.read_text())
+ for i in range(4):
+  try:
+   with urllib.request.urlopen(url,timeout=60) as r: b=r.read()
+   x=json.loads(b); p.write_bytes(b); return x
+  except Exception as e:
+   print(path,e,flush=True); time.sleep(2+i)
+ raise RuntimeError(url)
+
+def ensembl(s,h):
+ x=get('https://rest.ensembl.org/lookup/id/'+h['target']['id']+'?expand=1;content-type=application/json',s+'_gene.json')
+ ts=[t for t in x['Transcript'] if 'Translation' in t]
+ t=max(ts,key=lambda t:(t.get('is_canonical',0),t['Translation']['length']))
+ print(s,x['id'],t['id'],t['Translation'],t['Exon'],flush=True)
+ for typ in ['cds','cdna']:
+  get('https://rest.ensembl.org/sequence/id/'+t['id']+'?type='+typ+';content-type=application/json',s+'_'+typ+'.json')
+ return s
+if __name__=='__main__':
+ spp=['pan_troglodytes','macaca_mulatta','pan_paniscus','ailuropoda_melanoleuca','delphinapterus_leucas']
+ hs=json.load(open('shh_orthologues.json'))['data'][0]['homologies']
+ with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+  for f in concurrent.futures.as_completed([pool.submit(ensembl,s,next(h for h in hs if h['target']['species']==s)) for s in spp]): print(f.result())
+ get('https://rest.ensembl.org/sequence/id/ENST00000297261?type=cds;content-type=application/json','human_cds.json')
+ for s in ['Indri indri','Semnopithecus johnii']:
+  q=urllib.parse.urlencode({'db':'gene','term':s+'[Organism] AND SHH[Gene Name]','retmode':'json'})
+  x=get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?'+q,s.replace(' ','_')+'_search.json')
+  print(s,x,flush=True);time.sleep(1)
+PY
+python retrieve.py"

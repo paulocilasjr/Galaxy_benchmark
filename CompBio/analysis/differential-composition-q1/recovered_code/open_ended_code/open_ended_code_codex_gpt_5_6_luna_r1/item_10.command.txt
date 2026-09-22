@@ -1,0 +1,51 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy.sparse import csr_matrix
+pfx='differential.composition.q1.'
+genes=[]
+with gzip.open(pfx+'genes.txt.gz','rt') as f:
+ next(f)
+ for line in f:
+  z=line.rstrip('\\n').split('\\t')
+  genes.append(z[1] if len(z)>1 else z[0])
+print('genes',len(genes),flush=True)
+name_to_i={g.upper():i for i,g in enumerate(genes)}
+X=[]
+for k in ['1','2']:
+ x=mmread(pfx+k+'.mtx.gz').tocsr().astype(np.float32)
+ X.append(x)
+ print(k,x.shape,x.nnz,'counts',float(x.sum()),'cells median',np.median(np.asarray(x.sum(0)).ravel()),'genes median',np.median(np.asarray((x>0).sum(0)).ravel()),flush=True)
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','GJA1','CLDN11','VIM','S100B','CLU','SOX9'],
+'microglial cell':['C1QA','C1QB','C1QC','AIF1','CX3CR1','P2RY12','TMEM119','TYROBP','LST1','CSF1R','CTSS','FCER1G'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MLANA','MERTK','RDH5','RAX','MITF','SERPINF1','CST3'],
+'cone cell':['OPN1SW','OPN1MW','OPN1LW','ARR3','GNAT2','PDE6H','THRB','GNB3','RXRG','GUCA1C','PROM1'],
+'rod cell':['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','ROM1','GPR179','CNGB1','RCVRN'],
+'horizontal cell':['LHX1','LHX2','ONECUT1','CALB1','SLC6A9','GAD1','GAD2','PROX1','PDE1A'],
+'bipolar cell':['VSX2','GRM6','CABP5','PRKCA','PCP4','PVALB','GNG13','TRPM1','VSX1','KCNV2','CACNA1F'],
+'RGC':['RBPMS','SNCG','NEFL','NEFM','THY1','POU4F1','POU4F2','ISL1','GAP43','TUBB3','NCAM1'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','CD247','IL7R','LTB','MALAT1','CCL5','LST1'],
+'macrophage':['LGMN','CD68','CTSB','FCER1G','TYROBP','LST1','AIF1','MS4A7','CTSD','CSTA','C1QC'],
+'Schwann cell':['S100B','SOX10','MPZ','PLP1','GFAP','MBP','PMP22','ERBB3','MAG','NCAM1','MOBP'],
+'Pericyte':['RGS5','CSPG4','PDGFRB','MCAM','COL4A1','NOTCH3','ABCC9','KCNJ8','ACTA2','RBP1'],
+'B cell':['CD79A','MS4A1','CD37','HLA-DRA','CD74','CD79B','CD19','CD83','CD22','CD52'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','COL6A2','COL6A3','COL5A1','PDGFRA'],
+'endothelial cell':['EMCN','KDR','ESAM','PECAM1','VWF','RAMP2','PLVAP','ENG','CLDN5','FLT1','KDR','ECSCR'],
+'muller glia cell':['SLC1A3','RLBP1','GLUL','KCNJ10','AQP4','VIM','SOX9','RAX','CLU','DIO2','SLC1A2','MIOP']
+}
+# unique recognized marker indices; calculate any marker positive and sum marker counts, normalized by library size maybe
+lib=[np.asarray(x.sum(0)).ravel() for x in X]
+for typ,ms in markers.items():
+ inds=[name_to_i[m] for m in ms if m in name_to_i]
+ if not inds:
+  print('\\n',typ,'NO MARKERS')
+  continue
+ print('\\n'+typ, 'recognized',[(genes[i],i) for i in inds])
+ for k,x in enumerate(X):
+  sub=x[inds,:]
+  pos=np.asarray((sub>0).sum(0)).ravel()
+  total=np.asarray(sub.sum(0)).ravel()
+  # score mean fraction etc among all and positive
+  print(' sample',k+1,'any %.3f'%np.mean(pos>0),'>=2 %.3f'%np.mean(pos>=2),'markerUMI %.3f'%np.mean(total),'positive median %.2f'% (np.median(total[total>0]) if np.any(total>0) else 0),'norm median %.5g'%np.median(total/(lib[k]+1)*1e4))
+PY"

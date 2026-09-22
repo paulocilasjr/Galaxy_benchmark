@@ -1,0 +1,58 @@
+/bin/bash -lc "cat > download_refs.py <<'PY'
+import json, os, sys, time, requests, concurrent.futures
+url='https://ftp.ncbi.nlm.nih.gov/geo/series/GSE196nnn/GSE196235/suppl/GSE196235_RAW.tar'
+files=json.load(open('tar_index.json'))
+want_names=[
+'GSM5866073_AIIamacrine_frags.tsv.gz',
+'GSM5866073_Astrocyte_frags.tsv.gz',
+'GSM5866073_Cone_frags.tsv.gz',
+'GSM5866073_GABAamacrine_frags.tsv.gz',
+'GSM5866073_Horizontal_frags.tsv.gz',
+'GSM5866073_Microglia_frags.tsv.gz',
+'GSM5866073_Mullerglia_frags.tsv.gz',
+'GSM5866073_Retinalganglioncell_frags.tsv.gz',
+'GSM5866073_Rod_frags.tsv.gz',
+]
+targets=[]
+for n in want_names:
+    for x in files:
+        if x[0]==n:
+            targets.append((n,x[1],x[2])); break
+print('targets',targets)
+s=requests.Session()
+def download(t):
+    name,off,size=t
+    out='ref_'+name.split('_',1)[1] # e.g. AIIamacrine_frags.tsv.gz
+    if os.path.exists(out) and os.path.getsize(out)==size:
+        print('skip',name); return out,size
+    tmp=out+'.part'
+    headers={'Range':f'bytes={off}-{off+size-1}'}
+    last=0
+    for attempt in range(3):
+        try:
+            with s.get(url,headers=headers,stream=True,timeout=300) as r:
+                r.raise_for_status()
+                got=0
+                with open(tmp,'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1<<20):
+                        if not chunk: continue
+                        f.write(chunk); got+=len(chunk)
+                        if got-last>50_000_000:
+                            print(name, got//1_000_000,'MB',flush=True); last=got
+                if got"'!=size:
+                    raise IOError(f'"'short {got} {size}')
+            os.rename(tmp,out)
+            print('done',name,size,flush=True)
+            return out,size
+        except Exception as e:
+            print('retry',name,attempt,e,flush=True)
+            time.sleep(2)
+            try: os.remove(tmp)
+            except: pass
+    raise RuntimeError('failed '+name)
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    for res in ex.map(download,targets):
+        print('result',res,flush=True)
+print('ALL DONE')
+PY
+python3 download_refs.py"

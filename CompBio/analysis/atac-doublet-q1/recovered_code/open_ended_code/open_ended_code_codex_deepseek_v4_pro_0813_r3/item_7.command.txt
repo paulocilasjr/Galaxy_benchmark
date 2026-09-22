@@ -1,0 +1,59 @@
+/bin/bash -c "cat > analyze.py <<'PY'
+import numpy as np
+from scipy.sparse import csr_matrix, load_npz
+import scanpy as sc
+import anndata
+import scrublet as scr
+import time
+
+# load saved manually? load_npz won't handle .npz with custom arrays? Use csr from arrays
+d=np.load('atac_5kb.npz')
+mat=csr_matrix((d['data'],d['indices'],d['indptr']), shape=tuple(d['shape']))
+cell_ids=np.array([l.strip() for l in open('cell_ids.txt')])
+print(mat.shape, mat.nnz)
+# binarize
+mat.data[:] = 1
+# feature frequency
+freq = np.asarray(mat.sum(axis=0)).ravel()
+n_cells=mat.shape[0]
+print('freq quantiles', np.quantile(freq,[0,.01,.05,.1,.5,.9,.99,1]))
+# filter features present in at least 0.5% cells and at most 30%? scATAC peaks variable.
+lo=0.002*n_cells; hi=0.5*n_cells
+keep=np.where((freq>=lo)&(freq<=hi))[0]
+print('keep',len(keep),'lo/hi',lo,hi)
+sub=mat[:,keep].tocsc()
+# TF-IDF normalization? sc.pp.normalize_total then log1p
+adata=anndata.AnnData(sub)
+adata.obs_names=cell_ids
+adata.var_names=[f'b{i}' for i in keep]
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+# variable features top 20000 by dispersion? use sc.pp.highly_variable_genes sparse may be slow but okay.
+sc.pp.highly_variable_genes(adata, n_top_genes=20000, flavor='seurat_v3')
+hv=adata.var.highly_variable.values
+print('hv',hv.sum())
+X=adata.X[:,hv]
+# Use scanpy PCA (works sparse)
+adata2=anndata.AnnData(X)
+sc.pp.pca(adata2, n_comps=50)
+print('pca done', adata2.obsm['X_pca'].shape)
+# scrublet
+scrub=scr.Scrublet(adata2.obsm['X_pca'], expected_doublet_rate=0.06, sim_doublet_ratio=2)
+doublet_scores, predicted=scrub.scrub_doublets()
+adata2.obs['doublet_score']=doublet_scores
+adata2.obs['predicted']=predicted
+# print top
+idx=np.argsort(-doublet_scores)
+for i in idx[:30]:
+    print(cell_ids[i], doublet_scores[i], predicted[i])
+# save scores
+np.savetxt('scrublet_scores_pca.txt', np.c_[cell_ids,doublet_scores,predicted.astype(int)], fmt='%s')
+# neighbors/umap
+sc.pp.neighbors(adata2, n_neighbors=20, use_rep='X_pca')
+sc.tl.umap(adata2)
+sc.tl.leiden(adata2, resolution=1.0)
+adata2.obs.to_csv('obs_scrublet.csv')
+# scatter? save coords
+np.savetxt('umap.txt', np.c_[cell_ids, adata2.obsm['X_umap'], adata2.obs['leiden'].values], fmt='%s')
+PY
+python3 analyze.py"

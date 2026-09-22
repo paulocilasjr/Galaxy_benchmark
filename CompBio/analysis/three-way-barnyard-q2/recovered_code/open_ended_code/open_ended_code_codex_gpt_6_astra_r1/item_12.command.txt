@@ -1,0 +1,68 @@
+/bin/bash -lc "cat > prepare_reference.py <<'PY'
+import gzip,re,json
+meta={}
+with open('refs/combined.fa','w') as out:
+ for sp in ['human','mouse','pig']:
+  n=0
+  with gzip.open('refs/'+sp+'.range.fa.gz','rt') as f:
+   for line in f:
+    if line.startswith('>'):
+     tid=line[1:].split()[0];key=sp+'|'+tid
+     fields=dict(re.findall(r'(gene|gene_symbol|gene_biotype):(["'^'"\\s]+)',line))
+     meta[key]={'species':sp,**fields,'description':line.split('description:')[-1].strip()}
+     out.write('>'+key+'\\n');n+=1
+    else:out.write(line)
+  print(sp,n,flush=True)
+with open('refs/transcript_metadata.json','w') as f:json.dump(meta,f)
+PY
+cat > analyze_alignments.py <<'PY'
+import gzip,json,collections,sys,numpy as np
+meta=json.load(open('refs/transcript_metadata.json'))
+barcodes=[l.split()[0] for l in open('barcode_counts.tsv')];bcidx={b:i for i,b in enumerate(barcodes)}
+read_bc=[-1];read_umi=['']
+with gzip.open('three.way.barnyard.q2.R1.fq.gz','rt') as f:
+ for h in f:
+  seq=next(f).strip();next(f);next(f)
+  read_bc.append(bcidx[seq[:16]]);read_umi.append(seq[16:])
+species=['human','mouse','pig'];spidx={s:i for i,s in enumerate(species)}
+counts=np.zeros((len(barcodes),3),dtype=int);strict=counts.copy();reads=collections.Counter();umis=collections.defaultdict(set);high_umis=collections.defaultdict(set)
+quality=collections.Counter()
+for line in open('results/alignments.paf'):
+ p=line.rstrip().split('\\t');rid=int(p[0].split('/')[0].split('_')[1]);bi=read_bc[rid]
+ tr=meta[p[5]];sp=tr['species'];si=spidx[sp];gene=tr.get('gene_symbol',tr['gene']);mq=int(p[11]);match=int(p[9]);aln=int(p[10])
+ quality[(sp,'all')]+=1
+ if match<50 or match/aln<0.85:continue
+ counts[bi,si]+=1;reads[(sp,gene)]+=1;umis[(bi,sp,gene)].add(read_umi[rid])
+ if mq>=10 and match/aln>=0.95:
+  strict[bi,si]+=1;high_umis[(bi,sp,gene)].add(read_umi[rid])
+  quality[(sp,'strict')]+=1
+np.savez('results/species_counts.npz',counts=counts,strict=strict,barcodes=barcodes)
+print('ALIGNMENTS',quality)
+for cname,arr in [('all',counts),('strict',strict)]:
+ for thresh in [0.7,0.8,0.9,0.95]:
+  selected=(arr.max(axis=1)/np.maximum(1,arr.sum(axis=1))>=thresh)&(arr.sum(axis=1)>=20)
+  cnt=collections.Counter(np.array(species)[arr[selected].argmax(axis=1)])
+  print(cname,thresh,selected.sum(),cnt)
+with open('results/barcode_species.tsv','w') as f:
+ f.write('barcode\\thuman\\tmouse\\tpig\\tstrict_human\\tstrict_mouse\\tstrict_pig\\tassignment\\tfraction\\n')
+ for bi,bc in enumerate(barcodes):
+  si=strict[bi].argmax();frac=strict[bi,si]/max(1,strict[bi].sum());sp=species[si] if frac>=0.8 and strict[bi].sum()>=20 else 'unassigned'
+  f.write('\\t'.join(map(str,[bc,*counts[bi],*strict[bi],sp,frac]))+'\\n')
+for label,udict in [('all',umis),('strict',high_umis)]:
+ agg=collections.Counter();cells=collections.Counter()
+ for (bi,sp,gene),us in udict.items():
+  arr=strict[bi];si=arr.argmax()
+  if species[si]"'!=sp or arr[si]/max(1,arr.sum())<0.8 or arr.sum()<20:continue
+  agg[(sp,gene)]+=len(us);cells[(sp,gene)]+=1
+ with open('"'results/gene_counts_'+label+'.tsv','w') as f:
+  f.write('species\\tgene\\tumis\\tcells\\n')
+  for (sp,gene),num in agg.most_common():f.write(f'{sp}\\t{gene}\\t{num}\\t{cells[(sp,gene)]}\\n')
+ print('\\n',label)
+ for sp in species:
+  print('\\n',sp)
+  print([(g,num,cells[(s,g)]) for (s,g),num in agg.most_common() if s==sp][:100])
+with gzip.open('results/cell_gene_umis.tsv.gz','wt') as f:
+ f.write('barcode\\tspecies\\tgene\\tumis\\n')
+ for (bi,sp,g),us in umis.items():f.write(f'{barcodes[bi]}\\t{sp}\\t{g}\\t{len(us)}\\n')
+PY
+cat refs/download.log"

@@ -1,0 +1,54 @@
+/bin/bash -lc "cat > scripts/aggregate_avg.py <<'PY'
+import numpy as np, json
+# parse avg tab to dict gene_idx -> {T:list100,E:list100,B:list50}
+def parse(path):
+    d={}
+    with open(path) as f:
+        for line in f:
+            p=line.rstrip().split('\\t')
+            name=p[0]; mean0=float(p[4])
+            # name gIDX_TBIN / EBIN / BBIN
+            base, featbin=name.split('_')
+            idx=int(base[1:]); feat=featbin[0]; b=int(featbin[1:])
+            if idx not in d:
+                d[idx]={'T':[0.0]*100,'E':[0.0]*100,'B':[0.0]*50}
+            d[idx][feat][b]=mean0
+    return d
+
+sig=parse('bins/signal.avg.tab')
+ctrl=parse('bins/control.avg.tab')
+print('parsed',len(sig),len(ctrl), flush=True)
+# iterate genes order, reverse for minus
+genes=[]
+with open('ref/genes.pc.longest.tsv') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip().split('\\t'); genes.append(p)
+
+ST=[]; SE=[]; SB=[]; CT=[]; CE=[]; CB=[]; RT=[]; RE=[]; RB=[]
+# scaling factor from bigwig header sums; approximate 1.639
+scale=1.6392283037914148
+for i,p in enumerate(genes):
+    if i not in sig or i not in ctrl: continue
+    strand=p[2]
+    sT=np.array(sig[i]['T']); sE=np.array(sig[i]['E']); sB=np.array(sig[i]['B'])
+    cT=np.array(ctrl[i]['T']); cE=np.array(ctrl[i]['E']); cB=np.array(ctrl[i]['B'])
+    if strand=='-':
+        sT=sT[::-1]; sE=sE[::-1]; sB=sB[::-1]
+        cT=cT[::-1]; cE=cE[::-1]; cB=cB[::-1]
+    ST.append(sT); SE.append(sE); SB.append(sB)
+    CT.append(cT); CE.append(cE); CB.append(cB)
+
+n=len(ST); print('genes used',n, flush=True)
+ST=np.mean(ST,axis=0); SE=np.mean(SE,axis=0); SB=np.mean(SB,axis=0)
+CT=np.mean(CT,axis=0); CE=np.mean(CE,axis=0); CB=np.mean(CB,axis=0)
+CNT=CT*scale; CNE=CE*scale; CNB=CB*scale
+RT=np.log2((ST+0.1)/(CNT+0.1)); RE=np.log2((SE+0.1)/(CNE+0.1)); RB=np.log2((SB+0.1)/(CNB+0.1))
+for name,S,C,CN,R in [('tss',ST,CT,CNT,RT),('tes',SE,CE,CNE,RE),('body',SB,CB,CNB,RB)]:
+    with open('profiles.'+name+'.txt','w') as f:
+        f.write('idx\\tsig\\tctrl\\tctrl_norm\\tlog2_ratio\\n')
+        for i in range(len(S)):
+            f.write(f'{i}\\t{S[i]:.6g}\\t{C[i]:.6g}\\t{CN[i]:.6g}\\t{R[i]:.6g}\\n')
+    print(name, 'first last sig', S[0], S[-1], 'ratio minmax', R.min(), R.max(), flush=True)
+PY
+python3 scripts/aggregate_avg.py"

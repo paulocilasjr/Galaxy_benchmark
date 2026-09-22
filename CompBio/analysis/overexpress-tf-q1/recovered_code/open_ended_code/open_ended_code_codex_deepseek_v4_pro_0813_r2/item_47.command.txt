@@ -1,0 +1,42 @@
+/bin/bash -c "python3 - <<'EOF'
+import json, urllib.request, urllib.parse, time, os, re
+TFs=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']
+motifs={}
+for tf in TFs:
+    url='https://jaspar.elixir.no/api/v1/matrix/?format=json&page_size=100&search='+urllib.parse.quote(tf)
+    with urllib.request.urlopen(url, timeout=30) as r:
+        data=json.load(r)
+    results=data.get('results',[])
+    cand=[]
+    for x in results:
+        if x.get('name','').upper()==tf.upper() and x.get('collection')=='CORE':
+            cand.append(x)
+    if not cand:
+        print('No core exact for',tf,'results names',[(x['name'],x['collection'],x['matrix_id']) for x in results[:10]])
+        continue
+    # choose latest version (matrix_id ends .version)
+    cand_sorted=sorted(cand, key=lambda x:int(x['matrix_id'].split('.')[-1]))
+    chosen=cand_sorted[-1]
+    mid=chosen['matrix_id']
+    with urllib.request.urlopen('https://jaspar.elixir.no/api/v1/matrix/{}/'.format(mid), timeout=30) as r:
+        detail=json.load(r)
+    motifs[tf]={'id':mid,'pfm':detail['pfm'],'name':detail['name']}
+    print(tf, mid, 'len', len(detail['pfm']['A']), 'source', detail.get('source'))
+# Save as JSON and JASPAR-ish
+with open('candidate_motifs.json','w') as f:
+    json.dump(motifs,f,indent=2)
+# Save simple pfm files and meme file
+with open('candidate_motifs.meme','w') as f:
+    f.write('MEME version 4\\n\\nALPHABET= ACGT\\n\\nstrands: + -\\n\\nBackground letter frequencies (from uniform background):\\nA 0.25 C 0.25 G 0.25 T 0.25\\n\\n')
+    for tf,m in motifs.items():
+        cols=len(m['pfm']['A'])
+        f.write(f'MOTIF {tf} {m[\"id\"]}\\n')
+        f.write(f'letter-probability matrix: alength= 4 w= {cols} nsites= 1000 E= 0\\n')
+        for i in range(cols):
+            total=sum(m['pfm'][b][i] for b in 'ACGT')
+            vals=[m['pfm'][b][i]/total for b in 'ACGT']
+            f.write('  '+'  '.join(f'{v:.6f}' for v in vals)+'\\n')
+        f.write('\\n')
+print('saved')
+EOF
+ls -lh candidate_motifs.json candidate_motifs.meme"

@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, requests, math, json, sys
+# get top 20 with file data
+out=subprocess.check_output(\"gzip -cd reverse.search.gwas.q2.gz | awk -F \\\"\\\\t\\\" 'NR>1 && "'$10!='"\\\"\\\" && "'$10!='"\\\"NA\\\" {print "'$10'"\\\"\\\\t\\\""'$2'"\\\"\\\\t\\\""'$8'"\\\"\\\\t\\\""'$5'"\\\"\\\\t\\\""'$6'"\\\"\\\\t\\\""'$7}'"' | sort -g | head -20\", shell=True, text=True)
+rows=[]
+for line in out.strip().splitlines():
+    p,rs,beta,ea,oa,eaf=line.split('\\t')
+    rows.append((rs,float(p),float(beta),ea,oa,float(eaf)))
+s=requests.Session()
+def get(url):
+    for attempt in range(2):
+        try:
+            r=s.get(url,headers={'Accept':'application/json'},timeout=15)
+            if r.status_code==200:return r.json()
+            return None
+        except Exception:
+            continue
+    return None
+for rs,p,b,ea,oa,eaf in rows:
+    data=get(f'https://www.ebi.ac.uk/gwas/rest/api/singleNucleotidePolymorphisms/{rs}/associations?size=100')
+    assocs=data.get('_embedded',{}).get('associations',[]) if data else []
+    matches=[]
+    for a in assocs:
+        ap=a.get('pvalue'); ab=a.get('betaNum')
+        if ap is None: continue
+        # compare p within factor 2 and beta abs within 10% if beta exists
+        pmatch=abs(math.log10(ap)-math.log10(p))<0.05
+        bmatch=False
+        if ab is not None and abs(b)>0:
+            bmatch=abs(abs(ab)-abs(b))/abs(b)<0.03
+        elif ab is None:
+            bmatch=False
+        if pmatch and (bmatch or ab is None):
+            study_data=get(a['_links']['study']['href'])
+            st=study_data or {}
+            pub=st.get('publicationInfo',{}).get('pubmedId')
+            trait=st.get('diseaseTrait',{}).get('trait')
+            matches.append((ap,ab,pub,trait))
+    print(rs, 'file p',p,'b',b,'matches',matches[:5])
+PY"

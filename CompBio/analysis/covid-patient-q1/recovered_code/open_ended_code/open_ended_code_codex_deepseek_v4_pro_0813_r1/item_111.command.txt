@@ -1,0 +1,94 @@
+/bin/bash -lc "cat > sig_scores.py <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+from scipy import stats
+
+adata=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+names=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); sums=D['sum']; cc=D['cell_counts']; cats=D['cats']
+# library size = sum raw counts across genes per donor (same as cell sums)
+libs=sums.sum(axis=0, keepdims=True)
+cpm=sums/libs*1e6
+log=np.log1p(cpm)
+# z score across donors per gene
+mu=log.mean(axis=1, keepdims=True); sd=log.std(axis=1, keepdims=True); sd[sd==0]=1
+Z=(log-mu)/sd
+
+def genes_from_file(path):
+    with open(path) as f:
+        return [l.strip() for l in f if l.strip()]
+
+def score(genes):
+    idx=[]
+    notfound=[]
+    for g in genes:
+        arr=np.where(names==g)[0]
+        if len(arr): idx.append(arr[0])
+        else: notfound.append(g)
+    idx=np.array(idx)
+    if len(idx)==0: return None, notfound
+    return Z[idx].mean(axis=0), notfound
+
+up=genes_from_file('covid_up_genes.txt')
+dn=genes_from_file('covid_dn_genes.txt')
+su,nf1=score(up); sd_,nf2=score(dn)
+diff=su-sd_
+print('notfound',len(nf1),len(nf2))
+print('first nf up',nf1[:20])
+print('first nf dn',nf2[:20])
+# additional signatures
+sigs={
+'ISG':['ISG15','IFI27','IFI44L','IFIT1','IFIT3','MX1','OAS1','IFITM3','IRF7','STAT1','RSAD2','OAS2','OAS3','IFI6'],
+'Mono':['LYZ','S100A8','S100A9','CD14','FCGR3A','MS4A7','CSF1R','LILRB2'],
+'Neutro':['FCGR3B','S100A8','S100A9','CEACAM8','CSF3R'],
+'T':['CD3D','CD3E','CD3G','IL7R','TRAC','CD2'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1','KLRB1','PRF1'],
+'B':['MS4A1','CD19','CD79A','CD79B','IGHG1','JCHAIN'],
+'pDC':['LILRA4','IL3RA','GZMB','TCF4'],
+'Platelet':['PPBP','PF4','GP9','ITGA2B'],
+'Erythroid':['HBB','HBA1','HBA2','ALAS2'],
+'Myeloid_over_lymph':None
+}
+scores={}
+for k,gs in sigs.items():
+    if gs:
+        s,nf=score(gs); scores[k]=s; print(k,'nf',len(nf))
+# celltype score ratios
+scores['myel_lymph_ratio']= ( (np.expm1(scores['Mono']) ) / (np.expm1(scores['T'])+np.expm1(scores['NK'])+np.expm1(scores['B'])+1e-3) )
+rows=[]
+for i,d in enumerate(cats):
+    row={'donor':d,'up':su[i],'down':sd_[i],'diff':diff[i]}
+    for k,s in scores.items():
+        if s is not None: row[k]=s[i]
+    rows.append(row)
+df=pd.DataFrame(rows).set_index('donor')
+print('\\nTop 12 diff')
+print(df.sort_values('diff',ascending=False)[['up','down','diff','ISG','myel_lymph_ratio']].head(12).to_string())
+print('\\nBottom 12 diff')
+print(df.sort_values('diff',ascending=True)[['up','down','diff','ISG','myel_lymph_ratio']].head(12).to_string())
+df.to_csv('signature_scores.csv')
+# cluster diff / up/down
+X=df[['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','myel_lymph_ratio']].values
+Xz=StandardScaler().fit_transform(X)
+for feat in ['diff','up','down','ISG','myel_lymph_ratio']:
+    v=df[feat].values
+    km=KMeans(n_clusters=2,n_init=50,random_state=0).fit(v.reshape(-1,1))
+    groups={0:[],1:[]}
+    for d,l in zip(df.index,km.labels_): groups[l].append(d)
+    print('\\nfeature',feat,'centers',km.cluster_centers_.ravel())
+    for l in sorted(groups, key=lambda l: km.cluster_centers_[l,0]):
+        print(l, groups[l])
+# GMM on diff
+for comp in [2,3]:
+ gmm=GaussianMixture(n_components=comp, random_state=0).fit(df[['diff']].values)
+ print('GMM comp',comp,'means',gmm.means_.ravel())
+ print('predict labels low..')
+ order=np.argsort(gmm.means_.ravel())
+ labs=gmm.predict(df[['diff']].values)
+ for rank,comp_idx in enumerate(order):
+  mem=sorted(df.index[labs==comp_idx].tolist())
+  print(rank, comp_idx, mem)
+PY
+python3 sig_scores.py"

@@ -1,0 +1,80 @@
+/bin/bash -lc "cat > torch_score.py <<'PY'
+import os, time, h5py, numpy as np, torch, torch.nn as nn
+import pandas as pd
+torch.set_grad_enabled(False)
+torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
+DEV='cpu'
+INP_LEN=2114
+
+class BPNetCounts(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0=nn.Conv1d(4,512,21)
+        self.blocks=nn.ModuleList()
+        self.dilations=[2,4,8,16,32,64,128,256]
+        for d in self.dilations:
+            self.blocks.append(nn.ModuleDict({
+                'conv': nn.Conv1d(512,512,3,dilation=d),
+            }))
+        self.final_conv=nn.Conv1d(512,1,75)
+        self.fc=nn.Linear(512,1)
+    def forward(self,x):
+        x=torch.relu(self.conv0(x))
+        for i,d in enumerate(self.dilations):
+            shortcut=x[:,:,d:-d] if d < x.shape[2] else x[:,:,:0]
+            out=torch.relu(self.blocks[i]['conv'](x))
+            x=out+shortcut
+        pooled=x.mean(dim=2)
+        counts=self.fc(pooled)
+        return counts
+
+def load_fold(path):
+    h=h5py.File(path,'r')
+    def w(name):
+        return torch.from_numpy(np.array(h[f'model_weights/{name}/{name}/kernel:0'],dtype=np.float32))
+    def b(name):
+        return torch.from_numpy(np.array(h[f'model_weights/{name}/{name}/bias:0'],dtype=np.float32))
+    model=BPNetCounts().to(DEV)
+    # conv0
+    model.conv0.weight.data=w('conv1d').permute(2,1,0).contiguous()
+    model.conv0.bias.data=b('conv1d')
+    for i,d in enumerate(model.dilations):
+        nm=f'conv1d_{i+1}'
+        model.blocks[i]['conv'].weight.data=w(nm).permute(2,1,0).contiguous()
+        model.blocks[i]['conv'].bias.data=b(nm)
+    # fc logcounts
+    model.fc.weight.data=w('logcounts').squeeze(-1).unsqueeze(0).contiguous()
+    model.fc.bias.data=b('logcounts')
+    h.close()
+    return model.eval()
+
+def predict_counts(paths,x):
+    all_counts=[]
+    for p in paths:
+        t=time.time(); m=load_fold(p)
+        xs=torch.from_numpy(x).to(DEV)
+        outs=[]
+        for i in range(0,len(xs),64):
+            out=m(xs[i:i+64])[:,0]
+            outs.append(out.cpu().numpy())
+        counts=np.concatenate(outs)
+        all_counts.append(counts)
+        print('fold',p,'done',time.time()-t, counts.shape, counts[:3])
+    return np.array(all_counts)
+
+if __name__=='__main__':
+    d=np.load('rod_inputs.npz')
+    ref=d['ref']; alt=d['alt']; labels=d['label']
+    paths=[f'models_Rod_fold{i}.h5' for i in range(5)]
+    ref_counts=predict_counts(paths,ref) # shape (5,500)
+    alt_counts=predict_counts(paths,alt)
+    lfc_per_fold=alt_counts-ref_counts
+    lfc_avg=lfc_per_fold.mean(axis=0)
+    np.save('rod_ref_counts.npy',ref_counts)
+    np.save('rod_alt_counts.npy',alt_counts)
+    np.save('rod_lfc_folds.npy',lfc_per_fold)
+    np.save('rod_lfc_avg.npy',lfc_avg)
+    print('lfc avg range',lfc_avg.min(),lfc_avg.max(), 'mean',lfc_avg.mean())
+    print('first',lfc_avg[:20])
+PY
+python torch_score.py"

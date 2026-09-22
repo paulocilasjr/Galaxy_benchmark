@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import requests, json, time
+term=('\"Mus musculus\"[Organism] AND (\"single cell RNA\"[All Fields] OR \"single-cell RNA\"[All Fields] OR scRNA-seq[All Fields] OR scRNA[All Fields] OR \"single cell\"[All Fields] OR \"single-cell\"[All Fields]) AND (\"brain\"[All Fields] OR \"neural\"[All Fields] OR \"neuron\"[All Fields] OR \"spinal cord\"[All Fields] OR \"retina\"[All Fields] OR \"cortex\"[All Fields] OR \"midbrain\"[All Fields] OR \"hindbrain\"[All Fields] OR \"forebrain\"[All Fields] OR \"embryo\"[All Fields] OR \"embryonic\"[All Fields] OR \"neural tube\"[All Fields]) AND gse[Entry Type] AND (\"Expression profiling by high throughput sequencing\"[DataSet Type] OR \"Other\"[DataSet Type])')
+all_ids=[]
+for retstart in range(0,5000,500):
+ r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',params={'db':'gds','term':term,'retmax':500,'retstart':retstart,'retmode':'json'})
+ js=r.json()['esearchresult']
+ ids=js['idlist']
+ print('retstart',retstart,'got',len(ids),'count',js['count'])
+ all_ids+=ids
+ if len(ids)<500: break
+ time.sleep(0.5)
+all_ids=list(dict.fromkeys(all_ids))
+print('total',len(all_ids))
+open('broad_ids.txt','w').write('\\n'.join(all_ids))
+summaries={}
+for i in range(0,len(all_ids),200):
+ chunk=all_ids[i:i+200]
+ for attempt in range(5):
+  r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi',params={'db':'gds','id':','.join(chunk),'retmode':'json'})
+  if r.status_code==200:
+   try:
+    data=r.json()['result']
+    for uid in data['uids']:
+     summaries[uid]=data[uid]
+    print('chunk',i,'ok',len(chunk))
+    break
+   except Exception as e:
+    print('json err',e); time.sleep(2)
+  else:
+   print('status',r.status_code,'wait'); time.sleep(2)
+ time.sleep(0.5)
+open('broad_summaries.json','w').write(json.dumps(summaries,indent=2))
+print('saved',len(summaries))
+PY"

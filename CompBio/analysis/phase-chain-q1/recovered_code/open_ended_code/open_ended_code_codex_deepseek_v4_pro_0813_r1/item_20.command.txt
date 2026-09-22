@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+fasta=pysam.FastaFile('hg38.fa')
+bam=pysam.AlignmentFile('phase.bam','rb')
+start=27079100; end=27080650
+refseq=fasta.fetch('chr22', start-1, end)
+counts={}
+for col in bam.pileup('chr22', start, end, truncate=True, min_base_quality=0, stepper='nofilter', max_depth=1000000):
+    pos=col.reference_pos+1
+    c=collections.Counter()
+    for pr in col.pileups:
+        if pr.is_del or pr.is_refskip: continue
+        c[pr.alignment.query_sequence[pr.query_position]]+=1
+    counts[pos]=c
+for pos,c in sorted(counts.items()):
+    tot=sum(c.values())
+    if tot<20: continue
+    ref=refseq[pos-start].upper()
+    refn=c.get(ref,0)
+    # true variants: alt frac high 0.15..0.85 OR ref frac <0.15
+    top=c.most_common()
+    top1n=top[0][1]
+    nonmajor= tot-top1n
+    alt_candidates = [b for b,n in top if b"'!=ref]
+    altn=sum(n for b,n in c.items() if b!=ref)
+    altfrac=altn/tot
+    if (refn/tot<0.20) or (0.15 <= altfrac <= 0.9 and len(alt_candidates)>=1):
+        print(pos, '"'tot',tot,'ref',ref,'counts',dict(c.most_common()),'ref_frac',round(refn/tot,3),'alt_frac',round(altfrac,3))
+PY"

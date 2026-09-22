@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix
+
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        shape=tuple(f['X'].attrs['shape'])
+        X=csc_matrix((f['X/data'][()], f['X/indices'][()], f['X/indptr'][()]), shape=shape)
+        cats=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/guide/categories'][()]])
+        codes=f['obs/guide/codes'][()]
+        var=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in f['var/_index'][()]])
+    return X,cats,codes,var
+X,cats,codes,var=load('perturb.seq.align.q1.query.h5ad')
+lib=np.asarray(X.sum(axis=1)).ravel()
+nt_mask=np.array([cats[c].startswith('NT-') for c in codes])
+print('shape', X.shape, 'lib mean', lib.mean(), 'cells', len(codes))
+for gene in ['PABPC1','NUDT21','LEO1']:
+    j=int(np.where(var==gene)[0][0])
+    col=X[:,j].toarray().ravel()
+    vals=np.log1p(col/lib*1e4)
+    means=[]
+    for i,g in enumerate(cats):
+        m=vals[codes==i].mean()
+        n=(codes==i).sum()
+        means.append((m,g,n))
+    nt_mean=vals[nt_mask].mean()
+    print('\\n',gene,'nt_mean',nt_mean)
+    for m,g,n in sorted(means)[:12]:
+        print(f'{g:8s} mean={m:.3f} diff={m-nt_mean:.3f} n={n}')
+PY"

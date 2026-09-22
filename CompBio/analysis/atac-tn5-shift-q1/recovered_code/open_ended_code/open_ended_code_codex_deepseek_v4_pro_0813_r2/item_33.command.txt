@@ -1,0 +1,58 @@
+/bin/bash -lc "cat > calibrate.py <<'PY'
+import gzip, math, random
+import pysam
+fasta=pysam.FastaFile('hg38.fa')
+chrs=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        p=line.rstrip().split('\\t'); chrs.append((p[0],int(p[1]),int(p[2])))
+# sample every 5
+chrs=chrs[::5]
+print('N',len(chrs))
+
+def extract(ch,c,flank=45):
+    lo=c-flank; hi=c+flank+1
+    if lo<0: return None
+    try: seq=fasta.fetch(ch,lo,hi).upper()
+    except: return None
+    return seq if len(seq)==2*flank+1 else None
+
+def best(data,pos_type,dmin=-12,dmax=12,win=21):
+    D=dmax-dmin+1; counts=[[[0]*4 for _ in range(win)] for __ in range(D)]
+    for ch,s,e in data:
+        c=s if pos_type=='start' else e-1
+        seq=extract(ch,c)
+        if seq is None: continue
+        ci=45; bd={'A':0,'C':1,'G':2,'T':3}
+        for di,d in enumerate(range(dmin,dmax+1)):
+            center=ci-d; lo=center-10; hi=lo+21
+            if lo<0 or hi>len(seq): continue
+            for j,b in enumerate(seq[lo:hi]):
+                if b in bd: counts[di][j][bd[b]]+=1
+    total=[0]*4
+    for dm in counts:
+        for pos in dm:
+            for i in range(4): total[i]+=pos[i]
+    N=sum(total); bg=[(x+1)/(N+4) for x in total]
+    vals=[]
+    for di,d in enumerate(range(dmin,dmax+1)):
+        kl=0
+        for pos in counts[di]:
+            n=sum(pos)
+            if n==0: continue
+            for i in range(4):
+                p=pos[i]/n
+                if p>0: kl += p*math.log(p/bg[i])
+        vals.append((d,kl))
+    return max(vals,key=lambda x:x[1])
+
+def shift_data(data, add_start, add_end):
+    return [(ch,s+add_start,e+add_end) for ch,s,e in data]
+
+for pos in ['start','end']:
+    print('original',pos,best(chrs,pos))
+for a,b in [(5,0),(0,5),(-5,0),(0,-5),(3,-3),(-2,3),(4,-5)]:
+    data2=shift_data(chrs,a,b)
+    print('shifted',a,b,'start',best(data2,'start'),'end',best(data2,'end'))
+PY
+python3 calibrate.py"

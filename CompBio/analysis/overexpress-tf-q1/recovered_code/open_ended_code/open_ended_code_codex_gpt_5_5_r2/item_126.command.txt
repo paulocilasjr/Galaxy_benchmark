@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+# Print candidate ranks among all TFName enrichments from top500 gained vs stable.
+import json, os, collections, math
+C=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']
+def read(path, limit):
+ return [(x[0],int(x[1]),int(x[2])) for _,x in zip(range(limit),(l.split()[:3] for l in open(path)))]
+def collect(regs):
+ cnt=collections.Counter()
+ for c,s,e in regs:
+  p=f'work/jaspar_cache/{c}_{s}_{e}.json'
+  if not os.path.exists(p): continue
+  seen=set()
+  for it in json.load(open(p)).get('jaspar2024',[]):
+   if int(it['score'])>=400: seen.add(it['TFName'].upper())
+  cnt.update(seen)
+ return cnt
+def fisher(a,b,c,d):
+ n=a+b+c+d; row=a+b; col=a+c; hi=min(row,col)
+ def lc(n,k): return math.lgamma(n+1)-math.lgamma(k+1)-math.lgamma(n-k+1)
+ logs=[lc(col,x)+lc(n-col,row-x)-lc(n,row) for x in range(a,hi+1)]
+ m=max(logs); return math.exp(m)*sum(math.exp(x-m) for x in logs)
+G=read('work/top_gained_1000.bed',500); S=read('work/stable_1000.bed',500); g=collect(G); s=collect(S)
+rows=[]
+for name in set(g)|set(s):
+ a=g[name]; c=s[name]
+ odds=((a+.5)/(len(G)-a+.5))/((c+.5)/(len(S)-c+.5))
+ rows.append((fisher(a,len(G)-a,c,len(S)-c),-odds,name,a,c,odds))
+rows=sorted(rows)
+for idx,r in enumerate(rows,1):
+ if any(c in r[2] for c in C):
+  print(idx,r[2], 'p', f'{r[0]:.2g}', 'odds', f'{r[5]:.2f}', 'regions', r[3], r[4])
+PY"

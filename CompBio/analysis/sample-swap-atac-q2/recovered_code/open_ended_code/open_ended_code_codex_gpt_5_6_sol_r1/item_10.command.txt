@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import concurrent.futures, requests, pandas as pd, numpy as np
+markers={
+'AIIamacrine':['GJD2','GRIK1','SLC6A9','DAB1','PCP4','PROX1','TFAP2A','TFAP2B'],
+'Astrocyte':['GFAP','ALDH1L1','AQP4','SLC1A3','SLC1A2','GJA1','SOX9','CLU'],
+'Cone':['ARR3','GNAT2','PDE6C','PDE6H','CNGB3','OPN1SW','GUCA1C','THRB'],
+'GABAamacrine':['GAD1','GAD2','SLC6A1','SLC32A1','DLX1','DLX2','TFAP2A','TFAP2B'],
+'Horizontal':['LHX1','ONECUT1','ONECUT2','PROX1','CALB1','RELN','SEMA6A','EPHA7'],
+'Microglia':['CX3CR1','P2RY12','C1QA','C1QB','C1QC','AIF1','TMEM119','TYROBP'],
+'Mullerglia':['RLBP1','GLUL','SLC1A3','SLC1A2','SOX9','CLU','VIM','APOE'],
+'Retinalganglioncell':['RBPMS','SNCG','POU4F1','POU4F2','NEFL','NEFM','ISL1','THY1'],
+'Rod':['RHO','GNAT1','PDE6A','PDE6B','CNGA1','NRL','SAG','GNGT1']}
+allgenes=sorted(set(sum(markers.values(),[])))
+def one(g):
+ u='https://mygene.info/v3/query'
+ x=requests.get(u,params={'q':'symbol:'+g,'species':'human','fields':'symbol,genomic_pos','size':3},timeout=20).json()
+ for h in x.get('hits',[]):
+  if h.get('symbol')"'!=g: continue
+  ps=h.get('"'genomic_pos',[]); ps=ps if isinstance(ps,list) else [ps]
+  ps=[p for p in ps if str(p.get('chr')) in [str(i) for i in range(1,23)]+['X','Y']]
+  if ps:
+   p=ps[0]; t=p['start'] if p['strand']==1 else p['end']; return g,'chr'+str(p['chr']),t
+ return g,None,None
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+ coords=dict((g,(c,t)) for g,c,t in ex.map(one,allgenes))
+missing=[g for g,v in coords.items() if v[0] is None]; print('missing',missing)
+df=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t')
+cols=list(df.columns[3:]); totals=df[cols].sum(); X=df[cols].div(totals,axis=1)*1e6
+# indexes by tuple exact bin
+idx={(c,int(s)):i for i,(c,s) in enumerate(zip(df.chrom,df.start))}
+print('depths',totals.to_dict())
+for typ,gs in markers.items():
+ vals=[]
+ print('\\n###',typ)
+ for g in gs:
+  c,t=coords[g]; start=(int(t)//10000)*10000
+  ii=idx.get((c,start))
+  if ii is None: continue
+  v=X.iloc[ii]
+  # specificity of counts in TSS bin
+  top=v.sort_values(ascending=False).head(3)
+  print(g,c,t,' '.join(f'{k}:{x:.2f}' for k,x in top.items()))
+PY"

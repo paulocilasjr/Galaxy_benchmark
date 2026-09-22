@@ -1,0 +1,32 @@
+/bin/bash -lc "cat > validate_spectral.py <<'PY'
+import os
+os.environ['MPLCONFIGDIR']=os.path.abspath('tmp/matplotlib')
+import numpy as np,json
+from scipy import sparse
+from sklearn.metrics import adjusted_rand_score
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+from vireoSNP import Vireo
+ad=sparse.load_npz('AD.npz').tocsc();dp=sparse.load_npz('DP.npz').tocsc()
+sites=[l.split() for l in open('sites.tsv')]
+ch=np.array([int(a[0]) for a in sites]);pos=np.array([int(a[1]) for a in sites]);base=np.load('models/k4.s1.npz')['ID'].argmax(1)
+for subset in ['nonHLA','odd','even']:
+ keep=~((ch==6)&(pos>25000000)&(pos<35000000))
+ if subset=='odd':keep&=(ch%2==1)
+ if subset=='even':keep&=(ch%2==0)
+ aa=ad[keep];dd=dp[keep]
+ p=np.asarray(aa.sum(1)).ravel()/np.asarray(dd.sum(1)).ravel()
+ inv=dd.copy();inv.data=1/inv.data
+ mask=dd.copy();mask.data[:]=1
+ x=(aa.multiply(inv)-mask.multiply(p[:,None])).multiply(1/np.sqrt(p*(1-p))[:,None]).T.tocsr()
+ cov=np.asarray(mask.sum(0)).ravel();x=x.multiply((1/np.sqrt(np.maximum(cov,1)))[:,None]).tocsr()
+ z=TruncatedSVD(n_components=10,random_state=43).fit_transform(x)
+ for k in [3,4,5]:
+  labs=KMeans(n_clusters=k,n_init=30,random_state=43).fit_predict(z)
+  init=np.full((dd.shape[1],k),.01);init[np.arange(dd.shape[1]),labs]=.99
+  m=Vireo(n_cell=aa.shape[1],n_var=aa.shape[0],n_donor=k,ID_prob_init=init)
+  m.fit(aa,dd,max_iter=250,delay_fit_theta=5,verbose=False)
+  labels=m.ID_prob.argmax(1);conf=m.ID_prob.max(1)>.95
+  print(json.dumps({'subset':subset,'k':k,'elbo':float(m.ELBO_[-1]),'sizes':np.bincount(labels,minlength=k).tolist(),'confident':int(conf.sum()),'ARI_vs_full':adjusted_rand_score(base[conf],labels[conf])}),flush=True)
+PY
+PYTHONPATH=\""'$PWD/pydeps" OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 python -u validate_spectral.py > validate_spectral.log 2>&1'

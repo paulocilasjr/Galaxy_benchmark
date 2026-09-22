@@ -1,0 +1,1827 @@
+[
+  {
+    "dataset_id": "f9cad7b01a472135446ee904856467b2",
+    "hid": 2,
+    "name": "gwas_signature.py",
+    "bytes": 2532,
+    "sha256": "bc65bf1aebd18fd59675eed5247a03e47392ed3849c687545748a78c28dfc535",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135446ee904856467b2/display",
+    "content": "import csv\nimport gzip\nimport heapq\nimport io\nimport math\nimport sys\nfrom collections import Counter\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef main(in_path, out_path):\n    top_n = 100\n    rows = 0\n    malformed = 0\n    p_missing = 0\n    min_p = None\n    chrom_counts = Counter()\n    top = []\n    first_data = []\n    header = None\n\n    with open_text(in_path) as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        for rec in reader:\n            if not rec:\n                continue\n            if header is None:\n                header = rec\n                continue\n            rows += 1\n            if len(rec) < 8:\n                malformed += 1\n                continue\n            if len(first_data) < 5:\n                first_data.append(rec[:8])\n            chrom_counts[rec[0]] += 1\n            try:\n                p = float(rec[7])\n            except ValueError:\n                p_missing += 1\n                continue\n            if not math.isfinite(p):\n                p_missing += 1\n                continue\n            if min_p is None or p < min_p:\n                min_p = p\n            # Heap root is the largest P among retained records.\n            key = (-p, rows, rec[:8])\n            if len(top) < top_n:\n                heapq.heappush(top, key)\n            elif key > top[0]:\n                heapq.heapreplace(top, key)\n\n    top_rows = [item[2] for item in sorted(top, key=lambda x: (-x[0], x[1]))]\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        out.write(\"section\\tvalue\\n\")\n        out.write(\"header\\t%s\\n\" % \"\\t\".join(header or []))\n        out.write(\"rows\\t%d\\n\" % rows)\n        out.write(\"malformed_rows\\t%d\\n\" % malformed)\n        out.write(\"missing_or_invalid_p\\t%d\\n\" % p_missing)\n        out.write(\"min_p\\t%s\\n\" % (\"\" if min_p is None else format(min_p, \".17g\")))\n        out.write(\"chrom_counts\\t%s\\n\" % \";\".join(f\"{k}:{chrom_counts[k]}\" for k in sorted(chrom_counts, key=lambda x: (len(x), x))))\n        out.write(\"\\nfirst_rows\\n\")\n        out.write(\"#CHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\tP\\n\")\n        for rec in first_data:\n            out.write(\"\\t\".join(rec) + \"\\n\")\n        out.write(\"\\ntop_by_p\\n\")\n        out.write(\"#CHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\tP\\n\")\n        for rec in top_rows:\n            out.write(\"\\t\".join(rec) + \"\\n\")\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2])\n",
+    "file": "r0_h2_gwas_signature.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5d1aa1a73b3f98a12"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721354b43107dad3d269b",
+    "hid": 4,
+    "name": "gwas_loci.py",
+    "bytes": 2591,
+    "sha256": "8b34ebdce6dd97c87265819893d77675635c975c0fbf13f98994f06b5012b62b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721354b43107dad3d269b/display",
+    "content": "import csv\nimport gzip\nimport math\nimport sys\nfrom collections import defaultdict\n\n\nTARGET_POSITIONS = {\n    (\"1\", 161509955): \"rs1801274_FCGR2A\",\n    (\"6\", 32461866): \"rs9268853_HLA_UC\",\n    (\"6\", 32082981): \"rs1150754_HLA_SLE\",\n    (\"6\", 32638107): \"rs2187668_HLA_SLE\",\n    (\"6\", 32713854): \"rs9275596_HLA_IgAN\",\n    (\"1\", 196717788): \"rs6677604_CFH_IgAN\",\n    (\"22\", 30098382): \"rs2412971_HORMAD2_IgAN\",\n    (\"1\", 67240275): \"rs11209026_IL23R_UC\",\n    (\"1\", 19845367): \"rs6426833_RNF186_UC\",\n    (\"9\", 4981602): \"rs10758669_JAK2_UC\",\n    (\"21\", 39093608): \"rs2836878_UC\",\n}\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef main(in_path, out_path):\n    sig_rows = []\n    target_rows = []\n    window_best = {}\n    rows = 0\n\n    with open_text(in_path) as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        header = next(reader)\n        for rec in reader:\n            if len(rec) < 8:\n                continue\n            rows += 1\n            chrom = rec[0]\n            try:\n                pos = int(rec[1])\n                p = float(rec[7])\n            except ValueError:\n                continue\n            if not math.isfinite(p):\n                continue\n            label = TARGET_POSITIONS.get((chrom, pos))\n            if label:\n                target_rows.append([label] + rec[:8])\n            if p < 5e-8:\n                sig_rows.append(rec[:8])\n                win = pos // 1_000_000\n                key = (chrom, win)\n                if key not in window_best or p < window_best[key][0]:\n                    window_best[key] = (p, rec[:8])\n\n    leads = [v[1] for _, v in sorted(window_best.items(), key=lambda kv: (kv[0][0].zfill(2), kv[0][1]))]\n    leads_by_p = sorted(leads, key=lambda r: float(r[7]))[:250]\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        out.write(\"section\\tvalue\\n\")\n        out.write(\"rows\\t%d\\n\" % rows)\n        out.write(\"genome_wide_significant_rows\\t%d\\n\" % len(sig_rows))\n        out.write(\"lead_1mb_windows\\t%d\\n\" % len(leads))\n        out.write(\"\\ntarget_positions\\n\")\n        out.write(\"label\\t#CHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\tP\\n\")\n        for rec in target_rows:\n            out.write(\"\\t\".join(rec) + \"\\n\")\n        out.write(\"\\nlead_windows_by_p\\n\")\n        out.write(\"#CHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\tP\\n\")\n        for rec in leads_by_p:\n            out.write(\"\\t\".join(rec) + \"\\n\")\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2])\n",
+    "file": "r0_h4_gwas_loci.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b513d330774ecac471"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135f708952ac466d369",
+    "hid": 6,
+    "name": "compare_catalog_targets.py",
+    "bytes": 3585,
+    "sha256": "b4dc2ca58fba5edbad6e549f2a5cae81a3439f038ec2a2b3bc41cd5f3a72ffc0",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135f708952ac466d369/display",
+    "content": "import csv\nimport gzip\nimport math\nimport sys\nfrom collections import defaultdict\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef parse_p(value):\n    try:\n        p = float(value)\n        if math.isfinite(p):\n            return p\n    except ValueError:\n        return None\n    return None\n\n\ndef main(gwas_path, target_path, out_path):\n    targets = {}\n    target_rows = []\n    with open_text(target_path) as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            key = (row[\"chrom\"], int(row[\"pos\"]))\n            row[\"catalog_p_float\"] = parse_p(row[\"catalog_p\"])\n            target_rows.append(row)\n            targets.setdefault(key, []).append(row)\n\n    found = {}\n    with open_text(gwas_path) as handle:\n        reader = csv.DictReader(handle, delimiter=\"\\t\")\n        for rec in reader:\n            try:\n                key = (rec[\"#CHROM\"], int(rec[\"POS\"]))\n            except (KeyError, ValueError):\n                continue\n            if key in targets:\n                found[key] = rec\n\n    summary = defaultdict(lambda: {\"n\": 0, \"found\": 0, \"within10x\": 0, \"within100x\": 0, \"exact_text\": 0, \"best_log10_delta\": None})\n    detail = []\n    for row in target_rows:\n        key = (row[\"chrom\"], int(row[\"pos\"]))\n        rec = found.get(key)\n        s = summary[(row[\"pmid\"], row[\"accession\"], row[\"trait\"])]\n        s[\"n\"] += 1\n        input_p = None\n        ratio = \"\"\n        log_delta = \"\"\n        if rec:\n            s[\"found\"] += 1\n            input_p = parse_p(rec[\"P\"])\n            cat_p = row[\"catalog_p_float\"]\n            if input_p is not None and cat_p and cat_p > 0 and input_p > 0:\n                log_delta_value = abs(math.log10(input_p) - math.log10(cat_p))\n                log_delta = \"%.6g\" % log_delta_value\n                ratio = \"%.6g\" % (input_p / cat_p)\n                if log_delta_value <= 1:\n                    s[\"within10x\"] += 1\n                if log_delta_value <= 2:\n                    s[\"within100x\"] += 1\n                best = s[\"best_log10_delta\"]\n                if best is None or log_delta_value < best:\n                    s[\"best_log10_delta\"] = log_delta_value\n            if rec[\"P\"].lower() == row[\"catalog_p\"].lower():\n                s[\"exact_text\"] += 1\n        detail.append([\n            row[\"pmid\"], row[\"accession\"], row[\"trait\"], row[\"snp\"],\n            row[\"chrom\"], row[\"pos\"], row[\"catalog_p\"],\n            \"\" if input_p is None else \"%.8g\" % input_p,\n            ratio, log_delta, row[\"mapped_gene\"],\n        ])\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"n_targets\", \"found\", \"within10x\", \"within100x\", \"exact_text\", \"best_log10_delta\"])\n        for (pmid, accession, trait), s in sorted(summary.items(), key=lambda kv: (-kv[1][\"within10x\"], -kv[1][\"within100x\"], kv[0][1], kv[0][2])):\n            w.writerow([\"summary\", pmid, accession, trait, s[\"n\"], s[\"found\"], s[\"within10x\"], s[\"within100x\"], s[\"exact_text\"], \"\" if s[\"best_log10_delta\"] is None else \"%.6g\" % s[\"best_log10_delta\"]])\n        w.writerow([])\n        w.writerow([\"detail\", \"pmid\", \"accession\", \"trait\", \"snp\", \"chrom\", \"pos\", \"catalog_p\", \"input_p\", \"input_over_catalog\", \"abs_log10_delta\", \"mapped_gene\"])\n        for rec in detail:\n            w.writerow([\"detail\"] + rec)\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2], sys.argv[3])\n",
+    "file": "r0_h6_compare_catalog_targets.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b56347f6f3e7fd56e8"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135c4f4ad48c55c996c",
+    "hid": 9,
+    "name": "compare_catalog_targets.py",
+    "bytes": 3585,
+    "sha256": "b4dc2ca58fba5edbad6e549f2a5cae81a3439f038ec2a2b3bc41cd5f3a72ffc0",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135c4f4ad48c55c996c/display",
+    "content": "import csv\nimport gzip\nimport math\nimport sys\nfrom collections import defaultdict\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef parse_p(value):\n    try:\n        p = float(value)\n        if math.isfinite(p):\n            return p\n    except ValueError:\n        return None\n    return None\n\n\ndef main(gwas_path, target_path, out_path):\n    targets = {}\n    target_rows = []\n    with open_text(target_path) as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            key = (row[\"chrom\"], int(row[\"pos\"]))\n            row[\"catalog_p_float\"] = parse_p(row[\"catalog_p\"])\n            target_rows.append(row)\n            targets.setdefault(key, []).append(row)\n\n    found = {}\n    with open_text(gwas_path) as handle:\n        reader = csv.DictReader(handle, delimiter=\"\\t\")\n        for rec in reader:\n            try:\n                key = (rec[\"#CHROM\"], int(rec[\"POS\"]))\n            except (KeyError, ValueError):\n                continue\n            if key in targets:\n                found[key] = rec\n\n    summary = defaultdict(lambda: {\"n\": 0, \"found\": 0, \"within10x\": 0, \"within100x\": 0, \"exact_text\": 0, \"best_log10_delta\": None})\n    detail = []\n    for row in target_rows:\n        key = (row[\"chrom\"], int(row[\"pos\"]))\n        rec = found.get(key)\n        s = summary[(row[\"pmid\"], row[\"accession\"], row[\"trait\"])]\n        s[\"n\"] += 1\n        input_p = None\n        ratio = \"\"\n        log_delta = \"\"\n        if rec:\n            s[\"found\"] += 1\n            input_p = parse_p(rec[\"P\"])\n            cat_p = row[\"catalog_p_float\"]\n            if input_p is not None and cat_p and cat_p > 0 and input_p > 0:\n                log_delta_value = abs(math.log10(input_p) - math.log10(cat_p))\n                log_delta = \"%.6g\" % log_delta_value\n                ratio = \"%.6g\" % (input_p / cat_p)\n                if log_delta_value <= 1:\n                    s[\"within10x\"] += 1\n                if log_delta_value <= 2:\n                    s[\"within100x\"] += 1\n                best = s[\"best_log10_delta\"]\n                if best is None or log_delta_value < best:\n                    s[\"best_log10_delta\"] = log_delta_value\n            if rec[\"P\"].lower() == row[\"catalog_p\"].lower():\n                s[\"exact_text\"] += 1\n        detail.append([\n            row[\"pmid\"], row[\"accession\"], row[\"trait\"], row[\"snp\"],\n            row[\"chrom\"], row[\"pos\"], row[\"catalog_p\"],\n            \"\" if input_p is None else \"%.8g\" % input_p,\n            ratio, log_delta, row[\"mapped_gene\"],\n        ])\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"n_targets\", \"found\", \"within10x\", \"within100x\", \"exact_text\", \"best_log10_delta\"])\n        for (pmid, accession, trait), s in sorted(summary.items(), key=lambda kv: (-kv[1][\"within10x\"], -kv[1][\"within100x\"], kv[0][1], kv[0][2])):\n            w.writerow([\"summary\", pmid, accession, trait, s[\"n\"], s[\"found\"], s[\"within10x\"], s[\"within100x\"], s[\"exact_text\"], \"\" if s[\"best_log10_delta\"] is None else \"%.6g\" % s[\"best_log10_delta\"]])\n        w.writerow([])\n        w.writerow([\"detail\", \"pmid\", \"accession\", \"trait\", \"snp\", \"chrom\", \"pos\", \"catalog_p\", \"input_p\", \"input_over_catalog\", \"abs_log10_delta\", \"mapped_gene\"])\n        for rec in detail:\n            w.writerow([\"detail\"] + rec)\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2], sys.argv[3])\n",
+    "file": "r0_h9_compare_catalog_targets.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5a39b97578cedde6d"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135e1d36bd65b620319",
+    "hid": 12,
+    "name": "summarize_catalog_compare.py",
+    "bytes": 1917,
+    "sha256": "d8134f1827c862832acf09f8b491642a3f145f6c4719605cb382fa6f9e2cff24",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135e1d36bd65b620319/display",
+    "content": "import csv\nimport sys\n\n\ndef main(in_path, out_path):\n    summaries = []\n    details = []\n    in_detail = False\n    with open(in_path, newline=\"\") as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        for row in reader:\n            if not row:\n                continue\n            if row[0] == \"section\" or row[0].startswith(\"#\"):\n                continue\n            if row[0] == \"detail\" and len(row) > 1 and row[1] == \"pmid\":\n                in_detail = True\n                continue\n            if row[0] == \"summary\":\n                summaries.append(row)\n            elif row[0] == \"detail\" and in_detail:\n                details.append(row)\n\n    def int_field(row, idx):\n        try:\n            return int(row[idx])\n        except Exception:\n            return 0\n\n    def float_field(row, idx):\n        try:\n            return float(row[idx])\n        except Exception:\n            return 1e99\n\n    summaries.sort(key=lambda r: (-int_field(r, 6), -int_field(r, 7), float_field(r, 9), r[1], r[3]))\n    top_pmids = {r[1] for r in summaries[:5]}\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"n_targets\", \"found\", \"within10x\", \"within100x\", \"exact_text\", \"best_log10_delta\"])\n        for row in summaries[:25]:\n            w.writerow(row[:10])\n        w.writerow([])\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"snp\", \"chrom\", \"pos\", \"catalog_p\", \"input_p\", \"input_over_catalog\", \"abs_log10_delta\", \"mapped_gene\"])\n        selected = []\n        for row in details:\n            if len(row) >= 12 and row[1] in top_pmids:\n                selected.append(row)\n        selected.sort(key=lambda r: (r[1], r[3], float_field(r, 10), r[5], r[6]))\n        for row in selected[:200]:\n            w.writerow(row[:12])\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2])\n",
+    "file": "r0_h12_summarize_catalog_compare.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b59f21cec1345ce0c0"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135f92b85e32d5575f5",
+    "hid": 14,
+    "name": "summarize_unique_positions.py",
+    "bytes": 2478,
+    "sha256": "e6959e0a936b76ba67784fb111cce9fa84647bf46b7644dadad9e5d3fdf6c108",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135f92b85e32d5575f5/display",
+    "content": "import csv\nimport sys\nfrom collections import defaultdict\n\n\ndef safe_float(value, default=1e99):\n    try:\n        return float(value)\n    except Exception:\n        return default\n\n\ndef main(in_path, out_path):\n    best = {}\n    in_detail = False\n    with open(in_path, newline=\"\") as handle:\n        for row in csv.reader(handle, delimiter=\"\\t\"):\n            if not row:\n                continue\n            if row[0] == \"detail\" and len(row) > 1 and row[1] == \"pmid\":\n                in_detail = True\n                continue\n            if not in_detail or row[0] != \"detail\" or len(row) < 12:\n                continue\n            # row: detail, pmid, accession, trait, snp, chrom, pos, catalog_p, input_p,\n            # input_over_catalog, abs_log10_delta, mapped_gene\n            key = (row[1], row[2], row[3], row[5], row[6])\n            delta = safe_float(row[10])\n            if key not in best or delta < safe_float(best[key][10]):\n                best[key] = row\n\n    grouped = defaultdict(list)\n    for row in best.values():\n        grouped[(row[1], row[2], row[3])].append(row)\n\n    summaries = []\n    for key, rows in grouped.items():\n        deltas = [safe_float(r[10]) for r in rows]\n        within10 = sum(d <= 1 for d in deltas)\n        within100 = sum(d <= 2 for d in deltas)\n        summaries.append((key, rows, len(rows), within10, within100, min(deltas), sum(deltas) / len(deltas)))\n\n    summaries.sort(key=lambda x: (-x[3], -x[4], -x[2], x[5], x[6], x[0][0], x[0][2]))\n\n    top_keys = {s[0] for s in summaries[:10]}\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"unique_positions\", \"within10x\", \"within100x\", \"best_log10_delta\", \"mean_best_log10_delta\"])\n        for key, rows, n, within10, within100, best_delta, mean_delta in summaries[:50]:\n            w.writerow([\"summary\", key[0], key[1], key[2], n, within10, within100, \"%.6g\" % best_delta, \"%.6g\" % mean_delta])\n        w.writerow([])\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"snp\", \"chrom\", \"pos\", \"catalog_p\", \"input_p\", \"input_over_catalog\", \"abs_log10_delta\", \"mapped_gene\"])\n        for key, rows, *_ in summaries:\n            if key not in top_keys:\n                continue\n            for row in sorted(rows, key=lambda r: (safe_float(r[10]), r[5], r[6]))[:20]:\n                w.writerow(row[:12])\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2])\n",
+    "file": "r0_h14_summarize_unique_positions.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5bd89d12264973771"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721351952a080c33f5593",
+    "hid": 16,
+    "name": "compare_remote_tabix.py",
+    "bytes": 4144,
+    "sha256": "c63cd1bf443af7e64f5600a47c5b2e11f0270e009eb2b3f665ef6c1c868e2645",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721351952a080c33f5593/display",
+    "excerpt": "import csv\nimport gzip\nimport math\nimport subprocess\nimport sys\nfrom collections import defaultdict\n\n\nLEAD_TARGETS = {\n    (\"1\", 161530617),\n    (\"6\", 32067917),\n    (\"6\", 31614248),\n    (\"17\", 16939677),\n    (\"6\", 30931873),\n    (\"19\", 49525049),\n    (\"4\", 3445429),\n    (\"6\", 29686923),\n    (\"4\", 102486185),\n    (\"2\", 111471251),\n    (\"13\", 108308037),\n    (\"2\", 27508073),\n    (\"6\", 33546790),\n}\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef parse_p(value):\n    try:\n        p = float(value)\n        if math.isfinite(p):\n            return p\n    except Exception:\n        return None\n    return None\n\n\ndef main(gwas_path, candidates_path, out_path):\n    targets = {}\n    first_needed = 5\n    with open_text(gwas_path) as handle:\n        reader = csv.DictReader(handle, delimiter=\"\\t\")\n        for rec in reader:\n            key = (rec[\"#CHROM\"], int(rec[\"POS\"]))\n            if len(targets) < first_needed or key in LEAD_TARGETS:\n                targets[key] = rec\n            if len(targets) >= first_needed + len(LEAD_TARGETS):\n                break\n\n    candidates = []\n    with open_text(candidates_path) as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            candidates.append(row)\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"targets\", \"found\", \"within10x\", \"within100x\", \"best_log10_delta\", \"mean_log10_delta\"])\n        detail_rows = []\n        for cand in candidates:\n            url = cand[\"url\"]\n            found = 0\n            deltas = []\n            for chrom, pos in sorted(targets, key=lambda x: (int(x[0]) if x[0].isdigit() else 999, x[1])):\n                region = f\"{chrom}:{pos}-{pos}\"\n                proc = subprocess.run([\"tabix\", url, region], text=True, stdout=subproce",
+    "file": "r0_h16_compare_remote_tabix.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5ad1b9667b53cf841"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135506a71d3e97fe956",
+    "hid": 19,
+    "name": "compare_remote_tabix.py",
+    "bytes": 4730,
+    "sha256": "6df9cf28071f8fab9895904f4c65e7f402f0c2c82a03199b0443fe1fffc43dd0",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135506a71d3e97fe956/display",
+    "excerpt": "import csv\nimport gzip\nimport math\nimport subprocess\nimport sys\nfrom collections import defaultdict\n\n\nLEAD_TARGETS = {\n    (\"1\", 161530617),\n    (\"6\", 32067917),\n    (\"6\", 31614248),\n    (\"17\", 16939677),\n    (\"6\", 30931873),\n    (\"19\", 49525049),\n    (\"4\", 3445429),\n    (\"6\", 29686923),\n    (\"4\", 102486185),\n    (\"2\", 111471251),\n    (\"13\", 108308037),\n    (\"2\", 27508073),\n    (\"6\", 33546790),\n}\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef parse_p(value):\n    try:\n        p = float(value)\n        if math.isfinite(p):\n            return p\n    except Exception:\n        return None\n    return None\n\n\ndef main(gwas_path, candidates_path, out_path):\n    targets = {}\n    first_needed = 5\n    with open_text(gwas_path) as handle:\n        reader = csv.DictReader(handle, delimiter=\"\\t\")\n        for rec in reader:\n            key = (rec[\"#CHROM\"], int(rec[\"POS\"]))\n            if len(targets) < first_needed or key in LEAD_TARGETS:\n                targets[key] = rec\n            if len(targets) >= first_needed + len(LEAD_TARGETS):\n                break\n\n    candidates = []\n    with open_text(candidates_path) as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            candidates.append(row)\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"targets\", \"found\", \"within10x\", \"within100x\", \"best_log10_delta\", \"mean_log10_delta\"])\n        detail_rows = []\n        for cand in candidates:\n            url = cand[\"url\"]\n            header_proc = subprocess.run([\"tabix\", \"-H\", url], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n            header = []\n            for line in header_proc.stdout.splitlines():\n                if line.startswith(\"#\"):\n                    header = line.lstrip(\"#\")",
+    "file": "r0_h19_compare_remote_tabix.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5ffd8d560f3b04b21"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213513f8db34cdd6c2fc",
+    "hid": 22,
+    "name": "compare_catalog_targets.py",
+    "bytes": 3585,
+    "sha256": "b4dc2ca58fba5edbad6e549f2a5cae81a3439f038ec2a2b3bc41cd5f3a72ffc0",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213513f8db34cdd6c2fc/display",
+    "content": "import csv\nimport gzip\nimport math\nimport sys\nfrom collections import defaultdict\n\n\ndef open_text(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", newline=\"\")\n    return open(path, \"rt\", newline=\"\")\n\n\ndef parse_p(value):\n    try:\n        p = float(value)\n        if math.isfinite(p):\n            return p\n    except ValueError:\n        return None\n    return None\n\n\ndef main(gwas_path, target_path, out_path):\n    targets = {}\n    target_rows = []\n    with open_text(target_path) as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            key = (row[\"chrom\"], int(row[\"pos\"]))\n            row[\"catalog_p_float\"] = parse_p(row[\"catalog_p\"])\n            target_rows.append(row)\n            targets.setdefault(key, []).append(row)\n\n    found = {}\n    with open_text(gwas_path) as handle:\n        reader = csv.DictReader(handle, delimiter=\"\\t\")\n        for rec in reader:\n            try:\n                key = (rec[\"#CHROM\"], int(rec[\"POS\"]))\n            except (KeyError, ValueError):\n                continue\n            if key in targets:\n                found[key] = rec\n\n    summary = defaultdict(lambda: {\"n\": 0, \"found\": 0, \"within10x\": 0, \"within100x\": 0, \"exact_text\": 0, \"best_log10_delta\": None})\n    detail = []\n    for row in target_rows:\n        key = (row[\"chrom\"], int(row[\"pos\"]))\n        rec = found.get(key)\n        s = summary[(row[\"pmid\"], row[\"accession\"], row[\"trait\"])]\n        s[\"n\"] += 1\n        input_p = None\n        ratio = \"\"\n        log_delta = \"\"\n        if rec:\n            s[\"found\"] += 1\n            input_p = parse_p(rec[\"P\"])\n            cat_p = row[\"catalog_p_float\"]\n            if input_p is not None and cat_p and cat_p > 0 and input_p > 0:\n                log_delta_value = abs(math.log10(input_p) - math.log10(cat_p))\n                log_delta = \"%.6g\" % log_delta_value\n                ratio = \"%.6g\" % (input_p / cat_p)\n                if log_delta_value <= 1:\n                    s[\"within10x\"] += 1\n                if log_delta_value <= 2:\n                    s[\"within100x\"] += 1\n                best = s[\"best_log10_delta\"]\n                if best is None or log_delta_value < best:\n                    s[\"best_log10_delta\"] = log_delta_value\n            if rec[\"P\"].lower() == row[\"catalog_p\"].lower():\n                s[\"exact_text\"] += 1\n        detail.append([\n            row[\"pmid\"], row[\"accession\"], row[\"trait\"], row[\"snp\"],\n            row[\"chrom\"], row[\"pos\"], row[\"catalog_p\"],\n            \"\" if input_p is None else \"%.8g\" % input_p,\n            ratio, log_delta, row[\"mapped_gene\"],\n        ])\n\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"n_targets\", \"found\", \"within10x\", \"within100x\", \"exact_text\", \"best_log10_delta\"])\n        for (pmid, accession, trait), s in sorted(summary.items(), key=lambda kv: (-kv[1][\"within10x\"], -kv[1][\"within100x\"], kv[0][1], kv[0][2])):\n            w.writerow([\"summary\", pmid, accession, trait, s[\"n\"], s[\"found\"], s[\"within10x\"], s[\"within100x\"], s[\"exact_text\"], \"\" if s[\"best_log10_delta\"] is None else \"%.6g\" % s[\"best_log10_delta\"]])\n        w.writerow([])\n        w.writerow([\"detail\", \"pmid\", \"accession\", \"trait\", \"snp\", \"chrom\", \"pos\", \"catalog_p\", \"input_p\", \"input_over_catalog\", \"abs_log10_delta\", \"mapped_gene\"])\n        for rec in detail:\n            w.writerow([\"detail\"] + rec)\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2], sys.argv[3])\n",
+    "file": "r0_h22_compare_catalog_targets.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b59cc7da6485468f55"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135b9e61e96b23f4224",
+    "hid": 25,
+    "name": "summarize_unique_positions.py",
+    "bytes": 2478,
+    "sha256": "e6959e0a936b76ba67784fb111cce9fa84647bf46b7644dadad9e5d3fdf6c108",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135b9e61e96b23f4224/display",
+    "content": "import csv\nimport sys\nfrom collections import defaultdict\n\n\ndef safe_float(value, default=1e99):\n    try:\n        return float(value)\n    except Exception:\n        return default\n\n\ndef main(in_path, out_path):\n    best = {}\n    in_detail = False\n    with open(in_path, newline=\"\") as handle:\n        for row in csv.reader(handle, delimiter=\"\\t\"):\n            if not row:\n                continue\n            if row[0] == \"detail\" and len(row) > 1 and row[1] == \"pmid\":\n                in_detail = True\n                continue\n            if not in_detail or row[0] != \"detail\" or len(row) < 12:\n                continue\n            # row: detail, pmid, accession, trait, snp, chrom, pos, catalog_p, input_p,\n            # input_over_catalog, abs_log10_delta, mapped_gene\n            key = (row[1], row[2], row[3], row[5], row[6])\n            delta = safe_float(row[10])\n            if key not in best or delta < safe_float(best[key][10]):\n                best[key] = row\n\n    grouped = defaultdict(list)\n    for row in best.values():\n        grouped[(row[1], row[2], row[3])].append(row)\n\n    summaries = []\n    for key, rows in grouped.items():\n        deltas = [safe_float(r[10]) for r in rows]\n        within10 = sum(d <= 1 for d in deltas)\n        within100 = sum(d <= 2 for d in deltas)\n        summaries.append((key, rows, len(rows), within10, within100, min(deltas), sum(deltas) / len(deltas)))\n\n    summaries.sort(key=lambda x: (-x[3], -x[4], -x[2], x[5], x[6], x[0][0], x[0][2]))\n\n    top_keys = {s[0] for s in summaries[:10]}\n    with open(out_path, \"w\", newline=\"\") as out:\n        w = csv.writer(out, delimiter=\"\\t\")\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"unique_positions\", \"within10x\", \"within100x\", \"best_log10_delta\", \"mean_best_log10_delta\"])\n        for key, rows, n, within10, within100, best_delta, mean_delta in summaries[:50]:\n            w.writerow([\"summary\", key[0], key[1], key[2], n, within10, within100, \"%.6g\" % best_delta, \"%.6g\" % mean_delta])\n        w.writerow([])\n        w.writerow([\"section\", \"pmid\", \"accession\", \"trait\", \"snp\", \"chrom\", \"pos\", \"catalog_p\", \"input_p\", \"input_over_catalog\", \"abs_log10_delta\", \"mapped_gene\"])\n        for key, rows, *_ in summaries:\n            if key not in top_keys:\n                continue\n            for row in sorted(rows, key=lambda r: (safe_float(r[10]), r[5], r[6]))[:20]:\n                w.writerow(row[:12])\n\n\nif __name__ == \"__main__\":\n    main(sys.argv[1], sys.argv[2])\n",
+    "file": "r0_h25_summarize_unique_positions.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5ec0ec1251f2a9b8c"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135f65f37e0b99f09f2",
+    "hid": 27,
+    "name": "compare_candidate_pmids_from_catalog.py",
+    "bytes": 5771,
+    "sha256": "360abd13e7d0e99073275fecf3480599c7261d4c9cab14b8d4500cb7ee8d0e40",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135f65f37e0b99f09f2/display",
+    "excerpt": "import csv\nimport gzip\nimport math\nimport os\nimport sys\nimport urllib.request\nimport zipfile\nfrom collections import defaultdict\n\n\nCATALOG_URL = \"https://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations-full.zip\"\n\n\ndef as_float(value):\n    try:\n        return float(value)\n    except Exception:\n        return None\n\n\ndef norm_chrom(value):\n    value = str(value).strip()\n    if value.startswith(\"chr\"):\n        value = value[3:]\n    return value\n\n\ndef log_delta(a, b):\n    if a is None or b is None or a <= 0 or b <= 0:\n        return 1e99\n    return abs(math.log10(a) - math.log10(b))\n\n\ndef read_catalog(pmids, work_dir):\n    zip_path = os.path.join(work_dir, \"gwas-catalog-associations-full.zip\")\n    urllib.request.urlretrieve(CATALOG_URL, zip_path)\n    rows = []\n    positions = set()\n    with zipfile.ZipFile(zip_path) as archive:\n        names = [name for name in archive.namelist() if name.endswith(\".tsv\")]\n        if not names:\n            raise RuntimeError(\"No TSV found in GWAS Catalog zip\")\n        with archive.open(names[0]) as raw:\n            text = (line.decode(\"utf-8\", errors=\"replace\") for line in raw)\n            reader = csv.DictReader(text, delimiter=\"\\t\")\n            for row in reader:\n                pmid = row.get(\"PUBMEDID\", \"\").strip()\n                if pmid not in pmids:\n                    continue\n                chrom = norm_chrom(row.get(\"CHR_ID\", \"\"))\n                pos = row.get(\"CHR_POS\", \"\").strip()\n                if not chrom.isdigit() or not pos.isdigit():\n                    continue\n                pval = as_float(row.get(\"P-VALUE\", \"\"))\n                if pval is None:\n                    continue\n                entry = {\n                    \"pmid\": pmid,\n                    \"accession\": row.get(\"STUDY ACCESSION\", \"\").strip(),\n                    \"trait\": row.get(\"DISEASE/TRAIT\", \"\").strip(),\n                    \"snp\": row.get(\"SNPS\", \"\").strip(),\n                    \"chrom\": chrom,\n                    \"pos\": p",
+    "file": "r0_h27_compare_candidate_pmids_from_catalog.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b534c9cb29dc3db0f3"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721351fad9e1703c86435",
+    "hid": 29,
+    "name": "compare_candidate_pmids_from_catalog.py",
+    "bytes": 5771,
+    "sha256": "360abd13e7d0e99073275fecf3480599c7261d4c9cab14b8d4500cb7ee8d0e40",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721351fad9e1703c86435/display",
+    "excerpt": "import csv\nimport gzip\nimport math\nimport os\nimport sys\nimport urllib.request\nimport zipfile\nfrom collections import defaultdict\n\n\nCATALOG_URL = \"https://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations-full.zip\"\n\n\ndef as_float(value):\n    try:\n        return float(value)\n    except Exception:\n        return None\n\n\ndef norm_chrom(value):\n    value = str(value).strip()\n    if value.startswith(\"chr\"):\n        value = value[3:]\n    return value\n\n\ndef log_delta(a, b):\n    if a is None or b is None or a <= 0 or b <= 0:\n        return 1e99\n    return abs(math.log10(a) - math.log10(b))\n\n\ndef read_catalog(pmids, work_dir):\n    zip_path = os.path.join(work_dir, \"gwas-catalog-associations-full.zip\")\n    urllib.request.urlretrieve(CATALOG_URL, zip_path)\n    rows = []\n    positions = set()\n    with zipfile.ZipFile(zip_path) as archive:\n        names = [name for name in archive.namelist() if name.endswith(\".tsv\")]\n        if not names:\n            raise RuntimeError(\"No TSV found in GWAS Catalog zip\")\n        with archive.open(names[0]) as raw:\n            text = (line.decode(\"utf-8\", errors=\"replace\") for line in raw)\n            reader = csv.DictReader(text, delimiter=\"\\t\")\n            for row in reader:\n                pmid = row.get(\"PUBMEDID\", \"\").strip()\n                if pmid not in pmids:\n                    continue\n                chrom = norm_chrom(row.get(\"CHR_ID\", \"\"))\n                pos = row.get(\"CHR_POS\", \"\").strip()\n                if not chrom.isdigit() or not pos.isdigit():\n                    continue\n                pval = as_float(row.get(\"P-VALUE\", \"\"))\n                if pval is None:\n                    continue\n                entry = {\n                    \"pmid\": pmid,\n                    \"accession\": row.get(\"STUDY ACCESSION\", \"\").strip(),\n                    \"trait\": row.get(\"DISEASE/TRAIT\", \"\").strip(),\n                    \"snp\": row.get(\"SNPS\", \"\").strip(),\n                    \"chrom\": chrom,\n                    \"pos\": p",
+    "file": "r0_h29_compare_candidate_pmids_from_catalog.py",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b580fd35b6dd6b61d7"
+    ]
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b5d1aa1a73b3f98a12.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5d1aa1a73b3f98a12",
+    "tool_id": "gwas-signature-v1",
+    "sha256": "476cf1e21084b37db967e7d462db5152d41ac103b327ebd3fbca9ae15ca97bcb"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b513d330774ecac471.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b513d330774ecac471",
+    "tool_id": "gwas-loci-v1",
+    "sha256": "9ec04e5170e0bf245336ed4c7fd29b009f96db95b085e811f36548ca8fdf1fb3"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b56347f6f3e7fd56e8.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b56347f6f3e7fd56e8",
+    "tool_id": "compare-catalog-targets-v1",
+    "sha256": "baa5e3dc62c5be60207d1dbfd4750fa2f27bb22e914f250d7c0e15774b6f4f72"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b5a39b97578cedde6d.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5a39b97578cedde6d",
+    "tool_id": "compare-leadpos-catalog-v1",
+    "sha256": "7551395b353fe4a76fed22aca0e7f2cdaac050c4a435242ab4038d219e633d9e"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b59f21cec1345ce0c0.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b59f21cec1345ce0c0",
+    "tool_id": "summarize-leadpos-compare-v1",
+    "sha256": "0801da1f633452fa9bdbc3af3a39ea74ee0db8e475ab8d6db6449335ec03b980"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b5bd89d12264973771.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5bd89d12264973771",
+    "tool_id": "summarize-unique-leadpos-v1",
+    "sha256": "cb62c7612b45e3144f01fb1c759d71cc9cddcdeb99f6d5752056f5dc5407b78d"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b5ad1b9667b53cf841.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5ad1b9667b53cf841",
+    "tool_id": "compare-remote-tabix-v1",
+    "sha256": "7508724d653133eb0ce15d9ce2341bcd80b6ff0ab360f1f3beeefe83bbdb70a5"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b5ffd8d560f3b04b21.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5ffd8d560f3b04b21",
+    "tool_id": "compare-remote-tabix-v2",
+    "sha256": "6c7dec76be31be7ee292b49a954fa0ca249e07a80a1eb9859937a17d27fa19f5"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b59cc7da6485468f55.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b59cc7da6485468f55",
+    "tool_id": "compare-top-pmids-catalog-v1",
+    "sha256": "c84f1afe59faa684b4b8f5431da112133352b7357e4ed627c826067ccc704f03"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b5ec0ec1251f2a9b8c.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5ec0ec1251f2a9b8c",
+    "tool_id": "summarize-unique-top-pmids-v2",
+    "sha256": "c6cb62b511311821c36e71621dfd7a417f10bb23eefa2102c155635b1fa15062"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b534c9cb29dc3db0f3.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b534c9cb29dc3db0f3",
+    "tool_id": "compare-candidate-pmids-catalog-v1",
+    "sha256": "3a5702a041ed6421c4229a9cba659a7915f0e62a8b6749422411e27aced811ba"
+  },
+  {
+    "file": "r0_job_bbd44e69cb8906b580fd35b6dd6b61d7.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.5",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b580fd35b6dd6b61d7",
+    "tool_id": "compare-ztt-pmid-catalog-v1",
+    "sha256": "8f5498a02ae1cefa2e344fa26336307145edf83bb5a09bc5ccb5cbb790031af9"
+  },
+  {
+    "dataset_id": "f9cad7b01a4721356921ad50f56dca0c",
+    "hid": 2,
+    "name": "gwas_top_hits.py",
+    "bytes": 3256,
+    "sha256": "e131cd6758120850915f7f8d6518daa6319db8add11b0e8946a8bf3ec77749ea",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721356921ad50f56dca0c/display",
+    "content": "#!/usr/bin/env python3\nimport gzip\nimport heapq\nimport math\nimport sys\nfrom collections import Counter\n\n\ndef open_maybe_gzip(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\")\n    return open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\")\n\n\ndef main():\n    if len(sys.argv) != 4:\n        raise SystemExit(\"usage: gwas_top_hits.py INPUT TOP_OUT DIAG_OUT\")\n    input_path, top_out, diag_out = sys.argv[1:]\n\n    keep_n = 500\n    top_heap = []\n    threshold_counts = Counter()\n    chr_sig_counts = Counter()\n    chr_counts = Counter()\n    row_count = 0\n    bad_p = 0\n    header = None\n    min_p = math.inf\n\n    with open_maybe_gzip(input_path) as handle:\n        for line_number, line in enumerate(handle, start=1):\n            line = line.rstrip(\"\\n\")\n            if not line:\n                continue\n            fields = line.split(\"\\t\")\n            if line_number == 1 and fields[0] == \"#CHROM\":\n                header = fields\n                continue\n            if len(fields) < 8:\n                bad_p += 1\n                continue\n            try:\n                p_value = float(fields[7])\n            except ValueError:\n                bad_p += 1\n                continue\n            if not math.isfinite(p_value):\n                bad_p += 1\n                continue\n\n            row_count += 1\n            chrom = fields[0]\n            chr_counts[chrom] += 1\n            min_p = min(min_p, p_value)\n            if p_value < 5e-8:\n                threshold_counts[\"p_lt_5e-8\"] += 1\n                chr_sig_counts[chrom] += 1\n            if p_value < 1e-10:\n                threshold_counts[\"p_lt_1e-10\"] += 1\n            if p_value < 1e-20:\n                threshold_counts[\"p_lt_1e-20\"] += 1\n\n            row_key = (p_value, line_number, fields[:8])\n            heap_item = (-p_value, -line_number, row_key)\n            if len(top_heap) < keep_n:\n                heapq.heappush(top_heap, heap_item)\n            elif heap_item > top_heap[0]:\n                heapq.heapreplace(top_heap, heap_item)\n\n    top_rows = [item[2] for item in top_heap]\n    top_rows.sort(key=lambda item: (item[0], item[1]))\n\n    with open(top_out, \"w\", encoding=\"utf-8\") as out:\n        out.write(\"rank\\tline_number\\t\" + \"\\t\".join(header or [\"#CHROM\", \"POS\", \"ID\", \"REF\", \"ALT\", \"A1\", \"TEST\", \"P\"]) + \"\\n\")\n        for rank, (p_value, line_number, fields) in enumerate(top_rows, start=1):\n            out.write(f\"{rank}\\t{line_number}\\t\" + \"\\t\".join(fields) + \"\\n\")\n\n    with open(diag_out, \"w\", encoding=\"utf-8\") as out:\n        out.write(\"metric\\tvalue\\n\")\n        out.write(f\"row_count\\t{row_count}\\n\")\n        out.write(f\"bad_p_or_short_rows\\t{bad_p}\\n\")\n        out.write(f\"min_p\\t{min_p:.17g}\\n\")\n        for key in [\"p_lt_5e-8\", \"p_lt_1e-10\", \"p_lt_1e-20\"]:\n            out.write(f\"{key}\\t{threshold_counts[key]}\\n\")\n        out.write(\"chromosome_counts\\t\" + \";\".join(f\"{k}:{chr_counts[k]}\" for k in sorted(chr_counts, key=lambda x: (len(x), x))) + \"\\n\")\n        out.write(\"chromosome_sig_counts\\t\" + \";\".join(f\"{k}:{chr_sig_counts[k]}\" for k in sorted(chr_sig_counts, key=lambda x: (len(x), x))) + \"\\n\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "file": "r2_h2_gwas_top_hits.py",
+    "model": "GPT-5.5",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5830b52de222b96b4"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721353bace3515bb668d6",
+    "hid": 5,
+    "name": "gwas_top_hits.py",
+    "bytes": 3256,
+    "sha256": "e131cd6758120850915f7f8d6518daa6319db8add11b0e8946a8bf3ec77749ea",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721353bace3515bb668d6/display",
+    "content": "#!/usr/bin/env python3\nimport gzip\nimport heapq\nimport math\nimport sys\nfrom collections import Counter\n\n\ndef open_maybe_gzip(path):\n    with open(path, \"rb\") as raw:\n        magic = raw.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\")\n    return open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\")\n\n\ndef main():\n    if len(sys.argv) != 4:\n        raise SystemExit(\"usage: gwas_top_hits.py INPUT TOP_OUT DIAG_OUT\")\n    input_path, top_out, diag_out = sys.argv[1:]\n\n    keep_n = 500\n    top_heap = []\n    threshold_counts = Counter()\n    chr_sig_counts = Counter()\n    chr_counts = Counter()\n    row_count = 0\n    bad_p = 0\n    header = None\n    min_p = math.inf\n\n    with open_maybe_gzip(input_path) as handle:\n        for line_number, line in enumerate(handle, start=1):\n            line = line.rstrip(\"\\n\")\n            if not line:\n                continue\n            fields = line.split(\"\\t\")\n            if line_number == 1 and fields[0] == \"#CHROM\":\n                header = fields\n                continue\n            if len(fields) < 8:\n                bad_p += 1\n                continue\n            try:\n                p_value = float(fields[7])\n            except ValueError:\n                bad_p += 1\n                continue\n            if not math.isfinite(p_value):\n                bad_p += 1\n                continue\n\n            row_count += 1\n            chrom = fields[0]\n            chr_counts[chrom] += 1\n            min_p = min(min_p, p_value)\n            if p_value < 5e-8:\n                threshold_counts[\"p_lt_5e-8\"] += 1\n                chr_sig_counts[chrom] += 1\n            if p_value < 1e-10:\n                threshold_counts[\"p_lt_1e-10\"] += 1\n            if p_value < 1e-20:\n                threshold_counts[\"p_lt_1e-20\"] += 1\n\n            row_key = (p_value, line_number, fields[:8])\n            heap_item = (-p_value, -line_number, row_key)\n            if len(top_heap) < keep_n:\n                heapq.heappush(top_heap, heap_item)\n            elif heap_item > top_heap[0]:\n                heapq.heapreplace(top_heap, heap_item)\n\n    top_rows = [item[2] for item in top_heap]\n    top_rows.sort(key=lambda item: (item[0], item[1]))\n\n    with open(top_out, \"w\", encoding=\"utf-8\") as out:\n        out.write(\"rank\\tline_number\\t\" + \"\\t\".join(header or [\"#CHROM\", \"POS\", \"ID\", \"REF\", \"ALT\", \"A1\", \"TEST\", \"P\"]) + \"\\n\")\n        for rank, (p_value, line_number, fields) in enumerate(top_rows, start=1):\n            out.write(f\"{rank}\\t{line_number}\\t\" + \"\\t\".join(fields) + \"\\n\")\n\n    with open(diag_out, \"w\", encoding=\"utf-8\") as out:\n        out.write(\"metric\\tvalue\\n\")\n        out.write(f\"row_count\\t{row_count}\\n\")\n        out.write(f\"bad_p_or_short_rows\\t{bad_p}\\n\")\n        out.write(f\"min_p\\t{min_p:.17g}\\n\")\n        for key in [\"p_lt_5e-8\", \"p_lt_1e-10\", \"p_lt_1e-20\"]:\n            out.write(f\"{key}\\t{threshold_counts[key]}\\n\")\n        out.write(\"chromosome_counts\\t\" + \";\".join(f\"{k}:{chr_counts[k]}\" for k in sorted(chr_counts, key=lambda x: (len(x), x))) + \"\\n\")\n        out.write(\"chromosome_sig_counts\\t\" + \";\".join(f\"{k}:{chr_sig_counts[k]}\" for k in sorted(chr_sig_counts, key=lambda x: (len(x), x))) + \"\\n\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "file": "r2_h5_gwas_top_hits.py",
+    "model": "GPT-5.5",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5d31e9fbb7d89c3e4"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135b88cacf197f47dd7",
+    "hid": 2,
+    "name": "extract_gwas_signals.py",
+    "bytes": 1570,
+    "sha256": "26ad6d9d1cdcf6a66a71b5f1533dbd9ad2f55e20b78aac290f2ba041d493acbf",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135b88cacf197f47dd7/display",
+    "content": "import gzip\nimport heapq\nimport sys\n\n\ninput_path, output_path = sys.argv[1:3]\n\nwith open(input_path, \"rb\") as raw:\n    magic = raw.read(2)\nopener = gzip.open if magic == b\"\\x1f\\x8b\" else open\n\ntop = []\nrow_count = 0\ninvalid_p = 0\nthreshold_counts = {5e-8: 0, 1e-10: 0, 1e-20: 0, 1e-50: 0}\n\nwith opener(input_path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as handle:\n    header = handle.readline().rstrip(\"\\n\\r\").split(\"\\t\")\n    if len(header) < 8 or header[7] != \"P\":\n        raise ValueError(f\"Unexpected header: {header!r}\")\n    for line in handle:\n        fields = line.rstrip(\"\\n\\r\").split(\"\\t\")\n        if len(fields) < 8:\n            continue\n        row_count += 1\n        try:\n            p = float(fields[7])\n        except ValueError:\n            invalid_p += 1\n            continue\n        for threshold in threshold_counts:\n            if p < threshold:\n                threshold_counts[threshold] += 1\n        item = (-p, fields[:8])\n        if len(top) < 200:\n            heapq.heappush(top, item)\n        elif p < -top[0][0]:\n            heapq.heapreplace(top, item)\n\nwith open(output_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"metric\\tvalue\\n\")\n    out.write(f\"row_count\\t{row_count}\\n\")\n    out.write(f\"invalid_p\\t{invalid_p}\\n\")\n    for threshold, count in threshold_counts.items():\n        out.write(f\"p_lt_{threshold:g}\\t{count}\\n\")\n    out.write(\"rank\\tCHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\tP\\n\")\n    for rank, (neg_p, fields) in enumerate(sorted(top, key=lambda x: -x[0]), 1):\n        out.write(str(rank) + \"\\t\" + \"\\t\".join(fields) + \"\\n\")\n",
+    "file": "r3_h2_extract_gwas_signals.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5282d428416e24545"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135b2cef27b31d6a6e8",
+    "hid": 4,
+    "name": "extract_gwas_locus_minima.py",
+    "bytes": 1548,
+    "sha256": "8160a386f788bf00ae44d4ef3bebafc1a95bcc43e30fac11d42999a14c69f81b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135b2cef27b31d6a6e8/display",
+    "content": "import gzip\nimport sys\n\n\ninput_path, output_path = sys.argv[1:3]\nwith open(input_path, \"rb\") as raw:\n    magic = raw.read(2)\nopener = gzip.open if magic == b\"\\x1f\\x8b\" else open\n\nbin_size = 5_000_000\nbest = {}\nsig_by_chrom = {}\n\nwith opener(input_path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as handle:\n    header = handle.readline().rstrip(\"\\n\\r\").split(\"\\t\")\n    if len(header) < 8 or header[7] != \"P\":\n        raise ValueError(f\"Unexpected header: {header!r}\")\n    for line in handle:\n        fields = line.rstrip(\"\\n\\r\").split(\"\\t\")\n        if len(fields) < 8:\n            continue\n        try:\n            chrom = fields[0]\n            pos = int(fields[1])\n            p = float(fields[7])\n        except ValueError:\n            continue\n        if p < 5e-8:\n            sig_by_chrom[chrom] = sig_by_chrom.get(chrom, 0) + 1\n        key = (chrom, pos // bin_size)\n        if key not in best or p < best[key][0]:\n            best[key] = (p, fields[:8])\n\nwith open(output_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"section\\tchrom\\tvalue\\n\")\n    for chrom in sorted(sig_by_chrom, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x)):\n        out.write(f\"significant_count\\t{chrom}\\t{sig_by_chrom[chrom]}\\n\")\n    out.write(\"rank\\tbin_start\\tCHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\tP\\n\")\n    ranked = sorted(best.values(), key=lambda x: x[0])[:300]\n    for rank, (p, fields) in enumerate(ranked, 1):\n        bin_start = (int(fields[1]) // bin_size) * bin_size\n        out.write(f\"{rank}\\t{bin_start}\\t\" + \"\\t\".join(fields) + \"\\n\")\n",
+    "file": "r3_h4_extract_gwas_locus_minima.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b58ca2866d3fa57b9b"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213554257405cd1e5477",
+    "hid": 6,
+    "name": "compare_gwas_catalog_loci.py",
+    "bytes": 4353,
+    "sha256": "eccaf90654c6b802d6c1a91c9acb785071828f236009c915b366e44e8b306b45",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213554257405cd1e5477/display",
+    "excerpt": "import concurrent.futures\nimport json\nimport sys\nimport urllib.request\n\n\nlocus_path, output_path, *catalog_paths = sys.argv[1:]\n\ninput_loci = []\nin_ranked = False\nwith open(locus_path, encoding=\"utf-8\") as handle:\n    for line in handle:\n        fields = line.rstrip(\"\\n\\r\").split(\"\\t\")\n        if fields[0] == \"rank\":\n            in_ranked = True\n            continue\n        if in_ranked and len(fields) >= 10:\n            p = float(fields[9])\n            if p < 5e-8:\n                input_loci.append((fields[2], int(fields[3]), fields[4], p))\n\n\ndef parse_catalog(path):\n    with open(path, encoding=\"utf-8\") as handle:\n        payload = json.load(handle)\n    associations = payload.get(\"_embedded\", {}).get(\"associations\", [])\n    if not associations:\n        raise ValueError(f\"No associations in {path}\")\n    study = associations[0][\"study\"]\n    rsids = set()\n    for association in associations:\n        for locus in association.get(\"loci\", []):\n            for risk in locus.get(\"strongestRiskAlleles\", []):\n                rsid = risk.get(\"riskAlleleName\", \"\").split(\"-\", 1)[0]\n                if rsid.startswith(\"rs\"):\n                    rsids.add(rsid)\n    return {\n        \"accession\": study[\"accessionId\"],\n        \"trait\": study[\"diseaseTrait\"][\"trait\"],\n        \"pmid\": study[\"publicationInfo\"][\"pubmedId\"],\n        \"title\": study[\"publicationInfo\"][\"title\"],\n        \"rsids\": sorted(rsids),\n    }\n\n\ncatalogs = [parse_catalog(path) for path in catalog_paths]\nall_rsids = sorted({rsid for catalog in catalogs for rsid in catalog[\"rsids\"]})\n\n\ndef resolve_grch38(rsid):\n    url = f\"https://rest.ensembl.org/variation/human/{rsid}?content-type=application/json\"\n    request = urllib.request.Request(url, headers={\"User-Agent\": \"Galaxy-GWAS-locus-validator/1.0\"})\n    with urllib.request.urlopen(request, timeout=30) as response:\n        data = json.load(response)\n    mappings = []\n    for mapping in data.get(\"mappings\", []):\n        if mapping.get(\"assembly_name\") == \"GRCh38\" and mapp",
+    "file": "r3_h6_compare_gwas_catalog_loci.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5774cc2c80fbb42f2"
+    ]
+  },
+  {
+    "file": "r3_job_bbd44e69cb8906b5282d428416e24545.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5282d428416e24545",
+    "tool_id": "extract-gwas-signals-v1",
+    "sha256": "9c4d1ea12b31224006dea2bd4b7558c2f29432bf03f1c20973d91dc3997d4949"
+  },
+  {
+    "file": "r3_job_bbd44e69cb8906b58ca2866d3fa57b9b.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b58ca2866d3fa57b9b",
+    "tool_id": "extract-gwas-locus-minima-v1",
+    "sha256": "1f22fd6ddc8ba76a11a54aa6599bbcad2d4455d075d85db0c7aa8f7413181bc0"
+  },
+  {
+    "file": "r3_job_bbd44e69cb8906b5774cc2c80fbb42f2.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5774cc2c80fbb42f2",
+    "tool_id": "compare-gwas-catalog-loci-v1",
+    "sha256": "849fce0f123da42241719da5b6a81b4cc94ab3c25d9f867fc1b27eb1f1e27477"
+  },
+  {
+    "dataset_id": "f9cad7b01a472135139555ef5908daba",
+    "hid": 4,
+    "name": "select_gwas_lead_regions.py",
+    "bytes": 1353,
+    "sha256": "5f251c4e92b2f3c39652685a580e54fd18f675679331bc0faddc758c7b4d8a1d",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135139555ef5908daba/display",
+    "content": "import csv\nimport sys\n\n\nsource_path, output_path = sys.argv[1:3]\nthreshold = 5e-8\nwindow = 1_000_000\nmax_leads = 50\n\nleads = []\nsignificant_rows = 0\ndata_rows = 0\n\nwith open(source_path, \"rt\", encoding=\"utf-8\", newline=\"\") as source:\n    reader = csv.reader(source, delimiter=\"\\t\")\n    for row in reader:\n        if not row or row[0].startswith(\"#\"):\n            continue\n        data_rows += 1\n        chrom = row[0]\n        pos = int(row[1])\n        p_value = float(row[7])\n        if p_value >= threshold:\n            continue\n        significant_rows += 1\n        if len(leads) >= max_leads:\n            continue\n        if any(chrom == lead[0] and abs(pos - lead[1]) <= window for lead in leads):\n            continue\n        leads.append((chrom, pos, row[2], row[3], row[4], row[5], p_value))\n\nwith open(output_path, \"wt\", encoding=\"utf-8\", newline=\"\") as output:\n    output.write(f\"#diagnostic\\tvalue\\n\")\n    output.write(f\"#data_rows\\t{data_rows}\\n\")\n    output.write(f\"#p_lt_5e-8_rows\\t{significant_rows}\\n\")\n    output.write(f\"#lead_window_bp\\t{window}\\n\")\n    output.write(\"rank\\tCHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tP\\n\")\n    for rank, lead in enumerate(leads, 1):\n        chrom, pos, variant_id, ref, alt, a1, p_value = lead\n        output.write(\n            f\"{rank}\\t{chrom}\\t{pos}\\t{variant_id}\\t{ref}\\t{alt}\\t{a1}\\t{p_value:.12g}\\n\"\n        )\n",
+    "file": "r4_h4_select_gwas_lead_regions.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 2,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5b4475a9d93047fd8"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213572694ecfc7fa2273",
+    "hid": 7,
+    "name": "verify_gwas_source.py",
+    "bytes": 5240,
+    "sha256": "3b8432a8bcca64ac76a3a91db34711effe56ea69c8a782cf916868c5f5b88711",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213572694ecfc7fa2273/display",
+    "excerpt": "#!/usr/bin/env python3\nimport io\nimport json\nimport os\nimport sys\nimport zipfile\n\n\nQUERY_PATH, ARCHIVE_PATH, METADATA_PATH, PUBMED_PATH, REPORT_PATH, ANSWER_PATH = sys.argv[1:]\n\nTARGETS = {\n    \"chr1:14671:G:C\",\n    \"chr1:64649:A:C\",\n    \"chr1:161530617:CTT:C\",\n    \"chr17:16939677:G:A\",\n}\nEXPECTED_TITLE = \"MultiSuSiE improves multi-ancestry fine-mapping in All of Us whole-genome sequencing data\"\nEXPECTED_DOI = \"10.1038/s41588-025-02450-5\"\n\n\ndef read_selected_rows(path, targets):\n    found = {}\n    with open(path, \"rb\") as handle:\n        header = handle.readline().rstrip(b\"\\r\\n\").decode(\"utf-8\").split(\"\\t\")\n        index = {name: i for i, name in enumerate(header)}\n        id_i = index[\"ID\"]\n        for raw_line in handle:\n            fields = raw_line.rstrip(b\"\\r\\n\").decode(\"utf-8\").split(\"\\t\")\n            variant_id = fields[id_i]\n            if variant_id in targets:\n                found[variant_id] = {name: fields[i] for name, i in index.items()}\n                if len(found) == len(targets):\n                    break\n    return header, found\n\n\ndef read_archive_rows(archive, targets):\n    found = {}\n    chromosomes = sorted({variant_id.split(\":\", 2)[0].removeprefix(\"chr\") for variant_id in targets}, key=int)\n    for chromosome in chromosomes:\n        member = f\"eur115620/ss_eur115620_{chromosome}.tsv\"\n        chromosome_targets = {v for v in targets if v.startswith(f\"chr{chromosome}:\")}\n        with archive.open(member, \"r\") as binary_handle:\n            header = binary_handle.readline().rstrip(b\"\\r\\n\").decode(\"utf-8\").split(\"\\t\")\n            index = {name: i for i, name in enumerate(header)}\n            id_i = index[\"ID\"]\n            for raw_line in binary_handle:\n                fields = raw_line.rstrip(b\"\\r\\n\").decode(\"utf-8\").split(\"\\t\")\n                variant_id = fields[id_i]\n                if variant_id in chromosome_targets:\n                    found[variant_id] = {name: fields[i] for name, i in index.items()}\n                    if chromosome_targets",
+    "file": "r4_h7_verify_gwas_source.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 2,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b50cd5e3dc79f85ffe",
+      "bbd44e69cb8906b51540d79c2994ffb1"
+    ]
+  },
+  {
+    "file": "r4_job_bbd44e69cb8906b5b4475a9d93047fd8.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 2,
+    "job_id": "bbd44e69cb8906b5b4475a9d93047fd8",
+    "tool_id": "select-gwas-lead-regions-v1",
+    "sha256": "4d593efcf2e706136edafa5cf82f24a46ef55e5b2bef716374a2d22d8fedb481"
+  },
+  {
+    "file": "r4_job_bbd44e69cb8906b51540d79c2994ffb1.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 2,
+    "job_id": "bbd44e69cb8906b51540d79c2994ffb1",
+    "tool_id": "verify-gwas-source-multisusie-v2",
+    "sha256": "0b0ebab6c2933e350a87158037ee873982b7e4c52127ad5b8fa01d1943fc4bcd"
+  },
+  {
+    "dataset_id": "f9cad7b01a472135fa5fc0ab4b4e98ad",
+    "hid": 2,
+    "name": "gwas_fingerprint.py",
+    "bytes": 2683,
+    "sha256": "c7f85f4cbe475bf02820b6eb91c65a4a09a5479982a8acdf88725550ac4d766a",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135fa5fc0ab4b4e98ad/display",
+    "content": "#!/usr/bin/env python3\nimport gzip\nimport heapq\nimport math\nimport sys\n\n\ninput_path, top_path, diagnostics_path = sys.argv[1:4]\n\nwith open(input_path, \"rb\") as probe:\n    compressed = probe.read(2) == b\"\\x1f\\x8b\"\nopener = gzip.open if compressed else open\n\ntop_n = 250\nheap = []\nchrom_min = {}\nthresholds = [5e-8, 1e-7, 1e-6, 1e-5, 1e-4]\ncounts = {threshold: 0 for threshold in thresholds}\nvalid_rows = 0\ninvalid_rows = 0\n\nwith opener(input_path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as handle:\n    header = handle.readline().rstrip(\"\\n\\r\").split(\"\\t\")\n    required = {\"#CHROM\", \"POS\", \"ID\", \"REF\", \"ALT\", \"A1\", \"TEST\", \"P\"}\n    if not required.issubset(header):\n        raise SystemExit(\"Required PLINK columns are absent: \" + repr(header))\n    ix = {name: header.index(name) for name in required}\n    for line_number, line in enumerate(handle, 2):\n        fields = line.rstrip(\"\\n\\r\").split(\"\\t\")\n        try:\n            p = float(fields[ix[\"P\"]])\n            if not math.isfinite(p) or p < 0 or p > 1:\n                raise ValueError\n            chrom = fields[ix[\"#CHROM\"]]\n            pos = int(fields[ix[\"POS\"]])\n        except (ValueError, IndexError):\n            invalid_rows += 1\n            continue\n        valid_rows += 1\n        for threshold in thresholds:\n            if p < threshold:\n                counts[threshold] += 1\n        record = (p, chrom, pos, fields[ix[\"ID\"]], fields[ix[\"REF\"]],\n                  fields[ix[\"ALT\"]], fields[ix[\"A1\"]], fields[ix[\"TEST\"]])\n        prior = chrom_min.get(chrom)\n        if prior is None or record < prior:\n            chrom_min[chrom] = record\n        item = (-p, record)\n        if len(heap) < top_n:\n            heapq.heappush(heap, item)\n        elif item > heap[0]:\n            heapq.heapreplace(heap, item)\n\ntop = sorted(record for _, record in heap)\nwith open(top_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"rank\\tP\\tCHROM\\tPOS\\tID\\tREF\\tALT\\tA1\\tTEST\\n\")\n    for rank, record in enumerate(top, 1):\n        p, chrom, pos, marker, ref, alt, a1, test = record\n        out.write(f\"{rank}\\t{p:.17g}\\t{chrom}\\t{pos}\\t{marker}\\t{ref}\\t{alt}\\t{a1}\\t{test}\\n\")\n\nwith open(diagnostics_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"metric\\tvalue\\n\")\n    out.write(f\"valid_rows\\t{valid_rows}\\n\")\n    out.write(f\"invalid_rows\\t{invalid_rows}\\n\")\n    out.write(f\"gzip_encoded\\t{str(compressed).lower()}\\n\")\n    for threshold in thresholds:\n        out.write(f\"p_lt_{threshold:g}\\t{counts[threshold]}\\n\")\n    for chrom in sorted(chrom_min, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x)):\n        record = chrom_min[chrom]\n        out.write(f\"chr{chrom}_min_p\\t{record[0]:.17g}|{record[3]}\\n\")\n",
+    "file": "r5_h2_gwas_fingerprint.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b51267c51237415ada"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721350d475dd8313cfa75",
+    "hid": 6,
+    "name": "match_gwas_fingerprint.py",
+    "bytes": 1143,
+    "sha256": "e5eb5ecd45374d34053b71945aa9fb6c434303a0c5fe4594cdfa939b07df0f00",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721350d475dd8313cfa75/display",
+    "content": "#!/usr/bin/env python3\nimport collections\nimport csv\nimport sys\n\n\ntop_path, pips_path, output_path = sys.argv[1:4]\n\nwith open(top_path, encoding=\"utf-8\") as handle:\n    reader = csv.DictReader(handle, delimiter=\"\\t\")\n    top = {row[\"ID\"]: row for row in reader}\n\nmatches = []\ngrouped = collections.Counter()\nwith open(pips_path, encoding=\"utf-8\") as handle:\n    reader = csv.DictReader(handle, delimiter=\"\\t\")\n    for row in reader:\n        if row[\"rsid\"] in top:\n            source = top[row[\"rsid\"]]\n            grouped[(row[\"trait\"], row[\"cohort\"])] += 1\n            matches.append((row[\"trait\"], row[\"cohort\"], row[\"rsid\"],\n                            source[\"rank\"], source[\"P\"], row[\"PIP\"]))\n\nwith open(output_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"section\\ttrait\\tcohort\\tcount\\trsid\\tinput_rank\\tinput_p\\tPIP\\n\")\n    for (trait, cohort), count in sorted(grouped.items(), key=lambda x: (-x[1], x[0])):\n        out.write(f\"summary\\t{trait}\\t{cohort}\\t{count}\\t\\t\\t\\t\\n\")\n    for trait, cohort, rsid, rank, p_value, pip in sorted(matches):\n        out.write(f\"match\\t{trait}\\t{cohort}\\t\\t{rsid}\\t{rank}\\t{p_value}\\t{pip}\\n\")\n",
+    "file": "r5_h6_match_gwas_fingerprint.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b55753baf1db7dd9aa"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135027cb1e575cc4c4b",
+    "hid": 9,
+    "name": "finalize_source_pmid.py",
+    "bytes": 1904,
+    "sha256": "9cb63aa41f8706c2b18976c0a840270e81155ba9ba5cb81a6beb047e71c45638",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135027cb1e575cc4c4b/display",
+    "content": "#!/usr/bin/env python3\nimport csv\nimport sys\nimport xml.etree.ElementTree as ET\n\n\nmatch_path, pubmed_path, pmid_path, audit_path = sys.argv[1:5]\nwith open(match_path, encoding=\"utf-8\") as handle:\n    summaries = [row for row in csv.DictReader(handle, delimiter=\"\\t\")\n                 if row[\"section\"] == \"summary\"]\n\ntraits = {row[\"trait\"] for row in summaries}\ncohorts = {row[\"cohort\"] for row in summaries}\nif traits != {\"protein_density\"}:\n    raise SystemExit(\"Fingerprint did not uniquely identify protein_density\")\nrequired_v1_cohorts = {\"eur94082\", \"afr47041_eur94082\"}\nif not required_v1_cohorts.issubset(cohorts):\n    raise SystemExit(\"Fingerprint does not identify the original Eur94k study version\")\n\ntarget_title = \"MultiSuSiE improves multi-ancestry fine-mapping in All of Us whole-genome sequencing data\"\nroot = ET.parse(pubmed_path).getroot()\ncandidates = []\nfor article in root.findall(\".//PubmedArticle\"):\n    title_node = article.find(\".//ArticleTitle\")\n    title = \"\".join(title_node.itertext()).rstrip(\".\") if title_node is not None else \"\"\n    pmid = article.findtext(\".//MedlineCitation/PMID\")\n    types = {\"\".join(node.itertext()) for node in article.findall(\".//PublicationType\")}\n    if title == target_title:\n        candidates.append((pmid, types))\n\npreprints = [pmid for pmid, types in candidates if \"Preprint\" in types]\nif len(preprints) != 1:\n    raise SystemExit(\"Could not uniquely resolve the original PubMed preprint record\")\n\nwith open(pmid_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(preprints[0] + \"\\n\")\nwith open(audit_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"check\\tvalue\\n\")\n    out.write(\"matched_trait\\tprotein_density\\n\")\n    out.write(\"matched_original_cohort\\teur94082\\n\")\n    out.write(\"matching_pubmed_title\\t\" + target_title + \"\\n\")\n    out.write(\"selected_record_type\\tPreprint\\n\")\n    out.write(\"selected_pmid\\t\" + preprints[0] + \"\\n\")\n",
+    "file": "r5_h9_finalize_source_pmid.py",
+    "model": "GPT-5.6 Sol",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b58490f49f35f43070"
+    ]
+  },
+  {
+    "file": "r5_job_bbd44e69cb8906b51267c51237415ada.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 3,
+    "job_id": "bbd44e69cb8906b51267c51237415ada",
+    "tool_id": "gwas-fingerprint-v1",
+    "sha256": "da76c3ced0232b2a2cffed392e6cde35e678225e4043116f07a734f3078b434d"
+  },
+  {
+    "file": "r5_job_bbd44e69cb8906b55753baf1db7dd9aa.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 3,
+    "job_id": "bbd44e69cb8906b55753baf1db7dd9aa",
+    "tool_id": "match-gwas-fingerprint-v1",
+    "sha256": "2508c4fc9357cf6588eed210f2cd12ec2b8a1f3b643da421f1f077f84b9ec012"
+  },
+  {
+    "file": "r5_job_bbd44e69cb8906b58490f49f35f43070.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "GPT-5.6 Sol",
+    "replicate": 3,
+    "job_id": "bbd44e69cb8906b58490f49f35f43070",
+    "tool_id": "finalize-gwas-source-pmid-v1",
+    "sha256": "f7a2179301fa715469ef08921c03221ca6074234704390e33bd9f0a2d3911ee9"
+  },
+  {
+    "dataset_id": "f9cad7b01a4721354053da1415a7f8cd",
+    "hid": 11,
+    "name": "probe_gwas_api.py",
+    "bytes": 1063,
+    "sha256": "ea76e0c6c1ed6648abcb200e7c5cbc84302707510fc4ecf3a0a5a887f7d9ad6a",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721354053da1415a7f8cd/display",
+    "content": "import sys\nimport json\nimport urllib.request\nimport urllib.error\n\nurl = \"https://www.ebi.ac.uk/gwas/summary-statistics/api/chromosomes/1/associations?start=161530617&end=161530617&size=50\"\nout_path = sys.argv[2] if len(sys.argv) > 2 else \"result.txt\"\n\nreq = urllib.request.Request(url, headers={\"Accept\": \"application/json\", \"User-Agent\": \"galaxy-udt-probe/0.1\"})\ntry:\n    with urllib.request.urlopen(req, timeout=60) as resp:\n        status = resp.status\n        headers = dict(resp.headers)\n        body = resp.read().decode(\"utf-8\", errors=\"replace\")\nexcept urllib.error.HTTPError as e:\n    status = e.code\n    headers = dict(e.headers) if e.headers else {}\n    body = e.read().decode(\"utf-8\", errors=\"replace\")\nexcept Exception as e:\n    status = \"ERR\"\n    headers = {}\n    body = f\"{type(e).__name__}: {e}\"\n\nwith open(out_path, \"w\") as f:\n    f.write(f\"status\\t{status}\\n\")\n    f.write(f\"content_type\\t{headers.get('Content-Type', headers.get('content-type', ''))}\\n\")\n    f.write(\"body_length\\t\" + str(len(body)) + \"\\n\")\n    f.write(\"body\\t\" + body + \"\\n\")\n",
+    "file": "r6_h11_probe_gwas_api.py",
+    "model": "Codex + DeepSeek-v4-pro-0813",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b58af02583c64ad938"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213575763dfa42e6ee15",
+    "hid": 53,
+    "name": "inspect_igg_directory.py",
+    "bytes": 973,
+    "sha256": "a58f13472047189d704930afcc8b93f2b362a39810fc3bedf68e0209a6d4565c",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213575763dfa42e6ee15/display",
+    "content": "import gzip\nimport os\nimport sys\n\n\nroot = sys.argv[1]\nout_path = sys.argv[2]\n\nfiles = []\nfor dirpath, _, names in os.walk(root):\n    for name in names:\n        files.append(os.path.join(dirpath, name))\nfiles.sort()\n\nwith open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"path\\tsize_bytes\\tfirst_lines\\n\")\n    for path in files:\n        rel = os.path.relpath(path, root)\n        size = os.path.getsize(path)\n        lines = []\n        opener = gzip.open if path.endswith(\".gz\") else open\n        try:\n            with opener(path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as handle:\n                for _ in range(3):\n                    line = handle.readline()\n                    if not line:\n                        break\n                    lines.append(line.rstrip(\"\\n\").replace(\"\\t\", \"<TAB>\"))\n        except Exception as exc:\n            lines = [\"ERROR:\" + type(exc).__name__]\n        out.write(rel + \"\\t\" + str(size) + \"\\t\" + \"\\\\n\".join(lines) + \"\\n\")\n",
+    "file": "r9_h53_inspect_igg_directory.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5010360876d020d32"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213556242b7cbe9bd632",
+    "hid": 55,
+    "name": "inspect_igg_directory_container.py",
+    "bytes": 849,
+    "sha256": "f77b2516eefd74dd4867954b9a5392cc74a26b8860564f7f10a4e738049016e2",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213556242b7cbe9bd632/display",
+    "content": "import os\nimport sys\nimport zipfile\n\n\nroot = sys.argv[1]\nout_path = sys.argv[2]\n\nwith open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"path=\" + root + \"\\n\")\n    out.write(\"isdir=\" + str(os.path.isdir(root)) + \"\\n\")\n    out.write(\"isfile=\" + str(os.path.isfile(root)) + \"\\n\")\n    out.write(\"exists=\" + str(os.path.exists(root)) + \"\\n\")\n    if os.path.exists(root):\n        out.write(\"size=\" + str(os.path.getsize(root)) + \"\\n\")\n    if os.path.isfile(root):\n        try:\n            with zipfile.ZipFile(root) as archive:\n                names = archive.namelist()\n                out.write(\"zip_entries=\" + str(len(names)) + \"\\n\")\n                for name in names[:5]:\n                    out.write(\"entry=\" + name + \"\\n\")\n        except Exception as exc:\n            out.write(\"zip_error=\" + type(exc).__name__ + \":\" + str(exc) + \"\\n\")\n",
+    "file": "r9_h55_inspect_igg_directory_container.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b586d7ab9e996e67e9"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135338c329d092f694a",
+    "hid": 57,
+    "name": "inspect_igg_tar.py",
+    "bytes": 816,
+    "sha256": "887705dfa4a6186caa269a86d8ae84d88e0debef7ba0f960ee6090932480eb14",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135338c329d092f694a/display",
+    "content": "import gzip\nimport sys\nimport tarfile\n\n\narchive_path = sys.argv[1]\nout_path = sys.argv[2]\n\nwith tarfile.open(archive_path, mode=\"r:gz\") as archive, open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"member\\tsize_bytes\\tfirst_lines\\n\")\n    for member in archive:\n        if not member.isfile():\n            continue\n        member_file = archive.extractfile(member)\n        if member_file is None:\n            continue\n        with member_file:\n            if member.name.endswith(\".gz\"):\n                raw = gzip.GzipFile(fileobj=member_file).read(65536)\n            else:\n                raw = member_file.read(65536)\n        lines = raw.decode(\"utf-8\", errors=\"replace\").splitlines()[:3]\n        out.write(member.name + \"\\t\" + str(member.size) + \"\\t\" + \"\\\\n\".join(lines).replace(\"\\t\", \"<TAB>\") + \"\\n\")\n",
+    "file": "r9_h57_inspect_igg_tar.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b56af6bd26eb547cba",
+      "bbd44e69cb8906b5d9c6f097770f99cf",
+      "bbd44e69cb8906b5da2c3c80f4f25a50",
+      "bbd44e69cb8906b5cb4e2fcc8570c913"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135fa3c5274aa8b9224",
+    "hid": 59,
+    "name": "scan_igg_source.py",
+    "bytes": 1166,
+    "sha256": "c25dd3e6772847b4573107e77127b0de89bb5f79c71ce2e2b4ad28d0e59beb8f",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135fa3c5274aa8b9224/display",
+    "content": "import gzip\nimport io\nimport sys\nimport tarfile\n\n\nTARGETS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs2647032\",\n    \"rs3763321\",\n}\n\narchive_path = sys.argv[1]\nout_path = sys.argv[2]\nmember_filter = sys.argv[3] if len(sys.argv) > 3 else \"\"\n\nwith tarfile.open(archive_path, mode=\"r:gz\") as archive, open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"source_member\\tsnp\\trow\\n\")\n    for member in archive:\n        if not member.isfile() or not member.name.endswith(\".gz\"):\n            continue\n        if member_filter and member_filter not in member.name:\n            continue\n        member_file = archive.extractfile(member)\n        if member_file is None:\n            continue\n        with member_file:\n            gz = gzip.GzipFile(fileobj=member_file)\n            with io.TextIOWrapper(gz, encoding=\"utf-8\", errors=\"replace\") as text:\n                next(text, None)\n                for line in text:\n                    fields = line.rstrip(\"\\n\").split(\"\\t\")\n                    if fields and fields[0] in TARGETS:\n                        out.write(member.name + \"\\t\" + fields[0] + \"\\t\" + line)\n",
+    "file": "r9_h59_scan_igg_source.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b57e5feebb07ef9a18"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721357b4b80801aa596f6",
+    "hid": 61,
+    "name": "scan_igg_source.py",
+    "bytes": 1166,
+    "sha256": "c25dd3e6772847b4573107e77127b0de89bb5f79c71ce2e2b4ad28d0e59beb8f",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721357b4b80801aa596f6/display",
+    "content": "import gzip\nimport io\nimport sys\nimport tarfile\n\n\nTARGETS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs2647032\",\n    \"rs3763321\",\n}\n\narchive_path = sys.argv[1]\nout_path = sys.argv[2]\nmember_filter = sys.argv[3] if len(sys.argv) > 3 else \"\"\n\nwith tarfile.open(archive_path, mode=\"r:gz\") as archive, open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"source_member\\tsnp\\trow\\n\")\n    for member in archive:\n        if not member.isfile() or not member.name.endswith(\".gz\"):\n            continue\n        if member_filter and member_filter not in member.name:\n            continue\n        member_file = archive.extractfile(member)\n        if member_file is None:\n            continue\n        with member_file:\n            gz = gzip.GzipFile(fileobj=member_file)\n            with io.TextIOWrapper(gz, encoding=\"utf-8\", errors=\"replace\") as text:\n                next(text, None)\n                for line in text:\n                    fields = line.rstrip(\"\\n\").split(\"\\t\")\n                    if fields and fields[0] in TARGETS:\n                        out.write(member.name + \"\\t\" + fields[0] + \"\\t\" + line)\n",
+    "file": "r9_h61_scan_igg_source.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b52ac7b53cd6bd1a8d"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721357cef5009f00aca0e",
+    "hid": 78,
+    "name": "scan_candidate_gwas_gz.py",
+    "bytes": 791,
+    "sha256": "3dbadc67afe108b54a8578600eeaa8e7e282af7709c71923cd02524e6b17fde5",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721357cef5009f00aca0e/display",
+    "content": "import gzip\nimport sys\n\nsource = sys.argv[1]\ntargets = {\n    (\"1\", \"161612233\"),\n    (\"1\", \"161595730\"),\n    (\"17\", \"16842991\"),\n    (\"17\", \"16849139\"),\n    (\"17\", \"16848750\"),\n    (\"6\", \"32629905\"),\n    (\"6\", \"32406704\"),\n    (\"17\", \"16863638\"),\n}\n\nprint(\"line_type\\tcontent\")\nwith gzip.open(source, \"rt\", encoding=\"utf-8\", errors=\"replace\") as handle:\n    for line_number, raw in enumerate(handle, 1):\n        line = raw.rstrip(\"\\n\\r\")\n        if line_number <= 3:\n            print(\"header\\t\" + line)\n            continue\n        if not line or line.startswith(\"#\"):\n            continue\n        fields = line.split(\"\\t\")\n        if len(fields) < 2:\n            fields = line.split()\n        if len(fields) >= 2 and (fields[0], fields[1]) in targets:\n            print(\"target\\t\" + line)\n",
+    "file": "r9_h78_scan_candidate_gwas_gz.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5a593786318a424b0",
+      "bbd44e69cb8906b57014d971b9b173d1",
+      "bbd44e69cb8906b5493e8177a215634a",
+      "bbd44e69cb8906b506c043639267499b"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721357005df75790f8d96",
+    "hid": 106,
+    "name": "count_input_lines.py",
+    "bytes": 300,
+    "sha256": "c93ed66a45806d6b24742e2ff5a47c801239a63f19e0a93ee2564a72df8d4291",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721357005df75790f8d96/display",
+    "content": "import gzip\nimport sys\n\npath = sys.argv[1]\nopener = gzip.open if path.endswith((\".gz\", \".gzip\")) else open\nwith opener(path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    count = 0\n    for line in text:\n        if line.strip():\n            count += 1\n    print(\"nonempty_lines\\t%d\" % count)\n",
+    "file": "r9_h106_count_input_lines.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b532434bba43726e78"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135ba92fd1cc74c3e39",
+    "hid": 109,
+    "name": "scan_bbj_ag_gz.py",
+    "bytes": 960,
+    "sha256": "6f7dd175dd8ab40917a318439f1615a694d5540e9485b04c3d99fc68dfdad934",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135ba92fd1cc74c3e39/display",
+    "content": "import re\nimport sys\n\nTARGET_IDS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs4985726\",\n    \"rs2647032\",\n    \"rs3763321\",\n    \"rs150420714\",\n    \"rs2926468\",\n}\nTARGET_COORDS = {\n    \"1:161612233\",\n    \"1:161595730\",\n    \"6:32629905\",\n    \"6:32406704\",\n    \"17:16842991\",\n    \"17:16849139\",\n    \"17:16848750\",\n    \"17:16863638\",\n    \"19:50014739\",\n}\n\ndef is_target(line):\n    fields = re.split(r\"\\s+\", line.strip())\n    for field in fields:\n        if field in TARGET_IDS or field in TARGET_COORDS:\n            return True\n        if any(field.startswith(coord + \":\") for coord in TARGET_COORDS):\n            return True\n    return False\n\nwith open(sys.argv[1], \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    for index, line in enumerate(text):\n        if index < 4:\n            print(\"header\\t%s\" % line.rstrip(\"\\n\"))\n        if is_target(line):\n            print(\"target\\t%s\" % line.rstrip(\"\\n\"))\n",
+    "file": "r9_h109_scan_bbj_ag_gz.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b526ef4c0cac499efe"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213562bca5b8c50a1277",
+    "hid": 111,
+    "name": "scan_bbj_ag_gz.py",
+    "bytes": 993,
+    "sha256": "38bf49b3554a065249996c92b103cce3c7dd098fd4c20b9dcc779c50f4c8dc8b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213562bca5b8c50a1277/display",
+    "content": "import re\nimport sys\n\nTARGET_IDS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs4985726\",\n    \"rs2647032\",\n    \"rs3763321\",\n    \"rs150420714\",\n    \"rs2926468\",\n}\nTARGET_COORDS = {\n    \"1:161612233\",\n    \"1:161595730\",\n    \"6:32629905\",\n    \"6:32406704\",\n    \"17:16842991\",\n    \"17:16849139\",\n    \"17:16848750\",\n    \"17:16863638\",\n    \"19:50014739\",\n}\n\ndef is_target(line):\n    fields = re.split(r\"\\s+\", line.strip())\n    for field in fields:\n        if field in TARGET_IDS or field in TARGET_COORDS:\n            return True\n        if any(field.startswith(coord + \":\") or field.startswith(coord + \"_\") for coord in TARGET_COORDS):\n            return True\n    return False\n\nwith open(sys.argv[1], \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    for index, line in enumerate(text):\n        if index < 4:\n            print(\"header\\t%s\" % line.rstrip(\"\\n\"))\n        if is_target(line):\n            print(\"target\\t%s\" % line.rstrip(\"\\n\"))\n",
+    "file": "r9_h111_scan_bbj_ag_gz.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5435cd57f96a93db3"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135330501971cac886e",
+    "hid": 113,
+    "name": "profile_input.py",
+    "bytes": 1024,
+    "sha256": "7d945c8f5bbf6cdf071f2115e744ed33fa986a4cf9561dec0b5f31b0dd2af53c",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135330501971cac886e/display",
+    "content": "import gzip\nimport re\nimport sys\nfrom collections import Counter\n\ncounts = Counter()\nid_types = Counter()\nheaders = []\nopener = gzip.open if sys.argv[1].endswith((\".gz\", \".gzip\")) else open\nwith opener(sys.argv[1], \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    for line in text:\n        if line.startswith(\"#\"):\n            headers.append(line.rstrip(\"\\n\"))\n            continue\n        fields = re.split(r\"\\s+\", line.strip())\n        if len(fields) < 3:\n            continue\n        counts[fields[0]] += 1\n        marker = fields[2]\n        if marker.startswith(\"rs\"):\n            id_types[\"rs\"] += 1\n        elif marker.startswith(fields[0] + \":\"):\n            id_types[\"coordinate\"] += 1\n        else:\n            id_types[\"other\"] += 1\nprint(\"headers\\t%d\" % len(headers))\nfor key in sorted(counts, key=lambda value: (not value.isdigit(), int(value) if value.isdigit() else value)):\n    print(\"chrom\\t%s\\t%d\" % (key, counts[key]))\nfor key in sorted(id_types):\n    print(\"id_type\\t%s\\t%d\" % (key, id_types[key]))\n",
+    "file": "r9_h113_profile_input.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b53bb45e3713855082",
+      "bbd44e69cb8906b5bd54672e9ab07005"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721359991b8d0d5733b36",
+    "hid": 115,
+    "name": "tail_input.py",
+    "bytes": 349,
+    "sha256": "f7a3845f812901ddd1780e7b77772e969dba94da84bf4c709ee8c77c1ba3c996",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721359991b8d0d5733b36/display",
+    "content": "import gzip\nimport sys\nfrom collections import deque\n\nopener = gzip.open if sys.argv[1].endswith((\".gz\", \".gzip\")) else open\ntail = deque(maxlen=20)\nwith opener(sys.argv[1], \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    for line in text:\n        if line.strip():\n            tail.append(line.rstrip(\"\\n\"))\nfor line in tail:\n    print(line)\n",
+    "file": "r9_h115_tail_input.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b511f205cb491ca5db"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721356791edcfd4068d24",
+    "hid": 118,
+    "name": "scan_bbj_ag_gz.py",
+    "bytes": 993,
+    "sha256": "38bf49b3554a065249996c92b103cce3c7dd098fd4c20b9dcc779c50f4c8dc8b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721356791edcfd4068d24/display",
+    "content": "import re\nimport sys\n\nTARGET_IDS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs4985726\",\n    \"rs2647032\",\n    \"rs3763321\",\n    \"rs150420714\",\n    \"rs2926468\",\n}\nTARGET_COORDS = {\n    \"1:161612233\",\n    \"1:161595730\",\n    \"6:32629905\",\n    \"6:32406704\",\n    \"17:16842991\",\n    \"17:16849139\",\n    \"17:16848750\",\n    \"17:16863638\",\n    \"19:50014739\",\n}\n\ndef is_target(line):\n    fields = re.split(r\"\\s+\", line.strip())\n    for field in fields:\n        if field in TARGET_IDS or field in TARGET_COORDS:\n            return True\n        if any(field.startswith(coord + \":\") or field.startswith(coord + \"_\") for coord in TARGET_COORDS):\n            return True\n    return False\n\nwith open(sys.argv[1], \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    for index, line in enumerate(text):\n        if index < 4:\n            print(\"header\\t%s\" % line.rstrip(\"\\n\"))\n        if is_target(line):\n            print(\"target\\t%s\" % line.rstrip(\"\\n\"))\n",
+    "file": "r9_h118_scan_bbj_ag_gz.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": []
+  },
+  {
+    "dataset_id": "f9cad7b01a472135f0679cfa06ecbce6",
+    "hid": 119,
+    "name": "scan_bbj_ag_gz.py",
+    "bytes": 993,
+    "sha256": "38bf49b3554a065249996c92b103cce3c7dd098fd4c20b9dcc779c50f4c8dc8b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135f0679cfa06ecbce6/display",
+    "content": "import re\nimport sys\n\nTARGET_IDS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs4985726\",\n    \"rs2647032\",\n    \"rs3763321\",\n    \"rs150420714\",\n    \"rs2926468\",\n}\nTARGET_COORDS = {\n    \"1:161612233\",\n    \"1:161595730\",\n    \"6:32629905\",\n    \"6:32406704\",\n    \"17:16842991\",\n    \"17:16849139\",\n    \"17:16848750\",\n    \"17:16863638\",\n    \"19:50014739\",\n}\n\ndef is_target(line):\n    fields = re.split(r\"\\s+\", line.strip())\n    for field in fields:\n        if field in TARGET_IDS or field in TARGET_COORDS:\n            return True\n        if any(field.startswith(coord + \":\") or field.startswith(coord + \"_\") for coord in TARGET_COORDS):\n            return True\n    return False\n\nwith open(sys.argv[1], \"rt\", encoding=\"utf-8\", errors=\"replace\") as text:\n    for index, line in enumerate(text):\n        if index < 4:\n            print(\"header\\t%s\" % line.rstrip(\"\\n\"))\n        if is_target(line):\n            print(\"target\\t%s\" % line.rstrip(\"\\n\"))\n",
+    "file": "r9_h119_scan_bbj_ag_gz.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5523dcdcfefe86661"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135298549fed28f89cf",
+    "hid": 121,
+    "name": "scan_bbj_ag_gz.py",
+    "bytes": 1255,
+    "sha256": "782b4ff496b15b90f9c175ecc2565ad52a7b20dd573f706e4891375a99bcdf82",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135298549fed28f89cf/display",
+    "content": "import re\nimport sys\nimport gzip\n\nTARGET_IDS = {\n    \"rs7554873\",\n    \"rs143596860\",\n    \"rs34562254\",\n    \"rs4273077\",\n    \"rs4561508\",\n    \"rs4985726\",\n    \"rs2647032\",\n    \"rs3763321\",\n    \"rs150420714\",\n    \"rs2926468\",\n}\nTARGET_COORDS = {\n    \"1:161612233\",\n    \"1:161595730\",\n    \"6:32629905\",\n    \"6:32406704\",\n    \"17:16842991\",\n    \"17:16849139\",\n    \"17:16848750\",\n    \"17:16863638\",\n    \"19:50014739\",\n}\n\ndef is_target(line):\n    fields = re.split(r\"\\s+\", line.strip())\n    for field in fields:\n        if field in TARGET_IDS or field in TARGET_COORDS:\n            return True\n        if any(field.startswith(coord + \":\") or field.startswith(coord + \"_\") for coord in TARGET_COORDS):\n            return True\n    return False\n\ninput_path = sys.argv[1]\noutput_path = sys.argv[2]\nwith open(input_path, \"rb\") as probe:\n    compressed = probe.read(2) == b\"\\x1f\\x8b\"\nopener = gzip.open if compressed else open\nwith opener(input_path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as text, open(output_path, \"wt\", encoding=\"utf-8\") as output:\n    for index, line in enumerate(text):\n        if index < 4:\n            output.write(\"header\\t%s\\n\" % line.rstrip(\"\\n\"))\n        if is_target(line):\n            output.write(\"target\\t%s\\n\" % line.rstrip(\"\\n\"))\n",
+    "file": "r9_h121_scan_bbj_ag_gz.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b57973ab10ea795051"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135f38042df7e500c93",
+    "hid": 123,
+    "name": "scan_2017_igg_sheets.py",
+    "bytes": 980,
+    "sha256": "20c80e175128ba8f0ad2e370f0109e09f613c749dc2c59f8f6b375ca7fce0a25",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135f38042df7e500c93/display",
+    "content": "import re\nimport sys\n\nTARGET_IDS = {\n    \"rs7554873\", \"rs143596860\", \"rs34562254\", \"rs4273077\",\n    \"rs4561508\", \"rs4985726\", \"rs2647032\", \"rs3763321\",\n}\nTARGET_COORDS = {\n    \"chr1:161625940\", \"chr1:161642443\", \"chr6:32438927\",\n    \"chr6:32662128\", \"chr17:16939677\", \"chr17:16945825\",\n    \"chr17:16945436\", \"chr17:16960324\",\n}\n\ndef is_target(line):\n    fields = re.split(r\"\\s+\", line.strip())\n    return any(field in TARGET_IDS or field in TARGET_COORDS for field in fields)\n\nout_path = sys.argv[-1]\npaths = sys.argv[1:-1]\nwith open(out_path, \"wt\", encoding=\"utf-8\") as out:\n    for label, path in zip(\n        [\"A-G\", \"A-M\", \"AG-M\", \"AG\", \"AGM\", \"G-M\", \"IgA\", \"IgG\", \"IgM\"],\n        paths,\n    ):\n        out.write(\"sheet\\t%s\\n\" % label)\n        with open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\") as src:\n            for line in src:\n                if is_target(line):\n                    out.write(\"row\\t%s\\t%s\" % (label, line if line.endswith(\"\\n\") else line + \"\\n\"))\n",
+    "file": "r9_h123_scan_2017_igg_sheets.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5b80a634f56aeb60b"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721350ea7ccb9be520f71",
+    "hid": 157,
+    "name": "scan_2026_igg_tables.py",
+    "bytes": 1174,
+    "sha256": "cff5ae16b784d8d6edcdf38d0888b90b9cb3ff7587e094e7298e2ad4ebd761c9",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721350ea7ccb9be520f71/display",
+    "content": "import sys\n\n\nneedles = [\n    \"rs7554873\", \"rs143596860\", \"rs34562254\", \"rs4273077\",\n    \"rs4561508\", \"rs4985726\", \"rs2647032\", \"rs3763321\",\n    \"rs150420714\", \"rs2926468\",\n    \"161530\", \"161595730\", \"161612233\", \"161625940\", \"161642443\",\n    \"32406704\", \"32438927\", \"32629905\", \"32662128\",\n    \"16842991\", \"16848750\", \"16849139\", \"16863638\",\n    \"16939677\", \"16945436\", \"16945825\", \"16960324\", \"49525049\",\n    \"FCGR\", \"HLA\", \"TACI\", \"TNFRSF13B\", \"FCGRT\", \"IGH\",\n]\n\n\ndef matches(line):\n    low = line.lower()\n    return any(needle.lower() in low for needle in needles)\n\n\ndef main():\n    if len(sys.argv) < 3:\n        raise SystemExit(\"usage: scan_2026_igg_tables.py label=path ... output\")\n    output = sys.argv[-1]\n    sources = sys.argv[1:-1]\n    with open(output, \"w\", encoding=\"utf-8\") as out:\n        for source in sources:\n            label, path = source.split(\"=\", 1)\n            out.write(\"TABLE\\t%s\\n\" % label)\n            with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n                for line in handle:\n                    if matches(line):\n                        out.write(line.rstrip(\"\\n\") + \"\\n\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "file": "r9_h157_scan_2026_igg_tables.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b560e94c8ce0e59942"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135e4dbfd74e536a729",
+    "hid": 159,
+    "name": "join_top1000_2026.py",
+    "bytes": 1990,
+    "sha256": "0ece85e6eb0b821bcb607cbbf8ebcdd56242c4d613cc30caebd399e6b5ee1fa2",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135e4dbfd74e536a729/display",
+    "content": "import re\nimport sys\n\n\ndef target_key(chrom, pos):\n    chrom = chrom.lower()\n    if chrom.startswith(\"chr\"):\n        chrom = chrom[3:]\n    return chrom, pos\n\n\ndef source_keys(fields):\n    keys = set()\n    for i, field in enumerate(fields):\n        value = field.strip()\n        m = re.fullmatch(r\"(?:chr)?([0-9]+|x|y|mt)[:](\\d+)\", value, re.I)\n        if m:\n            keys.add(target_key(m.group(1), m.group(2)))\n        if i + 1 < len(fields) and re.fullmatch(r\"(?:chr)?[0-9]+|x|y|mt\", value, re.I):\n            if re.fullmatch(r\"\\d+\", fields[i + 1].strip()):\n                keys.add(target_key(value, fields[i + 1].strip()))\n    return keys\n\n\ndef main():\n    if len(sys.argv) < 3:\n        raise SystemExit(\"usage: join_top1000_2026.py target table=path ... output\")\n    target_path = sys.argv[1]\n    output = sys.argv[-1]\n    sources = sys.argv[2:-1]\n    targets = {}\n    with open(target_path, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n        for line in handle:\n            if not line.strip() or line.startswith(\"#\"):\n                continue\n            fields = line.rstrip(\"\\n\").split(\"\\t\")\n            if len(fields) >= 2 and re.fullmatch(r\"\\d+\", fields[1].strip()):\n                targets[target_key(fields[0], fields[1])] = line.rstrip(\"\\n\")\n\n    with open(output, \"w\", encoding=\"utf-8\") as out:\n        out.write(\"target_variants\\t%d\\n\" % len(targets))\n        for source in sources:\n            label, path = source.split(\"=\", 1)\n            out.write(\"TABLE\\t%s\\n\" % label)\n            with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n                for line in handle:\n                    fields = line.rstrip(\"\\n\").split(\"\\t\")\n                    matched = source_keys(fields) & targets.keys()\n                    for key in sorted(matched):\n                        out.write(\"MATCH\\t%s:%s\\tTARGET\\t%s\\tSOURCE\\t%s\\n\" % (\n                            key[0], key[1], targets[key], line.rstrip(\"\\n\")))\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "file": "r9_h159_join_top1000_2026.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b59ddd46c64db9e9ee"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135e59c6dedc3186efa",
+    "hid": 163,
+    "name": "scan_iga_source_targets.py",
+    "bytes": 918,
+    "sha256": "11e04bb963d5acec52b26436661566ee62d245bd5544be1c4772abbec1f480a0",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135e59c6dedc3186efa/display",
+    "content": "import sys\n\n\ntargets = {\n    \"1:161530617\", \"1:161531006\", \"1:161540726\", \"1:161530615\",\n    \"1:161595363\", \"1:161558222\", \"1:161533223\", \"1:161642443\",\n    \"1:161513694\", \"1:161530922\", \"1:161540644\", \"1:161625940\",\n    \"6:32438927\", \"6:32662128\", \"6:32406704\", \"6:32629905\",\n    \"17:16939677\", \"17:16945436\", \"17:16945825\", \"17:16960324\",\n    \"17:16842991\", \"17:16848750\", \"17:16849139\", \"17:16863638\",\n    \"19:49525049\",\n}\n\n\ndef main():\n    source = sys.argv[1]\n    output = sys.argv[2]\n    with open(output, \"w\", encoding=\"utf-8\") as out:\n        out.write(\"SNP\\tCHR\\tBP_hg19\\tA1\\tA2\\tBETA\\tSE\\tP\\n\")\n        with open(source, \"r\", encoding=\"utf-8\", errors=\"replace\") as handle:\n            for line in handle:\n                fields = line.rstrip(\"\\n\").split(\"\\t\")\n                if fields and fields[0] in targets:\n                    out.write(line.rstrip(\"\\n\") + \"\\n\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "file": "r9_h163_scan_iga_source_targets.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b520bafb4ec53847b6"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135a662573fbc7877f2",
+    "hid": 166,
+    "name": "scan_pan_ag_regions.py",
+    "bytes": 4031,
+    "sha256": "2efad2b6c6b202882da746c755246c754b4dd549ff235f126a837229aaac2ada",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135a662573fbc7877f2/display",
+    "excerpt": "import gzip\nimport heapq\nimport sys\n\n\ndef open_text(path):\n    return gzip.open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, key, value, row, limit=25):\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif value > heap[0][0]:\n        heapq.heapreplace(heap, item)\n\n\ndef target_regions():\n    return {\n        \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n        \"HLA_hg38\": (\"6\", 32000000, 33000000),\n        \"TACI_hg38\": (\"17\", 16900000, 17100000),\n        \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n    }\n\n\ndef source_regions():\n    return {\n        \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n        \"HLA_hg19\": (\"6\", 32000000, 33000000),\n        \"TACI_hg19\": (\"17\", 16800000, 16900000),\n        \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n    }\n\n\ndef scan_target(path):\n    regions = target_regions()\n    heaps = {name: [] for name in regions}\n    with open_text(path) as handle:\n        header = handle.readline().rstrip(\"\\n\").split(\"\\t\")\n        idx = {name: i for i, name in enumerate(header)}\n        for line in handle:\n            fields = line.rstrip(\"\\n\").split(\"\\t\")\n            if len(fields) <= max(idx.get(\"P\", 0), idx.get(\"#CHROM\", 0), idx.get(\"POS\", 0)):\n                continue\n            chrom = fields[idx.get(\"#CHROM\", 0)]\n            try:\n                pos = int(fields[idx.get(\"POS\", 1)])\n                p = float(fields[idx.get(\"P\", 7)])\n            except (ValueError, IndexError):\n                continue\n            if p <= 0:\n                continue\n            for name, (want_chrom, lo, hi) in regions.items():\n                if chrom == want_chrom and lo <= pos <= hi:\n                    add_top(heaps[name], -__import__(\"math\").log10(p),\n                            \"\\t\".join([name, chrom, str(pos), fields[idx.get(\"ID\", 2)], fields[idx.get(\"P\", 7)]]))\n    return heaps\n\n\ndef scan_source(path):\n    regions = source_regions()\n    heaps = {name: [] for name in regions}\n    with open_text(path) as handle:\n        header",
+    "file": "r9_h166_scan_pan_ag_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b519b53eea884fdc55"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135856381bdf4f99aac",
+    "hid": 168,
+    "name": "scan_pan_ag_regions.py",
+    "bytes": 4176,
+    "sha256": "9da8cc030d69bfbb00772ab993fe39081181d286db4b91499fe4956168b6accd",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135856381bdf4f99aac/display",
+    "excerpt": "import gzip\nimport heapq\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, key, value, row, limit=25):\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif value > heap[0][0]:\n        heapq.heapreplace(heap, item)\n\n\ndef target_regions():\n    return {\n        \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n        \"HLA_hg38\": (\"6\", 32000000, 33000000),\n        \"TACI_hg38\": (\"17\", 16900000, 17100000),\n        \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n    }\n\n\ndef source_regions():\n    return {\n        \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n        \"HLA_hg19\": (\"6\", 32000000, 33000000),\n        \"TACI_hg19\": (\"17\", 16800000, 16900000),\n        \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n    }\n\n\ndef scan_target(path):\n    regions = target_regions()\n    heaps = {name: [] for name in regions}\n    with open_text(path) as handle:\n        header = handle.readline().rstrip(\"\\n\").split(\"\\t\")\n        idx = {name: i for i, name in enumerate(header)}\n        for line in handle:\n            fields = line.rstrip(\"\\n\").split(\"\\t\")\n            if len(fields) <= max(idx.get(\"P\", 0), idx.get(\"#CHROM\", 0), idx.get(\"POS\", 0)):\n                continue\n            chrom = fields[idx.get(\"#CHROM\", 0)]\n            try:\n                pos = int(fields[idx.get(\"POS\", 1)])\n                p = float(fields[idx.get(\"P\", 7)])\n            except (ValueError, IndexError):\n                continue\n            if p <= 0:\n                continue\n            for name, (want_chrom, lo, hi) in regions.items():\n                if chrom == want_chrom and lo <= pos <= hi:\n                    add_top(heaps[name], -__import__(\"math\").log10(p),\n                            \"\\t\".join([name, chrom, str(pos), fields[idx.get(\"ID\", 2)], fields[idx.get(\"P\", 7)]]))\n    return heaps\n\n\nde",
+    "file": "r9_h168_scan_pan_ag_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5139b3592298073ea"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213580e113055fc31d80",
+    "hid": 170,
+    "name": "scan_pan_ag_regions.py",
+    "bytes": 4171,
+    "sha256": "ba7c3407f6bf757bf3fbca9055cab806ed4c1a0dc4dce067ad7259f930a082e9",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213580e113055fc31d80/display",
+    "excerpt": "import gzip\nimport heapq\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, value, row, limit=25):\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif value > heap[0][0]:\n        heapq.heapreplace(heap, item)\n\n\ndef target_regions():\n    return {\n        \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n        \"HLA_hg38\": (\"6\", 32000000, 33000000),\n        \"TACI_hg38\": (\"17\", 16900000, 17100000),\n        \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n    }\n\n\ndef source_regions():\n    return {\n        \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n        \"HLA_hg19\": (\"6\", 32000000, 33000000),\n        \"TACI_hg19\": (\"17\", 16800000, 16900000),\n        \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n    }\n\n\ndef scan_target(path):\n    regions = target_regions()\n    heaps = {name: [] for name in regions}\n    with open_text(path) as handle:\n        header = handle.readline().rstrip(\"\\n\").split(\"\\t\")\n        idx = {name: i for i, name in enumerate(header)}\n        for line in handle:\n            fields = line.rstrip(\"\\n\").split(\"\\t\")\n            if len(fields) <= max(idx.get(\"P\", 0), idx.get(\"#CHROM\", 0), idx.get(\"POS\", 0)):\n                continue\n            chrom = fields[idx.get(\"#CHROM\", 0)]\n            try:\n                pos = int(fields[idx.get(\"POS\", 1)])\n                p = float(fields[idx.get(\"P\", 7)])\n            except (ValueError, IndexError):\n                continue\n            if p <= 0:\n                continue\n            for name, (want_chrom, lo, hi) in regions.items():\n                if chrom == want_chrom and lo <= pos <= hi:\n                    add_top(heaps[name], -__import__(\"math\").log10(p),\n                            \"\\t\".join([name, chrom, str(pos), fields[idx.get(\"ID\", 2)], fields[idx.get(\"P\", 7)]]))\n    return heaps\n\n\ndef sca",
+    "file": "r9_h170_scan_pan_ag_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b591c43d45e8bda913",
+      "bbd44e69cb8906b52f65df1c237b7b9e"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721353d5cd5b011abe52d",
+    "hid": 173,
+    "name": "scan_neale_albumin_regions.py",
+    "bytes": 3637,
+    "sha256": "4b5a44e848e43df2755629bce91258ccccd1e1eed62ad667acecef09d3cc2b66",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721353d5cd5b011abe52d/display",
+    "content": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, value, row, limit=25):\n    if not math.isfinite(value):\n        return\n    item = (-value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef rows_desc(heap):\n    return [( -item[0], item[1]) for item in sorted(heap, reverse=True)]\n\n\nregions = {\n    \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n    \"HLA_hg38\": (\"6\", 32000000, 33000000),\n    \"TACI_hg38\": (\"17\", 16900000, 17100000),\n    \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n}\nsource_regions = {\n    \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n    \"HLA_hg19\": (\"6\", 32000000, 33000000),\n    \"TACI_hg19\": (\"17\", 16800000, 16900000),\n    \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in source_regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    source_header = None\n    pidx = None\n    vidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if source_header is None:\n            source_header = line.rstrip(\"\\n\").split(\"\\t\")\n            lower = [x.lower() for x in source_header]\n            vidx = lower.index(\"variant\")\n            pidx = lower.index(\"pval\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if len(fields) <= max(vidx, pidx):\n            continue\n        variant = fields[vidx]\n        parts = variant.split(\":\")\n        if len(parts) < 2:\n            continue\n        try:\n            chrom = parts[0].removeprefix(\"chr\")\n            pos = int(parts[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in source_regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(source_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open(out_path, \"w\") as out:\n    out.write(\"target_header\\t\" + \"\\t\".join(header or []) + \"\\n\")\n    out.write(\"source_header\\t\" + \"\\t\".join(source_header or []) + \"\\n\")\n    for name in regions:\n        out.write(\"TARGET_REGION\\t\" + name + \"\\n\")\n        for score, row in rows_desc(target_heaps[name]):\n            out.write(\"TARGET\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n    for name in source_regions:\n        out.write(\"SOURCE_REGION\\t\" + name + \"\\n\")\n        for score, row in rows_desc(source_heaps[name]):\n            out.write(\"SOURCE\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n",
+    "file": "r9_h173_scan_neale_albumin_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5171065ab0e5e4101"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135b13473872fe4d1d0",
+    "hid": 175,
+    "name": "scan_neale_albumin_regions.py",
+    "bytes": 3634,
+    "sha256": "662974c05d85caa2c243dd246c135b343c1e0c6b385abc936e2d5695c6a20665",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135b13473872fe4d1d0/display",
+    "content": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, value, row, limit=25):\n    if not math.isfinite(value):\n        return\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef rows_desc(heap):\n    return [(item[0], item[1]) for item in sorted(heap, reverse=True)]\n\n\nregions = {\n    \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n    \"HLA_hg38\": (\"6\", 32000000, 33000000),\n    \"TACI_hg38\": (\"17\", 16900000, 17100000),\n    \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n}\nsource_regions = {\n    \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n    \"HLA_hg19\": (\"6\", 32000000, 33000000),\n    \"TACI_hg19\": (\"17\", 16800000, 16900000),\n    \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in source_regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    source_header = None\n    pidx = None\n    vidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if source_header is None:\n            source_header = line.rstrip(\"\\n\").split(\"\\t\")\n            lower = [x.lower() for x in source_header]\n            vidx = lower.index(\"variant\")\n            pidx = lower.index(\"pval\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if len(fields) <= max(vidx, pidx):\n            continue\n        variant = fields[vidx]\n        parts = variant.split(\":\")\n        if len(parts) < 2:\n            continue\n        try:\n            chrom = parts[0].removeprefix(\"chr\")\n            pos = int(parts[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in source_regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(source_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open(out_path, \"w\") as out:\n    out.write(\"target_header\\t\" + \"\\t\".join(header or []) + \"\\n\")\n    out.write(\"source_header\\t\" + \"\\t\".join(source_header or []) + \"\\n\")\n    for name in regions:\n        out.write(\"TARGET_REGION\\t\" + name + \"\\n\")\n        for score, row in rows_desc(target_heaps[name]):\n            out.write(\"TARGET\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n    for name in source_regions:\n        out.write(\"SOURCE_REGION\\t\" + name + \"\\n\")\n        for score, row in rows_desc(source_heaps[name]):\n            out.write(\"SOURCE\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n",
+    "file": "r9_h175_scan_neale_albumin_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5ac987f3cd9f0f898",
+      "bbd44e69cb8906b5e7b715057b3b1c8a"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135a754d65fde51a33b",
+    "hid": 178,
+    "name": "scan_epic_igg_regions.py",
+    "bytes": 3296,
+    "sha256": "15ddd08c12b8604eead488cda9d9df3fa949797a55ae42a6808b5182978cfa2b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135a754d65fde51a33b/display",
+    "content": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, score, row, limit=10):\n    if not math.isfinite(score):\n        return\n    item = (score, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef top_rows(heap):\n    return sorted(heap, reverse=True)\n\n\nregions = {\n    \"FCGR\": (\"1\", 161480000, 161680000),\n    \"HLA\": (\"6\", 32000000, 33000000),\n    \"TACI\": (\"17\", 16900000, 17100000),\n    \"FCGRT\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    source_header = None\n    cidx = posidx = pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if source_header is None:\n            source_header = line.rstrip(\"\\n\").split(\"\\t\")\n            lower = [x.lower() for x in source_header]\n            cidx = lower.index(\"chromosome\")\n            posidx = lower.index(\"base_pair_location\")\n            pidx = lower.index(\"p_value\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if len(fields) <= max(cidx, posidx, pidx):\n            continue\n        try:\n            chrom = fields[cidx].removeprefix(\"chr\")\n            pos = int(fields[posidx])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(source_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open(out_path, \"w\") as out:\n    out.write(\"target_header\\t\" + \"\\t\".join(header or []) + \"\\n\")\n    out.write(\"source_header\\t\" + \"\\t\".join(source_header or []) + \"\\n\")\n    for name in regions:\n        out.write(\"TARGET_REGION\\t\" + name + \"\\n\")\n        for score, row in top_rows(target_heaps[name]):\n            out.write(\"TARGET\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n        out.write(\"SOURCE_REGION\\t\" + name + \"\\n\")\n        for score, row in top_rows(source_heaps[name]):\n            out.write(\"SOURCE\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n",
+    "file": "r9_h178_scan_epic_igg_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b559d38898005e0083"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213598a6098a1956d62f",
+    "hid": 181,
+    "name": "scan_epic_igg_regions.py",
+    "bytes": 3296,
+    "sha256": "15ddd08c12b8604eead488cda9d9df3fa949797a55ae42a6808b5182978cfa2b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213598a6098a1956d62f/display",
+    "content": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, score, row, limit=10):\n    if not math.isfinite(score):\n        return\n    item = (score, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef top_rows(heap):\n    return sorted(heap, reverse=True)\n\n\nregions = {\n    \"FCGR\": (\"1\", 161480000, 161680000),\n    \"HLA\": (\"6\", 32000000, 33000000),\n    \"TACI\": (\"17\", 16900000, 17100000),\n    \"FCGRT\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    source_header = None\n    cidx = posidx = pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if source_header is None:\n            source_header = line.rstrip(\"\\n\").split(\"\\t\")\n            lower = [x.lower() for x in source_header]\n            cidx = lower.index(\"chromosome\")\n            posidx = lower.index(\"base_pair_location\")\n            pidx = lower.index(\"p_value\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if len(fields) <= max(cidx, posidx, pidx):\n            continue\n        try:\n            chrom = fields[cidx].removeprefix(\"chr\")\n            pos = int(fields[posidx])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(source_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open(out_path, \"w\") as out:\n    out.write(\"target_header\\t\" + \"\\t\".join(header or []) + \"\\n\")\n    out.write(\"source_header\\t\" + \"\\t\".join(source_header or []) + \"\\n\")\n    for name in regions:\n        out.write(\"TARGET_REGION\\t\" + name + \"\\n\")\n        for score, row in top_rows(target_heaps[name]):\n            out.write(\"TARGET\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n        out.write(\"SOURCE_REGION\\t\" + name + \"\\n\")\n        for score, row in top_rows(source_heaps[name]):\n            out.write(\"SOURCE\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n",
+    "file": "r9_h181_scan_epic_igg_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5f584de6e2be9a543"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135303e2a70f36275be",
+    "hid": 184,
+    "name": "scan_epic_igg_regions.py",
+    "bytes": 3296,
+    "sha256": "15ddd08c12b8604eead488cda9d9df3fa949797a55ae42a6808b5182978cfa2b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135303e2a70f36275be/display",
+    "content": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, score, row, limit=10):\n    if not math.isfinite(score):\n        return\n    item = (score, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef top_rows(heap):\n    return sorted(heap, reverse=True)\n\n\nregions = {\n    \"FCGR\": (\"1\", 161480000, 161680000),\n    \"HLA\": (\"6\", 32000000, 33000000),\n    \"TACI\": (\"17\", 16900000, 17100000),\n    \"FCGRT\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    source_header = None\n    cidx = posidx = pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if source_header is None:\n            source_header = line.rstrip(\"\\n\").split(\"\\t\")\n            lower = [x.lower() for x in source_header]\n            cidx = lower.index(\"chromosome\")\n            posidx = lower.index(\"base_pair_location\")\n            pidx = lower.index(\"p_value\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if len(fields) <= max(cidx, posidx, pidx):\n            continue\n        try:\n            chrom = fields[cidx].removeprefix(\"chr\")\n            pos = int(fields[posidx])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(source_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open(out_path, \"w\") as out:\n    out.write(\"target_header\\t\" + \"\\t\".join(header or []) + \"\\n\")\n    out.write(\"source_header\\t\" + \"\\t\".join(source_header or []) + \"\\n\")\n    for name in regions:\n        out.write(\"TARGET_REGION\\t\" + name + \"\\n\")\n        for score, row in top_rows(target_heaps[name]):\n            out.write(\"TARGET\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n        out.write(\"SOURCE_REGION\\t\" + name + \"\\n\")\n        for score, row in top_rows(source_heaps[name]):\n            out.write(\"SOURCE\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n",
+    "file": "r9_h184_scan_epic_igg_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b54df755033a7f04d4"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213520e031492e6f43ac",
+    "hid": 187,
+    "name": "scan_neale_albumin_regions.py",
+    "bytes": 3634,
+    "sha256": "662974c05d85caa2c243dd246c135b343c1e0c6b385abc936e2d5695c6a20665",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213520e031492e6f43ac/display",
+    "content": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, value, row, limit=25):\n    if not math.isfinite(value):\n        return\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef rows_desc(heap):\n    return [(item[0], item[1]) for item in sorted(heap, reverse=True)]\n\n\nregions = {\n    \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n    \"HLA_hg38\": (\"6\", 32000000, 33000000),\n    \"TACI_hg38\": (\"17\", 16900000, 17100000),\n    \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n}\nsource_regions = {\n    \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n    \"HLA_hg19\": (\"6\", 32000000, 33000000),\n    \"TACI_hg19\": (\"17\", 16800000, 16900000),\n    \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in source_regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    source_header = None\n    pidx = None\n    vidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if source_header is None:\n            source_header = line.rstrip(\"\\n\").split(\"\\t\")\n            lower = [x.lower() for x in source_header]\n            vidx = lower.index(\"variant\")\n            pidx = lower.index(\"pval\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if len(fields) <= max(vidx, pidx):\n            continue\n        variant = fields[vidx]\n        parts = variant.split(\":\")\n        if len(parts) < 2:\n            continue\n        try:\n            chrom = parts[0].removeprefix(\"chr\")\n            pos = int(parts[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in source_regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(source_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open(out_path, \"w\") as out:\n    out.write(\"target_header\\t\" + \"\\t\".join(header or []) + \"\\n\")\n    out.write(\"source_header\\t\" + \"\\t\".join(source_header or []) + \"\\n\")\n    for name in regions:\n        out.write(\"TARGET_REGION\\t\" + name + \"\\n\")\n        for score, row in rows_desc(target_heaps[name]):\n            out.write(\"TARGET\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n    for name in source_regions:\n        out.write(\"SOURCE_REGION\\t\" + name + \"\\n\")\n        for score, row in rows_desc(source_heaps[name]):\n            out.write(\"SOURCE\\t\" + name + \"\\t-log10P=\" + format(score, \".8g\") + \"\\t\" + row + \"\\n\")\n",
+    "file": "r9_h187_scan_neale_albumin_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b55e0d207055c0fa05"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721355103d663fb35505d",
+    "hid": 189,
+    "name": "extract_2026_target_positions.py",
+    "bytes": 1263,
+    "sha256": "ae6421ee2d2cce48ae2ed8728e506769262edcbf96c466b0f022ee4c8134aac6",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721355103d663fb35505d/display",
+    "content": "import re\nimport sys\n\ntargets = {\n    \"1:161530615\", \"1:161530617\", \"1:161531006\", \"1:161540726\",\n    \"1:161558222\", \"1:161595363\", \"1:161625940\", \"1:161642443\",\n    \"1:161649573\", \"6:32067917\", \"6:32662128\", \"6:32629905\",\n    \"17:16939677\", \"17:16941853\", \"17:16945436\", \"17:16945825\",\n    \"17:16960324\", \"19:49525049\",\n}\nids = {\n    \"rs7554873\", \"rs143596860\", \"rs34562254\", \"rs4273077\",\n    \"rs4561508\", \"rs4985726\", \"rs2647032\", \"rs3763321\",\n}\n\ndef wanted(line):\n    low = line.lower()\n    if any(x.lower() in low for x in ids):\n        return True\n    for chrom, pos in re.findall(r\"(?:chr)?(1|6|17|19)[: _-](161530615|161530617|161531006|161540726|161558222|161595363|161625940|161642443|161649573|32067917|32662128|32629905|16939677|16941853|16945436|16945825|16960324|49525049)\", low):\n        if f\"{chrom}:{pos}\" in targets:\n            return True\n    return False\n\nsrc = sys.argv[1]\nout = sys.argv[2]\nwith open(src, \"rt\", encoding=\"utf-8\", errors=\"replace\") as inp, open(out, \"wt\", encoding=\"utf-8\") as dst:\n    table = \"\"\n    for line in inp:\n        if line.startswith(\"TABLE\\t\"):\n            table = line.rstrip(\"\\n\")\n        elif wanted(line):\n            dst.write(table + \"\\n\")\n            dst.write(line if line.endswith(\"\\n\") else line + \"\\n\")\n",
+    "file": "r9_h189_extract_2026_target_positions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5e19e024747541458"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721357eaee0b253516c96",
+    "hid": 212,
+    "name": "scan_koyama_ztt_leads.py",
+    "bytes": 3029,
+    "sha256": "a59b7dff62f542a3f009c49b1b798a8276f026ce44f31d46405aa690a8a32b96",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721357eaee0b253516c96/display",
+    "content": "import csv\nimport gzip\nimport heapq\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as fh:\n        magic = fh.read(2)\n    return gzip.open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\") if magic == b\"\\x1f\\x8b\" else open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\")\n\n\ndef pval(value):\n    try:\n        return float(value)\n    except Exception:\n        return None\n\n\ndef region(chrom, pos):\n    windows = {\n        \"FCGR\": (\"1\", 161480000, 161680000),\n        \"HLA\": (\"6\", 32000000, 33000000),\n        \"TACI\": (\"17\", 16900000, 17100000),\n        \"FCGRT\": (\"19\", 49300000, 49800000),\n    }\n    for label, (want_chrom, start, end) in windows.items():\n        if chrom == want_chrom and start <= pos <= end:\n            return label\n    return None\n\n\ndef add_top(heaps, label, value, row, limit=20):\n    if value is None:\n        return\n    heap = heaps.setdefault(label, [])\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif value > heap[0][0]:\n        heapq.heapreplace(heap, item)\n\n\ntarget_path, loci_path, out_path = sys.argv[1:4]\ntarget_heaps = {}\ntarget_exact = []\nwith open_text(target_path) as inp:\n    header = inp.readline().rstrip(\"\\n\\r\").split(\"\\t\")\n    for line in inp:\n        fields = line.rstrip(\"\\n\\r\").split(\"\\t\")\n        if len(fields) < 8:\n            continue\n        chrom, pos_s = fields[0], fields[1]\n        try:\n            pos = int(pos_s)\n        except Exception:\n            continue\n        label = region(chrom, pos)\n        if label is not None:\n            p = pval(fields[7])\n            add_top(target_heaps, label, -p if p is not None and p > 0 else None, fields)\n        if (chrom, pos) in {\n            (\"1\", 161625940), (\"1\", 161642443), (\"6\", 32438927), (\"6\", 32662128),\n            (\"17\", 16939677), (\"17\", 16945436), (\"17\", 16945825), (\"17\", 16960324),\n            (\"19\", 49525049),\n        }:\n            target_exact.append(fields)\n\nztt_rows = []\nwith open_text(loci_path) as inp:\n    reader = csv.reader(inp, delimiter=\"\\t\")\n    rows = list(reader)\n\n# The first four rows are title/blank/header/blank; data begins after them.\nfor fields in rows[4:]:\n    if not fields or fields[0] != \"ZTT\":\n        continue\n    ztt_rows.append(fields)\n\nwith open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"TARGET_REGIONAL_TOPS\\n\")\n    for label in (\"FCGR\", \"HLA\", \"TACI\", \"FCGRT\"):\n        out.write(\"REGION\\t%s\\n\" % label)\n        for value, fields in sorted(target_heaps.get(label, []), reverse=True):\n            out.write(\"\\t\".join(fields) + \"\\n\")\n    out.write(\"TARGET_EXACT_COORDINATES\\n\")\n    out.write(\"\\t\".join(header) + \"\\n\")\n    for fields in target_exact:\n        out.write(\"\\t\".join(fields) + \"\\n\")\n    out.write(\"KOYAMA_ZTT_LEAD_ROWS\\n\")\n    out.write(\"\\t\".join([\n        \"Phenotype\", \"CHR\", \"POS\", \"REF\", \"ALT\", \"LocusStart\", \"LocusEnd\",\n        \"N\", \"AAF\", \"BETA\", \"SE\", \"P\", \"LOGP\", \"rsID\", \"Consequence\",\n        \"GeneSymbol\"\n    ]) + \"\\n\")\n    for fields in ztt_rows:\n        out.write(\"\\t\".join(fields) + \"\\n\")\n",
+    "file": "r9_h212_scan_koyama_ztt_leads.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5253316be195b1d0d"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213561c24606d85751cc",
+    "hid": 214,
+    "name": "scan_koyama_all_regional_leads.py",
+    "bytes": 3406,
+    "sha256": "4097423a92ab44c50236ca0aa3a873f39b59bf36946f6bb4f6e5c2ebd1bb296b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213561c24606d85751cc/display",
+    "content": "import csv\nimport gzip\nimport heapq\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as fh:\n        magic = fh.read(2)\n    return gzip.open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\") if magic == b\"\\x1f\\x8b\" else open(path, \"rt\", encoding=\"utf-8\", errors=\"replace\")\n\n\ndef pval(value):\n    try:\n        return float(value)\n    except Exception:\n        return None\n\n\ndef region(chrom, pos):\n    windows = {\n        \"FCGR\": (\"1\", 161480000, 161680000),\n        \"HLA\": (\"6\", 32000000, 33000000),\n        \"TACI\": (\"17\", 16900000, 17100000),\n        \"FCGRT\": (\"19\", 49300000, 49800000),\n    }\n    for label, (want_chrom, start, end) in windows.items():\n        if chrom == want_chrom and start <= pos <= end:\n            return label\n    return None\n\n\ndef add_top(heaps, label, value, row, limit=20):\n    if value is None:\n        return\n    heap = heaps.setdefault(label, [])\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif value > heap[0][0]:\n        heapq.heapreplace(heap, item)\n\n\ntarget_path, loci_path, out_path = sys.argv[1:4]\ntarget_heaps = {}\ntarget_exact = []\nwith open_text(target_path) as inp:\n    header = inp.readline().rstrip(\"\\n\\r\").split(\"\\t\")\n    for line in inp:\n        fields = line.rstrip(\"\\n\\r\").split(\"\\t\")\n        if len(fields) < 8:\n            continue\n        chrom, pos_s = fields[0], fields[1]\n        try:\n            pos = int(pos_s)\n        except Exception:\n            continue\n        label = region(chrom, pos)\n        if label is not None:\n            p = pval(fields[7])\n            add_top(target_heaps, label, -p if p is not None and p > 0 else None, fields)\n        if (chrom, pos) in {\n            (\"1\", 161625940), (\"1\", 161642443), (\"6\", 32438927), (\"6\", 32662128),\n            (\"17\", 16939677), (\"17\", 16945436), (\"17\", 16945825), (\"17\", 16960324),\n            (\"19\", 49525049),\n        }:\n            target_exact.append(fields)\n\nztt_rows = []\nregional_rows = []\nwith open_text(loci_path) as inp:\n    reader = csv.reader(inp, delimiter=\"\\t\")\n    rows = list(reader)\n\n# The first four rows are title/blank/header/blank; data begins after them.\nfor fields in rows[4:]:\n    if not fields or len(fields) < 13:\n        continue\n    try:\n        locus_chrom = fields[1]\n        locus_pos = int(fields[2])\n    except Exception:\n        continue\n    if region(locus_chrom, locus_pos) is not None:\n        regional_rows.append(fields)\n    if fields[0] == \"ZTT\":\n        ztt_rows.append(fields)\n\nwith open(out_path, \"w\", encoding=\"utf-8\") as out:\n    out.write(\"TARGET_REGIONAL_TOPS\\n\")\n    for label in (\"FCGR\", \"HLA\", \"TACI\", \"FCGRT\"):\n        out.write(\"REGION\\t%s\\n\" % label)\n        for value, fields in sorted(target_heaps.get(label, []), reverse=True):\n            out.write(\"\\t\".join(fields) + \"\\n\")\n    out.write(\"TARGET_EXACT_COORDINATES\\n\")\n    out.write(\"\\t\".join(header) + \"\\n\")\n    for fields in target_exact:\n        out.write(\"\\t\".join(fields) + \"\\n\")\n    out.write(\"KOYAMA_ZTT_LEAD_ROWS\\n\")\n    out.write(\"\\t\".join([\n        \"Phenotype\", \"CHR\", \"POS\", \"REF\", \"ALT\", \"LocusStart\", \"LocusEnd\",\n        \"N\", \"AAF\", \"BETA\", \"SE\", \"P\", \"LOGP\", \"rsID\", \"Consequence\",\n        \"GeneSymbol\"\n    ]) + \"\\n\")\n    for fields in ztt_rows:\n        out.write(\"\\t\".join(fields) + \"\\n\")\n    out.write(\"KOYAMA_ALL_REGIONAL_LEAD_ROWS\\n\")\n    for fields in regional_rows:\n        out.write(\"\\t\".join(fields) + \"\\n\")\n",
+    "file": "r9_h214_scan_koyama_all_regional_leads.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5a9425672fdfe3a3a"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135f905c933ec4424fa",
+    "hid": 219,
+    "name": "scan_gcst_total_protein_regions.py",
+    "bytes": 4220,
+    "sha256": "7ab430be0dd65c5f7bd62a477469941cce500986de9f04a67d7579899bb15700",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135f905c933ec4424fa/display",
+    "excerpt": "import gzip\nimport heapq\nimport math\nimport sys\n\n\ndef open_text(path):\n    with open(path, \"rb\") as probe:\n        magic = probe.read(2)\n    if magic == b\"\\x1f\\x8b\":\n        return gzip.open(path, \"rt\", errors=\"replace\")\n    return open(path, \"rt\", errors=\"replace\")\n\n\ndef add_top(heap, value, row, limit=25):\n    if not math.isfinite(value):\n        return\n    item = (value, row)\n    if len(heap) < limit:\n        heapq.heappush(heap, item)\n    elif item > heap[0]:\n        heapq.heapreplace(heap, item)\n\n\ndef rows_desc(heap):\n    return [(item[0], item[1]) for item in sorted(heap, reverse=True)]\n\n\nregions = {\n    \"FCGR_hg38\": (\"1\", 161480000, 161680000),\n    \"HLA_hg38\": (\"6\", 32000000, 33000000),\n    \"TACI_hg38\": (\"17\", 16900000, 17100000),\n    \"FCGRT_hg38\": (\"19\", 49300000, 49800000),\n}\nsource_regions = {\n    \"FCGR_hg19\": (\"1\", 161450000, 161650000),\n    \"HLA_hg19\": (\"6\", 32000000, 33000000),\n    \"TACI_hg19\": (\"17\", 16800000, 16900000),\n    \"FCGRT_hg19\": (\"19\", 49300000, 49800000),\n}\n\ntarget_path, source_path, out_path = sys.argv[1:4]\ntarget_heaps = {name: [] for name in regions}\nsource_heaps = {name: [] for name in source_regions}\n\nwith open_text(target_path) as fh:\n    header = None\n    pidx = None\n    for line in fh:\n        if not line.strip():\n            continue\n        if line.startswith(\"#\"):\n            header = line.rstrip(\"\\n\").split(\"\\t\")\n            pidx = header.index(\"P\")\n            continue\n        fields = line.rstrip(\"\\n\").split(\"\\t\")\n        if pidx is None or len(fields) <= pidx:\n            fields = line.rstrip(\"\\n\").split()\n        try:\n            chrom = fields[0].removeprefix(\"chr\")\n            pos = int(fields[1])\n            p = float(fields[pidx])\n        except (ValueError, IndexError):\n            continue\n        for name, (rchrom, start, end) in regions.items():\n            if chrom == rchrom and start <= pos <= end:\n                add_top(target_heaps[name], -math.log10(p), \"\\t\".join(fields))\n\nwith open_text(source_path) as fh:\n    ",
+    "file": "r9_h219_scan_gcst_total_protein_regions.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b56abc707ddaa76c74",
+      "bbd44e69cb8906b5af05d4ef4230be2f",
+      "bbd44e69cb8906b5c5ebeb1a8b3df8e6",
+      "bbd44e69cb8906b53c734133c8e36be1",
+      "bbd44e69cb8906b5ba67620301812ea5",
+      "bbd44e69cb8906b5d15e6a7fc6bcb2b4",
+      "bbd44e69cb8906b5fed369ea969d2747"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213503a538179beb7f78",
+    "hid": 223,
+    "name": "scan_jonsson_table5_targets.py",
+    "bytes": 448,
+    "sha256": "cb65938faa6fea0b8c34f3675f330b783b84b664bb72d339c2b2c1e3f0412528",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213503a538179beb7f78/display",
+    "content": "import csv\nimport sys\n\nsource_path, out_path = sys.argv[1:3]\nneedles = {\n    \"rs143596860\", \"rs7554873\", \"rs2647032\", \"rs3763321\",\n    \"rs34562254\", \"rs4273077\", \"rs4561508\", \"rs4985726\",\n}\n\nwith open(source_path, \"r\", errors=\"replace\") as fh, open(out_path, \"w\") as out:\n    reader = csv.reader(fh, delimiter=\"\\t\")\n    for row in reader:\n        text = \"\\t\".join(row)\n        if any(x in text for x in needles):\n            out.write(text + \"\\n\")\n",
+    "file": "r9_h223_scan_jonsson_table5_targets.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b517e4b1095766ef86"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135411417d5a8d59c7d",
+    "hid": 240,
+    "name": "inspect_gwas_head.py",
+    "bytes": 349,
+    "sha256": "a61c39b548003a52128e1ec96195cf0e0131db703a014fa2a763c1f48cafaa75",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135411417d5a8d59c7d/display",
+    "content": "import gzip\nimport sys\n\nsource = sys.argv[1]\nout_path = sys.argv[2]\n\nopener = gzip.open if source.endswith(\".gz\") else open\nwith opener(source, \"rt\", encoding=\"utf-8\", errors=\"replace\") as src, open(out_path, \"wt\", encoding=\"utf-8\") as out:\n    for i, line in enumerate(src):\n        out.write(f\"{i+1}\\t{line}\")\n        if i >= 9:\n            break\n",
+    "file": "r9_h240_inspect_gwas_head.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5a38c89bc97531260"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135d7f76398fc8d301a",
+    "hid": 244,
+    "name": "inspect_table5_rows.py",
+    "bytes": 426,
+    "sha256": "6fc67590c2da91b52fd2c36a9e8ae7b50bb3e188f723fd5fcd0bbf7d4f86241b",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135d7f76398fc8d301a/display",
+    "content": "import csv\nimport sys\n\nsource_path, out_path = sys.argv[1:3]\nneedles = {\"rs7554873\", \"rs34562254\"}\n\nwith open(source_path, \"r\", errors=\"replace\") as fh, open(out_path, \"w\") as out:\n    reader = csv.reader(fh, delimiter=\"\\t\")\n    for line_number, row in enumerate(reader, start=1):\n        text = \"\\t\".join(row)\n        if line_number <= 10 or any(x in text for x in needles):\n            out.write(f\"{line_number}\\t{text}\\n\")\n",
+    "file": "r9_h244_inspect_table5_rows.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b51e320582a5512ceb"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135cf396976decc530d",
+    "hid": 249,
+    "name": "extract_gudjonsson_metadata.py",
+    "bytes": 527,
+    "sha256": "f91ceb34e47339374fb7288d58bd5b78bc29aa22f01562bc7717504de10498b5",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135cf396976decc530d/display",
+    "content": "import csv\nimport sys\n\nsource_path, out_path = sys.argv[1:3]\nkeywords = (\"immunoglobulin\", \"igg\", \"iga\", \"igm\", \"globulin\", \"fcgr\", \"tnfrsf13b\", \"fcgrt\")\n\nwith open(source_path, \"r\", errors=\"replace\") as fh, open(out_path, \"w\") as out:\n    reader = csv.reader(fh, delimiter=\"\\t\")\n    for line_number, row in enumerate(reader, start=1):\n        text = \"\\t\".join(row)\n        lowered = text.lower()\n        if line_number <= 4 or any(keyword in lowered for keyword in keywords):\n            out.write(f\"{line_number}\\t{text}\\n\")\n",
+    "file": "r9_h249_extract_gudjonsson_metadata.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b58db4b1b1d7386550"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135d9631a85ef6b4f6d",
+    "hid": 252,
+    "name": "inspect_gzip_head.py",
+    "bytes": 218,
+    "sha256": "888fa0ea19b59a407d58019fcb9d6865ad509deac1b38ce1b2ba6cbe22961b8d",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135d9631a85ef6b4f6d/display",
+    "content": "import gzip\nimport sys\n\nsrc, n = sys.argv[1], int(sys.argv[2])\nwith gzip.open(src, \"rt\", errors=\"replace\") as fh:\n    for i, line in enumerate(fh):\n        if i >= n:\n            break\n        print(line.rstrip(\"\\n\"))\n",
+    "file": "r9_h252_inspect_gzip_head.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b57ab80d0510f43577",
+      "bbd44e69cb8906b5df06fbf06aa35037"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135bca356e14d12e1ca",
+    "hid": 259,
+    "name": "scan_candidate_gwas_tabular.py",
+    "bytes": 774,
+    "sha256": "a352f754bdb120a609c39a5dae111ec363faf1f470ef17c32220143e80178286",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135bca356e14d12e1ca/display",
+    "content": "import sys\n\nsource = sys.argv[1]\ntargets = {\n    (\"1\", \"161612233\"),\n    (\"1\", \"161595730\"),\n    (\"17\", \"16842991\"),\n    (\"17\", \"16849139\"),\n    (\"17\", \"16848750\"),\n    (\"6\", \"32629905\"),\n    (\"6\", \"32406704\"),\n    (\"17\", \"16863638\"),\n}\n\nprint(\"line_type\\tcontent\")\nwith open(source, \"rt\", encoding=\"utf-8\", errors=\"replace\") as handle:\n    for line_number, raw in enumerate(handle, 1):\n        line = raw.rstrip(\"\\n\\r\")\n        if line_number <= 3:\n            print(\"header\\t\" + line)\n            continue\n        if not line or line.startswith(\"#\"):\n            continue\n        fields = line.split(\"\\t\")\n        if len(fields) < 2:\n            fields = line.split()\n        if len(fields) >= 2 and (fields[0], fields[1]) in targets:\n            print(\"target\\t\" + line)\n",
+    "file": "r9_h259_scan_candidate_gwas_tabular.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b53844abc40a6fddbd"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a4721351e19a8237f08bdbe",
+    "hid": 272,
+    "name": "inspect_galaxy_directory.py",
+    "bytes": 529,
+    "sha256": "3f67364c78483603dbffbf364504000a2999cecc79dc2f98abd9390375b244ff",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721351e19a8237f08bdbe/display",
+    "content": "import os\nimport sys\n\n\nroot = sys.argv[1]\nprint(\"root=%s\" % root)\nprint(\"is_dir=%s is_file=%s\" % (os.path.isdir(root), os.path.isfile(root)))\nif os.path.isdir(root):\n    for current, dirs, files in os.walk(root):\n        rel = os.path.relpath(current, root)\n        print(\"DIR\\t%s\\t%d files\" % (rel, len(files)))\n        for name in sorted(files)[:20]:\n            print(\"FILE\\t%s\" % os.path.join(rel, name))\n        if rel != \".\":\n            dirs[:] = []\nelif os.path.isfile(root):\n    print(\"size=%d\" % os.path.getsize(root))\n",
+    "file": "r9_h272_inspect_galaxy_directory.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b53dcc4c6f432359e8",
+      "bbd44e69cb8906b5d2182b7286589c08"
+    ]
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5010360876d020d32.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5010360876d020d32",
+    "tool_id": "inspect-igg-directory-v1",
+    "sha256": "91ff456e0cfed2deaba50089921887bb725f343f1c00d6a928367e2ac3617487"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b586d7ab9e996e67e9.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b586d7ab9e996e67e9",
+    "tool_id": "inspect-igg-directory-container-v2",
+    "sha256": "a0378ad9bf29514586b833392091710c9c6ff284c454b70f66e2722f9f9b01ed"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b56af6bd26eb547cba.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b56af6bd26eb547cba",
+    "tool_id": "inspect-igg-tar-v1",
+    "sha256": "6670a8d01beccf8b8bcc12842fa89771cea257eb5773b577440f6a568fc81616"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b57e5feebb07ef9a18.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b57e5feebb07ef9a18",
+    "tool_id": "scan-igg-source-igp9-v1",
+    "sha256": "3820c085d3ffa840d3a36824248526990952d92328e06e904a9f1741c0b61351"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b52ac7b53cd6bd1a8d.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b52ac7b53cd6bd1a8d",
+    "tool_id": "scan-igg-source-all-v1",
+    "sha256": "b8f0280537c5f76a8a9e961b51c9844339eb3aac8c01b57510404cae9c3b32e1"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5a593786318a424b0.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5a593786318a424b0",
+    "tool_id": "scan-candidate-gwas-gz-v1",
+    "sha256": "a704c3267de079627862bf934a8928f427ae83b104bf52e2f7d116a28d2249ff"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b570d7cf12f8e5ef3b.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b570d7cf12f8e5ef3b",
+    "tool_id": "scan-bbj-tp-zip-v1",
+    "sha256": "4bea1319d5b0717b5f0596ac838512d365f9a3a7a26c32a4d735777f44f4e2aa"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b54c100e2e2ee42be9.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b54c100e2e2ee42be9",
+    "tool_id": "scan-bbj-tp-zip-v2",
+    "sha256": "9aeade2e45f864f046365340f8c299969b6e83931dd2bc1f4965182d8d47eab4"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5efaa8f5e2dc0bdcf.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5efaa8f5e2dc0bdcf",
+    "tool_id": "scan-bbj-tp-zip-v3",
+    "sha256": "d0bf83f94d52df278644f759af57fcb3f76a788fa6158b80a3c18249a088c013"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b596388c06f00e6b32.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b596388c06f00e6b32",
+    "tool_id": "scan-bbj-alb-zip-v1",
+    "sha256": "49d1b6cf54678005f7a034956ef77edddc1cc1dce6d6c161aa77347d1492c435"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b50298c9af837a8733.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b50298c9af837a8733",
+    "tool_id": "scan-bbj-ag-gz-v1",
+    "sha256": "2c976bd1d66443057845ea88cf092d2077cb05cb887a449a7438172815c3ffb1"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b58c5028ea322c0f12.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b58c5028ea322c0f12",
+    "tool_id": "scan-bbj-ag-text-v1",
+    "sha256": "c7d928af798c952c1fc6c07d925a57bc27c43cd775b898baede39bdfaf1426a6"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5d45dd1ebc8ec5b9f.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5d45dd1ebc8ec5b9f",
+    "tool_id": "scan-bbj-alb-regions-v1",
+    "sha256": "481094c088af58cac8912ab6f12e6b0ef47812bdd366944352b680941c53a0a3"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b551050b3ebcc20008.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b551050b3ebcc20008",
+    "tool_id": "scan-bbj-alb-regions-v2",
+    "sha256": "e6b6be1ee3885fa8f5f40e243d2c24c6be370c7406e87d2d16ce59f0ac4d850e"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b54909e3fcb526465d.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b54909e3fcb526465d",
+    "tool_id": "scan-bbj-alb-regions-v3",
+    "sha256": "bd40dea7e332edec57bb6ec443263ff01332b0d75b0313cf125362c18263aa03"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5044cf8cd57848d3a.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5044cf8cd57848d3a",
+    "tool_id": "scan-bbj-alb-regions-v4",
+    "sha256": "a76ea3b3f38bd91bb06ebf8f5ef6507e190ed606633e64f913416cc6a2a7f99d"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5b0fc439843ccd636.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5b0fc439843ccd636",
+    "tool_id": "scan-bbj-alb-regions-v5",
+    "sha256": "fe14a7f96adfef13b818d3cd532747fcb7f2c18314608cfd4acb5910b64edf86"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b532434bba43726e78.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b532434bba43726e78",
+    "tool_id": "count-input-lines-v1",
+    "sha256": "6fc7c4180673ffbf07e784d14dbccadd033b100938df6916be1f7cb9d1be6973"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b526ef4c0cac499efe.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b526ef4c0cac499efe",
+    "tool_id": "scan-ukb-total-protein-v1",
+    "sha256": "14c0553cbbbc25b021bccbc2f08305df89b0265b781a7fbe0577acc7525223fc"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5435cd57f96a93db3.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5435cd57f96a93db3",
+    "tool_id": "scan-ukb-total-protein-v2",
+    "sha256": "9474793feaf4a3ba0882922bf3c93e350bc29ffe742f7b2d32d1c5a885243b97"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b53bb45e3713855082.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b53bb45e3713855082",
+    "tool_id": "profile-input-gwas-v1",
+    "sha256": "7fea549388b920c716af69538dadf0297853d4b13138e0260ee19403ee9f600a"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b511f205cb491ca5db.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b511f205cb491ca5db",
+    "tool_id": "tail-input-gwas-v1",
+    "sha256": "1313d1361bd598021254a55f98d9cbaf6000f9c6b8b1d066b5a4fe7c09faad20"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5523dcdcfefe86661.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5523dcdcfefe86661",
+    "tool_id": "scan-bbj-v5-nap-targets-v2",
+    "sha256": "f76a0252c59b694053c2f214dbd3dec67fa5745334986f3ac56e923fc55c7970"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b57973ab10ea795051.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b57973ab10ea795051",
+    "tool_id": "scan-bbj-v5-nap-targets-v3",
+    "sha256": "ebdfb9599cd7f2bf9ee595228553ada712a7df5ed8b829f3c5e2e44a9656b7e3"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5b80a634f56aeb60b.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5b80a634f56aeb60b",
+    "tool_id": "scan-2017-immunoglobulin-sheets",
+    "sha256": "674d69fddaf2a0b52a64575f25a842476b97ea9f453937a4c2ec377d0cb96644"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b560e94c8ce0e59942.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b560e94c8ce0e59942",
+    "tool_id": "scan-2026-igg-supplementary-signals",
+    "sha256": "672d2a16912e401417280b055577ee7faa082e9ce21c4cfe64c31e43978912b7"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b59ddd46c64db9e9ee.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b59ddd46c64db9e9ee",
+    "tool_id": "join-top1000-with-2026-igg-signals",
+    "sha256": "a0f701c3ddc64800a6091e4fb81b19ea60a602286a01dce7897aa54016bb7563"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b520bafb4ec53847b6.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b520bafb4ec53847b6",
+    "tool_id": "scan-iga-source-target-loci",
+    "sha256": "0d096c1208b756388f80eeb7d2315c9c86d0d697e7a2b14ae9b61835705f0825"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b519b53eea884fdc55.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b519b53eea884fdc55",
+    "tool_id": "scan-pan-ag-regions-v1",
+    "sha256": "3ab98ff54196c76e80dab328afe1e234bdccd2676eedb40eacd44b53f16d6588"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5139b3592298073ea.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5139b3592298073ea",
+    "tool_id": "scan-pan-ag-regions-v2",
+    "sha256": "f2a5471ec7c78d20d17f5e0bb3d6b9437386a45ce5064a84b4c358200ba8a15c"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b591c43d45e8bda913.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b591c43d45e8bda913",
+    "tool_id": "scan-pan-ag-regions-v3",
+    "sha256": "2f67ee5d943929209f6ef64f889ff7074f444a4cf58441ea1cbdc7795c3e561a"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5171065ab0e5e4101.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5171065ab0e5e4101",
+    "tool_id": "scan-neale-albumin-regions-v1",
+    "sha256": "4998415be3238076979d73e8377f2bf7b5588646f80f0711ab02dc8de77c92c0"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5ac987f3cd9f0f898.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5ac987f3cd9f0f898",
+    "tool_id": "scan-neale-albumin-regions-v2",
+    "sha256": "64ace9e9591a921a3cae9b86cdca0bb756e65a956c51110d36ffc97d1309d170"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b559d38898005e0083.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b559d38898005e0083",
+    "tool_id": "scan-epic-igg-regions-v1",
+    "sha256": "e574b92c268fd33d78ce4bc68c8d4e3cd034057f228abed30628d8eed6bd5726"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5f584de6e2be9a543.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5f584de6e2be9a543",
+    "tool_id": "scan-epic-iga-regions-v1",
+    "sha256": "5446cbf036b04d7d7a24a5d360b625a2bc9fbdf69eb478dd5fe15067212eb6be"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b54df755033a7f04d4.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b54df755033a7f04d4",
+    "tool_id": "scan-willis-igg-meta-v1",
+    "sha256": "a32067368bcb399a98ebe01a7d93c66148078a2d710313b364c845109fb67332"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b55e0d207055c0fa05.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b55e0d207055c0fa05",
+    "tool_id": "scan-neale-total-protein-regions-v1",
+    "sha256": "736cdbb27ca998dfce386bfc0b553a293e7ec927ef3310379ff382cc244bf7ca"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5e19e024747541458.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5e19e024747541458",
+    "tool_id": "extract-2026-target-positions-v1",
+    "sha256": "e8325ee49032b2126d9467a401cbb471faf93f59c7db65f03c99f072f25751e9"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5253316be195b1d0d.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5253316be195b1d0d",
+    "tool_id": "scan-koyama-ztt-leads-v1",
+    "sha256": "5604456da8e14af83bdd556d00b52f0bfd34d69b7010057a274ba081fba1b3ea"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5a9425672fdfe3a3a.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5a9425672fdfe3a3a",
+    "tool_id": "scan-koyama-all-regional-leads-v1",
+    "sha256": "7e4a2098e72391cf2ffe86758c7bc1e5cf4285264d68f00bb8c3ea1c66e53549"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5e7b715057b3b1c8a.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5e7b715057b3b1c8a",
+    "tool_id": "scan-gcst-total-protein-regions-v1",
+    "sha256": "c0087cafbd253d7d0245754189dd712eaacae08b5d7559e62f3bef8464bf147a"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b56abc707ddaa76c74.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b56abc707ddaa76c74",
+    "tool_id": "scan-gcst-total-protein-regions-v2",
+    "sha256": "cc567a1a9891dd7f5067bedb49403eac565f70c6f065d056ac3aed50f4d79b1a"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5af05d4ef4230be2f.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5af05d4ef4230be2f",
+    "tool_id": "scan-gcst-eastasian-total-protein-regions-v1",
+    "sha256": "d7c020d0880d2c8a74f614ba437adf630be750679b746f6af4736fbcb5fbfbee"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b517e4b1095766ef86.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b517e4b1095766ef86",
+    "tool_id": "scan-jonsson-table5-targets-v1",
+    "sha256": "967f37ddc9522ff4d66597037a7cf80589f1065f4f5b33fc772bc6134ebd205b"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b52f65df1c237b7b9e.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b52f65df1c237b7b9e",
+    "tool_id": "scan-pan-total-protein-regions-v1",
+    "sha256": "1ea333882f058f2c43ca693de34f440bb7f0368c15b4cd4fba8e7e877af31ed7"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b508d95d4c3dfca12a.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b508d95d4c3dfca12a",
+    "tool_id": "scan-grch38-regions-v1",
+    "sha256": "28bcb2d09dcc3e53985afb3d52dd068f54229aa146eb5047ab679ec9c4b47692"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5c5ebeb1a8b3df8e6.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5c5ebeb1a8b3df8e6",
+    "tool_id": "scan-sakaue-meta-total-protein-regions-v1",
+    "sha256": "f2b4020080aaf27a7e1f19668a1880be93c6c45d94fe6b5e58e0cf3b69792218"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b53c734133c8e36be1.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b53c734133c8e36be1",
+    "tool_id": "scan-sinnott-armstrong-albumin-regions-v1",
+    "sha256": "01c43a2585bd931f5c70df8d51f96f4756549d99b5d852dff3490518d6b32582"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5ba67620301812ea5.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5ba67620301812ea5",
+    "tool_id": "scan-suhre-igg-regions-v1",
+    "sha256": "d301344238109428b1ab9c8b0921ce6c14548a6f06a0604e98f4ae01437617d4"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5d15e6a7fc6bcb2b4.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5d15e6a7fc6bcb2b4",
+    "tool_id": "scan-qatari-total-protein-regions-v1",
+    "sha256": "4c127ce553a8deff7579185da4626be28354a7dd096bc8ecc5a3cd020dcdb5ea"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5bd54672e9ab07005.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5bd54672e9ab07005",
+    "tool_id": "profile-q2-gwas-v1",
+    "sha256": "60a80c539b12ea389730a40e38026ddf57d483f2dfd97bde2149ee8b102869f3"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5a38c89bc97531260.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5a38c89bc97531260",
+    "tool_id": "inspect-reverse-search-q2-head-v1",
+    "sha256": "636f7ddccd967c352f793bed1ed4b57de216721fa250bc47377dfed8650e4dfe"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5fed369ea969d2747.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5fed369ea969d2747",
+    "tool_id": "scan-qatari-albumin-regions-v1",
+    "sha256": "87a0ae2643a5b5d04fee3a9ae4d77d5f1ae7e3c9d74ee1a6511a9688d5263723"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b51e320582a5512ceb.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b51e320582a5512ceb",
+    "tool_id": "inspect-jonsson-table5-rows-v1",
+    "sha256": "50da235497493d68dc40bf077d536ecf83defd716180073c233d0f563d94a7c2"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b58db4b1b1d7386550.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b58db4b1b1d7386550",
+    "tool_id": "extract-gudjonsson-immune-accessions-v1",
+    "sha256": "b207e07c70ca05b8d1592e8eefd8e92e9b270bd1156278faf0451080cac45b70"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b57ab80d0510f43577.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b57ab80d0510f43577",
+    "tool_id": "inspect-gzip-head-v1",
+    "sha256": "930b9c86bee7e4da8dfb59ee028f2b454970763052d494701444102c43962e5a"
+  },
+  {
+    "file": "r9_job_bbd44e69cb8906b5df06fbf06aa35037.sh",
+    "kind": "recorded Galaxy command; not a portable tool definition",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 1,
+    "job_id": "bbd44e69cb8906b5df06fbf06aa35037",
+    "tool_id": "inspect-gzip-head-v2",
+    "sha256": "542a36f7d0ddda26a359acb82fd7d9ef277891ceec10ea115786399f5c4614d0"
+  },
+  {
+    "dataset_id": "f9cad7b01a4721356ccb5501bdc2d0a9",
+    "hid": 64,
+    "name": "query_bcx2_sources.py",
+    "bytes": 4280,
+    "sha256": "6ddd004c7854bd369ee70db73cbfcc14e4e8114e241733bd9f150cc11ba20e6f",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a4721356ccb5501bdc2d0a9/display",
+    "excerpt": "import gzip\nimport io\nimport sys\nimport urllib.request\n\n\nTARGET_POSITIONS = {\n    (\"1\", 161473296),\n    (\"1\", 161475575),\n    (\"1\", 161481328),\n    (\"1\", 161498503),\n    (\"1\", 161506415),\n    (\"1\", 161507159),\n    (\"1\", 161507228),\n    (\"1\", 161507276),\n    (\"1\", 161507414),\n    (\"1\", 161508918),\n    (\"1\", 161509003),\n    (\"1\", 161509341),\n    (\"1\", 161509562),\n    (\"1\", 161509648),\n    (\"1\", 161509809),\n    (\"1\", 161510859),\n    (\"1\", 161513694),\n    (\"1\", 161515469),\n    (\"1\", 161517662),\n    (\"1\", 161522385),\n    (\"1\", 161522877),\n    (\"1\", 161523491),\n    (\"1\", 161530615),\n    (\"1\", 161530617),\n    (\"1\", 161530922),\n    (\"1\", 161531006),\n    (\"1\", 161533223),\n    (\"1\", 161537658),\n    (\"1\", 161540644),\n    (\"1\", 161540726),\n    (\"1\", 161545536),\n    (\"1\", 161558222),\n    (\"1\", 161595363),\n    (\"1\", 161612233),\n    (\"1\", 161642443),\n    (\"6\", 31614248),\n    (\"6\", 31973120),\n    (\"6\", 32047051),\n    (\"6\", 32061428),\n    (\"6\", 32067917),\n    (\"6\", 32092090),\n    (\"6\", 32096949),\n    (\"6\", 32112414),\n    (\"6\", 32128224),\n    (\"6\", 32164195),\n    (\"6\", 32438927),\n    (\"6\", 32667724),\n    (\"6\", 32668787),\n    (\"6\", 32668221),\n    (\"6\", 32662128),\n}\n\n\ndef open_text(path):\n    raw = open(path, \"rb\")\n    prefix = raw.peek(2)[:2] if hasattr(raw, \"peek\") else raw.read(2)\n    if prefix == b\"\\x1f\\x8b\":\n        raw.close()\n        return io.TextIOWrapper(gzip.open(path, \"rb\"), encoding=\"utf-8\", errors=\"replace\")\n    raw.seek(0)\n    return io.TextIOWrapper(raw, encoding=\"utf-8\", errors=\"replace\")\n\n\ndef load_input(path):\n    values = {}\n    with open_text(path) as handle:\n        for line in handle:\n            if not line.strip() or line.startswith(\"#\"):\n                continue\n            fields = line.rstrip(\"\\n\").split(\"\\t\")\n            if len(fields) < 8:\n                continue\n            chrom = fields[0].removeprefix(\"chr\")\n            try:\n                key = (chrom, int(fields[1]))\n            except ValueError:\n                continue\n            if key in TARG",
+    "file": "r11_h64_query_bcx2_sources.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b534bce1ac5c70e636"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135098dfe2dfe6b2234",
+    "hid": 66,
+    "name": "query_bcx2_sources.py",
+    "bytes": 4280,
+    "sha256": "6ddd004c7854bd369ee70db73cbfcc14e4e8114e241733bd9f150cc11ba20e6f",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135098dfe2dfe6b2234/display",
+    "excerpt": "import gzip\nimport io\nimport sys\nimport urllib.request\n\n\nTARGET_POSITIONS = {\n    (\"1\", 161473296),\n    (\"1\", 161475575),\n    (\"1\", 161481328),\n    (\"1\", 161498503),\n    (\"1\", 161506415),\n    (\"1\", 161507159),\n    (\"1\", 161507228),\n    (\"1\", 161507276),\n    (\"1\", 161507414),\n    (\"1\", 161508918),\n    (\"1\", 161509003),\n    (\"1\", 161509341),\n    (\"1\", 161509562),\n    (\"1\", 161509648),\n    (\"1\", 161509809),\n    (\"1\", 161510859),\n    (\"1\", 161513694),\n    (\"1\", 161515469),\n    (\"1\", 161517662),\n    (\"1\", 161522385),\n    (\"1\", 161522877),\n    (\"1\", 161523491),\n    (\"1\", 161530615),\n    (\"1\", 161530617),\n    (\"1\", 161530922),\n    (\"1\", 161531006),\n    (\"1\", 161533223),\n    (\"1\", 161537658),\n    (\"1\", 161540644),\n    (\"1\", 161540726),\n    (\"1\", 161545536),\n    (\"1\", 161558222),\n    (\"1\", 161595363),\n    (\"1\", 161612233),\n    (\"1\", 161642443),\n    (\"6\", 31614248),\n    (\"6\", 31973120),\n    (\"6\", 32047051),\n    (\"6\", 32061428),\n    (\"6\", 32067917),\n    (\"6\", 32092090),\n    (\"6\", 32096949),\n    (\"6\", 32112414),\n    (\"6\", 32128224),\n    (\"6\", 32164195),\n    (\"6\", 32438927),\n    (\"6\", 32667724),\n    (\"6\", 32668787),\n    (\"6\", 32668221),\n    (\"6\", 32662128),\n}\n\n\ndef open_text(path):\n    raw = open(path, \"rb\")\n    prefix = raw.peek(2)[:2] if hasattr(raw, \"peek\") else raw.read(2)\n    if prefix == b\"\\x1f\\x8b\":\n        raw.close()\n        return io.TextIOWrapper(gzip.open(path, \"rb\"), encoding=\"utf-8\", errors=\"replace\")\n    raw.seek(0)\n    return io.TextIOWrapper(raw, encoding=\"utf-8\", errors=\"replace\")\n\n\ndef load_input(path):\n    values = {}\n    with open_text(path) as handle:\n        for line in handle:\n            if not line.strip() or line.startswith(\"#\"):\n                continue\n            fields = line.rstrip(\"\\n\").split(\"\\t\")\n            if len(fields) < 8:\n                continue\n            chrom = fields[0].removeprefix(\"chr\")\n            try:\n                key = (chrom, int(fields[1]))\n            except ValueError:\n                continue\n            if key in TARG",
+    "file": "r11_h66_query_bcx2_sources.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b5da1b9599b21f452f"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a472135745f69c2ee491e59",
+    "hid": 640,
+    "name": "compare_igg_source.py",
+    "bytes": 2929,
+    "sha256": "7c41b4a9e1e4e80070946a090066483657c05e11603de3ab0832e79ae8f9c134",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a472135745f69c2ee491e59/display",
+    "content": "import csv\nimport gzip\nimport os\nimport sys\n\n\ndef norm(value):\n    return value.strip().lower()\n\n\ndef close_p(left, right):\n    try:\n        return norm(left) == norm(right)\n    except AttributeError:\n        return False\n\n\ndef read_target_map(path):\n    result = {}\n    with open(path, newline=\"\") as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            result[row[\"rsid\"]] = row\n    return result\n\n\ndef read_r37_map(path, wanted):\n    result = {}\n    with open(path, newline=\"\") as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        next(reader, None)\n        for row in reader:\n            if len(row) >= 3 and row[0] in wanted:\n                result[row[0]] = (row[1], row[2])\n    return result\n\n\ndef source_rows(path, wanted):\n    with gzip.open(path, \"rt\", newline=\"\") as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        header = next(reader, None)\n        if not header:\n            return {}\n        columns = {norm(value): index for index, value in enumerate(header)}\n        rs_index = columns.get(\"snp\")\n        p_index = columns.get(\"p\")\n        if rs_index is None or p_index is None:\n            return {}\n        found = {}\n        for row in reader:\n            if len(row) <= max(rs_index, p_index):\n                continue\n            rsid = row[rs_index]\n            if rsid in wanted:\n                found[rsid] = row[p_index]\n        return found\n\n\ndef main(source_dir, target_map_path, r37_map_path, output_path):\n    target = read_target_map(target_map_path)\n    r37 = read_r37_map(r37_map_path, set(target))\n    files = []\n    for root, _, names in os.walk(source_dir):\n        for name in names:\n            if name.endswith(\".txt.gz\"):\n                files.append(os.path.join(root, name))\n    files.sort()\n    with open(output_path, \"w\", newline=\"\") as output:\n        writer = csv.writer(output, delimiter=\"\\t\", lineterminator=\"\\n\")\n        writer.writerow([\n            \"source_file\", \"rsid\", \"source_chr37\", \"source_pos37\",\n            \"target_id\", \"source_p\", \"target_p\", \"exact_p_match\",\n        ])\n        for path in files:\n            found = source_rows(path, set(target))\n            for rsid in sorted(found):\n                source_p = found[rsid]\n                target_p = target[rsid][\"target_p\"]\n                chr37, pos37 = r37.get(rsid, (\"\", \"\"))\n                writer.writerow([\n                    os.path.basename(path), rsid, chr37, pos37,\n                    target[rsid][\"target_id\"], source_p, target_p,\n                    \"YES\" if close_p(source_p, target_p) else \"NO\",\n                ])\n    if not files:\n        raise RuntimeError(\"No .txt.gz trait files were found in the source directory\")\n\n\nif __name__ == \"__main__\":\n    if len(sys.argv) != 5:\n        raise SystemExit(\"usage: compare_igg_source.py SOURCE_DIR TARGET_MAP MAP_R37 OUTPUT\")\n    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])\n",
+    "file": "r11_h640_compare_igg_source.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b58a388fe8700e5c8a"
+    ]
+  },
+  {
+    "dataset_id": "f9cad7b01a47213598badebf4d686ad7",
+    "hid": 721,
+    "name": "compare_igg_one.py",
+    "bytes": 2442,
+    "sha256": "cbd38ec0b9b5c278704e4dc0d4dbc2447fa7e5c7ac0e45dd4a4fc12d5b6469d3",
+    "url": "https://usegalaxy.org/api/datasets/f9cad7b01a47213598badebf4d686ad7/display",
+    "content": "import csv\nimport gzip\nimport os\nimport sys\n\n\ndef norm(value):\n    return value.strip().lower()\n\n\ndef read_target_map(path):\n    result = {}\n    with open(path, newline=\"\") as handle:\n        for row in csv.DictReader(handle, delimiter=\"\\t\"):\n            result[row[\"rsid\"]] = row\n    return result\n\n\ndef read_r37_map(path, wanted):\n    result = {}\n    with open(path, newline=\"\") as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        next(reader, None)\n        for row in reader:\n            if len(row) >= 3 and row[0] in wanted:\n                result[row[0]] = (row[1], row[2])\n    return result\n\n\ndef main(source_path, target_map_path, r37_map_path, output_path):\n    target = read_target_map(target_map_path)\n    wanted = set(target)\n    r37 = read_r37_map(r37_map_path, wanted)\n    found = {}\n    with gzip.open(source_path, \"rt\", newline=\"\") as handle:\n        reader = csv.reader(handle, delimiter=\"\\t\")\n        header = next(reader, None)\n        if not header:\n            raise RuntimeError(\"Source file has no header\")\n        columns = {norm(value): index for index, value in enumerate(header)}\n        rs_index = columns.get(\"snp\")\n        p_index = columns.get(\"p\")\n        if rs_index is None or p_index is None:\n            raise RuntimeError(\"Source file lacks SNP and p columns\")\n        for row in reader:\n            if len(row) <= max(rs_index, p_index):\n                continue\n            rsid = row[rs_index]\n            if rsid in wanted:\n                found[rsid] = row[p_index]\n    with open(output_path, \"w\", newline=\"\") as output:\n        writer = csv.writer(output, delimiter=\"\\t\", lineterminator=\"\\n\")\n        writer.writerow([\n            \"source_file\", \"rsid\", \"source_chr37\", \"source_pos37\",\n            \"target_id\", \"source_p\", \"target_p\", \"exact_p_match\",\n        ])\n        for rsid in sorted(found):\n            source_p = found[rsid]\n            target_p = target[rsid][\"target_p\"]\n            chr37, pos37 = r37.get(rsid, (\"\", \"\"))\n            writer.writerow([\n                os.path.basename(source_path), rsid, chr37, pos37,\n                target[rsid][\"target_id\"], source_p, target_p,\n                \"YES\" if norm(source_p) == norm(target_p) else \"NO\",\n            ])\n\n\nif __name__ == \"__main__\":\n    if len(sys.argv) != 5:\n        raise SystemExit(\"usage: compare_igg_one.py SOURCE TARGET_MAP MAP_R37 OUTPUT\")\n    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])\n",
+    "file": "r11_h721_compare_igg_one.py",
+    "model": "Codex GPT-5.6 Luna",
+    "replicate": 3,
+    "kind": "uploaded script bytes",
+    "consuming_job_ids": [
+      "bbd44e69cb8906b525de0e1cfe850926",
+      "bbd44e69cb8906b5f46e28bd8fc1524b",
+      "bbd44e69cb8906b52aff1e6eedbf4f70",
+      "bbd44e69cb8906b539b1518015efc799",
+      "bbd44e69cb8906b5be4c4e09364e643a",
+      "bbd44e69cb8906b56c521797ea72cea4",
+      "bbd44e69cb8906b5e7c54d81763e7a74",
+      "bbd44e69cb8906b58378cae2cfbe07be",
+      "bbd44e69cb8906b54e19630db1c3141c",
+      "bbd44e69cb8906b53b4540d1b1604c47",
+      "bbd44e69cb8906b5cc3c833f9f94b249",
+      "bbd44e69cb8906b5731454d92f0b000e",
+      "bbd44e69cb8906b556057f6e00a7d2c1",
+      "bbd44e69cb8906b569bf64d0467d605d",
+      "bbd44e69cb8906b5dfb2386917e7406d",
+      "bbd44e69cb8906b512080459e4225f87",
+      "bbd44e69cb8906b59dfa85a62d7ffcf6",
+      "bbd44e69cb8906b50fa4d41f85a13c37",
+      "bbd44e69cb8906b5d283c1e0eaa23180",
+      "bbd44e69cb8906b5fcd1930697081482",
+      "bbd44e69cb8906b5cce71ee9ebb5b376",
+      "bbd44e69cb8906b546fc8ac60969b510",
+      "bbd44e69cb8906b5d39c850ac59517ff",
+      "bbd44e69cb8906b57b6d22ec67bbc448",
+      "bbd44e69cb8906b527e4715e8a7f9297",
+      "bbd44e69cb8906b57e34cdf1cb9ae365",
+      "bbd44e69cb8906b58730e67c05a97c50",
+      "bbd44e69cb8906b5a4a029510fb5467d",
+      "bbd44e69cb8906b54141f4fcb0198ae2",
+      "bbd44e69cb8906b5a091111895c1541b",
+      "bbd44e69cb8906b5ddb591cb6d9b50ff",
+      "bbd44e69cb8906b5099a529015932e4d",
+      "bbd44e69cb8906b5a035af21ae7ffec1",
+      "bbd44e69cb8906b50fc6d8464647b013",
+      "bbd44e69cb8906b57721b624e8980df6",
+      "bbd44e69cb8906b5923292422057467c",
+      "bbd44e69cb8906b5558ce42b8bf13faf",
+      "bbd44e69cb8906b546f9f818c0a928af",
+      "bbd44e69cb8906b51861eaef814474b6",
+      "bbd44e69cb8906b5e9da18035770d7b9",
+      "bbd44e69cb8906b58d3510be141299ca",
+      "bbd44e69cb8906b5e800813383056718",
+      "bbd44e69cb8906b53974673e30f6cc1c",
+      "bbd44e69cb8906b521a98cbd718afd04",
+      "bbd44e69cb8906b591ad5df3ae9c7dd6",
+      "bbd44e69cb8906b5d16017058b4bd1eb",
+      "bbd44e69cb8906b5ca944e99b0f0688e",
+      "bbd44e69cb8906b5e6ea2a092ccb8836",
+      "bbd44e69cb8906b563dad7a67f689201",
+      "bbd44e69cb8906b5f1a25b44be3bb680",
+      "bbd44e69cb8906b5ea24f0245e669a95",
+      "bbd44e69cb8906b507d2b78416a18d68",
+      "bbd44e69cb8906b595703453948ed788",
+      "bbd44e69cb8906b5314bcef7283d023b",
+      "bbd44e69cb8906b59a295cb96d8bfc3e",
+      "bbd44e69cb8906b52163afa7d49b43e5",
+      "bbd44e69cb8906b5fd992b5ff8b5e284",
+      "bbd44e69cb8906b5a656946f012d9668",
+      "bbd44e69cb8906b5800ab9ef425ccfb0",
+      "bbd44e69cb8906b556ebb426f73cb3a5",
+      "bbd44e69cb8906b598a254e2d42d5297",
+      "bbd44e69cb8906b5ce6e35e7d3bfbf2f",
+      "bbd44e69cb8906b5f4180b106301c486",
+      "bbd44e69cb8906b51983e270397c60dd",
+      "bbd44e69cb8906b5580a84cfd82ddab1",
+      "bbd44e69cb8906b501a63674a1b6f6d8",
+      "bbd44e69cb8906b533df7aa5ea209dfb",
+      "bbd44e69cb8906b5194eb40c63019078",
+      "bbd44e69cb8906b5bced426e23372227",
+      "bbd44e69cb8906b504a788fc6d7ef0af",
+      "bbd44e69cb8906b56cafb06e84038b83",
+      "bbd44e69cb8906b59826b9cb5b6b6411",
+      "bbd44e69cb8906b58212b44e2e6488b8",
+      "bbd44e69cb8906b5e812aec59f34547f",
+      "bbd44e69cb8906b527586e009326112b",
+      "bbd44e69cb8906b5821c885208b1f80c",
+      "bbd44e69cb8906b5a01ffb55d43aa552"
+    ]
+  }
+]

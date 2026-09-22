@@ -1,0 +1,51 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.stats import chi2, pearsonr, spearmanr
+samples=[x.strip() for x in open('samples.txt')]
+panel=pd.read_csv('integrated_call_samples_v3.20130502.ALL.panel',sep='\\t').set_index('sample').loc[samples]
+groups={g:np.where(panel.super_pop.values==g)[0] for g in panel.super_pop.unique()}
+obs={}
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+ next(f)
+ for line in f:
+  a=line.rstrip().split('\\t')
+  if a[6]"'!='"'NA': obs[int(a[3])]=float(a[6])
+G={}
+for line in open('matched.genotypes.tsv'):
+ a=line.rstrip().split('\\t'); pos=int(a[0])
+ if pos not in obs or ',' in a[2] or a[2].startswith('<'): continue
+ try:
+  vals=np.array([np.nan if '.' in gt else sum(map(int,gt.replace('|','/').split('/'))) for gt in a[3:]],float)
+ except ValueError: continue
+ G[pos]=vals
+regions=[]
+for line in open('regions.bed'):
+ a=line.split(); regions.append((int(a[1])+1,int(a[2])))
+print('matched',len(G))
+agg={g:[] for g in groups}
+for lo,hi in regions:
+ ps=[p for p in G if lo<=p<=hi]
+ if not ps: continue
+ lead=min(ps,key=lambda p:obs[p])
+ if obs[lead]>1e-6: continue
+ yy=np.array([chi2.isf(obs[p],1) for p in ps])
+ print('\\nLOC',lo,hi,'lead',lead,'p',obs[lead],'vars',len(ps))
+ for group,idx in groups.items():
+  gl=G[lead][idx]; x=[]; y=[]
+  for p,yo in zip(ps,yy):
+   gp=G[p][idx]; ok=np.isfinite(gl)&np.isfinite(gp)
+   if ok.sum()<30 or np.std(gl[ok])==0 or np.std(gp[ok])==0: continue
+   x.append(np.corrcoef(gl[ok],gp[ok])[0,1]**2); y.append(yo)
+  x=np.array(x); y=np.array(y); k=y>2
+  if k.sum()<4: continue
+  pr=pearsonr(x[k],y[k]).statistic
+  sp=spearmanr(x[k],y[k]).statistic
+  # fitted and theoretically calibrated SSE normalized by variants
+  pred=1+x*(chi2.isf(obs[lead],1)-1)
+  mse=np.mean((y[k]-pred[k])**2)
+  agg[group].append((pr,sp,mse,k.sum()))
+  print(group,'m',k.sum(),'pear',round(pr,3),'spear',round(sp,3),'mse',round(mse,1))
+print('\\nAGG')
+for g,v in agg.items():
+ print(g,'loci',len(v),'mean pear',round(np.mean([x[0] for x in v]),3),'weighted pear',round(np.average([x[0] for x in v],weights=[x[3] for x in v]),3),'mean spear',round(np.mean([x[1] for x in v]),3),'total mse',round(np.average([x[2] for x in v],weights=[x[3] for x in v]),1))
+PY"

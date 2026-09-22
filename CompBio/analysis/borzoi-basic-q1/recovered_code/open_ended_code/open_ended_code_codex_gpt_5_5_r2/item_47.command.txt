@@ -1,0 +1,48 @@
+/bin/bash -lc "python - <<'PY'
+from math import prod
+
+def conv1d(k, cin, cout, bias=True):
+    return k*cin*cout + (cout if bias else 0)
+def dense(cin, cout, bias=True):
+    return cin*cout + (cout if bias else 0)
+def bn(c):
+    return 2*c
+
+total=0
+parts=[]
+# conv_dna
+p=conv1d(15,4,512,True)
+parts.append(('conv_dna',p)); total+=p
+# res tower
+widths=[608,736,896,1056,1280,1536]
+cin=512
+res=0
+for w in widths:
+    p=bn(cin)+conv1d(5,cin,w,True)
+    parts.append((f'res {cin}->{w}',p)); res+=p; total+=p; cin=w
+print('res',res)
+# transformer blocks
+C=1536; heads=8; key_size=64; value_size=C//heads; key_proj=key_size*heads; emb=C
+mha = dense(C,key_proj,False)*2 + dense(C,emb,False) + dense(emb,emb,True) + dense(32,key_proj,False) + 2*(heads*key_size)
+trans_dense = bn(C) + dense(C,2*C,True)+dense(2*C,C,True)
+trans_block = bn(C) + mha + trans_dense
+parts.append(('mha',mha)); parts.append(('trans_dense',trans_dense)); parts.append(('transformer_block',trans_block)); parts.append(('transformer8',8*trans_block)); total += 8*trans_block
+# unet1 current C=1536 repr 1536
+sep = 3*C + C*C + C # depthwise + pointwise + bias
+unet1 = bn(C)+bn(1536)+dense(C,C,True)+dense(1536,C,True)+sep
+parts.append(('unet1',unet1)); total+=unet1
+# unet2 current 1536 repr from width 1280
+repr2=1280
+unet2 = bn(C)+bn(repr2)+dense(C,C,True)+dense(repr2,C,True)+sep
+parts.append(('unet2',unet2)); total+=unet2
+# final conv_nac filters 1920, input 1536
+p = bn(C)+conv1d(1,C,1920,True)
+parts.append(('conv_nac final',p)); total+=p
+# heads
+human=dense(1920,7611,True)
+mouse=dense(1920,2608,True)
+parts.append(('head_human',human)); parts.append(('head_mouse',mouse)); total+=human+mouse
+for name,p in parts:
+    print(name,p)
+print('TOTAL',total)
+PY"

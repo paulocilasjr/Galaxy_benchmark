@@ -1,0 +1,56 @@
+/bin/bash -lc "cat > de_scores.py <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+from scipy.stats import ttest_ind, mannwhitneyu
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+
+# load working names
+adata=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array([x for x in adata.var['feature_name']])
+D=np.load('donor_sum.npz'); wsum=D['sum']; wcc=D['cell_counts']; wcats=D['cats']
+wlib=wsum.sum(axis=0,keepdims=True); wlog=np.log1p(wsum/wlib*1e6)
+
+# original
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array([x for x in orig.index.astype(str)])
+ocols=np.array(orig.columns.astype(str))
+O=orig.values.astype(float)
+olib=O.sum(axis=0,keepdims=True); olog=np.log1p(O/olib*1e6)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False).drop_duplicates('Donor').set_index('Donor')
+label=np.array([meta.loc[d,'Class'] for d in ocols])=='HC' # True HC
+
+# common genes
+wnorm=np.array([x.lower() for x in wnames]); onorm=np.array([x.lower() for x in onames])
+common,wi,oi=np.intersect1d(wnorm,onorm,return_indices=True)
+print('common',len(common))
+W=wlog[wi,:]; Or=olog[oi,:]
+# compute tstat across original donors
+covid=Or[:,~label]; hc=Or[:,label]
+t,p=ttest_ind(covid,hc,axis=1,equal_var=False)
+fc=covid.mean(axis=1)-hc.mean(axis=1)
+# rank abs t with direction
+idx_up=np.argsort(-t)
+idx_dn=np.argsort(t)
+for n in [20,50,100,200,500]:
+    genes_up=common[idx_up[:n]]
+    genes_dn=common[idx_dn[:n]]
+    # score working: z-score across working donors then mean
+    mu=W.mean(axis=1,keepdims=True); sd=W.std(axis=1,keepdims=True); sd[sd==0]=1
+    Wz=(W-mu)/sd
+    su=Wz[idx_up[:n]].mean(axis=0); sd_=Wz[idx_dn[:n]].mean(axis=0); diff=su-sd_
+    print('\\nn',n,'top up genes',genes_up[:20].tolist())
+    print('top dn genes',genes_dn[:20].tolist())
+    df=pd.DataFrame({'donor':wcats,'up':su,'down':sd_,'diff':diff}).set_index('donor')
+    print(df.sort_values('diff',ascending=False).head(15).to_string())
+    print('bottom')
+    print(df.sort_values('diff',ascending=True).head(15).to_string())
+    # gmm 2
+    g=GaussianMixture(n_components=2,random_state=0).fit(diff.values.reshape(-1,1))
+    order=np.argsort(g.means_.ravel())
+    labs=g.predict(diff.values.reshape(-1,1))
+    for rank,c in enumerate(order):
+        mem=sorted([int(x[5:]) for x in df.index[labs==c]])
+        print('cluster',rank,mem)
+PY
+python3 de_scores.py"

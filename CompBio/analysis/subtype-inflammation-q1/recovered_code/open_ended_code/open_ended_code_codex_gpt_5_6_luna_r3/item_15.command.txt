@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from scipy.io import mmread
+
+def load(p):
+ with gzip.open(p,'rt') as f:return mmread(f).tocsr()
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:
+ next(f); genes=[l.rstrip('\\n').split('\\t')[1] for l in f]
+pos={g:i for i,g in enumerate(genes)}
+sets={
+'rod cell':['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','RCVRN','ROM1','GRK1','CNGB1','PDE6G','FAM161A','EYS'],
+'cone cell':['ARR3','OPN1SW','OPN1MW','OPN1LW','GNAT2','PDE6C','RXRG','THRB','GNGT2','GUCA1C','CPLX4','UNC119','KCNV2'],
+'astrocyte':['GFAP','AQP4','S100B','ALDH1L1','SLC1A3','VIM','CLU','GJA1','KCNJ10'],
+'muller glia cell':['RLBP1','SLC1A3','GLUL','VIM','AQP4','SOX9','CLU','KCNJ10','RAX','SLC6A9'],
+'microglial cell':['P2RY12','TMEM119','CX3CR1','C1QA','C1QB','C1QC','AIF1','TYROBP','LST1','CSF1R','TREM2','CTSS','FCER1G','CST3','APOE'],
+'macrophage':['LYZ','TYROBP','FCER1G','LST1','CTSS','CD68','CST3','MS4A7','ITGAM','MRC1','MARCO','FCGR3A','S100A8','S100A9','CTSD','SPI1'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','IL7R','LTB','LCK','CD247'],
+'B cell':['MS4A1','CD79A','CD37','CD74','HLA-DRA','CD79B','CD22'],
+'RGC':['RBPMS','THY1','POU4F1','POU4F2','SNCG','NEFL','NEFM','ISL1','GAP43','TUBB3'],
+'bipolar cell':['VSX2','GRM6','TRPM1','CABP5','PCP2','PRKCA','SCGN','GNB3','OTX2','CACNA1F'],
+'horizontal cell':['LHX1','ONECUT1','ONECUT2','CALB1','PROX1','GAD1','GAD2','TF','CACNA1A'],
+'RPE cell':['RPE65','BEST1','MITF','PMEL','TYR','DCT','MERTK','LRAT','RLBP1','RDH5'],
+'endothelial cell':['KDR','ESM1','PECAM1','VWF','CLDN5','EMCN','RAMP2','KLF2','ENG','CDH5','FLT1'],
+'Pericyte':['KCNJ8','CSPG4','PDGFRB','RGS5','ABCC9','MCAM','COL4A1','COL4A2','ACTA2','DES'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','PDGFRA','FBLN1','C7','DPT'],
+'Schwann cell':['MPZ','SOX10','S100B','PLP1','MAL','MBP','GFRA3','NCAM1','CLDN11','EGR2'],
+}
+infl=['IL1B','CCL2','CCL7','CXCL9','CXCL10','CXCL11','IL6','CSF3','S100A8','S100A9','NFKBIA','CCL3','CCL4','CCL20','CD69','TNF','TNFRSF9','HLA-DRA','HLA-DRB1','CD74','MARCO']
+
+def report(label,p):
+ x=load(p); lib=np.asarray(x.sum(0)).ravel(); arr=x.astype(np.float32).multiply(1e4/lib).tocsr()
+ scores=[]; tys=[]
+ for t,gs in sets.items():
+  ii=[pos[g] for g in gs if g in pos]; tys.append(t)
+  scores.append(np.asarray(np.log1p(arr[ii,:]).mean(axis=0)).ravel())
+ scores=np.vstack(scores)
+ iscore=np.asarray(arr[[pos[g] for g in infl],:].sum(0)).ravel()
+ assign=scores.argmax(0)
+ print('\\n===',label,'===')
+ print('type  n  meanInfl medianInfl fracInfl fracHigh top-marker-mean')
+ for k,t in enumerate(tys):
+  ids=np.flatnonzero(assign==k)
+  print(f'{t:20s}{len(ids):5d} {iscore[ids].mean():9.3f} {np.median(iscore[ids]):11.3f} {np.mean(iscore[ids]>0):8.3f} {np.mean(iscore[ids]>20):8.3f} {scores[k,ids].mean():8.3f}')
+ print('\\nCross-tab high inflammatory by score assigned:')
+ for th in [2,5,10,20]:
+  ids=np.flatnonzero(iscore>=th); from collections import Counter
+  print('threshold',th,'total',len(ids),Counter(tys[k] for k in assign[ids]))
+ print('\\nTop inflammatory cells')
+ for j in np.argsort(iscore)[-30:][::-1]:
+  k=assign[j]; print(int(j), 'score',round(iscore[j],1),'lib',int(lib[j]),'assigned',tys[k], 'idscore',round(scores[k,j],2),'second',[(tys[z],round(scores[z,j],2)) for z in np.argsort(scores[:,j])[-3:][::-1]])
+report('eye1','subtype.inflammation.q1.1.mtx.gz'); report('eye2','subtype.inflammation.q1.2.mtx.gz')
+PY"

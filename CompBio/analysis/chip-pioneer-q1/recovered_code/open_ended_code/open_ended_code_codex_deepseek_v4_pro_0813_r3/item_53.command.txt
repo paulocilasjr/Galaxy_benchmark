@@ -1,0 +1,31 @@
+/bin/bash -lc "python3 - <<'PY'
+import glob, os, subprocess, tempfile, math
+regions={'hotspots':'dnase/hotspots_union.bed','peaks':'dnase/peaks_union.bed'}
+files=sorted(glob.glob('macs/TF*_peaks.narrowPeak'))
+for regname,reg in regions.items():
+    print('\\nREGION',regname)
+    for ntop in [1000,3000,5000,10000,20000,50000,100000000]:
+        print('top',ntop)
+        for f in files:
+            tf=os.path.basename(f).split('_')[0]
+            # read all peaks, sort by qvalue col9 (idx8)
+            peaks=[]
+            with open(f) as fh:
+                for line in fh:
+                    parts=line.rstrip().split('\\t')
+                    if len(parts)<9: continue
+                    q=float(parts[8]) if parts[8] not in ('.','-1') else 0
+                    peaks.append((q,line.rstrip()))
+            peaks.sort(key=lambda x:x[0], reverse=True)
+            top=peaks[:min(ntop,len(peaks))]
+            # write temp with first 3 cols
+            with open('[REDACTED LOCAL PATH]','w') as out:
+                for q,line in top:
+                    p=line.split('\\t')
+                    out.write('\\t'.join(p[:3])+'\\n')
+            total=len(top)
+            acc=int(subprocess.check_output(f\"bedtools intersect -u -a [REDACTED LOCAL PATH] -b {reg} | wc -l\",shell=True,text=True).strip())
+            closed=total-acc
+            print(f'{tf} total={total} closed_frac={closed/total:.3f}', end=' | ')
+        print()
+PY"

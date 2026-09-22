@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np,pandas as pd,anndata as ad
+from scipy.stats import ttest_ind
+# original
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array([x for x in orig.index.astype(str)])
+ocols=np.array(orig.columns.astype(str))
+O=orig.values.astype(float); olib=O.sum(axis=0,keepdims=True); ocpm=O/olib*1e6; olog=np.log1p(ocpm)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False).drop_duplicates('Donor').set_index('Donor')
+hc=np.array([meta.loc[d,'Class'] for d in ocols])=='HC'
+# filter mean cpm > 5 and detected in at least 5 donors in either group
+mean=ocpm.mean(axis=1)
+frac=(ocpm>1).sum(axis=1)/ocpm.shape[1]
+keep=(mean>5)&(frac>0.3)
+print('kept',keep.sum())
+t,p=ttest_ind(olog[keep][:,~hc],olog[keep][:,hc],axis=1,equal_var=False)
+names=onames[keep]; fc=olog[keep][:,~hc].mean(axis=1)-olog[keep][:,hc].mean(axis=1)
+up_idx=np.argsort(-t); dn_idx=np.argsort(t)
+print('up top 100')
+for i in up_idx[:100]: print(names[i], 't',round(t[i],2),'fc',round(fc[i],3))
+print('\\ndn top 100')
+for i in dn_idx[:100]: print(names[i], 't',round(t[i],2),'fc',round(fc[i],3))
+# save top gene lists
+np.savetxt('orig_de_up.txt',names[up_idx[:300]],fmt='%s')
+np.savetxt('orig_de_dn.txt',names[dn_idx[:300]],fmt='%s')
+PY"

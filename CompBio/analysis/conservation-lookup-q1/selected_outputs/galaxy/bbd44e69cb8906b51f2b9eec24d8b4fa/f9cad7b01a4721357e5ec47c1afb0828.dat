@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+import sys, io, json, zipfile, urllib.request, urllib.parse, re, math
+
+def read_fasta(path):
+    seqs = {}
+    name = None
+    parts = []
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip('\n')
+            if line.startswith('>'):
+                if name is not None:
+                    seqs[name] = ''.join(parts)
+                name = line[1:].split()[0]
+                parts = []
+            else:
+                parts.append(line.strip())
+        if name is not None:
+            seqs[name] = ''.join(parts)
+    return seqs
+
+def lev(a, b):
+    a = a.upper(); b = b.upper()
+    prev = list(range(len(b) + 1))
+    cur = [0] * (len(b) + 1)
+    for i, ca in enumerate(a, 1):
+        cur[0] = i
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j - 1] + (ca != cb), prev[j] + 1, cur[j - 1] + 1)
+        prev, cur = cur, prev
+    return prev[-1]
+
+def local_align_segment(query, target, match=2, mismatch=-1, gap=-1):
+    n = len(query); m = len(target)
+    # rows are query+1, columns target+1
+    H = [[0] * (m + 1) for _ in range(n + 1)]
+    maxscore = 0; maxi = maxj = 0
+    for i in range(1, n + 1):
+        qi = query[i - 1]
+        row = H[i]; up = H[i - 1]
+        for j in range(1, m + 1):
+            diag = up[j - 1] + (match if qi == target[j - 1] else mismatch)
+            v = max(0, diag, up[j] + gap, row[j - 1] + gap)
+            row[j] = v
+            if v > maxscore:
+                maxscore = v; maxi = i; maxj = j
+    # traceback to start
+    i = maxi; j = maxj
+    while i > 0 and j > 0 and H[i][j] > 0:
+        qi = query[i - 1]; tj = target[j - 1]
+        if H[i][j] == H[i - 1][j - 1] + (match if qi == tj else mismatch):
+            i -= 1; j -= 1
+        elif H[i][j] == H[i - 1][j] + gap:
+            i -= 1
+        else:
+            j -= 1
+    return target[j:maxj], j, maxj, maxscore
+
+def fetch_gene_package(gene_id):
+    params = {
+        'include_annotation_type': 'FASTA_RNA',
+        'aux_report': 'PRODUCT_REPORT',
+    }
+    url = 'https://api.ncbi.nlm.nih.gov/datasets/v2/gene/id/%s/download?%s' % (gene_id, urllib.parse.urlencode(params))
+    req = urllib.request.Request(url, headers={'User-Agent': 'galaxy-shh-analysis/1.0'})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = resp.read()
+    if len(data) == 0:
+        raise RuntimeError('empty download for gene ' + gene_id)
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    report_bytes = zf.read('ncbi_dataset/data/product_report.jsonl')
+    rna_bytes = zf.read('ncbi_dataset/data/rna.fna')
+    reports = [json.loads(line) for line in report_bytes.decode('utf-8').splitlines() if line.strip()]
+    seqs = {}
+    name = None; parts = []
+    for line in rna_bytes.decode('utf-8').splitlines():
+        if line.startswith('>'):
+            if name is not None:
+                seqs[name] = ''.join(parts)
+            name = line[1:].split()[0]
+            parts = []
+        else:
+            parts.append(line.strip())
+    if name is not None:
+        seqs[name] = ''.join(parts)
+    return reports[0], seqs
+
+def longest_protein_coding(report):
+    trs = [t for t in report.get('transcripts', []) if 'cds' in t and t.get('type', 'PROTEIN_CODING').startswith('PROTEIN_CODING')]
+    if not trs:
+        raise RuntimeError('no protein coding transcript for gene ' + report.get('geneId'))
+    return max(trs, key=lambda t: int(t['protein']['length']))
+
+def segment_for_gene(gene_id, human_seg):
+    report, seqs = fetch_gene_package(gene_id)
+    tr = longest_protein_coding(report)
+    acc = tr['accessionVersion']
+    rna = seqs[acc]
+    seg, start, end, score = local_align_segment(human_seg, rna)
+    dist = lev(human_seg, seg)
+    diag = {
+        'species_gene_id': gene_id,
+        'symbol': report.get('symbol'),
+        'taxname': report.get('taxname'),
+        'accession': acc,
+        'protein_len': tr.get('protein', {}).get('length'),
+        'rna_len': len(rna),
+        'target_start': start,
+        'target_end': end,
+        'align_score': score,
+        'segment_len': len(seg),
+        'distance': dist,
+        'segment_prefix': seg[:80],
+    }
+    return diag
+
+def parse_blast_top(path, human_seg):
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip('\n')
+            if not line.strip():
+                continue
+            cols = line.split('\t')
+            if len(cols) < 14:
+                raise RuntimeError('BLAST output has fewer than 14 columns: ' + path)
+            qseq = cols[12].replace('-', '')
+            sseq = cols[13].replace('-', '')
+            dist = lev(human_seg, sseq)
+            return {
+                'qseqid': cols[0], 'sseqid': cols[1], 'pident': cols[2],
+                'length': cols[3], 'mismatch': cols[4], 'gapopen': cols[5],
+                'sstart': cols[8], 'send': cols[9], 'evalue': cols[10],
+                'distance': dist, 'segment_prefix': sseq[:80],
+            }
+    raise RuntimeError('empty BLAST output: ' + path)
+
+def main():
+    human_path, indri_blast_path, semjoh_blast_path, out_path = sys.argv[1:5]
+    human_seqs = read_fasta(human_path)
+    if not human_seqs:
+        raise RuntimeError('no human segment sequence')
+    human_seg = next(iter(human_seqs.values())).upper()
+    # Human segment must be the canonical 300-nt region.
+    if len(human_seg) != 300:
+        print('WARNING: human segment length is %d, expected 300' % len(human_seg), file=sys.stderr)
+
+    ordered_species = [
+        ('Pan troglodytes', 'gene', '743371'),
+        ('Macaca mulatta', 'gene', '716553'),
+        ('Pan paniscus', 'gene', '100995872'),
+        ('Indri indri', 'blast', indri_blast_path),
+        ('Semnopithecus johnii', 'blast', semjoh_blast_path),
+        ('Ailuropoda melanoleuca', 'gene', '100481788'),
+        ('Delphinapterus leucas', 'gene', '111176269'),
+    ]
+    distances = []
+    diagnostics = []
+    for name, typ, val in ordered_species:
+        if typ == 'gene':
+            d = segment_for_gene(val, human_seg)
+            d['species'] = name
+            diagnostics.append(d)
+            distances.append(str(d['distance']))
+        else:
+            d = parse_blast_top(val, human_seg)
+            d['species'] = name
+            diagnostics.append(d)
+            distances.append(str(d['distance']))
+
+    with open(out_path, 'w') as f:
+        f.write(','.join(distances) + '\n')
+    # Diagnostics in a separate tabular file, printed to stdout as well.
+    diag_path = out_path + '.diagnostics.tsv'
+    with open(diag_path, 'w') as f:
+        f.write('species\tmethod\tsource\tdistance\tsegment_len\taccession_or_hit\tsegment_prefix\n')
+        for d in diagnostics:
+            src = d.get('accession') or d.get('sseqid') or ''
+            seglen = d.get('segment_len', len(d.get('segment_prefix', '')))
+            f.write('\t'.join([d['species'], d.get('method', 'blast' if 'sseqid' in d else 'gene'), src, str(d['distance']), str(seglen), d.get('accession') or d.get('sseqid') or '', d.get('segment_prefix', '')]) + '\n')
+    for d in diagnostics:
+        print(json.dumps(d, sort_keys=True))
+
+if __name__ == '__main__':
+    main()

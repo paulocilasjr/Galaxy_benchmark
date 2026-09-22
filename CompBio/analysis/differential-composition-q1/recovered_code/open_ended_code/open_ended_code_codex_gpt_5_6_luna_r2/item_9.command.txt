@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, scipy.io, numpy as np, pandas as pd
+from collections import OrderedDict
+base='differential.composition.q1'
+with gzip.open(base+'.genes.txt.gz','rt') as f:
+ f.readline(); genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+idx={g:i for i,g in enumerate(genes)}
+markers=OrderedDict({
+'astrocyte':['GFAP','AQP4','SLC1A3','CLDN11','VIM','GJA1','ALDOC','S100B'],
+'microglial cell':['AIF1','C1QA','C1QB','C1QC','TYROBP','P2RY12','TMEM119','CX3CR1','CSF1R','C3'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MERTK','LRAT','MITF','SERPINF1','TTR'],
+'cone cell':['ARR3','OPN1SW','OPN1MW','OPN1LW','GNGT2','PDE6H','GUCA1C','CNGB3','GNAT2','RXRG'],
+'rod cell':['RHO','SAG','GNAT1','PDE6A','PDE6B','NRL','NR2E3','ROM1','GPR37L1','GUCA1B'],
+'horizontal cell':['LHX1','ONECUT1','ONECUT2','CALB1','VSX1','GAD1','GAD2','SLC32A1'],
+'bipolar cell':['VSX2','GRM6','CABP5','PRKCA','PCP4','TRPM1','GNG13','ISL1','SLC24A2','THY1'],
+'RGC':['RBPMS','SNCG','POU4F1','POU4F2','THY1','NEFL','NEFM','ISL1','BRN3A','OPN4'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','CD2','IL7R','CCL5','LTB','MALAT1'],
+'macrophage':['LYZ','CTSD','FCER1G','TYROBP','CD68','C1QC','LST1','MS4A7','AIF1','LGALS3'],
+'Schwann cell':['S100B','SOX10','MPZ','PLP1','GFAP','NCAM1','FABP7','CLDN11'],
+'Pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ACTA2','COL4A1','COL4A2','NOTCH3','ABCC9','KCNJ8'],
+'B cell':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD83','CD22','CD69','CD48'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','COL6A2','PDGFRA','FBLN1'],
+'endothelial cell':['EMCN','KDR','ESAM','PECAM1','VWF','CLDN5','RAMP2','ENG','PLVAP','KDR'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','SOX9','AQP4','VIM','KCNJ10','SLC1A6','FABP7','MIOG']
+})
+for key,arr in markers.items():
+ print(key, [(g,idx.get(g)) for g in arr if g in idx])
+for j in [1,2]:
+ m=scipy.io.mmread(base+f'.{j}.mtx.gz').tocsr().astype(np.float32)
+ lib=np.asarray(m.sum(axis=0)).ravel()
+ norm=m.multiply(1e4/lib)
+ # mean log1p normalized among all cells; mean log for nonzero? display means and detection
+ print('\\nSAMPLE',j,'n',m.shape[1])
+ rows=[]
+ for key,arr in markers.items():
+  ids=[idx[g] for g in arr if g in idx]
+  vals=np.asarray(norm[ids].mean(axis=0)).ravel() if ids else np.zeros(m.shape[1])
+  logs=np.log1p(np.asarray(norm[ids].toarray())).mean(axis=0) if ids else np.zeros(m.shape[1])
+  rows.append((key,vals.mean(),np.quantile(vals,[.5,.9,.99]).tolist(),(vals>0).mean(),logs.mean(),(logs>0).mean()))
+ print(pd.DataFrame(rows,columns=['type','meanCP10k','q50/90/99','cellDetect','meanLogAvg','anyLog']).to_string(index=False))
+ # top markers by avg normalized counts
+ for key,arr in markers.items():
+  ids=[idx[g] for g in arr if g in idx]
+  if not ids: continue
+  av=np.asarray(norm[ids].mean(axis=1)).ravel()
+  print(key, sorted([(arr[ids.index(i)] if i in ids else '',float(v)) for i,v in zip(ids,av)],key=lambda x:-x[1])[:5])
+PY"

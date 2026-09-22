@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+# debug only central and local header
+import urllib.request,struct
+
+def get(u,a,b):
+ req=urllib.request.Request(u,headers={'User-Agent':'curl/8.0','Range':f'bytes={a}-{b}'})
+ try:
+  x=urllib.request.urlopen(req,timeout=120); y=x.read();print('got',a,b,len(y),x.headers.get('content-range'));return y
+ except Exception as e:print('err',a,b,e);raise
+u='https://zenodo.org/api/records/11111186/files/afr47041.zip/content';size=6011347563
+tail=get(u,size-200000,size-1);i=tail.rfind(b'PK\\x06\\x06');print('i',i)
+vals=struct.unpack_from('<4sQ2H2I4Q',tail,i);print(vals)
+_,_,_,_,_,_,entries,_,cdsize,cdoff=vals; b=get(u,cdoff,cdoff+cdsize-1);print('cd',len(b),cdoff,cdsize)
+p=0
+for k in range(4):
+ vals=struct.unpack_from('<4s6H3I5H2I',b,p);print('vals',vals)
+ sig,vermade,verneed,flag,comp,mt,md,crc,csize,usize,nlen,xlen,clen,disk,ia,ea,loff=vals
+ name=b[p+46:p+46+nlen].decode(); extra=b[p+46+nlen:p+46+nlen+xlen]
+ print(name,'raw',loff,csize,usize,'extra',extra.hex())
+ if loff==0xffffffff:
+  q=4
+  print('extra id',struct.unpack_from('<HH',extra,0))
+ p+=46+nlen+xlen+clen
+# parse first chr1 with extra
+p=0
+while p<len(b):
+ vals=struct.unpack_from('<4s6H3I5H2I',b,p)
+ sig,vermade,verneed,flag,comp,mt,md,crc,csize,usize,nlen,xlen,clen,disk,ia,ea,loff=vals
+ name=b[p+46:p+46+nlen].decode(); extra=b[p+46+nlen:p+46+nlen+xlen]
+ if name.endswith('ss_afr47041_1.tsv'):
+  print('FOUND',name,loff,csize,usize,extra.hex())
+  q=0
+  while q+4<=len(extra):
+   eid,elen=struct.unpack_from('<HH',extra,q);d=extra[q+4:q+4+elen];print('eid',eid,'elen',elen,d.hex());
+   if eid==1:
+    z=0
+    if usize==0xffffffff:usize=struct.unpack_from('<Q',d,z)[0];z+=8
+    if csize==0xffffffff:csize=struct.unpack_from('<Q',d,z)[0];z+=8
+    if loff==0xffffffff:loff=struct.unpack_from('<Q',d,z)[0];z+=8
+   q+=4+elen
+  print('parsed',loff,csize,usize)
+  lfh=get(u,loff,loff+29); print('lfh',lfh[:10],len(lfh));
+  break
+ p+=46+nlen+xlen+clen
+PY"

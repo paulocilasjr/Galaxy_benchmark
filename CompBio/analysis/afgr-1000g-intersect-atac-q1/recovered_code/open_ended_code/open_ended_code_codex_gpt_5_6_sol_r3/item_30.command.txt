@@ -1,0 +1,23 @@
+/bin/bash -lc "mkdir -p encode_file_records
+awk 'NR>1 {print "'$4}'"' afgr_1000g_filtered_bams.tsv | xargs -n 1 -P 8 -I '{}' sh -c 'curl -L --fail --silent --show-error \"https://www.encodeproject.org/files/{}/?format=json\" -H \"Accept: application/json\" -o \"encode_file_records/{}.json\"'
+find encode_file_records -type f -name '*.json' | wc -l
+python3 - <<'PY'
+import csv, glob, json
+expected={r['file_accession']:r for r in csv.DictReader(open('afgr_1000g_filtered_bams.tsv'),delimiter='\\t')}
+records={}
+for path in glob.glob('encode_file_records/*.json'):
+    x=json.load(open(path)); records[x['accession']]=x
+assert records.keys()==expected.keys()
+for accession, row in expected.items():
+    x=records[accession]
+    assert x['md5sum']==row['md5sum'], (accession,x['md5sum'],row['md5sum'])
+    assert x['file_format']=='bam'
+    assert x['output_type']=='alignments'
+    assert x['assembly']=='GRCh38'
+    assert x['status']=='released'
+print('validated direct ENCODE file records:',len(records))
+print('filtered original-name suffixes:',sorted({x['submitted_file_name'].rsplit('/',1)[-1].split('.')[-5:] and x['submitted_file_name'].rsplit('/',1)[-1][-30:] for x in records.values()})[:3])
+PY
+LC_ALL=C sort -c afgr_1000g_filtered_bam_md5sums.txt
+awk 'length "'!= 33 || $0 !~ /''^[0-9a-f]{32}$/ {bad++} END {print "bad checksum lines:", bad+0}'"' afgr_1000g_filtered_bam_md5sums.txt
+openssl md5 afgr_1000g_filtered_bam_md5sums.txt"

@@ -1,0 +1,25 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, json, collections
+assays=['ATAC-seq','DNase-seq','Histone ChIP-seq','TF ChIP-seq']
+out={}
+for assay in assays:
+ url='https://www.encodeproject.org/search/?type=Experiment&assay_title='+requests.utils.quote(assay)+'&replicates.library.biosample.organism.scientific_name=Homo%20sapiens&assembly=GRCh38&format=json&limit=all'
+ data=requests.get(url,timeout=180).json().get('@graph',[])
+ cell_exps=collections.defaultdict(list)
+ for exp in data:
+  if exp.get('biosample_ontology',{}).get('classification')"'!='"'cell line': continue
+  cell=exp['biosample_ontology']['term_name']
+  # choose files: prefer bed narrowPeak or bed broadPeak? 
+  peak=[]
+  for f in exp.get('files',[]):
+   ft=f.get('file_type','')
+   if 'narrowPeak' in ft or 'broadPeak' in ft or 'bed' in ft:
+    peak.append(f)
+  cell_exps[cell].append((exp.get('accession'),peak))
+ out[assay]=cell_exps
+ print(assay,'unique cells',len(cell_exps),'exps',sum(len(v) for v in cell_exps.values()))
+ # print counts per cell for top
+ print(collections.Counter({k:len(v) for k,v in cell_exps.items()}).most_common(10))
+# save metadata summaries
+with open('cell_exps.json','w') as fh: json.dump({a:{k:[(acc,[f.get('accession') for f in peaks]) for acc,peaks in v] for k,v in cs.items()} for a,cs in out.items()},fh)
+PY"

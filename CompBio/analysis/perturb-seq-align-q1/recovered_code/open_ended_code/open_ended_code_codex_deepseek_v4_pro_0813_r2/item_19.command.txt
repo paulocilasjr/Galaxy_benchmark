@@ -1,0 +1,138 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, pandas as pd
+from scipy.stats import spearmanr, pearsonr, rankdata
+from collections import defaultdict
+import warnings
+warnings.filterwarnings('ignore')
+
+def load_common():
+    files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']
+    data={}
+    vars_by={}
+    for fn in files:
+        with h5py.File(fn,'r') as f:
+            n_obs,n_var=f['X'].attrs['shape']
+            X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+            gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+            gc=f['obs/guide/codes'][:]
+            guides=np.array([gcats[i] for i in gc])
+            var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+            tgt=None
+            if 'obs/target_gene' in f:
+                tcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/target_gene/categories'][:]]
+                tc=f['obs/target_gene/codes'][:]
+                tgt=np.array([tcats[i] for i in tc])
+            data[fn]=X,guides,var,tgt
+            vars_by[fn]=var
+    common=[g for g in vars_by[files[0]] if g in set(vars_by[files[1]])]
+    refX,refg,refv,reft=data[files[0]]; qX,qg,qv,qt=data[files[1]]
+    refX=refX[:,[refv.index(g) for g in common]]
+    qX=qX[:,[qv.index(g) for g in common]]
+    return refX,refg,reft,qX,qg,common
+
+refX,refg,reft,qX,qg,var=load_common()
+print(refX.shape, qX.shape, len(var))
+
+def lognorm(X):
+    X=X.astype(np.float64).tocsr()
+    lib=np.asarray(X.sum(axis=1)).ravel(); lib[lib==0]=1
+    X=X.multiply(1.0/lib[:,None]).tocsr()
+    X.data=np.log1p(X.data*1e4)
+    return X.tocsr()
+refn=lognorm(refX); qn=lognorm(qX)
+
+# filter genes by combined expression >20 and variance across cells
+gene_mean=np.asarray(refn.mean(axis=0)).ravel()+np.asarray(qn.mean(axis=0)).ravel()
+gv=np.asarray(refn.power(2).mean(axis=0)).ravel()-np.asarray(refn.mean(axis=0)).ravel()**2
+qv=np.asarray(qn.power(2).mean(axis=0)).ravel()-np.asarray(qn.mean(axis=0)).ravel()**2
+keep=(gene_mean>0.01)&((gv>0.005)|(qv>0.005))
+print('keep',keep.sum())
+refn=refn[:,keep]; qn=qn[:,keep]; var=[g for g,k in zip(var,keep) if k]
+# More robust: top 5000 HVG by total variance of normalized counts (within cell all cells)
+total_var=gv[keep]+qv[keep]
+# use all for now
+
+def prep(Xn, guides):
+    cats=[g for g in sorted(set(guides)) if not g.startswith('NT-')]
+    nts=[g for g in sorted(set(guides)) if g.startswith('NT-')]
+    Xnt=Xn[np.isin(guides,nts)]
+    mu_nt=np.asarray(Xnt.mean(axis=0)).ravel()
+    # center and scale per dataset? use logFC only
+    M={}
+    T={}
+    for g in cats:
+        idx=np.where(guides==g)[0]
+        x=Xn[idx]
+        mu=np.asarray(x.mean(axis=0)).ravel()
+        M[g]=mu-mu_nt
+        # Welch t-stat
+        n1=x.shape[0]; n0=Xnt.shape[0]
+        v1=np.asarray(x.power(2).mean(axis=0)).ravel()-mu**2
+        v0=np.asarray(Xnt.power(2).mean(axis=0)).ravel()-mu_nt**2
+        denom=np.sqrt(v1/n1+v0/n0)
+        t=(mu-mu_nt)/np.where(denom==0, np.inf, denom)
+        t=np.where(np.isfinite(t), t, 0)
+        T[g]=t
+    return cats,M,T
+
+rc, rM, rT=prep(refn,refg)
+qc, qM, qT=prep(qn,qg)
+# target names from guide IDs: strip -I? remove '-I#'
+def target_of(g):
+    import re
+    return re.sub(r'-I\\d+"'$'"','',g)
+rt={g:target_of(g) for g in rc}
+
+# method 1 spearman all genes
+mapping={}
+for q in qc:
+    corrs=[]
+    for r in rc:
+        corrs.append(spearmanr(qM[q],rM[r]).correlation)
+    mapping[q]=rc[int(np.argmax(corrs))]
+print('MAPPING spearman all:')
+for q in sorted(qc, key=lambda s:int(s[5:])): print(q,'->',mapping[q],rt[mapping[q]])
+
+# method 2 pearson on logfc top variable genes
+var_total=np.array([np.var(np.concatenate([rM[g] for g in rc])) if False else 0 for g in []]); 
+# use gene var of M
+Mstack=np.vstack([rM[g] for g in rc]+[qM[g] for g in qc])
+gene_var=np.var(Mstack,axis=0)
+for ntop in [200,500,1000,2000,5000]:
+    idx=np.argsort(gene_var)[::-1][:ntop]
+    mapping2={}
+    for q in qc:
+        vals=[pearsonr(qM[q][idx],rM[r][idx])[0] for r in rc]
+        mapping2[q]=rc[int(np.argmax(vals))]
+    # print only target matches maybe
+    hits={t:q for q,r in mapping2.items() if rt[r]==t}
+    print('PEARSON top',ntop,'for targets', {t:hits.get(t) for t in ['PABPC1','NUDT21','LEO1']})
+    # print full mapping if small? maybe later
+
+# method 3 spearman on top variable genes
+for ntop in [500,1000,2000,5000]:
+    idx=np.argsort(gene_var)[::-1][:ntop]
+    mapping3={}
+    for q in qc:
+        vals=[spearmanr(qM[q][idx],rM[r][idx]).correlation for r in rc]
+        mapping3[q]=rc[int(np.argmax(vals))]
+    hits={t:q for q,r in mapping3.items() if rt[r]==t}
+    print('SPEAR top',ntop,'targets', {t:hits.get(t) for t in ['PABPC1','NUDT21','LEO1']})
+
+# method 4 t-stat spearman/pearson top variable
+Tstack=np.vstack([rT[g] for g in rc]+[qT[g] for g in qc])
+tvar=np.nanvar(Tstack,axis=0)
+for ntop in [500,1000,2000,5000]:
+    idx=np.argsort(tvar)[::-1][:ntop]
+    # pearson and spearman
+    for corrname,fn in [('pearson',pearsonr),('spearman',spearmanr)]:
+        mp={}
+        for q in qc:
+            vals=[]
+            for r in rc:
+                vals.append(fn(qT[q][idx],rT[r][idx]).correlation if corrname=='spearman' else fn(qT[q][idx],rT[r][idx])[0])
+            mp[q]=rc[int(np.argmax(vals))]
+        hits={t:q for q,r in mp.items() if rt[r]==t}
+        print('TSTAT',corrname,'top',ntop,'targets', {t:hits.get(t) for t in ['PABPC1','NUDT21','LEO1']})
+PY
+python [REDACTED LOCAL PATH]"

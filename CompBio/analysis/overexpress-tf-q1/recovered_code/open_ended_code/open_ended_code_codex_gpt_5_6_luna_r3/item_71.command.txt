@@ -1,0 +1,28 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import pandas as pd, numpy as np
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import StandardScaler
+from scipy.stats import fisher_exact, ttest_rel
+f=pd.read_csv('motif_features_peaks.tsv',sep='\\t');f.name=f.name.str.split('::').str[0]
+met=[]
+for lab in ['gain','loss','neutral']:
+ b=pd.read_csv(lab+'.peaks.bed',sep='\\t',header=None,names=['chrom','start','end','name']); b['group']=lab;b['width']=b.end-b.start
+ s=pd.read_csv(lab+'.peaks.seq.tsv',sep='\\t',header=None,names=['name2','seq']);s['name']=s.name2.str.split('::').str[0];s['gc']=s.seq.str.upper().str.count('[GC]')/s.seq.str.len();m=b.merge(s,on='name')
+ q=pd.read_csv(lab+'.peaks.tsv',sep='\\t',header=None,names=['name','c','s','e','o','ref','pert','lfc','z']);m=m.merge(q[['name','ref','pert']],on='name');met.append(m[['name','group','width','gc','ref','pert']])
+met=pd.concat(met);f=f.merge(met,on=['name','group']);
+features=['gc','width','ref','pert']; X=f.drop_duplicates(['name','group'])
+# transform scale covariates
+Xcov=X[features].copy();Xcov[['width','ref','pert']]=np.log1p(Xcov[['width','ref','pert']]);Xcov=StandardScaler().fit_transform(Xcov)
+base=X.reset_index(drop=True); # use index mapping
+for target in ['neutral','loss']:
+ A=base[base.group=='gain'].copy();B=base[base.group==target].copy(); ia=A.index.to_numpy();ib=B.index.to_numpy();
+ nn=NearestNeighbors(n_neighbors=1).fit(Xcov[ib]);dist,ind=nn.kneighbors(Xcov[ia]); match=ib[ind[:,0]]
+ print('\\nGAIN vs',target,'median match dist',np.median(dist),'n',len(A))
+ for tf in sorted(f.TF.unique()):
+  fa=f[(f.TF==tf)&(f.name.isin(A.name))].set_index('name').loc[A.name]
+  fb=f[(f.TF==tf)&(f.name.isin(B.name))].set_index('name').loc[B.name].iloc[ind[:,0]]
+  # paired diff
+  dh=fa.has_hit.to_numpy()-fb.has_hit.to_numpy(); dm=fa.max_score.to_numpy()-fb.max_score.to_numpy()
+  print(tf,'hit%',round(fa.has_hit.mean(),3),round(fb.has_hit.mean(),3),'diff',round(dh.mean(),3),'maxdiff',round(dm.mean(),3))
+PY
+python3 [REDACTED LOCAL PATH]"

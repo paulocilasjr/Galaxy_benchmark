@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import snapatac2 as snap, numpy as np, scipy.sparse as sp, time, gc
+adata=snap.read('atac.h5ad')
+Xfull=adata.X[:].tocsr()
+mask=np.array(adata.var['selected'].to_list())
+print('full',Xfull.shape,Xfull.nnz,'selected',mask.sum())
+X=Xfull[:,mask]
+print('selected',X.shape,X.nnz)
+# binarize
+Xb=(X>0).astype(np.float32)
+print('binary nnz',Xb.nnz, Xb.dtype)
+# free X
+del Xfull
+gc.collect()
+import scrublet as scr
+for label,M in [('counts',X),('binary',Xb)]:
+ print('\\nRunning scrublet',label)
+ t=time.time()
+ sc=scr.Scrublet(M, expected_doublet_rate=0.05, random_state=0)
+ ss, dd = sc.scrub_doublets(min_counts=1, min_cells=1, n_prin_comps=30, verbose=False)
+ sc.call_doublets(threshold=0.2)
+ print('time',time.time()-t)
+ print('predicted doublets',sc.predicted_doublets_.sum(),'threshold',sc.threshold_)
+ pairs=sorted(zip(ss, adata.obs_names), reverse=True)
+ for s,n in pairs[:20]: print(n,s)
+ # save maybe
+PY"

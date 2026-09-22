@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import cellxgene_census, anndata as ad
+import numpy as np, pandas as pd, time
+from scipy import sparse
+# focused genes: disease, lineage, and top PC markers from local analysis
+panel = ['IFI27','IFI6','ISG15','MX1','OAS1','OAS2','OAS3','IFIT1','IFIT2','IFIT3','RSAD2','SIGLEC1','LY6E','STAT1','IRF7','XAF1','USP18','IFI44L','IFI44','RNF213','SP100','ISG20','ADAR','SP110',
+'S100A8','S100A9','FCN1','LST1','IL1B','VCAN','LGALS3','CTSS','CST3','TYROBP','FCGR3A','CD14','LYZ','BCL3','NFIL3','PDLIM7','CTSD','S100A6','ADM','PLBD1','FURIN',
+'CD3D','CD3E','TRAC','IL7R','CCR7','LTB','TCF7','LEF1','S1PR1','SELL','MAL','IL32','ETS1',
+'MS4A1','CD79A','CD79B','BANK1','CD22','TCL1A','IGKC','IGLC2','IGLC3',
+'MZB1','JCHAIN','XBP1','PRDM1','TNFRSF17','DERL3','SSR4','IGHG1','IGHA1',
+'MKI67','TOP2A','STMN1','TUBA1B','HMGB2','TYMS','MCM6','PCNA','UBE2C','NUSAP1','TCF19','MCM7','FEN1','UBE2T','MAD2L1',
+'NKG7','GNLY','GZMB','PRF1','KLRD1','FGFBP2','PPBP','PF4','NRGN','HBB','HBA1','HBA2','LILRA4','GZMB','TCF4','PLD4','SERPINF1']
+panel = list(dict.fromkeys(panel))
+filt=\"feature_name in [\"+','.join(repr(g) for g in panel)+\"]\"
+t=time.time()
+with cellxgene_census.open_soma(census_version='latest') as census:
+    src=cellxgene_census.get_anndata(census,'Homo sapiens',obs_value_filter=\"dataset_id == 'c7775e88-49bf-4ba2-a03b-93f00447c958'\",var_value_filter=filt,obs_column_names=['donor_id','disease'],var_column_names=['feature_id','feature_name'])
+print('queried', src, 'time', time.time()-t, flush=True)
+# aggregate source by donor_id+disease
+obs=src.obs.copy(); obs['key']=obs['donor_id'].astype(str)+'|'+obs['disease'].astype(str)
+keys=sorted(obs['key'].unique())
+key_to_i={k:i for i,k in enumerate(keys)}
+codes=np.array([key_to_i[k] for k in obs['key']], dtype=np.int32)
+G=sparse.csr_matrix((np.ones(src.n_obs), (codes, np.arange(src.n_obs))), shape=(len(keys), src.n_obs))
+S=(G @ src.X).toarray().astype(float)
+cell_counts=np.bincount(codes, minlength=len(keys))
+lib=S.sum(axis=1)
+# Some panel-only library; also use relative log panel CPM
+logcpm=np.log1p(S/(lib[:,None]+1e-9)*1e6)
+src_names=src.var['feature_name'].astype(str).values
+np.savez('source_panel_pseudobulk.npz', sums=S, logcpm=logcpm, cell_counts=cell_counts, genes=src_names, keys=np.array(keys))
+print('saved source summaries', len(keys), len(src_names))
+print(pd.DataFrame({'key':keys,'cells':cell_counts}).to_string(index=False))
+PY"

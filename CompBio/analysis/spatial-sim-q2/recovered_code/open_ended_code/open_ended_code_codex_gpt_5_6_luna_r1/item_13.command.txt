@@ -1,0 +1,84 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import spearmanr, pearsonr, ttest_ind, mannwhitneyu
+from sklearn.metrics import confusion_matrix
+base='extracted/'
+sc=pd.read_csv(base+'spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv(base+'spatial_q_sc_metadata.csv',index_col=0)
+sp=mmread(base+'matrix.mtx.gz').tocsr().toarray().T
+pos=pd.read_csv(base+'tissue_positions.csv')
+types=sorted(meta.cell_type.unique()); ti={t:i for i,t in enumerate(types)}
+sc_norm=sc.div(sc.sum(axis=1),axis=0)
+refs={
+ 'cellnorm':meta.join(sc_norm).groupby('cell_type')[sc.columns].mean().loc[types].T.values,
+ 'rawmean':(meta.join(sc).groupby('cell_type')[sc.columns].mean().loc[types].T.values),
+}
+refs['rawmean']=refs['rawmean']/refs['rawmean'].sum(axis=0)
+nmeans=meta.join(sc_norm).groupby('cell_type')[sc.columns].mean().loc[types]
+# marker union sizes various
+marker_sets={}
+for nt in [20,40,60,100,150,250]:
+ m=[]
+ for t in types:
+  other=nmeans.drop(t).mean(axis=0)
+  score=np.log2((nmeans.loc[t]+1e-5)/(other+1e-5))
+  m += score.sort_values(ascending=False).head(nt).index.tolist()
+ marker_sets[f'm{nt}']=list(dict.fromkeys(m))
+
+def deconv(ref, genes=None):
+ if genes is None: A=ref; Y=sp/(sp.sum(1,keepdims=True)+1e-12)
+ else:
+  gi=[sc.columns.get_loc(g) for g in genes]; A=ref[gi,:]; Y=sp[:,gi]; Y=Y/(Y.sum(1,keepdims=True)+1e-12)
+ # normalize A columns to sum one
+ A=A/(A.sum(0,keepdims=True)+1e-12)
+ co=[];res=[]
+ for y in Y:
+  c,r=nnls(A,y)
+  c=c/(c.sum()+1e-12)
+  co.append(c);res.append(r)
+ return np.asarray(co),np.asarray(res)
+
+# coordinate distance in array grid; spot order same barcodes
+xy=pos[['array_row','array_col']].values.astype(float)
+D=cdist(xy,xy)
+# grid neighborhood: distance <= radii
+for rn,ref in refs.items():
+ for mn,genes in [('all',None),*marker_sets.items()]:
+  co,res=deconv(ref,genes)
+  # tumor threshold metrics
+  tum=co[:,ti['Tumor_Core']]
+  print('\\n###',rn,mn,'genes',len(genes) if genes else 1000,'res',res.mean())
+  print('co mean',dict(zip(types,np.round(co.mean(0),4))))
+  print('tum quantiles',np.quantile(tum,[0,.5,.75,.9,.95,.975,.99,1]).round(4), 'n>0.1',sum(tum>.1),'n>.25',sum(tum>.25),'n>.5',sum(tum>.5))
+  # distance to tumour mask / weighted by tumor abundance
+  for thr in [.01,.05,.1,.2,.4,.6]:
+   mask=tum>thr
+   if mask.sum()<1:continue
+   dmin=D[:,mask].min(axis=1)
+   # exclude tumor spots? compare other-type weighted abundance by distance
+   rows=[]
+   for t in types:
+    j=ti[t]; w=co[:,j]
+    # weighted mean dmin all, non-tumor and tumor mask separately
+    near=(dmin<=1.01)
+    r1=w[near].mean(); r0=w[~near].mean()
+    # weighted mean distance, weighting type abundance among non-tumor spots
+    md=(w*dmin).sum()/(w.sum()+1e-12)
+    rho,p=spearmanr(w,dmin)
+    rows.append((t,round(r1,4),round(r0,4),round(r1/(r0+1e-9),3),round(md,3),round(rho,3),round(p,3)))
+   print('thr',thr,'n',mask.sum(),'nearcount',near.sum(),'[type near mean,far mean,ratio,wtd d,rho,p]')
+   print(rows)
+  # weighted nearest tumor spot pair: use tumor co as weight maybe
+  print('pairwise weighted mean min-distance to tumor set threshold .1')
+  mask=tum>.1
+  for t in types:
+   w=co[:,ti[t]]
+   # non tumor spot type mass weighted d to any tumor-containing spot
+   print(t,round(float((w*D[:,mask].min(1)).sum()/w.sum()),3), 'near mass',round(float(w[D[:,mask].min(1)<=1.01].sum()/w.sum()),3))
+PY
+python [REDACTED LOCAL PATH] > [REDACTED LOCAL PATH]
+wc -l [REDACTED LOCAL PATH]
+sed -n '1,220p' [REDACTED LOCAL PATH]"

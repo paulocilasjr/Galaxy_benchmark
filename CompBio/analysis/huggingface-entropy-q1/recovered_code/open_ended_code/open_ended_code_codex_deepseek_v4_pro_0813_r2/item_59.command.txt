@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, pathlib, torch.nn.functional as F
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.modules.mamba_simple as ms
+saved={}; orig=ms.selective_scan_fn
+def wrap(u,delta,A,B,C,D=None,z=None,delta_bias=None,delta_softplus=False,return_last_state=False):
+    if not saved:
+        saved.update(u=u.detach().clone(),delta=delta.detach().clone(),A=A.detach().clone(),B=B.detach().clone(),C=C.detach().clone(),D=D.detach().clone(),z=z.detach().clone(),delta_bias=delta_bias.detach().clone())
+    return orig(u,delta,A,B,C,D,z,delta_bias,delta_softplus,return_last_state)
+ms.selective_scan_fn=wrap
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+batch_size=2; batch=[]
+for i in range(batch_size): x=ids[0].clone(); x[i]=3; batch.append(x)
+with torch.no_grad(): out=model(input_ids=torch.stack(batch))
+u=saved['u']; delta=saved['delta']; A=saved['A']; Bmat=saved['B']; Cmat=saved['C']; z=saved['z']; db=saved['delta_bias']; D=saved['D']
+delta3=F.softplus(delta+db[...,None]); dA=torch.exp(torch.einsum('bdl,dn->bdln',delta3,A)); dBu=torch.einsum('bdl,bnl,bdl->bdln',delta3,Bmat,u)
+x=torch.zeros_like(dA[:, :, 0]); ys=torch.empty(batch_size,u.shape[1],u.shape[2],device=u.device,dtype=u.dtype)
+for i in range(u.shape[2]):
+ x=dA[:,:,i]*x+dBu[:,:,i]; y=torch.einsum('bdn,bn->bd',x,Cmat[:,:,i])
+ if i<3 or i%100==0 or i==999:
+  print(i,'x finite',torch.isfinite(x).all().item(),'y finite',torch.isfinite(y).all().item(),'y0',y[0,0].item())
+ ys[:,:,i]=y
+ if i in [0,1,2,100,999]:
+  print(' ys slice finite',torch.isfinite(ys[:,:,i]).all().item(),'val',ys[0,0,i].item())
+print('final ys finite',torch.isfinite(ys).all().item(),'nan count',torch.isnan(ys).sum().item())
+print('ys0 0..5',ys[0,0,:5].cpu())
+PY"

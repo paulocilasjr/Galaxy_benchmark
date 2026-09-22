@@ -1,0 +1,79 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, subprocess, re as regex, collections
+# load original read lengths
+read_len={}
+with gzip.open('gene.fusion.q2.fq.gz','rt') as f:
+    while True:
+        h=f.readline().strip()
+        if not h:break
+        s=f.readline().strip(); f.readline(); f.readline()
+        n=h[1:] if h.startswith('@') else h
+        read_len[n]=len(s)
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip();tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'):trans_gene[tid]=part.split(':',1)[1];break
+
+def qint(c):
+ m=regex.findall(r'(\\d+)([MIDNSHP=X])',c);q=0;qs=None;qe=None
+ for ln,op in m:
+  ln=int(ln)
+  if op in 'SH':q+=ln
+  elif op in 'M=X':
+   if qs is None:qs=q
+   q+=ln;qe=q
+  elif op=='I':q+=ln
+ return (qs,qe)
+
+def orig_interval(q,L,strand):
+    if strand=='+': return q
+    return (L-q[1], L-q[0])
+directed=collections.Counter(); seen=set(); bad=0
+proc=subprocess.Popen(['samtools','view','-F','0x900','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+ p=line.rstrip().split('\\t');flag=int(p[1]);rname=p[2]
+ tags={}
+ for f in p[11:]:
+  if ':' in f:
+   k,t,v=f.split(':',2);tags[k]=v
+ sa=tags.get('SA')
+ if not sa:continue
+ g1=trans_gene.get(rname,'');q1=qint(p[5]);s1='-' if flag&16 else '+'
+ if not q1 or q1[0] is None:continue
+ L=read_len.get(p[0])
+ if not L:continue
+ o1=orig_interval(q1,L,s1)
+ for entry in sa.rstrip(';').split(';'):
+  if not entry:continue
+  parts=entry.split(',')
+  if len(parts)<6:continue
+  rt=parts[0];g2=trans_gene.get(rt,'')
+  if not g1 or not g2 or g1==g2:continue
+  q2=qint(parts[3]);s2=parts[2]
+  if not q2 or q2[0] is None:continue
+  o2=orig_interval(q2,L,s2)
+  # overlap in original coords
+  ov=max(0,min(o1[1],o2[1])-max(o1[0],o2[0]))
+  if ov>8:continue
+  key=(p[0],tuple(sorted((g1,g2))))
+  if key in seen:continue
+  seen.add(key)
+  if o1[0] <= o2[0]:
+   left_g,right_g=g1,g2;left_s,right_s=s1,s2
+  else:
+   left_g,right_g=g2,g1;left_s,right_s=s2,s1
+  if left_s==right_s=='+':bio=(left_g,right_g)
+  elif left_s==right_s=='-':bio=(right_g,left_g)
+  else:
+   bad+=1;continue
+  directed[bio]+=1
+proc.wait()
+print('unique counted',sum(directed.values()),'mixed',bad)
+for pair in [('SP1','MYC'),('MYC','SP1'),('SP1','ZIC2'),('ZIC2','SP1'),('SP1','CATSPER4'),('CATSPER4','SP1')]:
+ print(pair,directed.get(pair,0))
+print('top')
+for k,v in directed.most_common(40):print(v,k)
+PY"

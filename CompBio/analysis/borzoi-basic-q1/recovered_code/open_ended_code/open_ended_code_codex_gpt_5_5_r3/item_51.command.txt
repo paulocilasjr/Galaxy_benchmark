@@ -1,0 +1,56 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, math, os, json, re
+from collections import defaultdict
+
+def datasets(fn):
+    out=[]
+    with h5py.File(fn,'r') as f:
+        f.visititems(lambda n,o: out.append((n,o.shape,math.prod(o.shape))) if isinstance(o,h5py.Dataset) else None)
+    return sorted(out)
+
+def is_nontrainable(n):
+    return n.endswith('moving_mean:0') or n.endswith('moving_variance:0')
+
+for label,fn in [('human','data/borzoi_f0_human_model0_best.h5'),('mouse','data/borzoi_f0_mouse_model1_best.h5')]:
+    ds=datasets(fn)
+    total=sum(c for _,_,c in ds)
+    train=sum(c for n,_,c in ds if not is_nontrainable(n))
+    non=sum(c for n,_,c in ds if is_nontrainable(n))
+    print(label, 'datasets',len(ds),'total',total,'nontrain_bn_moving',non,'trainable_by_exclusion',train)
+    # layer totals top-level after model_weights/<layer>/
+    layers=defaultdict(int)
+    layer_shapes=defaultdict(list)
+    for n,sh,c in ds:
+        layer=n.split('/')[1] if n.startswith('model_weights/') else n.split('/')[0]
+        layers[layer]+=c
+        layer_shapes[layer].append((n,sh,c))
+    for layer,totalc in sorted(layers.items(), key=lambda kv: kv[1], reverse=True)[:15]:
+        print(' ',layer,totalc)
+    print('heads/final-like shapes:')
+    for n,sh,c in ds:
+        if sh and (sh[-1] in (7611,2608) or (len(sh)==1 and sh[0] in (7611,2608))):
+            print(' ',n,sh,c, 'train' if not is_nontrainable(n) else 'nontrain')
+    print('all final dense last dense layers')
+    for n,sh,c in ds:
+        if re.search(r'/dense_2[0-9]/', n):
+            print(' ',n,sh,c)
+
+# Compare all but final head shapes/names between files, identify shape differences.
+h=datasets('data/borzoi_f0_human_model0_best.h5')
+m=datasets('data/borzoi_f0_mouse_model1_best.h5')
+hmap={n:(sh,c) for n,sh,c in h}; mmap={n:(sh,c) for n,sh,c in m}
+print('only human names', sorted(set(hmap)-set(mmap))[:20], len(set(hmap)-set(mmap)))
+print('only mouse names', sorted(set(mmap)-set(hmap))[:20], len(set(mmap)-set(hmap)))
+print('same names diff shapes')
+for n in sorted(set(hmap)&set(mmap)):
+    if hmap[n][0] "'!= mmap[n][0]: print(n,hmap[n],mmap[n])
+
+# Head counts by known final dense shapes from each file
+human_head=sum(c for n,sh,c in h if (sh == (1920,7611) or sh == (7611,)))
+mouse_head=sum(c for n,sh,c in m if (sh == (1920,2608) or sh == (2608,)))
+human_train=sum(c for n,_,c in h if not is_nontrainable(n))
+mouse_train=sum(c for n,_,c in m if not is_nontrainable(n))
+trunk_h=human_train-human_head
+trunk_m=mouse_train-mouse_head
+print('"'human_head',human_head,'mouse_head',mouse_head,'trunk_h',trunk_h,'trunk_m',trunk_m,'combined',trunk_h+human_head+mouse_head)
+PY"

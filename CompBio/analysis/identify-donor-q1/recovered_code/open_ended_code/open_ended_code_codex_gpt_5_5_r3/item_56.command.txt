@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess, sys, math
+query_vcf='query.panelalleles.vcf.gz'; panel_vcf='panel.chr22.30_35.5M.snps.vcf.gz'
+q={}; qgt={}; regions=[]
+cmd=['bcftools','query','-f','%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT\\t%DP\\t%PL]\\n',query_vcf]
+with subprocess.Popen(cmd,stdout=subprocess.PIPE,text=True) as p:
+    for line in p.stdout:
+        chrom,pos,ref,alt,gt,dp_s,pl_s=line.rstrip().split('\\t')[:7]
+        gt=gt.replace('|','/')
+        if gt=='0/0' or gt.startswith('.') or pl_s=='.': continue
+        dp=int(dp_s) if dp_s"'!='"'.' else 0
+        pls=[int(x) for x in pl_s.split(',')[:3]]
+        s=sorted(pls); gq=s[1]-s[0]
+        if dp<4 or gq<20: continue
+        m=min(pls); q[(chrom,int(pos),ref,alt)]=[min(x-m,200) for x in pls]; qgt[(chrom,int(pos),ref,alt)]=gt; regions.append((chrom,int(pos)))
+    p.wait()
+open('query_nonref_strict.regions','w').write(''.join(f'{c}\\t{p}\\t{p}\\n' for c,p in regions))
+print('strict_sites',len(q),file=sys.stderr)
+samples=subprocess.check_output(['bcftools','query','-l',panel_vcf],text=True).splitlines(); n=len(samples)
+scores=[0]*n; exact=[0]*n; share=[0]*n; sites=[0]*n
+def dose(gt):
+    a=gt.replace('|','/').split(':',1)[0].split('/')
+    if len(a)"'!=2 or '"'.' in a: return None
+    return int(a[0])+int(a[1])
+fmt='%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT]\\n'
+cmd=['bcftools','query','-R','query_nonref_strict.regions','-f',fmt,panel_vcf]
+with subprocess.Popen(cmd,stdout=subprocess.PIPE,text=True) as p:
+    for line in p.stdout:
+        parts=line.rstrip().split('\\t'); key=(parts[0],int(parts[1]),parts[2],parts[3])
+        if key not in q: continue
+        qd=dose(qgt[key])
+        for i,gt in enumerate(parts[4:]):
+            d=dose(gt)
+            if d is None: continue
+            scores[i]+=q[key][d]; sites[i]+=1; exact[i]+=(d==qd); share[i]+=(d>0)
+    p.wait()
+rank=sorted(range(n), key=lambda i:(scores[i]/sites[i], scores[i], -exact[i]))
+for r,i in enumerate(rank[:10],1):
+    print(r,samples[i],round(scores[i]/sites[i],4),scores[i],sites[i],exact[i],share[i])
+PY"

@@ -1,0 +1,87 @@
+/bin/bash -lc "cat > parse_assign.py <<'PY'
+import sys, gzip, re, json, collections, os
+
+# build barcode dict from R1
+r1_path='three.way.barnyard.q2.R1.fq.gz'
+bc={}  # readid -> (barcode, umi)
+with gzip.open(r1_path,'rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        seq=f.readline().rstrip('\\n')
+        plus=f.readline()
+        qual=f.readline()
+        rid=h[1:].split()[0]
+        base=rid
+        if base.endswith('/1'): base=base[:-2]
+        bc[base]=(seq[:16], seq[16:28])
+
+# build transcript->gene from combined fasta (stream)
+print('building gene map', file=sys.stderr)
+gene={}
+with open('combined.cdna.fa','rt') as f:
+    tid=None
+    for line in f:
+        if line.startswith('>'):
+            tid=line[1:].split()[0]
+            m=re.search(r'gene_symbol:(["'^ ]+)'"', line)
+            gene[tid]=m.group(1) if m else ''
+# Note tid already has prefix HUMAN_ etc; store full.
+print('gene map', len(gene), file=sys.stderr)
+
+species_counts=collections.defaultdict(lambda: collections.Counter())
+# also raw species gene read counts aggregated
+species_gene_reads=collections.defaultdict(lambda: collections.Counter())
+# per-barcode per-species gene UMI counts for later maybe
+# We'll aggregate gene reads per species and UMI sets per barcode per species
+umi_sets=collections.defaultdict(lambda: collections.defaultdict(lambda: collections.defaultdict(set))) # species->barcode->gene->set(umi)
+unmapped=0
+mapped=0
+unknown=0
+for line in sys.stdin:
+    if line.startswith('@'): continue
+    parts=line.rstrip('\\n').split('\\t')
+    if len(parts)<10: continue
+    flag=int(parts[1])
+    if flag & 4:
+        unmapped+=1
+        continue
+    qname=parts[0]
+    base=qname
+    if base.endswith('/2'): base=base[:-2]
+    rname=parts[2]
+    species=rname.split('_',1)[0]
+    if species not in ('HUMAN','MOUSE','PIG'):
+        unknown+=1
+        continue
+    tid=rname
+    g=gene.get(tid,'')
+    b=bc.get(base)
+    if b is None:
+        continue
+    barcode, umi=b
+    mapped+=1
+    species_counts[barcode][species]+=1
+    if g:
+        species_gene_reads[species][g]+=1
+        umi_sets[species][barcode][g].add(umi)
+
+print(f'mapped {mapped} unmapped {unmapped} unknown {unknown}', file=sys.stderr)
+# output barcode species assignment based on max mapped read count
+with open('barcode_species.tsv','w') as out:
+    for barcode, cnt in species_counts.items():
+        total=sum(cnt.values())
+        best_species, best_count=cnt.most_common(1)[0]
+        frac=best_count/total if total else 0
+        out.write(f'{barcode}\\t{total}\\t{best_species}\\t{best_count}\\t{frac:.4f}\\t' + '\\t'.join(f'{s}:{cnt.get(s,0)}' for s in ['HUMAN','MOUSE','PIG']) + '\\n')
+# save json for gene counts
+json.dump({s:dict(c) for s,c in species_gene_reads.items()}, open('species_gene_reads.json','w'))
+# save UMI gene counts per species: species->gene->total UMI across cells? We need per cell later. Save gene count per barcode aggregated UMI counts.
+with open('species_barcode_gene_umi.tsv','w') as out:
+    for sp in ['HUMAN','MOUSE','PIG']:
+        d=umi_sets.get(sp,{})
+        for barcode, genes in d.items():
+            for g, umiset in genes.items():
+                out.write(f'{sp}\\t{barcode}\\t{g}\\t{len(umiset)}\\n')
+PY
+python3 parse_assign.py < /dev/null 2>&1 | head"

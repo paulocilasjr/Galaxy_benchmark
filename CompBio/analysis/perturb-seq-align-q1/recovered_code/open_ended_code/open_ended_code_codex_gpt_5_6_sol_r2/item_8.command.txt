@@ -1,0 +1,64 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+r=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+genes=r.var_names.intersection(q.var_names); ri=r.var_names.get_indexer(genes); qi=q.var_names.get_indexer(genes)
+
+def matrices(a, idx):
+ X=a.X[:,idx].tocsr().astype(float); lib=np.asarray(X.sum(1)).ravel(); N=sparse.diags(1e4/np.maximum(lib,1))@X; L=N.copy();L.data=np.log1p(L.data); return X,N,L
+RX,RN,RL=matrices(r,ri); QX,QN,QL=matrices(q,qi)
+rg=[x for x in r.obs.guide.cat.categories if not x.startswith('NT')];qg=[x for x in q.obs.guide.cat.categories if not x.startswith('NT')]
+
+def idx_groups(obs,cats): return [np.flatnonzero((obs.guide==x).to_numpy()) for x in cats],np.flatnonzero(obs.guide.astype(str).str.startswith('NT').to_numpy())
+rig,ric=idx_groups(r.obs,rg);qig,qic=idx_groups(q.obs,qg)
+def means(M,igs,ic):
+ c=np.asarray(M[ic].mean(0)).ravel(); m=np.vstack([np.asarray(M[ii].mean(0)).ravel() for ii in igs]); return m,c
+Rlm,Rlc=means(RL,rig,ric);Qlm,Qlc=means(QL,qig,qic)
+Rnm,Rnc=means(RN,rig,ric);Qnm,Qnc=means(QN,qig,qic)
+# signatures
+sigs={
+ 'meanlog':(Rlm-Rlc,Qlm-Qlc),
+ 'meannorm':(Rnm-Rnc,Qnm-Qnc),
+ 'logFC_norm':(np.log1p(Rnm)-np.log1p(Rnc),np.log1p(Qnm)-np.log1p(Qnc)),
+}
+# variance standardized effects on log normalized
+rv=np.asarray(RL[ric].power(2).mean(0)).ravel()-Rlc**2; qv=np.asarray(QL[qic].power(2).mean(0)).ravel()-Qlc**2
+sigs['controlSD']=((Rlm-Rlc)/np.sqrt(rv+0.1),(Qlm-Qlc)/np.sqrt(qv+0.1))
+req=['PABPC1-I1','NUDT21-I3','LEO1-I2']
+expr=(np.asarray(RN.mean(0)).ravel()>.03)&(np.asarray(QN.mean(0)).ravel()>.03)
+# correlation function each pair using feature masks based all or union top effects
+
+def cor(A,B,mask,center=True):
+ A=A[:,mask].copy();B=B[:,mask].copy()
+ if center:A-=A.mean(1)[:,None];B-=B.mean(1)[:,None]
+ A/=np.maximum(np.linalg.norm(A,axis=1)[:,None],1e-12);B/=np.maximum(np.linalg.norm(B,axis=1)[:,None],1e-12);return A@B.T
+for sn,(A,B) in sigs.items():
+ for center in [True,False]:
+  C=cor(A,B,expr,center)
+  rr,cc=linear_sum_assignment(-C); ass={rg[i]:qg[j] for i,j in zip(rr,cc)}
+  print('\\n',sn,'pearson' if center else 'cosine','H',[(x,ass[x]) for x in req])
+  for x in req:
+   i=rg.index(x); o=np.argsort(-C[i])[:5];print(x,[(qg[j],round(float(C[i,j]),3)) for j in o])
+# Pairwise top union feature correlations, each pair selecting top abs effects in both
+A,B=sigs['meanlog']
+for n in [25,50,100,200,500]:
+ C=np.empty((len(rg),len(qg)))
+ base=np.flatnonzero(expr)
+ for i in range(len(rg)):
+  ar=base[np.argsort(-np.abs(A[i,base]))[:n]]
+  for j in range(len(qg)):
+   bq=base[np.argsort(-np.abs(B[j,base]))[:n]]
+   use=np.union1d(ar,bq); aa=A[i,use];bb=B[j,use]; C[i,j]=np.corrcoef(aa,bb)[0,1]
+ print('\\nunion top',n)
+ for x in req:
+  i=rg.index(x);o=np.argsort(-C[i])[:5];print(x,[(qg[j],round(float(C[i,j]),3)) for j in o])
+# top genes for requested and likely
+A,B=sigs['meanlog']
+for x,y in zip(req,['guide18','guide13','guide14']):
+ i=rg.index(x);j=qg.index(y); score=A[i]*B[j]
+ print('\\nPAIR',x,y,'corr',np.corrcoef(A[i,expr],B[j,expr])[0,1])
+ top=np.flatnonzero(expr)[np.argsort(-score[expr])[:20]]
+ print([(genes[k],round(A[i,k],2),round(B[j,k],2)) for k in top])
+PY"

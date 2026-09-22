@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, urllib.parse, urllib.request, json, numpy as np
+syms='RHO PDE6A PDE6B GNAT1 NRL NR2E3 SAG ROM1 GRK1 OPN1SW OPN1MW OPN1LW ARR3 PDE6C GNAT2 RBPMS SNCG POU4F1 POU4F2 POU4F3 ISL1 THY1 LHX1 ONECUT1 ONECUT2 PROX1 GAD1 GAD2 SLC6A1 GFAP AQP4 SLC1A3 ALDH1L1 SOX9 RLBP1 GLUL KCNJ10 VIM AIF1 C1QA C1QB C1QC TYROBP P2RY12 CX3CR1 TMEM119 CALB2'.split()
+q=' OR '.join('symbol:'+s for s in syms)
+u='https://mygene.info/v3/query?'+urllib.parse.urlencode({'q':q,'species':'human','fields':'symbol,genomic_pos','size':100})
+data=json.load(urllib.request.urlopen(u))
+pos={}
+for h in data.get('hits',[]):
+ p=h.get('genomic_pos',{})
+ if isinstance(p,list): p=p[0]
+ if 'chr' in p: pos[h['symbol']]=p
+names=[]; coords=[]; vals=[]
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ names=f.readline().rstrip().split('\\t')[3:]
+ for line in f:
+  a=line.rstrip().split('\\t'); coords.append((a[0],int(a[1]),int(a[2]))); vals.append([int(x) for x in a[3:]])
+x=np.asarray(vals,dtype=float); lib=x.sum(0); y=x/lib*1e6
+for sym in syms:
+ if sym not in pos: continue
+ p=pos[sym]; chrom='chr'+p['chr']; tss=p['start'] if p.get('strand',1)==1 else p['end']
+ # promoter + gene body with 20kb flanks
+ mask=np.array([(c==chrom and e>=p['start']-20000 and s<=p['end']+20000) for c,s,e in coords])
+ if not mask.any(): continue
+ # sum normalized cpm; max row normalized, top cell
+ sums=y[mask].sum(0); maxs=y[mask].max(0)
+ print(f'{sym:8s} {chrom}:{p[\"start\"]}-{p[\"end\"]} bins={mask.sum():2d} sum='+' '.join(f'{v:6.1f}' for v in sums)+' max='+' '.join(f'{v:5.1f}' for v in maxs))
+PY"

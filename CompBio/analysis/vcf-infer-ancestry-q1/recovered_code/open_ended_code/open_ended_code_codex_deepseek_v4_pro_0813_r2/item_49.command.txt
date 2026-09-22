@@ -1,0 +1,89 @@
+/bin/bash -lc "cat > match_1kg.py <<'PY'
+import gzip, time, numpy as np, sys
+# load query biallelic
+start=time.time()
+query={}
+with gzip.open('vcf.infer.ancestry.q1.vcf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if ',' in p[4]: continue
+        key=(int(p[1]), p[3], p[4])
+        ds=[]
+        ok=True
+        for x in p[9:]:
+            gt=x.split(':')[0]
+            if '.' in gt:
+                ok=False; break
+            a=gt.split('/') if '/' in gt else gt.split('|')
+            ds.append(int(a[0])+int(a[1]))
+        if ok:
+            query[key]=ds
+print('query biallelic', len(query), 'load', time.time()-start, flush=True)
+samples=open('1kg.samples.txt').read().splitlines()
+N=len(samples)
+# arrays sum ibs, count
+sum_ibs=np.zeros((4,N), dtype=np.int64)
+count=np.zeros(N, dtype=np.int32)
+# also exact matches per sample? sum exact
+sum_exact=np.zeros((4,N), dtype=np.int64)
+records=0; matched=0
+with open('1kg_overlap.vcf') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<10: continue
+        records+=1
+        if ',' in p[4]: continue
+        key=(int(p[1]), p[3], p[4])
+        qds=query.get(key)
+        if qds is None: continue
+        matched+=1
+        # parse ref samples
+        ds=np.empty(N, dtype=np.int8)
+        for j in range(N):
+            gt=p[9+j]
+            if gt[0]=='.':
+                ds[j]=-1
+            else:
+                ds[j]=(ord(gt[0])-48)+(ord(gt[2])-48)
+        # compare query
+        for qi,qd in enumerate(qds):
+            # ibs = 2 - abs(qd-ds)
+            ibs=2-np.abs(qd-ds)
+            ibs[ds<0]=0
+            sum_ibs[qi] += ibs.astype(np.int64)
+            # exact unordered geno: qd==ds
+            ex=(ds==qd)
+            ex[ds<0]=False
+            sum_exact[qi] += ex.astype(np.int64)
+            # count valid per sample increment where ds>=0
+            count += (ds>=0).astype(np.int32)
+        if matched % 10000 == 0:
+            print('matched', matched, 'records', records, 'elapsed', time.time()-start, flush=True)
+print('done', records, matched, 'elapsed', time.time()-start, flush=True)
+# save scores
+np.save('1kg_match_ibs.npy', sum_ibs)
+np.save('1kg_match_exact.npy', sum_exact)
+np.save('1kg_match_count.npy', count)
+# top matches per query
+for qi in range(4):
+    valid=count>0
+    avg=sum_ibs[qi,valid]/(2*count[valid])
+    exact=sum_exact[qi,valid]/count[valid]
+    order=np.argsort(-avg, kind='stable')[:20]
+    print('Query Sample', qi+1)
+    for idx in order[:20]:
+        j=valid.nonzero()[0][idx] if False else idx
+        # need original index among valid
+    # easier
+    inds=np.where(valid)[0]
+    vals=avg[inds]
+    ords=np.argsort(-vals, kind='stable')[:20]
+    print(' top avg IBS:')
+    for oi in ords:
+        j=inds[oi]
+        print('  ', samples[j], avg[j], exact[j], 'pop', end=' ')
+    print()
+# Save top all maybe later
+PY
+python3 match_1kg.py"

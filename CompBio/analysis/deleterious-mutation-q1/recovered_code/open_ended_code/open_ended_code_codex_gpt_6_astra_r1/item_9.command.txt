@@ -1,0 +1,40 @@
+/bin/bash -lc "cat > annotate.py <<'PY'
+import gzip,csv,bisect,json
+from collections import defaultdict
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+seq=''.join(x.strip() for x in open('reference/hg38.chr9.fa') if not x.startswith('>')).upper()
+metrics={r['gene']:r for r in csv.DictReader(gzip.open('reference/gnomad.v2.1.1.lof_metrics.by_gene.txt.bgz','rt'),delimiter='\\t')}
+variants=[]
+for line in open('results/variants.vcf'):
+ if line.startswith('#'): continue
+ c=line.strip().split('\\t'); chrom,pos,_,ref,alt,qual,_,info,fmt,sample=c[:10]
+ if len(ref)"'!=1 or len(alt)!=1: continue
+ d=dict(zip(fmt.split('"':'),sample.split(':')))
+ variants.append((int(pos)-1,ref,alt,float(qual),d,info))
+variants.sort(); positions=[v[0] for v in variants]
+hits=[]
+for line in gzip.open('reference/hg38.ncbiRefSeq.txt.gz','rt'):
+ c=line.strip().split('\\t')
+ if c[2]"'!='"'chr9' or not c[1].startswith('NM_'): continue
+ name,_,strand=c[1:4]; cs,ce=int(c[6]),int(c[7]); gene=c[12]
+ if cs==ce: continue
+ exons=[(max(int(a),cs),min(int(b),ce)) for a,b in zip(c[9].strip(',').split(','),c[10].strip(',').split(',')) if int(a)<ce and int(b)>cs]
+ cds=''.join(seq[a:b] for a,b in exons)
+ if strand=='-': cds=rc(cds)
+ offset=0
+ for a,b in exons:
+  for v in variants[bisect.bisect_left(positions,a):bisect.bisect_left(positions,b)]:
+   pos,ref,alt,qual,d,info=v
+   idx=offset+pos-a
+   if strand=='-': idx=len(cds)-1-idx; alt=rc(alt)
+   codon=cds[idx//3*3:idx//3*3+3]
+   mut=codon[:idx%3]+alt+codon[idx%3+1:]
+   if mut in ['TGA','TAA','TAG'] and codon not in ['TGA','TAA','TAG']:
+    m=metrics.get(gene,{})
+    hits.append(dict(gene=gene,transcript=name,pos=pos+1,ref=ref,alt=v[2],qual=qual,format=d,codon=codon,mut=mut,aa=idx//3+1,cds_len=len(cds),pLI=m.get('pLI'),oe_lof_upper=m.get('oe_lof_upper'),info=info))
+  offset+=b-a
+with open('results/stop_gains.json','w') as f: json.dump(hits,f,indent=2)
+for h in hits: print(json.dumps(h))
+print('Total SNVs:',len(variants),'stop gain transcripts:',len(hits),'genes:',len(set(h['gene'] for h in hits)))
+PY"

@@ -1,0 +1,27 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+calls['target']=calls.feature_call.map(dict(zip(ref.id, ref.target_gene_name)))
+bc2col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc2col)
+lib=np.asarray(mat.sum(axis=0)).ravel()
+# ISG15 log cpm
+idx=features.index('ISG15')
+log=np.log2(1 + np.asarray(mat[idx,:].todense()).ravel()*(10000/lib))
+df=pd.DataFrame({'cell':barcodes,'logISG15':log}).merge(calls[['cell_barcode','target','col']], left_on='cell', right_on='cell_barcode')
+nt=df[df.target=='Non-Targeting'].logISG15
+print('NT ISG15 median',nt.median(),'quantiles',nt.quantile([.05,.25,.5,.75]).to_string())
+for t in ['ISG15','STAT1']:
+    s=df[df.target==t].logISG15
+    print(t,'frac below NT median',np.mean(s<nt.median()),'below NT 5%',np.mean(s<nt.quantile(.05)),'minmax',s.min(),s.max())
+PY"

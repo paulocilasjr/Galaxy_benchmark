@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+# Build D sets and show matched Sei assay categories; also classify Borzoi matching source types
+import json,re,gzip,collections
+# ... reuse concise code
+direct=set(); bor_desc={}
+for path in ['[REDACTED LOCAL PATH]','[REDACTED LOCAL PATH]']:
+ f=gzip.open(path,'rt'); f.readline()
+ for line in f:
+  p=line.rstrip('\\n').split('\\t'); ident=re.sub(r'[+-]"'$'"','',p[1]); bor_desc[ident]=p[8]
+  if ident.startswith('GSM'): direct.add(ident)
+files=[json.loads(l) for l in open('data/borzoi_encff_metadata_full.jsonl')]
+exps={g['accession']:g for g in [json.loads(l) for l in open('data/borzoi_experiments_reps_metadata.jsonl')]}
+geo=set(direct); encode=set()
+for r in files:
+ acc=r.get('dataset','').rstrip('/').split('/')[-1]; ex=exps.get(acc); tech=set(r.get('technical_replicates') or [])
+ if not ex: continue
+ for b in r.get('biological_replicates') or []: encode.add(f'{acc}_{b}')
+ if tech:
+  for rep in ex.get('replicates',[]):
+   if f\"{rep.get('biological_replicate_number')}_{rep.get('technical_replicate_number')}\" in tech:
+    for d in (rep.get('library') or {}).get('dbxrefs',[]):
+     if d.startswith('GEO:GSM'): geo.add(d.split(':',1)[1])
+ else:
+  for d in ex.get('dbxrefs',[]):
+   if d.startswith('GEO:GSM'): geo.add(d.split(':',1)[1])
+sei=[json.loads(l) for l in open('data/sei_cistrome_samples.jsonl')]
+seilines={}
+for line in open('[REDACTED LOCAL PATH]'):
+ m=re.search(r'ID:(\\d+)"'$'"',line.rstrip())
+ if m: seilines[int(m.group(1))]=line.rstrip()
+cats=collections.Counter()
+src_cats=collections.Counter()
+for r in sei:
+ ext=r.get('external_id'); typ=r.get('external_id_type')
+ if typ=='GEO' and ext in geo:
+  assay=seilines[r['id']].split(' | ')[1]; cats[assay]+=1
+  if ext in direct: src_cats['direct_GSM']+=1
+  else: src_cats['ENCFF_to_GEO']+=1
+ elif typ=='ENCODE' and ext in encode:
+  assay=seilines[r['id']].split(' | ')[1]; cats[assay]+=1; src_cats['ENCFF_to_ENCODE']+=1
+print('total',sum(cats.values()),'source',src_cats)
+print('assay categories',len(cats))
+print(cats.most_common(30))
+PY"

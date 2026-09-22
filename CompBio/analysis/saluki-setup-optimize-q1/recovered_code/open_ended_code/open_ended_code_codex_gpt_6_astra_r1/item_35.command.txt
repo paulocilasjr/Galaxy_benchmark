@@ -1,0 +1,77 @@
+/bin/bash -lc "cat > optimize.py <<'PY'
+import os
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL','1')
+import csv,json,time,hashlib
+from pathlib import Path
+import numpy as np
+import tensorflow as tf
+from basenji import rnann
+
+SEQ='GCCGCCACCATGGTGAGCAAGGGCGAGTAGTGTACATAATAAGGACT'
+CDS_START=SEQ.index('ATG')
+CDS_END=next(i+3 for i in range(CDS_START,len(SEQ)-2,3) if SEQ[i:i+3] in ('TAA','TAG','TGA'))
+assert CDS_START==9 and CDS_END==30 and len(SEQ)==47
+OUT=Path(os.environ.get('RESULT_DIR','results'));OUT.mkdir(exist_ok=True)
+gpus=tf.config.list_physical_devices('GPU')
+if os.environ.get('FORCE_CPU'):
+ tf.config.set_visible_devices([], 'GPU');gpus=[]
+for gpu in gpus:tf.config.experimental.set_memory_growth(gpu,True)
+tf.config.threading.set_intra_op_parallelism_threads(8)
+tf.config.threading.set_inter_op_parallelism_threads(2)
+print('TensorFlow',tf.__version__,'GPUs',gpus,flush=True)
+params=json.load(open('models/params.json'))
+model=rnann.RnaNN(params['model'])
+paths=[Path(f'models/f{f}_c{c}/train/model0_best.h5') for f in range(10) for c in range(5)]
+assert all(p.exists() for p in paths)
+(OUT/'manifest.json').write_text(json.dumps({'initial':SEQ,'cds_start_0based':CDS_START,'cds_end_exclusive':CDS_END,'gpu':[str(g) for g in gpus],'models':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}},indent=2))
+
+def encode(seqs):
+ x=np.zeros((len(seqs),params['model']['seq_length'],6),dtype=np.float32)
+ for i,s in enumerate(seqs):
+  x[i,np.arange(len(s)),['ACGT'.index(b) for b in s]]=1
+  x[i,CDS_START:CDS_END:3,4]=1
+ return x
+
+@tf.function(input_signature=[tf.TensorSpec([None,12288,6],tf.float32)])
+def predict(x):
+ return model.model(x,training=False)
+
+current=SEQ
+history=[]
+for rnd in range(1,4):
+ start=time.time()
+ candidates=[current]
+ mutations=[(0,'','')]
+ for pos in range(CDS_END,len(current)):
+  for base in 'ACGT':
+   if base"'!=current[pos]:
+    candidates.append(current[:pos]+base+current[pos+1:])
+    mutations.append((pos+1,current[pos],base))
+ assert len(candidates)==52 and len(set(candidates))==52
+ x=encode(candidates)
+ preds=[]
+ for fi,p in enumerate(paths):
+  model.restore(str(p),head_i=0)
+  ys=[]
+  for bi in range(0,len(x),16):
+   y=predict(tf.convert_to_tensor(x[bi:bi+16])).numpy()
+   assert y.shape==(min(16,len(x)-bi),1)
+   ys.extend(y[:,0])
+  preds.append(ys)
+  print('"'round',rnd,'model',fi+1,'elapsed',round(time.time()-start,1),flush=True)
+ preds=np.asarray(preds,dtype=np.float32)
+ np.save(OUT/f'round{rnd}_fold_predictions.npy',preds)
+ # Float64 accumulation preserves precision when averaging the 50 float32 outputs.
+ avg=preds.mean(axis=0,dtype=np.float64)
+ best=int(np.argmax(avg))
+ with (OUT/f'round{rnd}_candidates.csv').open('w') as f:
+  w=csv.writer(f);w.writerow(['sequence','position_1based','from','to','mean_human_prediction']);w.writerows((s,*m,a) for s,m,a in zip(candidates,mutations,avg))
+ current=candidates[best]
+ row={'round':rnd,'sequence':current,'mutation':mutations[best],'prediction':float(avg[best]),'previous_prediction':float(avg[0]),'runner_up':float(np.sort(avg)[-2])}
+ history.append(row)
+ (OUT/'history.json').write_text(json.dumps(history,indent=2))
+ print('WINNER',json.dumps(row),flush=True)
+(OUT/'final_sequence.txt').write_text(current+'\\n')
+assert current[:CDS_END]==SEQ[:CDS_END] and sum(a"'!=b for a,b in zip(current,SEQ))<=3
+print('"'FINAL',current,flush=True)
+PY"

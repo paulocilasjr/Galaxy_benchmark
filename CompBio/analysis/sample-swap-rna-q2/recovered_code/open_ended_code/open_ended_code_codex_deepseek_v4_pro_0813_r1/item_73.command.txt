@@ -1,0 +1,61 @@
+/bin/bash -lc "cat > fetch_old_xrefs.py <<'PY'
+import requests, json, sys, concurrent.futures, time
+from collections import defaultdict
+session=requests.Session()
+adapter=requests.adapters.HTTPAdapter(pool_connections=40,pool_maxsize=40,max_retries=2)
+session.mount('https://',adapter)
+
+def get(gene):
+    url=f'https://rest.ensembl.org/xrefs/id/{gene}?content-type=application/json'
+    for attempt in range(3):
+        try:
+            r=session.get(url,headers={'Content-Type':'application/json'},timeout=30)
+            if r.status_code==200:
+                arr=r.json()
+                # prefer EntrezGene
+                entrez=None
+                for a in arr:
+                    db=a.get('db_display_name','')
+                    if db in ('NCBI gene (formerly Entrezgene)','WikiGene','EntrezGene'):
+                        pid=str(a.get('primary_id') or '')
+                        if pid and (entrez is None or db=='NCBI gene (formerly Entrezgene)' or db=='EntrezGene'):
+                            entrez=pid
+                            if db=='NCBI gene (formerly Entrezgene)' or db=='EntrezGene':
+                                break
+                return gene, entrez
+            elif r.status_code==400:
+                return gene, None
+        except Exception:
+            time.sleep(1+attempt)
+    return gene, None
+
+if __name__=='__main__':
+    genes=[]
+    for l in sys.stdin:
+        g=l.strip()
+        if g and g not in genes:
+            genes.append(g)
+    print('querying',len(genes),file=sys.stderr)
+    out={}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+        futs={ex.submit(get,g):g for g in genes}
+        for i,f in enumerate(concurrent.futures.as_completed(futs),1):
+            g,e=f.result()
+            out[g]=e
+            if i%100==0:
+                print(i,file=sys.stderr,flush=True)
+    json.dump(out,open('old_geneid_map.json','w'),indent=2)
+    print('done',len(out),file=sys.stderr)
+PY
+python3 - <<'PY'
+import openpyxl
+wb=openpyxl.load_workbook('additional_file2.xlsx', read_only=True, data_only=True)
+ws=wb['Table S2']
+seen=[]
+for row in ws.iter_rows(min_row=4, values_only=True):
+    if row and row[1] and row[1] not in seen:
+        seen.append(row[1])
+open('old_marker_ids.txt','w').write('\\n'.join(seen))
+print(len(seen))
+PY
+python3 fetch_old_xrefs.py < old_marker_ids.txt"

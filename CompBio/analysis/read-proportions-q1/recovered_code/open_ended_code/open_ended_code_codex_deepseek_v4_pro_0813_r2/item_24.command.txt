@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, time
+seqs={};name=None
+for line in open('read.proportions.q1.fa'):
+ line=line.strip()
+ if line.startswith('>'): name=line[1:];seqs[name]=''
+ else: seqs[name]+=line.upper()
+order=['chr1','chr2','chr3','chr4']
+windows=[];meta=[]
+for c in order:
+ s=seqs[c]
+ for i in range(len(s)-35): windows.append(s[i:i+36]); meta.append(c)
+comp=str.maketrans('ACGT','TGCA')
+def rc(x): return x.translate(comp)[::-1]
+N=20000; truepi=np.array([0.5,0.2,0.2,0.1]); eps=0.01
+rng=np.random.default_rng(0)
+chr_choices=rng.choice(4,size=N,p=truepi)
+positions=rng.integers(0,2965,size=N)
+seq_list=[seqs[c] for c in order]
+reads=[]
+for c,p in zip(chr_choices,positions):
+    seg=seq_list[c][p:p+36]
+    arr=np.frombuffer(seg.encode(),dtype=np.uint8).copy()
+    err=rng.random(36)<eps
+    if err.any():
+        for i in np.where(err)[0]:
+            choices=np.array([b for b in b'ACGT' if b"'!=arr[i]],dtype=np.uint8)
+            arr[i]=rng.choice(choices)
+    s=arr.tobytes().decode()
+    if rng.random()<0.5: s=rc(s)
+    reads.append(s)
+ref=np.frombuffer('"''.join(windows).encode(),dtype=np.uint8).reshape(len(windows),36)
+ref_rc=np.frombuffer(''.join(rc(w) for w in windows).encode(),dtype=np.uint8).reshape(len(windows),36)
+meta_idx=np.array([order.index(m) for m in meta])
+cnt=np.zeros((N,4,37),dtype=np.int32)
+for start in range(0,N,2000):
+ end=min(N,start+2000); rarr=np.frombuffer(''.join(reads[start:end]).encode(),dtype=np.uint8).reshape(end-start,36)
+ d1=np.count_nonzero(ref[None,:,:]"'!=rarr[:,None,:],axis=2)
+ d2=np.count_nonzero(ref_rc[None,:,:]!=rarr[:,None,:],axis=2)
+ for j in range(end-start):
+  for ci in range(4):
+   mask=meta_idx==ci
+   h=np.bincount(np.concatenate([d1[j,mask],d2[j,mask]]),minlength=37)
+   cnt[start+j,ci]+=h
+print('"'computed')
+K=37; pi=np.ones(4)/4; e=eps
+for it in range(200):
+ P=np.array([(1-e)**(K-1-d)*(e/3)**d for d in range(K)])
+ L=cnt.astype(float)@P
+ ll=np.log(L)+np.log(pi)
+ mx=ll.max(axis=1,keepdims=True);w=np.exp(ll-mx);gamma=w/w.sum(axis=1,keepdims=True)
+ newpi=gamma.mean(axis=0)
+ matches=((cnt.astype(float)*(K-1-np.arange(K))[None,None,:])@P)/L
+ mism=((cnt.astype(float)*np.arange(K)[None,None,:])@P)/L
+ newe=(gamma*mism).sum()/((gamma*matches).sum()+(gamma*mism).sum())
+ if it<5 or it%20==0: print(it,pi*100,e)
+ pi,e=newpi,newe
+print('true',truepi*100,'estimated',pi*100,'eps',e)
+PY"

@@ -1,0 +1,81 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, csv, sys, time, math
+import numpy as np
+import pandas as pd
+ann=pd.read_csv('GSE255742_Amphioxus_21hpf_sc_annotations.tsv.gz',sep='\\t')
+cols_sample=[]
+with gzip.open('sample.swap.rna.q1.tsv.gz','rt') as f:
+    cols_sample=f.readline().rstrip('\\n').split('\\t')[1:]
+print('sample columns', cols_sample)
+
+def collapse(ct):
+    if ct.startswith('epidermal_neural'):
+        return 'epidermal_neural'
+    if ct.startswith('epidermis_'):
+        return 'epidermis'
+    if ct.startswith('neural_like'):
+        return 'neural_like'
+    if ct in cols_sample:
+        return ct
+    return None
+ann['grp']=ann['cell_type'].map(collapse)
+print('group cell counts')
+print(ann.groupby('grp')['cell'].count().reindex(cols_sample).to_string())
+cell_to_grp=dict(zip(ann['cell'],ann['grp']))
+ng=len(cols_sample); grp_index={g:i for i,g in enumerate(cols_sample)}
+# Read UMI table and aggregate by group for all rows
+out_genes=[]; sums=[]; totals=np.zeros(ng,dtype=np.float64)
+with gzip.open('GSE255742_Amphioxus_21hpf_sc_UMI_counts.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    idx=np.array([grp_index[cell_to_grp.get(c)] if cell_to_grp.get(c) in grp_index else -1 for c in header], dtype=np.int16)
+    keep=idx>=0
+    idx_keep=idx[keep]
+    print('cells in groups', keep.sum(), 'of', len(header), flush=True)
+    for n,line in enumerate(f,1):
+        parts=line.rstrip('\\n').split('\\t')
+        gene=parts[0]
+        vals=np.fromiter((int(x) for x in parts[1:]), dtype=np.int32, count=len(header))
+        bc=np.bincount(idx_keep, weights=vals[keep], minlength=ng).astype(np.float64)
+        out_genes.append(gene); sums.append(bc); totals += bc
+        if n % 5000 == 0:
+            print('processed', n, flush=True)
+mat=np.vstack(sums)
+print('genes', mat.shape, 'totals', dict(zip(cols_sample, totals)))
+cpm=mat/totals*1e6
+# read suspect
+sus_genes=[]; sus=[]
+with gzip.open('sample.swap.rna.q1.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')[1:]
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        sus_genes.append(p[0]); sus.append([float(x) for x in p[1:]])
+sus=np.array(sus); print('sus', sus.shape)
+# gene order comparison
+print('gene order equal', out_genes==sus_genes)
+# restrict common
+pos={g:i for i,g in enumerate(out_genes)}
+idx2=[pos[g] for g in sus_genes if g in pos]
+idxs=[i for i,g in enumerate(sus_genes) if g in pos]
+ref=cpm[idx2,:]
+sus2=sus[idxs,:]
+# correlations and max abs diffs by pair
+print('\\nmax abs diff reference group -> suspect col')
+diff=np.zeros((ng,ng))
+for i,g in enumerate(cols_sample):
+    for j,h in enumerate(header):
+        diff[i,j]=np.max(np.abs(ref[:,i]-sus2[:,j]))
+print('header', header)
+for i,g in enumerate(cols_sample):
+    best=diff[i].argmin()
+    print(g, 'best', header[best], 'diff', diff[i,best], 'diag', diff[i,i])
+# Pearson log1p corr ref vs suspect
+A=np.log1p(ref); B=np.log1p(sus2)
+A=(A-A.mean(0))/A.std(0); B=(B-B.mean(0))/B.std(0)
+corr=A.T@B/(A.shape[0]-1)
+print('\\ncorrelation reference group rows -> suspect cols')
+print('       '+' '.join([h[:8].ljust(10) for h in header]))
+for i,g in enumerate(cols_sample):
+    row=' '.join([f'{corr[i,j]:.4f}'.ljust(10) for j in range(ng)])
+    best=corr[i].argmax()
+    print(g.ljust(22), row, 'best', header[best])
+PY"

@@ -1,0 +1,89 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, itertools
+from scipy.optimize import linear_sum_assignment
+# load ref
+ann_raw=pd.read_excel('supp_data_1_6.xlsx',sheet_name='Supplementary Data 4',header=None)
+ann=ann_raw.iloc[:,1:5].copy(); ann.columns=['metacell','cell_type','dev_layer','reclustering']
+ann=ann[pd.to_numeric(ann['metacell'],errors='coerce').notna()].copy(); ann['metacell']=ann['metacell'].astype(int)
+raw=pd.read_excel('source_data.xlsx',sheet_name='Figure 1c',header=None)
+row_gene=raw.index[raw.iloc[:,1].eq('Gene')][0]
+head=raw.iloc[row_gene,1:].tolist()
+expr=raw.iloc[row_gene+1:,1:].dropna(subset=[1]).copy(); expr.columns=head
+expr=expr[expr['Gene'].astype(str).str.startswith('BLAG')].set_index('Gene')
+expr.columns=[int(float(c)) for c in expr.columns]
+expr=expr.astype(float)
+# Collapse fine metacell annotation to task labels
+map_ct={
+ 'endoderm':'endoderm',
+ 'endostyle':'endostyle_csg',
+ 'epidermal neural 1':'epidermal_neural',
+ 'epidermal neural 2':'epidermal_neural',
+ 'anterior epidermis':'epidermis',
+ 'posterior epidermis':'epidermis',
+ 'mesodermal notochord':'mesodermal_notochord',
+ 'muscular somites':'muscular_somites',
+ 'neural':'neural',
+ 'neural like 1':'neural_like',
+ 'neural like 2':'neural_like',
+ 'putative neuro/endo':'putative_neuro_endo',
+ 'somite':'somite',
+ 'tailbud':'tailbud',
+ 'tailbud neural':'tailbud_neural',
+}
+ann2=ann[ann.cell_type.isin(map_ct)].copy(); ann2['label']=ann2.cell_type.map(map_ct)
+ref={}
+for label, sub in ann2.groupby('label'):
+    ref[label]=expr[sub.metacell.tolist()].mean(axis=1)
+ref=pd.DataFrame(ref)
+# load query
+df=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+labels=list(df.columns)
+common=df.index.intersection(ref.index)
+print('common', len(common))
+# try transformations for query/ref
+transforms=[]
+transforms.append(('log1p_vs_logFC', np.log1p(df.loc[common]), np.log2(ref.loc[common]+1e-9)))
+transforms.append(('log1p_vs_FC', np.log1p(df.loc[common]), ref.loc[common]))
+# fold change query within query: divide by gene median/mean
+q=df.loc[common].replace(0, np.nan)
+q_fc_median=df.loc[common].div(df.loc[common].median(axis=1).replace(0,np.nan), axis=0).replace([np.inf,-np.inf],np.nan).fillna(0)
+q_fc_mean=df.loc[common].div(df.loc[common].mean(axis=1).replace(0,np.nan), axis=0).fillna(0)
+transforms.append(('q_logFCmedian_vs_logFC', np.log2(q_fc_median+1e-6), np.log2(ref.loc[common]+1e-6)))
+transforms.append(('q_FCmean_vs_FC', q_fc_mean, ref.loc[common]))
+for name,qmat,rmat in transforms:
+    # select variable genes maybe
+    for subset in ['all','var5000','marker_ref_fc1.5','marker_query_top']:
+        genes=common
+        if subset=='var5000':
+            v=(qmat.var(axis=1)+rmat.var(axis=1)).sort_values(ascending=False)
+            genes=v.head(5000).index
+        elif subset=='marker_ref_fc1.5':
+            mx=ref.loc[common].max(axis=1); med=ref.loc[common].median(axis=1)
+            genes=mx[mx>=1.5].index
+        elif subset=='marker_query_top':
+            # genes with high max/min query FC
+            fc=df.loc[common].div(df.loc[common].mean(axis=1).replace(0,np.nan), axis=0).fillna(0)
+            score=fc.max(axis=1)
+            genes=score.sort_values(ascending=False).head(5000).index
+        C=pd.DataFrame(index=labels, columns=labels, dtype=float)
+        for ql in labels:
+            for rl in labels:
+                a=qmat.loc[genes,ql].astype(float).values
+                b=rmat.loc[genes,rl].astype(float).values
+                mask=np.isfinite(a)&np.isfinite(b)
+                if mask.sum()<10: C.loc[ql,rl]=np.nan
+                else: C.loc[ql,rl]=np.corrcoef(a[mask],b[mask])[0,1]
+        ri,ci=linear_sum_assignment(-C.values)
+        assignment={labels[i]:labels[j] for i,j in zip(ri,ci)}
+        total=C.values[ri,ci].sum()
+        mism=[(q,r,C.loc[q,r]) for q,r in assignment.items() if q"'!=r]
+        print('"'\\n',name, subset, 'n', len(genes), 'assign_total', round(total,3), 'mism', mism)
+        print(C.round(3).to_string())
+        # Evaluate pair swaps: identity total vs all single pair swaps where observed q label maps to ref label? If two labels swapped in data then best assignment has q label -> other ref.
+        ident=sum(C.loc[l,l] for l in labels)
+        best=None
+        for a,b in itertools.combinations(labels,2):
+            score=ident-C.loc[a,a]-C.loc[b,b]+C.loc[a,b]+C.loc[b,a]
+            if best is None or score>best[0]: best=(score,a,b)
+        print('identity',round(ident,3),'best_swap',best[1],best[2],round(best[0],3),'gain',round(best[0]-ident,3))
+PY"

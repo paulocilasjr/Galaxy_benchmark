@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+import scipy.sparse as sp
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering
+D=np.load('pseudobulk_raw.npz', allow_pickle=True)
+sums=D['sums']; cats=D['cats']; totals=D['totals']
+# CPM
+cpm=sums / totals[:,None] * 1e6
+X=np.log1p(cpm)
+means=X.mean(axis=0); vars=X.var(axis=0)
+disp=vars/(means+1e-6)
+idx=np.argsort(disp)[::-1][:3000]
+Xv=X[:,idx]
+Xsc=StandardScaler().fit_transform(Xv)
+pca=PCA(n_components=10, random_state=0)
+Z=pca.fit_transform(Xsc)
+print('pca explained', pca.explained_variance_ratio_)
+print('PC1 top loadings genes:')
+gi=np.argsort(np.abs(pca.components_[0]))[::-1][:20]
+A=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+var_names=np.asarray(A.var_names)
+print([var_names[idx[i]] for i in gi])
+print('scores first')
+print(pd.DataFrame(Z[:,:5], index=cats).to_string())
+km=KMeans(n_clusters=2,n_init=20,random_state=0).fit(Xsc)
+print('kmeans labels')
+print(pd.Series(km.labels_, index=cats).sort_index().to_string())
+agg=AgglomerativeClustering(n_clusters=2).fit(Xsc)
+print('agg labels')
+print(pd.Series(agg.labels_, index=cats).sort_index().to_string())
+PY"

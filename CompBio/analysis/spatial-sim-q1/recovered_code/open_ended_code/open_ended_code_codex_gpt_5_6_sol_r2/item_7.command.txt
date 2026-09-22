@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rb') as f: X=mmread(f).tocsc()
+cts=md.cell_type.unique().tolist()
+R=np.column_stack([sc.loc[md.cell_type==ct].mean(0).values for ct in cts])
+y=X[:,710].toarray().ravel()
+print('types',cts)
+print('spot lib',y.sum(),'sc means libs',R.sum(0))
+for transform in ['raw','sqrt','log']:
+ if transform=='raw': A,b=R,y
+ elif transform=='sqrt': A,b=np.sqrt(R),np.sqrt(y)
+ else: A,b=np.log1p(R),np.log1p(y)
+ coef,res=nnls(A,b)
+ print(transform,'coef',dict(zip(cts,np.round(coef,3))), 'frac',dict(zip(cts,np.round(coef/coef.sum(),3))),'res',res)
+# normalize gene proportions, nnls
+Rn=R/R.sum(0); yn=y/y.sum()
+coef,res=nnls(Rn,yn)
+print('prop nnls',dict(zip(cts,np.round(coef,4))),dict(zip(cts,np.round(coef/coef.sum(),4))),res)
+# correlations overall and marker genes (genes with fold >2)
+for j,ct in enumerate(cts):
+ oth=np.delete(R,j,axis=1).mean(1)
+ fold=(R[:,j]+.1)/(oth+.1)
+ marks=np.argsort(fold)[-50:]
+ print(ct,'corr',np.corrcoef(R[:,j],y)[0,1], 'top50 sums',y[marks].sum(), 'meanfold',fold[marks].mean(), 'genes',marks[-10:].tolist())
+# unconstrained lstsq too
+c=np.linalg.lstsq(R,y,rcond=None)[0]
+print('lstsq',dict(zip(cts,np.round(c,3))))
+PY"

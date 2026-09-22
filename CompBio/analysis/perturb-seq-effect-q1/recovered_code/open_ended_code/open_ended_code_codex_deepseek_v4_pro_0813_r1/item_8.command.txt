@@ -1,0 +1,80 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import stats
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+id2target=dict(zip(ref.id, ref.target_gene_name))
+calls['target']=calls.feature_call.map(id2target)
+bc_to_col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc_to_col)
+
+# total counts per cell
+lib=np.asarray(mat.sum(axis=1)).ravel() if False else np.asarray(mat.sum(axis=0)).ravel()
+# features x cells csr, sum axis=0 -> per cell
+lib=np.asarray(mat.sum(axis=0)).ravel()
+# use CPM/10, log2
+X=mat.astype(np.float64).T.tocsr() # cells x features maybe
+# convert cpm per cell
+cpm=10000
+norm=(X.multiply(1.0/lib[:,None])*cpm).tocsr()
+# Actually X / lib[:,None]*10000, scipy supports?
+# compute manually for pathway genes only easier
+path_genes=features[:20]
+path_idx=[i for i,g in enumerate(features) if g in path_genes]
+# ensure order
+path_idx=[features.index(g) for g in path_genes]
+print('path genes', path_genes)
+print('path_idx', path_idx)
+
+# build dataframe columns cell, target, lib and path log counts
+rows=[]
+# get sparse columns for path genes
+sub=mat[path_idx,:].tocsc()
+gene_arrays=[]
+for gi,g in enumerate(path_genes):
+    gene_arrays.append(np.asarray(sub[gi,:].todense()).ravel())
+gene_arrays=np.array(gene_arrays) # genes x cells
+logvals=np.log2(1 + gene_arrays * (cpm/lib[None,:]))  # broadcasting lib across genes
+# for each cell pathway score mean of logvals (all 20) and excluding target gene later
+score_all=logvals.mean(axis=0)
+df=pd.DataFrame({'cell':barcodes,'lib':lib,'score_all':score_all})
+df=df.merge(calls[['cell_barcode','target','col']], left_on='cell', right_on='cell_barcode')
+# add individual genes
+for gi,g in enumerate(path_genes):
+    df['log_'+g]=logvals[gi,:]
+# summary target
+summary=df.groupby('target').agg(n=('cell','size'), mean_score=('score_all','mean'), median_score=('score_all','median'), mean_lib=('lib','mean'))
+nt=df[df.target=='Non-Targeting']
+print('NT mean score_all', nt.score_all.mean())
+summary['delta_mean_vs_NT']=summary['mean_score']-nt.score_all.mean()
+summary=summary.sort_values('mean_score')
+print(summary.to_string())
+
+# statistical tests per target vs NT for score all, ttest and wilcoxon
+rows=[]
+for t,grp in df.groupby('target'):
+    if t=='Non-Targeting': continue
+    ttest=stats.ttest_ind(grp.score_all, nt.score_all, equal_var=False)
+    # Mann Whitney U
+    u,p_u=stats.mannwhitneyu(grp.score_all, nt.score_all, alternative='two-sided')
+    # effect size Cliff's delta? mean diff / std
+    pooled=((len(grp)-1)*grp.score_all.var()+(len(nt)-1)*nt.score_all.var())/(len(grp)+len(nt)-2)
+    d=(grp.score_all.mean()-nt.score_all.mean())/np.sqrt(pooled)
+    rows.append((t,grp.score_all.mean(),nt.score_all.mean(),grp.score_all.mean()-nt.score_all.mean(),d,p_u,ttest.pvalue))
+res=pd.DataFrame(rows,columns=['target','mean_target','mean_NT','mean_diff','cohens_d','mannwhitney_p','ttest_p'])
+res=res.sort_values('mean_diff')
+print('\\nTests score_all:')
+print(res.to_string(index=False))
+# Top negative
+print('\\nTop negative targets:')
+print(res.head(15).to_string(index=False))
+PY"

@@ -1,0 +1,38 @@
+/bin/bash -lc "cat > score_donors.py <<'PY'
+import pysam,numpy as np,json,collections
+r=json.load(open('region.json'));offset=r['start'];chrom=r['chrom']
+vf=pysam.VariantFile('panel.bcf');samples=list(vf.header.samples)
+print('Panel samples',len(samples),flush=True)
+sites={}
+for v in vf:
+ if len(v.ref)"'!=1 or not v.alts or len(v.alts)!=1 or len(v.alts[0])!=1:continue
+ af=v.info.get('"'AF',None)
+ if af is not None:
+  af=af[0] if isinstance(af,tuple) else af
+  if not 0.02<af<0.98:continue
+ gt=np.fromiter((sum(c['GT']) if None not in c['GT'] else -1 for c in v.samples.values()),dtype=np.int8,count=len(samples))
+ if not .02<gt[gt>=0].mean()/2<.98:continue
+ sites[v.start-offset]=(v.ref,v.alts[0],gt,v.pos)
+print('Informative SNPs',len(sites),flush=True)
+bam=pysam.AlignmentFile('reads.bam','rb');score=np.zeros(len(samples));sq=np.zeros(len(samples));opp=np.zeros(len(samples),dtype=int);ns=0;nr=0;obs=[]
+prob=np.array([0.005,0.5,0.995]);lp=np.log(prob);lq=np.log(1-prob)
+for col in bam.pileup(chrom,min(sites),max(sites)+1,truncate=True,stepper='samtools',min_base_quality=20,min_mapping_quality=30,max_depth=500,ignore_overlaps=True):
+ if col.reference_pos not in sites:continue
+ ref,alt,gt,pos=sites[col.reference_pos]
+ c=collections.Counter(p.alignment.query_sequence[p.query_position].upper() for p in col.pileups if not p.is_del and not p.is_refskip and p.query_position is not None)
+ rc,ac=c[ref],c[alt];depth=rc+ac
+ if depth<3 or depth>30 or depth/sum(c.values())<.9:continue
+ good=gt>=0
+ score[good]+=(rc*lq+ac*lp)[gt[good]]
+ sq[good]+=(ac/depth-gt[good]/2)**2
+ opp[good]+=((gt[good]==0)&(ac>=2)&(rc==0))|((gt[good]==2)&(rc>=2)&(ac==0))
+ ns+=1;nr+=depth;obs.append((pos,ref,alt,rc,ac))
+order=np.argsort(score)[::-1]
+with open('donor_scores.tsv','w') as out:
+ out.write('sample\\tlog_likelihood\\tsquared_error\\topposite_homozygous\\n')
+ for i in order:out.write(f'{samples[i]}\\t{score[i]:.3f}\\t{sq[i]:.3f}\\t{opp[i]}\\n')
+print('Scored SNPs',ns,'observations',nr,flush=True)
+for i in order[:20]:print(samples[i],score[i],sq[i],opp[i],flush=True)
+with open('snp_observations.tsv','w') as out:
+ for x in obs:out.write('\\t'.join(map(str,x))+'\\n')
+PY"

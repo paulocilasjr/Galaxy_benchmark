@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,base64,numpy as np
+chr12_offset=1943767673
+tile_x=1524; res=5000; tile_start=tile_x*256*res
+print('tile local start', tile_start-chr12_offset)
+keys={'H1':'JfVtzAhFSCS-j6tNALioCQ.10.1524.1524','HFF':'3e8b4161-556e-4722-bcef-88265a3436a1.10.1524.1524'}
+j=json.load(open('nanog_tile_z10.json'))
+arrs={}
+for name,k in keys.items():
+    v=j[k]; dt=np.float16 if v['dtype']=='float16' else np.float32
+    arrs[name]=np.frombuffer(base64.b64decode(v['dense']),dtype=dt).astype(float).reshape(256,256)
+
+def pix(coord):
+    return int(round((chr12_offset+coord - tile_start)/res))
+def score(arr, a,b):
+    i,jj=pix(a),pix(b)
+    # since symmetric, try both
+    vals=[]
+    for ii in range(max(0,i-2),min(256,i+3)):
+      for kk in range(max(0,jj-2),min(256,jj+3)):
+        vals.append(arr[ii,kk])
+    spot=max(vals)
+    # local background ring excluding 5x5 within +/-10 pix, same distance? simple median rectangle
+    bg=[]
+    for ii in range(max(0,i-10),min(256,i+11)):
+      for kk in range(max(0,jj-10),min(256,jj+11)):
+        if abs(ii-i)>2 or abs(kk-jj)>2:
+          bg.append(arr[ii,kk])
+    return i,jj,arr[i,jj],spot,float(np.median(bg)),float(np.mean(bg)),float(np.percentile(bg,95))
+
+candidates=[(7140000,7640000),(7220000,7640000),(7220000,7800000),(7640000,8080000),(7680000,7800000),(7720000,7800000),(7800000,7900000),(7460000,7640000),(7500000,7580000)]
+for a,b in candidates:
+    print('\\n',a,b,'pix',pix(a),pix(b))
+    for name,arr in arrs.items():
+        print(name, score(arr,a,b))
+PY"

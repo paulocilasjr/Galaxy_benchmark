@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, glob, os
+from scipy.stats import spearmanr
+cols = ['AIIamacrine','Astrocyte','Cone','GABAamacrine','Horizontal','Microglia','Mullerglia','Retinalganglioncell','Rod']
+df = pd.read_csv('data.tsv', sep='\\t', usecols=cols)
+refs = {}
+for c in cols:
+    if c == 'Rod': continue
+    path = 'Astrocyte_ref_counts.npy' if c=='Astrocyte' else f'{c}_ref_counts.npy'
+    if not os.path.exists(path): path='astro_ref_counts.npy'
+    refs[c] = np.load(path)
+print('Reference totals:')
+for c in refs:
+    print(c, refs[c].sum())
+print('Matrix totals:')
+print(df.sum())
+# Pearson
+print('\\nPearson correlation: reference rows vs matrix columns')
+pear = pd.DataFrame(index=refs.keys(), columns=cols, dtype=float)
+for r in refs:
+    for c in cols:
+        pear.loc[r,c] = np.corrcoef(refs[r], df[c].values)[0,1]
+print(pear.round(5).to_string())
+print('\\nBest matching matrix column for each reference (Pearson):')
+for r in refs:
+    s=pear.loc[r].sort_values(ascending=False)
+    print(f'{r:22s} -> {s.index[0]:22s} {s.iloc[0]:.5f}  (self {pear.loc[r,r]:.5f})  second {s.index[1]} {s.iloc[1]:.5f}')
+# Spearman on nonzero-ish sampled? Full spearman expensive but okay with 295k x 9? Use sample 100k or scipy loop maybe 30s. Let's sample 100k random bins.
+rng=np.random.default_rng(0); idx=rng.choice(len(df),100000,replace=False)
+spear = pd.DataFrame(index=refs.keys(), columns=cols, dtype=float)
+for r in refs:
+    for c in cols:
+        spear.loc[r,c] = spearmanr(refs[r][idx], df[c].values[idx]).correlation
+print('\\nSpearman sample 100k:')
+print(spear.round(5).to_string())
+print('\\nBest Spearman:')
+for r in refs:
+    s=spear.loc[r].sort_values(ascending=False)
+    print(f'{r:22s} -> {s.index[0]:22s} {s.iloc[0]:.5f}  (self {spear.loc[r,r]:.5f})  second {s.index[1]} {s.iloc[1]:.5f}')
+PY"

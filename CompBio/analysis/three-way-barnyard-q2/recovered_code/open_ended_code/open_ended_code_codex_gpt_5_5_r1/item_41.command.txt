@@ -1,0 +1,63 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+# load transcript->gene maps by species
+maps=defaultdict(dict)
+with open('refs/transcript_gene.tsv') as f:
+    next(f)
+    for line in f:
+        sp,tid,gene=line.rstrip('\\n').split('\\t')
+        maps[sp][tid]=gene
+species_files={'human':'human.paf','mouse':'mouse.paf','pig':'pig.paf'}
+best={}  # read -> sp -> (score,nm,alen,gene)
+for sp,fn in species_files.items():
+    with open(fn) as f:
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            q=p[0]; tid=p[5].split()[0]; nm=int(p[9]); alen=int(p[10])
+            if alen < 45 or nm/alen < 0.84: continue
+            score=2*nm-alen
+            gene=maps[sp].get(tid,'')
+            d=best.setdefault(q,{})
+            if sp not in d or score>d[sp][0]:
+                d[sp]=(score,nm,alen,gene)
+# read-level assignment
+gap=10
+read_sp={}
+read_gene={}
+bc_counts=defaultdict(Counter)
+for q,d in best.items():
+    items=sorted(((v[0],sp,v[1],v[2],v[3]) for sp,v in d.items()), reverse=True)
+    top=items[0]; second=items[1][0] if len(items)>1 else -999
+    if top[0]>=second+gap and top[2]>=50:
+        sp=top[1]; read_sp[q]=sp; read_gene[q]=top[4]
+        cb=q.split('|')[1]
+        bc_counts[cb][sp]+=1
+bc_sp={}
+for cb,c in bc_counts.items():
+    tot=sum(c.values()); sp,n=c.most_common(1)[0]
+    if tot>=20 and n/tot>=0.8:
+        bc_sp[cb]=sp
+print('bc species', Counter(bc_sp.values()), len(bc_sp))
+# gene counts: read and UMI
+gene_reads=defaultdict(Counter)
+gene_umis=defaultdict(set)
+gene_cells=defaultdict(lambda: defaultdict(set))
+for q,sp in read_sp.items():
+    parts=q.split('|'); cb=parts[1]; umi=parts[2]
+    if bc_sp.get(cb)"'!=sp: continue
+    gene=read_gene.get(q) or '"''
+    if not gene: continue
+    gene_reads[sp][gene]+=1
+    gene_umis[sp].add((cb,umi,gene))
+    gene_cells[sp][gene].add(cb)
+# convert umi counter
+umi_counts=defaultdict(Counter)
+for sp, s in gene_umis.items():
+    for cb,umi,gene in s:
+        umi_counts[sp][gene]+=1
+for sp in ['human','mouse','pig']:
+    print('\\n===',sp,'=== cells',sum(1 for x in bc_sp.values() if x==sp),'genes',len(umi_counts[sp]))
+    print('top UMI')
+    for g,n in umi_counts[sp].most_common(50):
+        print(g,n,'cells',len(gene_cells[sp][g]))
+PY"

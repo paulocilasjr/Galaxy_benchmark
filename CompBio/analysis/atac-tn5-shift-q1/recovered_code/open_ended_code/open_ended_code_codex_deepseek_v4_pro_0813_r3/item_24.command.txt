@@ -1,0 +1,90 @@
+/bin/bash -lc "cat > analyze_shift.py <<'PY'
+import gzip, py2bit, numpy as np, sys, time, os
+frag='unknown.shift.frag.bed.gz'
+tb=py2bit.open('hg38.2bit')
+valid=set(tb.chroms())
+chromlen=tb.chroms()
+bases='ACGT'
+Amin,Amax=-20,20
+Bmin,Bmax=-20,20
+w=15
+Avals=list(range(Amin,Amax+1))
+Bvals=list(range(Bmin,Bmax+1))
+left_counts=np.zeros((len(Avals),2*w+1,4),dtype=np.float64)
+right_counts=np.zeros((len(Bvals),2*w+1,4),dtype=np.float64)
+# mapping
+base_idx=np.zeros(256,dtype=np.int8); base_idx[:]=-1
+for i,b in enumerate(bases): base_idx[ord(b)]=i
+n=skipped=0
+t=time.time()
+with gzip.open(frag,'rt') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        chrom=parts[0]
+        if chrom not in valid:
+            skipped+=1; continue
+        clen=chromlen[chrom]
+        s=int(parts[1]); e=int(parts[2])
+        ls=s-60; le=s+70  # broad enough for A range -20..20 and window +-15: L min s-16, max s+24 -> window min s-31 max s+39, so 60/70 fine
+        # actually A min -20 L=s+24; max A=20 L=s-16; window max s+39 min s-31. Good.
+        rs=e-70; re=e+60
+        def getseq(chrom, st, en):
+            # returns padded sequence length en-st centered
+            if en<=st: return 'N'*(en-st)
+            qs=max(st,0); qe=min(en,clen)
+            seq=''
+            if qs<qe:
+                seq=tb.sequence(chrom,qs,qe).upper()
+            padleft='N'*(qs-st)
+            padright='N'*(en-qe)
+            return padleft+seq+padright
+        lseq=getseq(chrom,ls,le)
+        rseq=getseq(chrom,rs,re)
+        # vectorized positions for left
+        # left base index in lseq = (L+p)-ls = (s-A+4+p)-ls; ls=s-60 => 64-A+p (for p -w..w)
+        start_idx_l=64-w
+        arr=np.frombuffer(lseq.encode('ascii'),dtype=np.uint8).copy()
+        arr=base_idx[arr]
+        for ia,A in enumerate(Avals):
+            si=start_idx_l-A
+            sub=arr[si:si+2*w+1]
+            # count
+            for p,b in enumerate(sub):
+                if b>=0:
+                    left_counts[ia,p,b]+=1
+        start_idx_r=65-w  # R=e-B-5, rs=e-70 => index=R+p-rs=65-B+p
+        arr=np.frombuffer(rseq.encode('ascii'),dtype=np.uint8).copy()
+        arr=base_idx[arr]
+        for ib,B in enumerate(Bvals):
+            si=start_idx_r-B
+            sub=arr[si:si+2*w+1]
+            for p,b in enumerate(sub):
+                if b>=0:
+                    right_counts[ib,p,b]+=1
+        n+=1
+        if n%20000==0:
+            print('processed',n,'time',time.time()-t, file=sys.stderr)
+print('total',n,'skipped',skipped, file=sys.stderr)
+# score KL vs uniform; also compute entropy
+bg=np.array([0.25]*4)
+def scorekl(counts):
+    totals=counts.sum(axis=2,keepdims=True)
+    freq=counts/np.maximum(totals,1e-12)
+    return (freq*np.log((freq+1e-12)/(bg+1e-12))).sum(axis=2).sum(axis=1)
+def score_ent(counts):
+    totals=counts.sum(axis=2,keepdims=True)
+    freq=counts/np.maximum(totals,1e-12)
+    ent=-(freq*np.log2(freq+1e-12)).sum(axis=2)
+    return ent.sum(axis=1) # lower more biased
+print('LEFT KL')
+for A,sc in zip(Avals,scorekl(left_counts)): print(f'{A}\\t{sc:.4f}')
+print('LEFT ENT')
+for A,sc in zip(Avals,score_ent(left_counts)): print(f'{A}\\t{sc:.4f}')
+print('RIGHT KL')
+for B,sc in zip(Bvals,scorekl(right_counts)): print(f'{B}\\t{sc:.4f}')
+print('RIGHT ENT')
+for B,sc in zip(Bvals,score_ent(right_counts)): print(f'{B}\\t{sc:.4f}')
+np.savez('shift_counts.npz', Avals=Avals,Bvals=Bvals,left_counts=left_counts,right_counts=right_counts)
+tb.close()
+PY
+python analyze_shift.py > shift_scores.txt"

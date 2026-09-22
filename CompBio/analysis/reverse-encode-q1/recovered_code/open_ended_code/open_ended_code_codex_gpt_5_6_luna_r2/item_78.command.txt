@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip,random,pyBigWig,math,statistics,time
+# target raw integer counts
+N=76275859; rows=[]
+with gzip.open('reverse.encode.q1.tsv.gz','rt') as f:
+ for l in f:
+  c,s,e,v=l.rstrip().split('\\t'); rows.append((c,int(s),float(v),int(float(v)*N/1e6+0.5)))
+# choose diverse high-signal bins and nonzero random bins
+byc={}
+for i,(c,s,v,k) in enumerate(rows): byc.setdefault(c,[]).append(i)
+rng=random.Random(20260809)
+sel=[]
+for c,ix in byc.items():
+ hi=sorted(ix,key=lambda i:rows[i][3],reverse=True)[:4]
+ nz=[i for i in ix if rows[i][3]>0]
+ sel += hi + rng.sample(nz,min(2,len(nz)))
+# include global high bins, cap
+sel=sorted(set(sel),key=lambda i:rows[i][3],reverse=True)[:70]
+# add deterministic random nonzero, ensuring total 100
+nz=[i for i,x in enumerate(rows) if x[3]>0]
+sel += rng.sample(nz,30)
+sel=sorted(set(sel))
+print('selected',len(sel),'max',max(rows[i][3] for i in sel),flush=True)
+urls={}
+for l in open('encode_v3_grch38_normalized.tsv'):
+ x=l.rstrip().split('\\t'); urls.setdefault(x[0],[]).append(x[5])
+exps=['ENCSR000EPK','ENCSR000EQL','ENCSR420HOT','ENCSR385AMY','ENCSR597URK','ENCSR531UVE','ENCSR296TFH','ENCSR058ELM']
+for exp in exps:
+ vals=[0.0]*len(sel); t=time.time()
+ for u in urls.get(exp,[]):
+  b=pyBigWig.open(u)
+  for j,i in enumerate(sel):
+   c,s,v,k=rows[i]; q=b.stats(c,s,min(s+10000,b.chroms()[c]),nBins=1,exact=True)[0]
+   vals[j]+=(q or 0)*10000
+  b.close()
+ ys=[rows[i][3] for i in sel]; xs=vals
+ mx=sum(xs)/len(xs);my=sum(ys)/len(ys); den=(sum((x-mx)**2 for x in xs)*sum((y-my)**2 for y in ys))**.5
+ cor=sum((x-mx)*(y-my) for x,y in zip(xs,ys))/den if den else 0
+ # least squares scale, relative residual
+ scale=sum(x*y for x,y in zip(xs,ys))/sum(x*x for x in xs) if sum(x*x for x in xs) else 0
+ rmse=(sum((scale*x-y)**2 for x,y in zip(xs,ys))/len(xs))**.5
+ print(exp,'files',len(urls.get(exp,[])),'corr',round(cor,6),'scale',round(scale,4),'rmse',round(rmse,2),'time',round(time.time()-t,1),flush=True)
+PY"

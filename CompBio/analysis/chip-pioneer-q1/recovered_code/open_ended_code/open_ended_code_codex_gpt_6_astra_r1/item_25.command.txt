@@ -1,0 +1,39 @@
+/bin/bash -lc "cat > analysis/summarize_bins.py <<'PY'
+import numpy as np,glob,gzip,os,time
+from scipy.ndimage import uniform_filter1d
+sizes=[];offsets={};N=0
+for l in open('analysis/canonical.chrom.sizes'):
+ c,s=l.split();s=int(s);n=(s+499)//500;offsets[c]=(N,n);sizes.append((c,s));N+=n
+mask=np.zeros(N,dtype=bool);black=np.zeros(N,dtype=bool)
+for path,out in [('analysis/hotspots2018.bed',mask),('downloads/hg38-blacklist.v2.bed.gz',black)]:
+ op=gzip.open(path,'rt') if path.endswith('.gz') else open(path)
+ for l in op:
+  z=l.split();c=z[0]
+  if c not in offsets:continue
+  s,e=map(int,z[1:3]);off,n=offsets[c];out[off+s//500:off+(e-1)//500+1]=True
+ op.close()
+rows=[]
+for i in range(1,7):
+ tf=f'TF{i}';paths=glob.glob(f'analysis/bins/{tf}.*.uint32')
+ expected=4 if i<=4 else 3
+ while len(paths)"'!=expected or any(os.path.getsize(p)!=N*4 for p in paths):time.sleep(5);paths=glob.glob(f'"'analysis/bins/{tf}.*.uint32')
+ r1=np.fromfile(f'analysis/bins/{tf}.rep1.uint32',dtype=np.uint32).astype(float)
+ r2=np.fromfile(f'analysis/bins/{tf}.rep2.uint32',dtype=np.uint32).astype(float)
+ c=sum(np.fromfile(p,dtype=np.uint32).astype(float) for p in paths if 'control' in p)
+ t=r1+r2;ratio=t.sum()/c.sum();bg=np.maximum(c*ratio,t.mean())
+ for chrom,size in sizes:
+  off,n=offsets[chrom];seg=c[off:off+n]
+  for width in [21,201]:bg[off:off+n]=np.maximum(bg[off:off+n],uniform_filter1d(seg,size=width,mode='nearest')*ratio)
+ score=t*np.log(np.maximum(t,1)/np.maximum(bg,.0001))-t+bg
+ score[(t<=bg)|black|(r1<3)|(r2<3)]=-1
+ for k in [1000,5000,10000]:
+  idx=np.argpartition(score,-k)[-k:];closed=~mask[idx]
+  rows.append([tf,k,closed.mean(),(t[idx][closed]-bg[idx][closed]).sum()/(t[idx]-bg[idx]).sum(),np.median(score[idx])])
+ keep=(score>=15)&(t>=3*bg)
+ rows.append([tf,int(keep.sum()),float((~mask[keep]).mean()),float((t[keep&~mask]-bg[keep&~mask]).sum()/(t[keep]-bg[keep]).sum()),float(np.median(score[keep]))])
+ print(tf,rows[-4:],flush=True)
+with open('analysis/bin_summary.tsv','w') as out:
+ out.write('TF\\tn_bins\\tclosed_fraction\\tclosed_net_signal_share\\tmedian_poisson_deviance\\n')
+ for r in rows:out.write('\\t'.join(map(str,r))+'\\n')
+PY
+python3 analysis/summarize_bins.py > analysis/summarize_bins.log 2>&1"

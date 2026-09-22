@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+
+def load(f):
+    with h5py.File(f,'r') as h:
+        X=sp.csr_matrix((h['X/data'][:], h['X/indices'][:], h['X/indptr'][:]), shape=(len(h['var/_index']), len(h['obs/_index']))).T.tocsr()
+        guides=h['obs/guide/categories'][:].astype(str)
+        codes=h['obs/guide/codes'][:]
+        genes=h['var/_index'][:].astype(str)
+        targets=h['obs/target_gene/categories'][:].astype(str) if 'obs/target_gene/categories' in h else None
+        tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+    return X, guides, codes, genes, targets, tcodes
+Xr,gr,cr,genes,tr,tcr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,genes2,tq,tcq=load('perturb.seq.align.q1.query.h5ad')
+print('genes same',np.array_equal(genes,genes2))
+# target genes positions
+for target in ['PABPC1','NUDT21','LEO1']:
+ print(target, np.where(genes==target)[0])
+
+def norm_log(X):
+    sums=np.asarray(X.sum(1)).ravel().astype(float); sums[sums==0]=1
+    return np.log1p(X.multiply(1/sums[:,None]*1e6).tocsr())
+Lr=norm_log(Xr).toarray(); Lq=norm_log(Xq).toarray()
+# per guide means
+ur=np.array([Lr[cr==i].mean(0) for i in range(len(gr))])
+uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntr=np.where(np.char.startswith(gr,'NT-'))[0]; ntq=np.where(np.char.startswith(gq,'NT-'))[0]
+ref_ctrl=ur[ntr].mean(0); q_ctrl=uq[ntq].mean(0)
+# log fold difference of means
+Er=ur-ref_ctrl; Eq=uq-q_ctrl
+# print desired genes expression differences across query guides sorted
+for target in ['PABPC1','NUDT21','LEO1']:
+    gi=np.where(genes==target)[0][0]
+    vals=Eq[:,gi]
+    order=np.argsort(vals)
+    print('\\n',target,'query guides sorted by effect:')
+    for idx in order[:15]:
+        print(f'{gq[idx]:10s} {vals[idx]:.3f}')
+    print('ref target guides effect:')
+    for idx in np.where(tr==target)[0] if tr is not None else []:
+        print(gr[idx], Er[idx,gi])
+    # also ref guides sorted
+    pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')]
+    o=np.argsort(Er[pr,gi])
+    print('ref all perturb sorted bottom:')
+    for idx in o[:10]: print(gr[pr[idx]],Er[pr[idx],gi])
+PY"

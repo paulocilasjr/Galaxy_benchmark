@@ -1,0 +1,54 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,pandas as pd,scipy.sparse as sp,time
+p='covid.patients.q1.h5ad'
+with h5py.File(p,'r') as f:
+ cats=f['obs/donor_id/categories'].asstr()[:]; codes=f['obs/donor_id/codes'][:]
+ n=f['X/indptr'].shape[0]-1; g=f['var/_index'].shape[0]
+ names=f['var/feature_name/categories'].asstr()[:][f['var/feature_name/codes'][:]]
+ idx={}
+ for i,x in enumerate(names): idx.setdefault(x,i)
+ sets={
+ 'ISG':['ISG15','IFIT1','IFIT2','IFIT3','IFITM1','IFITM2','IFITM3','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI6','IFI27','IFI44','IFI44L','IRF7','RSAD2','BST2','LY6E','ISG20','USP18','DDX58','HERC5','XAF1','PARP9','SAMD9L','EPSTI1'],
+ 'Inflam':['S100A8','S100A9','IL1B','TNF','CCL2','CCL3','CCL4','CXCL10','NFKBIA','JUN','FOS','TNFAIP3','B2M','HLA-DRA'],
+ 'T':['CD3D','CD3E','TRBC1','TRBC2','IL7R','CCR7','LTB','MALAT1'],
+ 'NK':['NKG7','GNLY','PRF1','GZMB','KLRD1','FCGR3A'],
+ 'B':['MS4A1','CD79A','CD37','CD74','HLA-DRA','CD79B','CD22','CD83'],
+ 'Mono':['LST1','FCER1G','CTSS','TYMP','LILRB1','CTSD','FCGR3A','S100A8','S100A9','LGALS3'],
+ 'Platelet':['PPBP','PF4','GNG11','RGS18'],
+ }
+ sidx={k:[idx[x] for x in v if x in idx] for k,v in sets.items()}
+ print('genes per set', {k:len(v) for k,v in sidx.items()})
+ ip=f['X/indptr'][:]; data=f['X/data']; inds=f['X/indices']
+ scores={k:np.zeros(n,dtype=np.float32) for k in sidx}
+ # also categorical calls from scores later; keep selected log expression scores
+ lib=np.zeros(n,dtype=np.float32)
+ t=time.time(); block=3000
+ for jj,r0 in enumerate(range(0,n,block)):
+  r1=min(n,r0+block); a=ip[r0:r1+1]; s,e=int(a[0]),int(a[-1])
+  mat=sp.csr_matrix((data[s:e],inds[s:e],a-s),shape=(r1-r0,g))
+  l=np.asarray(mat.sum(axis=1)).ravel().astype(np.float32); lib[r0:r1]=l
+  # selected all indices, then normalized/log
+  union=sorted(set(i for v in sidx.values() for i in v))
+  sub=mat[:,union].toarray().astype(np.float32)
+  sub=np.log1p(sub/(l[:,None]/1e4))
+  pos={x:j for j,x in enumerate(union)}
+  for k,v in sidx.items(): scores[k][r0:r1]=sub[:,[pos[x] for x in v]].mean(axis=1)
+  if jj%20==0: print('block',jj,'sec',round(time.time()-t,1),flush=True)
+ print('scoring sec',round(time.time()-t,2),flush=True)
+ # donor summary
+ rows=[]
+ for di,d in enumerate(cats):
+  m=codes==di
+  row={'donor':d,'n':int(m.sum()),'lib_med':np.median(lib[m])}
+  for k,v in scores.items():
+   x=v[m]
+   row[k+'_mean']=x.mean(); row[k+'_med']=np.median(x); row[k+'_p90']=np.percentile(x,90); row[k+'_frac>0.2']=(x>0.2).mean(); row[k+'_frac>0.5']=(x>0.5).mean()
+  rows.append(row)
+out=pd.DataFrame(rows)
+pd.set_option('display.max_columns',100); pd.set_option('display.width',300)
+print(out.to_string(index=False,float_format=lambda x:f'{x:.3f}'),flush=True)
+# ranks of key scores
+for k in ['ISG','Inflam','T','Mono','NK','B']:
+ print('\\nRANK',k)
+ print(out.sort_values(k+'_mean',ascending=False)[['donor','n',k+'_mean',k+'_med',k+'_p90',k+'_frac>0.2',k+'_frac>0.5']].to_string(index=False,float_format=lambda x:f'{x:.3f}'))
+PY"

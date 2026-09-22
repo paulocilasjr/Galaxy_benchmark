@@ -1,0 +1,56 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy.sparse import csc_matrix
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ next(f); syms=[line.rstrip('\\n').split('\\t')[1] for line in f]
+idx={s:i for i,s in enumerate(syms)}
+Ms=[]
+for fn in ['differential.composition.q1.1.mtx.gz','differential.composition.q1.2.mtx.gz']:
+ with gzip.open(fn,'rb') as f: Ms.append(csc_matrix(mmread(f)))
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','KCNJ10','CLDN11','AGT'],
+'microglial cell':['AIF1','C1QA','C1QB','C1QC','P2RY12','TMEM119','CX3CR1','LST1','TYROBP','FCER1G','CSF1R'],
+'RPE cell':['RPE65','BEST1','PMEL','TYR','MITF','RDH5','SERPINA3','DCT','MERTK'],
+'cone cell':['ARR3','GNGT2','OPN1SW','OPN1MW','OPN1LW','PDE6H','GUCA1C','CNGB3','GNAT2','RXRG'],
+'rod cell':['RHO','GNAT1','PDE6A','PDE6B','SAG','GNGT1','NR2E3','ROM1','CNGA1','RBP3'],
+'horizontal cell':['LHX1','LHX2','ONECUT1','ONECUT2','CALB1','PROX1','VSX1','SLC32A1','GAD1','GAD2'],
+'bipolar cell':['VSX2','GRM6','CABP5','PCP4','PRKCA','TRPM1','GRIK1','VSX1','CALB2','GPR149'],
+'RGC':['RBPMS','SNCG','POU4F1','POU4F2','NEFL','NEFM','ISL1','THY1','GAP43','SLC17A6'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','CD2','IL7R','CCL5','NKG7','CD247'],
+'macrophage':['CD68','LILRB1','CTSD','CTSB','MSR1','FCGR3A','LYZ','SPP1','APOC1','CD14'],
+'Schwann cell':['S100B','SOX10','MPZ','PLP1','MBP','MAG','PMP22','GFAP','CLDN19'],
+'Pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ABCC9','KCNJ8','COL4A1','COL4A2','NOTCH3','ACTA2'],
+'B cell':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD22','CD19','CD83'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','C7','CTHRC1','PDGFRA','COL5A1'],
+'endothelial cell':['EMCN','KDR','ESAM','PECAM1','CDH5','VWF','ENG','RAMP2','PLVAP','CLDN5'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','RAX','SOX9','KCNJ10','AQP4','VIM','CLU','SLC6A11']}
+# compute normalized log per marker for each sample
+all_scores=[]
+for k,M in enumerate(Ms,1):
+ lib=np.asarray(M.sum(axis=0)).ravel()
+ print('sample',k,'lib',lib.mean())
+ scores=[]
+ for typ,ms in markers.items():
+  inds=[idx[m] for m in ms if m in idx]
+  Y=np.asarray(M[inds,:].todense(),dtype=float)
+  Y=np.log1p(Y*1e4/lib[None,:])
+  # average raw log marker expression; and mean z-score per gene to make comparable
+  raw=Y.mean(axis=0)
+  z=(Y-Y.mean(axis=1,keepdims=True))/(Y.std(axis=1,keepdims=True)+1e-9)
+  zs=z.mean(axis=0)
+  scores.append(raw)
+  print(typ,'raw mean q50/q90/q99',np.percentile(raw,[50,90,99]),'z q50/q90/q99',np.percentile(zs,[50,90,99]))
+ all_scores.append(np.array(scores))
+# classify by raw and z
+for mode in ['raw','z']:
+ print('\\nMODE',mode)
+ for k,S in enumerate(all_scores,1):
+  # need z not saved; recompute from raw? all_scores raw currently. Use raw scores per type normalized within type across cells z
+  if mode=='raw': A=S
+  else: A=(S-S.mean(axis=1,keepdims=True))/(S.std(axis=1,keepdims=True)+1e-9)
+  best=A.argmax(axis=0)
+  print('sample',k)
+  for i,t in enumerate(markers): print(t,int((best==i).sum()),end='; ')
+  print()
+PY"

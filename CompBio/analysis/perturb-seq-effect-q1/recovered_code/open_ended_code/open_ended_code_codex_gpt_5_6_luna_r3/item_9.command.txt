@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv,collections, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+# load labels
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t'); features.append(p[0])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[x.strip() for x in f]
+M=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr()
+print('shape',M.shape,'nnz',M.nnz,'dtype',M.dtype)
+rows=list(csv.DictReader(open('protospacer_calls_per_cell.csv')))
+by={r['cell_barcode']:r['feature_call'] for r in rows}
+labels=np.array([by[b] for b in barcodes])
+print('barcodes labels missing',sum(x not in by for x in barcodes), 'groups',len(set(labels)))
+ref=list(csv.DictReader(open('feature_reference.csv')))
+refd={r['id']:r for r in ref}
+# group stats raw means, library sizes
+for g in sorted(set(labels), key=lambda x:int(x.split('_')[1])):
+    ix=np.where(labels==g)[0]
+    print(g,refd[g]['target_gene_name'],len(ix),'lib',round(M[:,ix].sum()/len(ix),1),'det',round((M[:,ix].getnnz(axis=0)).mean(),1))
+# target genes of interest expression and group means normalized to 10k
+names=['IFNG','STAT1','ISG15','IFIT1','IFIT2','IFIT3','MX1','MX2','OAS1','OAS2','OAS3','CXCL10','CXCL11','IRF1','JAK1','JAK2','SOCS1','GBP1','GBP2','GBP5','TAP1','HLA-DRA','HLA-B','B2M','GAPDH','MKI67']
+idx={x:i for i,x in enumerate(features)}
+print('selected genes present',[(n,idx.get(n)) for n in names])
+# normalized matrix; group mean normalized counts
+lib=np.asarray(M.sum(axis=0)).ravel(); X=M.multiply(1e4/lib)
+order=sorted(set(labels),key=lambda x:int(x.split('_')[1]))
+print('gene means norm10k by group')
+print('gene\\t'+'\\t'.join(refd[g]['target_gene_name'] for g in order))
+for n in names:
+    if n in idx:
+      vals=[]
+      for g in order:
+        ix=np.where(labels==g)[0]; vals.append(np.mean(X[idx[n],ix].toarray()))
+      print(n+'\\t'+'\\t'.join(f'{v:.2f}' for v in vals))
+PY"

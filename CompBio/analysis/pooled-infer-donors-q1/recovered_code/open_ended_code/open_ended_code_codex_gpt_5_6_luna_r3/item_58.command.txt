@@ -1,0 +1,21 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+A=np.load('cell_site_counts.npz')['counts']; D=A.sum(2); ALT=A[:,:,1]; S,C,_=A.shape
+p=ALT.sum(1)/np.maximum(D.sum(1),1)
+g=(D.sum(1)>=20)&(ALT.sum(1)>=5)&(A[:,:,0].sum(1)>=5); ix=np.where(g)[0]
+rows=[]; cols=[]; vals=[]
+for j,i in enumerate(ix):
+ m=D[i]>0; v=(ALT[i]/np.maximum(D[i],1)-p[i])*np.sqrt(np.minimum(D[i],8)/8)
+ for c in np.where(m)[0]: rows.append(c);cols.append(j);vals.append(v[c])
+X=sparse.csr_matrix((vals,(rows,cols)),shape=(C,len(ix)),dtype=np.float32)
+E=TruncatedSVD(20,random_state=7).fit_transform(X); L=KMeans(2,n_init=20,random_state=7).fit_predict(E)
+# rank differences based on alt fraction with depth weights and per-cell mean
+for i in np.argsort([abs(np.nanmean(np.where(D[s,L==0]>0,ALT[s,L==0]/D[s,L==0],np.nan))-np.nanmean(np.where(D[s,L==1]>0,ALT[s,L==1]/D[s,L==1],np.nan))) for s in range(S)])[-30:][::-1]:
+ x=[]
+ for k in [0,1]:
+  m=D[i,L==k]; a=ALT[i,L==k]; ok=m>0; x.append((ok.sum(),m[ok].sum(),a[ok].sum(),round(a[ok].sum()/m[ok].sum(),3) if m[ok].sum() else 0))
+ print(i,open('validated_candidates.tsv').read().splitlines()[i],x)
+PY"

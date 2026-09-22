@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+sam='aln.primary.sam'
+pairs=defaultdict(list)
+for line in open(sam):
+    if line.startswith('@'): continue
+    f=line.rstrip('\\n').split('\\t')
+    q,flag,rname,pos,mapq,cigar=f[:6]
+    flag=int(flag); mapq=int(mapq)
+    if flag & 4: continue
+    parts=rname.split('|')
+    gene=parts[5] if len(parts)>5 else rname
+    # primary only file but skip secondary/supp just in case
+    if flag & 0x900: continue
+    mate=1 if flag & 64 else 2 if flag & 128 else 0
+    # get NM AS
+    tags={x[:2]:x[5:] for x in f[11:] if len(x)>5 and x[2:5] in (':i:',':f:',':A:')}
+    pairs[q].append((mate,gene,rname,int(pos),mapq,cigar,tags.get('NM'),tags.get('AS'),flag))
+
+diff=Counter(); same=Counter(); incomplete=0; ambiguous=0; examples={}
+for q,alns in pairs.items():
+    # choose one per mate, minimap primary maybe exactly one each
+    m={}
+    for a in alns:
+        m.setdefault(a[0],[]).append(a)
+    if 1 not in m or 2 not in m:
+        incomplete+=1; continue
+    g1=m[1][0][1]; g2=m[2][0][1]
+    if g1==g2:
+        same[g1]+=1
+    else:
+        key=(g1,g2)
+        diff[key]+=1
+        examples.setdefault(key,(q,m[1][0],m[2][0]))
+print('pairs with alignments',len(pairs),'incomplete',incomplete)
+print('top diff')
+for (g1,g2),c in diff.most_common(30):
+    print(c,g1,g2,examples[(g1,g2)])
+print('top same')
+for g,c in same.most_common(10): print(c,g)
+PY"

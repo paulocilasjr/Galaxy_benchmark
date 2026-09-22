@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+import gzip, collections, math, time
+trans=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(trans)[::-1]
+# parse fasta
+seqs=[]; name=None; chunks=[]
+for line in Path('read.proportions.q1.fa').read_text().splitlines():
+    if line.startswith('>'):
+        if name: seqs.append((name,''.join(chunks)))
+        name=line[1:].split()[0]; chunks=[]
+    else: chunks.append(line.strip())
+if name: seqs.append((name,''.join(chunks)))
+L=36
+# 4 segments of 9 -> any <=3 mism alignment has one exact segment
+seg_starts=[0,9,18,27]; seg_len=9
+windows=[]
+index=[collections.defaultdict(list) for _ in seg_starts]
+for ci,(n,s) in enumerate(seqs):
+    for orient,ss in [('+',s),('-',rc(s))]:
+        # rc(s) windows represent reverse-complemented genomic read strings; coordinates not needed
+        for pos in range(len(ss)-L+1):
+            w=ss[pos:pos+L]
+            wid=len(windows)
+            windows.append((ci,w))
+            for j,st in enumerate(seg_starts):
+                index[j][w[st:st+seg_len]].append(wid)
+print('windows',len(windows))
+reads=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        r=f.readline().strip(); f.readline(); f.readline()
+        reads.append(r)
+print('reads',len(reads))
+mincnt=collections.Counter(); minbychr=collections.Counter(); no=0
+best_counts=[collections.Counter() for _ in range(4)]
+per_read=[]
+t0=time.time()
+for r in reads:
+    cands=set()
+    for j,st in enumerate(seg_starts):
+        cands.update(index[j].get(r[st:st+seg_len],()))
+    # if no candidates rare, skip for now
+    best=[99]*4
+    nby=[[0]*8 for _ in range(4)]
+    for wid in cands:
+        ci,w=windows[wid]
+        # hamming, no early maybe 36 only
+        m=sum(a"'!=b for a,b in zip(r,w))
+        if m<8:
+            nby[ci][m]+=1
+        if m<best[ci]: best[ci]=m
+    bm=min(best)
+    mincnt[bm]+=1
+    if bm==99: no+=1
+    for ci,b in enumerate(best):
+        if b<99: best_counts[ci][b]+=1
+    per_read.append(nby)
+print('"'elapsed',time.time()-t0)
+print('global best mismatch counts', mincnt)
+print('no candidates',no)
+for ci,c in enumerate(best_counts): print('chr',ci+1,c)
+# Save compact mismatch-count likelihood features for later? not writing now.
+PY"

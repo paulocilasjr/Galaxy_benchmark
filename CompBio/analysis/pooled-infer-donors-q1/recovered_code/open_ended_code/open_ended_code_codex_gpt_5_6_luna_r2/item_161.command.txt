@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from scipy.io import mmread
+AD=mmread('cellSNP_common_20/cellSNP.tag.AD.mtx').tocsr();DP=mmread('cellSNP_common_20/cellSNP.tag.DP.mtx').tocsr();
+def gt(path):
+ G=[]
+ with gzip.open(path,'rt') as fh:
+  for l in fh:
+   if l.startswith('#'):continue
+   a=[]
+   for x in l.rstrip().split('\\t')[9:]:
+    g=x.split(':')[0];a.append(0 if g in ('0/0','0|0') else 1 if g in ('1/1','1|1') else .5)
+   G.append(a)
+ return np.array(G)
+for seed in [20260809,17,27]:
+ test=np.load(f'cv_common20_sets_s{seed}.npz')['test'];ad=AD[:,test].toarray();dp=DP[:,test].toarray();reads=dp.sum(0);ok=reads>=20
+ print('\\nseed',seed,'test',len(test),'usable',ok.sum(),'reads',int(reads[ok].sum()))
+ for n in range(2,8):
+  G=gt(f'cv_common20_s{seed}_N{n}/GT_donors.vireo.vcf.gz'); vals=[]
+  for e in [.01,.03,.05,.1]:
+   ll=np.zeros((len(test),n))
+   for g in range(n):
+    p=e+(1-2*e)*G[:,g];q=dp>0;ll[:,g]=np.sum(ad*q*np.log(p[:,None])+(dp-ad)*q*np.log1p(-p[:,None]),0)
+   b=ll.max(1); vals.append(round(b[ok].sum()/reads[ok].sum(),5))
+  print(n,vals)
+PY"

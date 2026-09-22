@@ -1,0 +1,38 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+D=pd.read_csv('single_cell_dynamics_question.csv')
+v=D[['enh_x','enh_y','enh_z']].to_numpy()-D[['prom_x','prom_y','prom_z']].to_numpy(); C=(np.sqrt((v*v).sum(1))<=260).astype(np.int8); T=D.transcription.to_numpy().astype(np.int8)
+C=C.reshape(600,250); T=T.reshape(600,250)
+# target values around source onset (source changes 0->1). Avoid boundaries.
+for srcname,X,Y in [('C',C,T),('T',T,C)]:
+ on=(X[:,1:]==1)&(X[:,:-1]==0)
+ print('\\nsource onsets',srcname,'n',on.sum())
+ for off in range(-5,11):
+  # onset at t=1..249, indexed on col t-1
+  ts=np.where(on)[0]*250+np.where(on)[1]+1
+  # convert row/col direct
+  rows, cols=np.where(on); cols=cols+1
+  valid=(cols+off>=0)&(cols+off<250)
+  vals=Y[rows[valid], cols[valid]+off]
+  print(f'offset {off:+d}: n={len(vals)} rate={vals.mean():.6f}')
+# Compare target rate by source state at each offset, perhaps target conditional state not onset
+for srcname,X,Y in [('C',C,T),('T',T,C)]:
+ print('\\nsource state',srcname)
+ for off in range(-3,6):
+  if off>=0:
+   x=X[:,:250-off].ravel(); y=Y[:,off:].ravel()
+  else:
+   x=X[:,-off:].ravel(); y=Y[:,:250+off].ravel()
+  print(off,'P(Y=1|X=1)',y[x==1].mean(),'P(Y=1|X=0)',y[x==0].mean(),'n1',np.sum(x==1))
+# event transitions: P target ON at t+1 when source has onset vs baseline target onset, maybe target new onset
+for srcname,X,Y in [('C',C,T),('T',T,C)]:
+ src_on=(X[:,1:]==1)&(X[:,:-1]==0)
+ tar_on=(Y[:,1:]==1)&(Y[:,:-1]==0)
+ # source at t; src_on cols t index 1..249; target onset same t+1 etc
+ rows, j=np.where(src_on); t=j+1
+ print('\\nsource onset -> target onset',srcname,'n',len(t))
+ for off in range(0,6):
+  valid=t+off<250
+  yy=tar_on[rows[valid],t[valid]+off-1] # tar_on index is target time -1
+  print('target onset at offset',off,'rate',yy.mean(),'n',len(yy))
+PY"

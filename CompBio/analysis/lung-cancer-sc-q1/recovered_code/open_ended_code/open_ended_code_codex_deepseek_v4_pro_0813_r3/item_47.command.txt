@@ -1,0 +1,46 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp, time
+from scipy.sparse import csr_matrix, issparse
+
+def norm_means(X, group):
+    groups, inv = np.unique(group.values, return_inverse=True)
+    lib=np.asarray(X.sum(axis=1)).ravel().astype(np.float64)
+    lib[lib==0]=1
+    if issparse(X):
+        Xn=X.multiply((1e4/lib)[:,None]).tocsr()
+        Xn.data=np.log1p(Xn.data)
+    else:
+        Xn=np.log1p(X* (1e4/lib)[:,None])
+    O=csr_matrix((np.ones(X.shape[0]), (np.arange(X.shape[0]), inv)), shape=(X.shape[0], len(groups)))
+    M=(Xn.T @ O).tocsr()
+    means=M.T / np.bincount(inv, minlength=len(groups))[:,None]
+    means=means.toarray()
+    return pd.DataFrame(means, index=pd.Index(groups, name='sample'))
+
+t=time.time()
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+l=ad.read_h5ad('luca_scanvi_adata.h5ad', backed='r')
+lgenes=l.var.index.values
+oursym=a.var['symbol'].values
+oursym_to_idx=pd.Series(np.arange(a.n_vars), index=oursym)
+idx=[]; missing=[]
+for g in lgenes:
+    if g in oursym_to_idx.index:
+        idx.append(oursym_to_idx[g])
+    else: missing.append(g)
+idx=np.array(idx)
+Xo=a.X[:,idx]
+Mo=norm_means(Xo, a.obs['sampleID'])
+print('Mo',Mo.shape)
+Xl=l.layers['raw_counts'][:,np.arange(len(lgenes))]  # all genes
+# Wait Xl has missing genes too, use same common genes columns
+common_idx=[i for i,g in enumerate(lgenes) if g not in missing]
+Xlc=l.layers['raw_counts'][:,common_idx]
+Ml=norm_means(Xlc, l.obs['sample'])
+print('Ml',Ml.shape)
+np.save('Mo.npy', Mo.values)
+np.save('Ml.npy', Ml.values)
+np.save('our_samples.npy', Mo.index.values)
+np.save('luca_samples.npy', Ml.index.values)
+print('done',time.time()-t)
+PY"

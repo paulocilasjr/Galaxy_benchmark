@@ -1,0 +1,50 @@
+/bin/bash -lc "cat > profiles.py <<'PY'
+import gzip, numpy as np
+from scipy.ndimage import uniform_filter1d
+S=dict(np.load('signal.bins.npz')); C=dict(np.load('control.bins.npz'))
+ns=sum(a.sum() for a in S.values()); nc=sum(a.sum() for a in C.values()); ratio=ns/nc
+print('Totals',ns,nc,'ratio',ratio)
+for c in S: print(c,int(S[c].sum()),int(C[c].sum()),round((S[c].sum()/ns)/(C[c].sum()/nc),3))
+genes={}
+for l in gzip.open('refGene.txt.gz','rt'):
+ v=l.rstrip().split('\\t'); _,name,c,strand,start,end,cs,ce,ec,es,ee,score,gene,*_=v
+ start,end=int(start),int(end)
+ if c not in S or not name.startswith('NM_'): continue
+ if gene not in genes or end-start>genes[gene][3]-genes[gene][2]: genes[gene]=(c,strand,start,end)
+P=[]; Q=[]; BODY=[]; BC=[]; meta=[]
+for gene,(c,strand,a,b) in genes.items():
+ t=a if strand=='+' else b
+ bins=np.arange(t//200-50,t//200+51)
+ if bins.min()<0 or bins.max()>=len(S[c]): continue
+ ps=S[c][bins].astype(float); pc=C[c][bins].astype(float)
+ if strand=='-': ps=ps[::-1]; pc=pc[::-1]
+ P.append(ps); Q.append(pc)
+ if b-a<10000: continue
+ edges=np.concatenate([np.linspace(a-10000,a,21)[:-1],np.linspace(a,b,51)[:-1],np.linspace(b,b+10000,21)])
+ ss=[]; cc=[]
+ for x,y in zip(edges[:-1],edges[1:]):
+  x=max(0,int(x)//200); y=min(len(S[c]),int(y)//200)
+  ss.append(np.mean(S[c][x:y])); cc.append(np.mean(C[c][x:y]))
+ if strand=='-': ss=ss[::-1];cc=cc[::-1]
+ BODY.append(ss);BC.append(cc)
+ meta.append((gene,c,strand,a,b,np.mean(ss[20:70])/ (np.mean(cc[20:70])*ratio+0.1)))
+P=np.array(P);Q=np.array(Q);BODY=np.array(BODY);BC=np.array(BC)
+print('Genes',len(genes),'TSS usable',len(P))
+print('TSS profile 1kb blocks:')
+for a in range(0,100,5):
+ print((a-50)*200,round(P[:,a:a+5].mean(),2),round(Q[:,a:a+5].mean()*ratio,2),round(P[:,a:a+5].mean()/(Q[:,a:a+5].mean()*ratio),3))
+print('Metagene blocks: 0-20 upstream;20-70 body;70-90 downstream')
+for a in range(0,90,5): print(a,round(np.nanmean(BODY[:,a:a+5]),2),round(np.nanmean(BC[:,a:a+5])*ratio,2),round(np.nanmean(BODY[:,a:a+5])/(np.nanmean(BC[:,a:a+5])*ratio),3))
+print('Top body enriched genes')
+for v in sorted(meta,key=lambda x:-x[-1])[:30]: print(v)
+for bp in [200,1000,5000,20000,100000]:
+ k=bp//200
+ ss=[]; cc=[]
+ for c in S:
+  if c in ['chrX','chrY']: continue
+  n=len(S[c])//k*k
+  ss.append(S[c][:n].reshape(-1,k).sum(axis=1)); cc.append(C[c][:n].reshape(-1,k).sum(axis=1))
+ ss=np.concatenate(ss);cc=np.concatenate(cc)*ratio
+ r=(ss+5)/(cc+5)
+ print('bins',bp,'ratio percentiles',np.percentile(r,[1,10,25,50,75,90,95,99,99.9]),'signal in enriched',[(t,round(ss[r>t].sum()/ss.sum(),3),round(np.mean(r>t),3)) for t in [2,3,5,10]])
+PY"

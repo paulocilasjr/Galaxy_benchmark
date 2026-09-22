@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests,time,json,sys
+genes=['Wfdc17','Scimp','Mcemp1','Clec4n','Ms4a6d','Cd180','C1qc','Lgmn','Mafb','Tspo']
+acc_sets={}
+for gene in genes:
+ ids=[];retstart=0
+ while True:
+  try:
+   r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',params={'db':'geoprofiles','term':f'{gene}[Gene Symbol]','retstart':retstart,'retmax':5000,'retmode':'json'},timeout=60)
+   j=r.json().get('esearchresult',{})
+  except Exception as e:
+   print('search err',gene,e);break
+  batch=j.get('idlist',[]); ids.extend(batch)
+  count=int(j.get('count','0'))
+  if len(batch)==0 or retstart+len(batch)>=count: break
+  retstart+=len(batch); time.sleep(.1)
+ acc=set()
+ for i in range(0,len(ids),500):
+  batch=ids[i:i+500]
+  try:
+   r=requests.post('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi',data={'db':'geoprofiles','id':','.join(batch),'retmode':'json'},timeout=60)
+   res=r.json().get('result',{})
+  except Exception as e:
+   print('summary err',gene,i,e);continue
+  for uid in batch:
+   val=res.get(uid,{})
+   gds=val.get('gds')
+   if gds: acc.add('GDS'+gds)
+  time.sleep(.08)
+ acc_sets[gene]=acc
+ print(gene,'profiles',len(ids),'gds',len(acc))
+# rank GDS by coverage
+allg=set().union(*acc_sets.values())
+rows=[]
+for gds in allg:
+ cov=[g for g,s in acc_sets.items() if gds in s]
+ if len(cov)>=3:
+  rows.append((len(cov),gds,cov))
+for row in sorted(rows,reverse=True)[:100]: print(row)
+PY"

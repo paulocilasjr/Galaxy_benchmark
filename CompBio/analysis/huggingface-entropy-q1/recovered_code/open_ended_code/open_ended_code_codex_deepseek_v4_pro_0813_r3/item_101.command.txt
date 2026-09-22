@@ -1,0 +1,67 @@
+/bin/bash -lc "cd /tmp && python - <<'PY'
+import sys, torch, torch.nn.functional as F, json
+sys.path.insert(0,'[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-6e845b76af504ee4e726ec8c/workspace/caduceus')
+from run_pure import load_model, TOKEN_TO_ID, rms_norm_fn
+
+def selective_scan_ref(u, delta, A, B, C, D, z, delta_bias):
+    # copied from mamba_ssm selective_scan_ref
+    dtype_in=u.dtype
+    u=u.float(); delta=delta.float(); delta=delta+delta_bias[...,None].float(); delta=F.softplus(delta)
+    batch,dim,dstate=u.shape[0],A.shape[0],A.shape[1]
+    B=B.float(); C=C.float()
+    x=A.new_zeros((batch,dim,dstate))
+    ys=[]
+    deltaA=torch.exp(torch.einsum('bdl,dn->bdln', delta, A))
+    deltaB_u=torch.einsum('bdl,bnl,bdl->bdln', delta, B, u)
+    for i in range(u.shape[2]):
+        x=deltaA[:,:,i]*x + deltaB_u[:,:,i]
+        y=torch.einsum('bdn,bn->bd', x, C[:,:,i])
+        ys.append(y)
+    y=torch.stack(ys,dim=2)
+    out=y + u * D.view(1,-1,1)
+    out=out*F.silu(z)
+    return out.to(dtype=dtype_in)
+
+def mamba_ref(hidden, m):
+    B,L,_=hidden.shape
+    xz=F.linear(hidden, m.in_proj.weight, m.in_proj.bias)
+    x,z=xz.chunk(2,-1)
+    x=x.transpose(1,2)
+    x=F.silu(m.conv1d(x)[...,:L])
+    z=z.transpose(1,2)
+    x_dbl=F.linear(x.transpose(1,2).reshape(B*L,m.d_inner), m.x_proj.weight)
+    dt_lin,B_raw,C_raw=torch.split(x_dbl,[m.dt_rank,m.d_state,m.d_state],-1)
+    dt=F.linear(dt_lin,m.dt_proj.weight).reshape(B,L,m.d_inner).transpose(1,2)
+    B_raw=B_raw.reshape(B,L,m.d_state).transpose(1,2)
+    C_raw=C_raw.reshape(B,L,m.d_state).transpose(1,2)
+    A=-torch.exp(m.A_log.float())
+    y=selective_scan_ref(x,dt,A,B_raw,C_raw,m.D.float(),z,m.dt_proj.bias.float())
+    y=y.transpose(1,2)
+    return F.linear(y,m.out_proj.weight,m.out_proj.bias)
+
+def block_ref(hidden,residual,blk):
+    hidden,residual=rms_norm_fn(hidden,blk.norm.weight,residual=residual,eps=blk.norm.eps,prenorm=True)
+    out=mamba_ref(hidden,blk.mixer.mamba_fwd)
+    rev=mamba_ref(hidden.flip(dims=(1,)),blk.mixer.mamba_rev).flip(dims=(1,))
+    return out+rev,residual
+
+W='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-6e845b76af504ee4e726ec8c/workspace'
+model=load_model(f'{W}/caduceus/model.safetensors')
+seq=json.load(open(f'{W}/seq_7792299_7793299.json'))['dna'].upper()
+ids=torch.tensor([TOKEN_TO_ID[c] for c in seq])
+pos=194
+inp=ids.clone(); inp[pos]=TOKEN_TO_ID['[MASK]']; inp=inp.unsqueeze(0)
+with torch.no_grad():
+    h=model.caduceus.backbone.embeddings.word_embeddings(inp)
+    residual=None
+    for blk in model.caduceus.backbone.layers:
+        h,residual=block_ref(h,residual,blk)
+    h=rms_norm_fn(h,model.caduceus.backbone.norm_f.weight,residual=residual,eps=model.caduceus.backbone.norm_f.eps,prenorm=False)
+    logits=F.linear(h,model.caduceus.backbone.embeddings.word_embeddings.weight)[0,pos]
+    # our saved logits for pos
+    saved=torch.load(f'{W}/caduceus/logits_full_no_sep.pt',map_location='cpu')[pos,pos]
+    diff=(logits.float()-saved.float()).abs().max().item()
+    print('ref vs saved max diff',diff)
+    print('ref top',logits.topk(5))
+    print('saved top',saved.topk(5))
+PY"

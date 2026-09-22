@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess,re,collections,pickle
+known=set(pickle.load(open('known_v38.pkl','rb')))
+novel_by_label=collections.defaultdict(collections.Counter); adj=[]
+for line in subprocess.Popen(['samtools','view','-F','4','cand2000_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6:continue
+    flag=int(f[1]);mapq=int(f[4]);cigar=f[5]
+    if flag&0x900 or mapq<10:continue
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"',f[2])
+    if not m:continue
+    label=m.group(1);chrom=m.group(2);ref_start=int(m.group(3));pos=int(f[3])
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar);left=0;ints=[]
+    for n,op in ops:
+        n=int(n)
+        if op=='N':
+            gs=ref_start+1+(pos-1)+left;ge=gs+n-1;nov=(chrom,gs,ge) not in known
+            ints.append((gs,ge,n,nov))
+            if nov:novel_by_label[label][(gs,ge)]+=1
+            left+=n
+        elif op in 'MDN=X':left+=n
+    for i in range(len(ints)-1):
+        a=ints[i];b=ints[i+1]
+        if a[3] and b[3]:
+            exon_len=b[0]-a[1]-1
+            adj.append((label,chrom,a[:2],b[:2],exon_len,pos,mapq,cigar,f[0]))
+print('adjacent novel-novel pairs v38',len(adj))
+for x in adj:print(x)
+print('\\nclusters')
+for label,jc in novel_by_label.items():
+    js=sorted(jc)
+    for a,b in zip(js,js[1:]):
+        gap=b[0]-a[1]; elen=gap-1
+        if 20<=elen<=1000:
+            print(f'{label}\\t{a[0]}-{a[1]}\\t{b[0]}-{b[1]}\\t{elen}\\t{jc[a]},{jc[b]}')
+PY"

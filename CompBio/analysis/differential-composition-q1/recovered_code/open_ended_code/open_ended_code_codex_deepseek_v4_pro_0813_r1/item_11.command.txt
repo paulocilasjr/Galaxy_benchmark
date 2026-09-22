@@ -1,0 +1,37 @@
+/bin/bash -lc "cat > seurat_pipeline.R <<'EOF'
+suppressMessages({library(Seurat); library(Matrix); library(ggplot2)})
+x <- readRDS('merged_input.rds')
+s1 <- x"'$s1; s2 <- x$s2; genes <- x$genes
+# QC filter
+s1 <- subset(s1, subset = nFeature_RNA > 200 & nFeature_RNA < 8000 & percent.mt < 20)
+s2 <- subset(s2, subset = nFeature_RNA > 200 & nFeature_RNA < 8000 & percent.mt < 20)
+cat('"'after qc cells', ncol(s1), ncol(s2), '\\n')
+# merge
+obj <- merge(s1, y=s2, add.cell.ids=c('s1','s2'), project='retina')
+obj <- NormalizeData(obj, verbose=FALSE)
+obj <- FindVariableFeatures(obj, selection.method='vst', nfeatures=3000, verbose=FALSE)
+# Label variable genes
+obj <- ScaleData(obj, verbose=FALSE)
+obj <- RunPCA(obj, features=VariableFeatures(object=obj), npcs=50, verbose=FALSE)
+ElbowPlot(obj, ndims=50) + ggsave('elbow.png', width=8, height=5)
+# integrate by sample
+anchors <- FindIntegrationAnchors(object.list=SplitObject(obj, split.by='sample'), anchor.features=3000, dims=1:30, verbose=TRUE)
+integrated <- IntegrateData(anchorset=anchors, dims=1:30, verbose=TRUE)
+DefaultAssay(integrated) <- 'integrated'
+integrated <- ScaleData(integrated, verbose=FALSE)
+integrated <- RunPCA(integrated, npcs=50, verbose=FALSE)
+ElbowPlot(integrated, ndims=50) + ggsave('elbow_integrated.png', width=8, height=5)
+integrated <- FindNeighbors(integrated, dims=1:30, verbose=FALSE)
+integrated <- FindClusters(integrated, resolution=0.8, verbose=FALSE)
+integrated <- RunUMAP(integrated, dims=1:30, verbose=FALSE)
+saveRDS(integrated, 'integrated.rds')
+cat('clusters table\\n')
+print(table(integrated"'$seurat_clusters, integrated$sample))
+ggsave('"'umap_sample.png', DimPlot(integrated, reduction='umap', group.by='sample'), width=7, height=5)
+ggsave('umap_clusters.png', DimPlot(integrated, reduction='umap', label=TRUE, repel=TRUE) + NoLegend(), width=8, height=7)
+# markers all clusters
+markers <- FindAllMarkers(integrated, only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25, verbose=FALSE)
+write.csv(markers, 'markers_all.csv', row.names=TRUE)
+cat('done\\n')
+EOF
+Rscript seurat_pipeline.R"

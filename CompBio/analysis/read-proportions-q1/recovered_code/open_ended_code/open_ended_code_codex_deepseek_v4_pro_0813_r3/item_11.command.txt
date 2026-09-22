@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+from Bio import SeqIO
+import gzip, time, pickle
+from collections import defaultdict, Counter
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+comp=str.maketrans('ACGT','TGCA')
+L=36;k=9
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in seqs}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1):
+        index[name]['f'][s[i:i+k]].append(i)
+    rs=s.translate(comp)[::-1]
+    for i in range(len(rs)-L+1):
+        index[name]['r'][rs[i:i+k]].append(i)
+
+def min_dist(read, name):
+    best=L+1
+    for strand in ['f','r']:
+        idx=index[name][strand]
+        sstr=seqs[name] if strand=='f' else seqs[name].translate(comp)[::-1]
+        for start in [0,k,2*k,3*k]:
+            seed=read[start:start+k]
+            if len(seed)<k: continue
+            for pos in idx.get(seed,()):
+                d=0
+                ss=sstr
+                for j in range(L):
+                    if ss[pos+j]"'!=read[j]:
+                        d+=1
+                        if d>=best: break
+                if d<best:
+                    best=d
+                    if best==0: return 0
+    return best
+start=time.time()
+res=[]; hist=Counter(); n_missing=0; tie_hist=Counter()
+with gzip.open('"'read.proportions.q1.fq.gz','rt') as f:
+    for idx in range(40000):
+        h=f.readline()
+        seq=f.readline().strip().upper(); f.readline(); f.readline()
+        ds={name:min_dist(seq,name) for name in seqs}
+        res.append(ds)
+        md=min(ds.values())
+        hist[md]+=1
+        tied=sum(1 for d in ds.values() if d==md)
+        tie_hist[tied]+=1
+print('time',time.time()-start)
+print('min dist hist',hist)
+print('tie hist',tie_hist)
+print('missing L+1',hist.get(37,0))
+# save
+with open('min_ds.pkl','wb') as f: pickle.dump(res,f)
+# Unique assignment counts by min
+unique=Counter()
+for ds in res:
+    md=min(ds.values())
+    names=[n for n,d in ds.items() if d==md]
+    if len(names)==1:
+        unique[names[0]]+=1
+print('unique counts',unique)
+PY"

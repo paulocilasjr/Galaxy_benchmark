@@ -1,0 +1,29 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip, numpy as np, time
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, adjusted_rand_score
+from sklearn.preprocessing import StandardScaler
+
+# load
+with gzip.open('cell.proportions.q1.mtx.gz','rt') as f:
+    for line in f:
+        if not line.startswith('%'): break
+    dims=tuple(map(int,line.split()))
+    vals=np.fromiter((float(line) for line in f),dtype=np.float32)
+X=vals.reshape(dims,order='F').T # cells x genes
+lib=X.sum(1)
+# log normalize
+Y=np.log1p(X/lib[:,None]*1e4).astype(np.float32)
+# gene stats and variable selection
+mu=Y.mean(0); va=Y.var(0); cv=va/(mu+1e-6)
+for n in [50,100,200,300,500,1000]:
+ idx=np.argsort(va)[-n:]
+ p=PCA(n_components=30,random_state=1,svd_solver='randomized').fit_transform(Y[:,idx])
+ print('\\nNVAR',n,'explained first',PCA(n_components=10,random_state=1,svd_solver='randomized').fit(Y[:,idx]).explained_variance_ratio_.round(4))
+ for k in range(2,11):
+  lab=KMeans(n_clusters=k,n_init=10,random_state=1,algorithm='lloyd').fit_predict(p[:,:20])
+  sil=silhouette_score(p[:,:20],lab,sample_size=min(5350,3000),random_state=1)
+  sizes=np.bincount(lab)
+  print('k',k,'sil',round(sil,4),'sizes',','.join(map(str,sorted(sizes,reverse=True))))
+PY"

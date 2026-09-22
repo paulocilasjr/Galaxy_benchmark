@@ -1,0 +1,46 @@
+/bin/bash -lc "cat > derive_answer.py <<'PY'
+import csv
+import hashlib
+import json
+import re
+from pathlib import Path
+
+cohort_path = Path('round2_5.txt')
+cohort_lines = [line.split() for line in cohort_path.read_text().splitlines()]
+assert cohort_lines[0] == ['FamilyID', 'SampleID', 'FatherID', 'MotherID', 'Sex', 'Population', 'Superpopulation']
+cohort = {row[1]: dict(zip(cohort_lines[0], row)) for row in cohort_lines[1:]}
+assert len(cohort) == len(cohort_lines) - 1 == 3202
+
+experiments = json.loads(Path('encode_0.json').read_text())
+assert experiments['total'] == len(experiments['@graph']) == 100
+experiment_ids = {e['accession'] for e in experiments['@graph']}
+rows = list(csv.DictReader(Path('metadata.txt').open(), delimiter='\\t'))
+filtered = [r for r in rows if r['File format'] == 'bam' and r['Output type'] == 'alignments' and r['File assembly'] == 'GRCh38' and r['Assay'] == 'ATAC-seq']
+assert len(filtered) == 100
+assert {r['Experiment accession'] for r in filtered} == experiment_ids
+assert all(r['File Status'] == 'released' for r in filtered)
+# Coriell GM identifiers designate cell lines; NA with the same digits
+# designates the corresponding DNA sample used in 1000 Genomes.
+for r in filtered:
+    name = r['Biosample term name']
+    assert re.fullmatch(r'(?:GM|HG)\\d{5}', name)
+    r['SampleID'] = 'NA' + name[2:] if name.startswith('GM') else name
+assert len({r['SampleID'] for r in filtered}) == 100
+matched = sorted((r for r in filtered if r['SampleID'] in cohort), key=lambda r: r['SampleID'])
+for r in matched:
+    r['Population'] = cohort[r['SampleID']]['Population']
+assert all(re.fullmatch('[0-9a-f]{32}', r['md5sum']) for r in matched)
+assert len({r['md5sum'] for r in matched}) == len(matched)
+with Path('matched_samples.tsv').open('w', newline='') as out:
+    columns = ['SampleID', 'Population', 'Biosample term name', 'Experiment accession', 'File accession', 'Output type', 'File assembly', 'md5sum', 'File download URL']
+    writer = csv.DictWriter(out, fieldnames=columns, delimiter='\\t', extrasaction='ignore', lineterminator='\\n')
+    writer.writeheader()
+    writer.writerows(matched)
+checksums = sorted(r['md5sum'] for r in matched)
+data = ''.join(checksum + '\\n' for checksum in checksums).encode('ascii')
+Path('md5sums.txt').write_bytes(data)
+answer = f'{len(matched)},{hashlib.md5(data).hexdigest()}'
+Path('answer.txt').write_text(answer + '\\n')
+print(answer)
+PY
+python derive_answer.py"

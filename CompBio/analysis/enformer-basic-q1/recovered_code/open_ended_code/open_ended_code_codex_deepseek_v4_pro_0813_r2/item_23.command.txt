@@ -1,0 +1,19 @@
+/bin/bash -lc "./venv/bin/python - <<'PY'
+import tensorflow as tf
+print('tf', tf.__version__)
+import sonnet as snt
+print('snt', snt.__version__ if hasattr(snt,'__version__') else 'ok')
+import enformer
+print('imported')
+model=enformer.Enformer(channels=1536,num_transformer_layers=11,num_heads=8)
+# Need call to initialize variables. Use dummy input maybe small length? target crop requires >=? Input seq length must >= 1536? Let's call with exact sequence length 196608 may allocate huge but okay? Better sequence length minimal after conv/pool downsample 7: need >= 896*128=114688? Stem + 6 tower = 7 downsamples factor128, target 896, so input at least 114688? Actually first stem pool then tower 6 pools => 128, yes. Use 114688. But model expects maybe seq length. Let's use 196608 to ensure shape and memory maybe ~200k*4 floats 3MB okay; transformer sequences 1536, okay but 11 layers heavy CPU. Could initialize all variables with tf.function? Call with is_training=True maybe. Maybe CPU slow but fine. Or use build with dummy shape.
+x=tf.ones((1,enformer.SEQUENCE_LENGTH,4),dtype=tf.float32)
+# call model once to initialize all variables
+out=model(x,is_training=True)
+trainable=[v for v in model.trainable_variables]
+allvars=[v for v in model.variables]
+print('trainable count vars',len(trainable),'params',sum(tf.size(v).numpy() for v in trainable))
+print('all count vars',len(allvars),'params',sum(tf.size(v).numpy() for v in allvars))
+print('non-trainable',sum(tf.size(v).numpy() for v in model.variables if v not in model.trainable_variables))
+for v in trainable[:20]: print(v.name, v.shape, tf.size(v).numpy())
+PY"

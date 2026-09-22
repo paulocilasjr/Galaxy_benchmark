@@ -1,0 +1,32 @@
+/bin/bash -c "cd tf_protos && python - <<'PY'
+import sys, struct, snappy
+sys.path.insert(0,'.')
+import tensor_bundle_pb2 as tb
+
+data=open('../enformer_saved/variables/variables.index','rb').read(); footer=data[-48:]
+def rv(b,p):
+ s=0;r=0
+ while 1:
+  x=b[p];p+=1;r|=(x&127)<<s
+  if not x&128:return r,p
+  s+=7
+pos=0; _,pos=rv(footer,pos); _,pos=rv(footer,pos); ioff,pos=rv(footer,pos); isz,pos=rv(footer,pos)
+def pb(c):
+ nr=struct.unpack('<I',c[-4:])[0]; rb=len(c)-4-4*nr; p=0;prev=b'';out=[]
+ while p<rb:
+  sh,p=rv(c,p);ns,p=rv(c,p);vl,p=rv(c,p);k=prev[:sh]+c[p:p+ns];p+=ns;v=c[p:p+vl];p+=vl;prev=k;out.append((k,v))
+ return out
+idx=pb(data[ioff:ioff+isz]); bh=idx[0][1];p=0;off,p=rv(bh,p);size,p=rv(bh,p);st=data[off:off+size];tr=data[off+size:off+size+5];c=snappy.decompress(st) if tr[0]==1 else st;entries=pb(c)
+def nel(sh):
+ n=1
+ for d in sh.dim:n*=d.size
+ return n
+tot=0;trn=0
+for k,v in entries:
+ if not k: continue
+ be=tb.BundleEntryProto();be.ParseFromString(v);n=nel(be.shape);tot+=n
+ name=k.decode()
+ if not (name.startswith('_CHECKPOINTABLE_OBJECT_GRAPH') or name.startswith('save_counter') or '/moving_mean/' in name or '/moving_variance/' in name): trn+=n
+print('all entries',len(entries),'all numel',tot,'train',trn,'nontrain',tot-trn)
+print('bytes all float32',tot*4,'train',trn*4)
+PY"

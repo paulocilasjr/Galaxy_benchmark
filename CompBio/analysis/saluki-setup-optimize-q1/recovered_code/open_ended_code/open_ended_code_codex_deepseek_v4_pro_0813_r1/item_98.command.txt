@@ -1,0 +1,38 @@
+/bin/bash -lc "mkdir -p proto && cat > proto/example.proto <<'EOF'
+syntax = \"proto3\";
+package tensorflow;
+message BytesList { repeated bytes value = 1; }
+message FloatList { repeated float value = 1 [packed=true]; }
+message Int64List { repeated int64 value = 1 [packed=true]; }
+message Feature {
+  oneof kind {
+    BytesList bytes_list = 1;
+    FloatList float_list = 2;
+    Int64List int64_list = 3;
+  }
+}
+message Features { map<string, Feature> feature = 1; }
+message Example { Features features = 1; }
+EOF
+protoc -I proto --python_out=proto proto/example.proto
+python - <<'PY'
+import struct, sys
+sys.path.insert(0,'proto')
+from example_pb2 import Example
+fn='models/train_gru/f0_c0/test-0.tfr'
+data=open(fn,'rb').read(); pos=0; n=0
+while pos+12<=len(data):
+    length=struct.unpack('<Q', data[pos:pos+8])[0]
+    length_crc=struct.unpack('<I', data[pos+8:pos+12])[0]
+    payload=data[pos+12:pos+12+length]
+    data_crc=struct.unpack('<I', data[pos+12+length:pos+16+length])[0]
+    ex=Example(); ex.ParseFromString(payload)
+    print('record',n,'length',length,'pos',pos,'features',list(ex.features.feature.keys()))
+    for k,f in ex.features.feature.items():
+        kind=f.WhichOneof('kind')
+        if k=='lengths': print(k,list(f.int64_list.value))
+        elif kind=='bytes_list': print(k,len(f.bytes_list.value[0]),type(f.bytes_list.value[0]))
+    pos += 12+length+4
+    n+=1
+    if n>=3: break
+PY"

@@ -1,0 +1,136 @@
+/bin/bash -lc "cat > saluki_torch.py <<'PY'
+import numpy as np
+import torch
+import torch.nn as nn
+import h5py, json
+
+class LayerNormLast(nn.Module):
+    def __init__(self, dim, eps):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
+        self.eps = eps
+    def forward(self, x):
+        # x: N,C,L
+        x = x.transpose(1,2)
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, unbiased=False, keepdim=True)
+        x = (x - mean) / torch.sqrt(var + self.eps)
+        x = x * self.gamma + self.beta
+        return x.transpose(1,2)
+
+class Saluki(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv_initial = nn.Conv1d(6,64,5,bias=False)
+        self.lns = nn.ModuleList([LayerNormLast(64,0.007) for _ in range(7)])
+        self.convs = nn.ModuleList([nn.Conv1d(64,64,5,bias=True) for _ in range(6)])
+        self.pools = nn.ModuleList([nn.MaxPool1d(2,stride=2) for _ in range(6)])
+        self.gru = nn.GRU(64,64,batch_first=True)
+        self.bn1 = nn.BatchNorm1d(64, eps=1e-3, momentum=0.90)
+        self.dense1 = nn.Linear(64,64)
+        self.bn2 = nn.BatchNorm1d(64, eps=1e-3, momentum=0.90)
+        self.dense2 = nn.Linear(64,1)
+
+    def forward(self, x):
+        x = self.conv_initial(x)
+        for i in range(6):
+            x = self.lns[i](x)
+            x = torch.relu(x)
+            x = self.convs[i](x)
+            x = self.pools[i](x)
+        x = self.lns[6](x)
+        x = torch.relu(x)
+        x = x.transpose(1,2)  # N,L,C
+        x = x.flip(dims=[1])
+        _, h = self.gru(x)
+        h = h.squeeze(0)  # N,C
+        h = self.bn1(h.unsqueeze(2)).squeeze(2)
+        h = torch.relu(h)
+        h = self.dense1(h)
+        h = self.bn2(h.unsqueeze(2)).squeeze(2)
+        h = torch.relu(h)
+        out = self.dense2(h)
+        return out
+
+def load_weights(model, path):
+    with h5py.File(path,'r') as f:
+        g=f['model_weights']
+        def get(name):
+            ds=g[name]
+            return torch.from_numpy(np.array(ds))
+        # conv initial
+        k = get('conv1d/conv1d/kernel:0')  # 5,6,64
+        model.conv_initial.weight.data = k.permute(2,1,0).contiguous()
+        for i in range(6):
+            si=i+1
+            k = get(f'conv1d_{si}/conv1d_{si}/kernel:0') # 5,64,64
+            b = get(f'conv1d_{si}/conv1d_{si}/bias:0') # 64
+            model.convs[i].weight.data = k.permute(2,1,0).contiguous()
+            model.convs[i].bias.data = b
+        # layer norms (7 total)
+        for idx,name in enumerate(['layer_normalization','layer_normalization_1','layer_normalization_2','layer_normalization_3','layer_normalization_4','layer_normalization_5','layer_normalization_6']):
+            gamma=get(f'{name}/{name}/gamma:0')
+            beta=get(f'{name}/{name}/beta:0')
+            model.lns[idx].gamma.data=gamma
+            model.lns[idx].beta.data=beta
+        # GRU
+        kk=get('gru/gru/gru_cell/kernel:0')  # 64,192 [z,r,h]
+        rk=get('gru/gru/gru_cell/recurrent_kernel:0') # 64,192 [z,r,h]
+        bias=get('gru/gru/gru_cell/bias:0') # 2,192
+        H=64
+        def reorder(mat, order_from='zrh'):
+            # mat shape out,in? input dims for kernel (in,H*3) or (H,H*3)
+            parts = torch.chunk(mat, 3, dim=1) # order z,r,h
+            z,r,h = parts
+            return torch.cat([r,z,h], dim=1)
+        wi = reorder(kk).t().contiguous() # now (3H,input)
+        wh = reorder(rk).t().contiguous()
+        bi = torch.cat([bias[0,64:128], bias[0,0:64], bias[0,128:192]], dim=0).contiguous()
+        bh = torch.cat([bias[1,64:128], bias[1,0:64], bias[1,128:192]], dim=0).contiguous()
+        model.gru.weight_ih_l0.data=wi
+        model.gru.weight_hh_l0.data=wh
+        model.gru.bias_ih_l0.data=bi
+        model.gru.bias_hh_l0.data=bh
+        # BN1
+        model.bn1.weight.data=get('batch_normalization/batch_normalization/gamma:0')
+        model.bn1.bias.data=get('batch_normalization/batch_normalization/beta:0')
+        model.bn1.running_mean.data=get('batch_normalization/batch_normalization/moving_mean:0')
+        model.bn1.running_var.data=get('batch_normalization/batch_normalization/moving_variance:0')
+        # Dense1
+        model.dense1.weight.data=get('dense/dense/kernel:0').t().contiguous()
+        model.dense1.bias.data=get('dense/dense/bias:0')
+        # BN2
+        model.bn2.weight.data=get('batch_normalization_1/batch_normalization_1/gamma:0')
+        model.bn2.bias.data=get('batch_normalization_1/batch_normalization_1/beta:0')
+        model.bn2.running_mean.data=get('batch_normalization_1/batch_normalization_1/moving_mean:0')
+        model.bn2.running_var.data=get('batch_normalization_1/batch_normalization_1/moving_variance:0')
+        # Dense2
+        model.dense2.weight.data=get('dense_1/dense_1/kernel:0').t().contiguous()
+        model.dense2.bias.data=get('dense_1/dense_1/bias:0')
+    return model
+
+def predict(model_path, X):
+    model=Saluki()
+    load_weights(model, model_path)
+    model.eval()
+    with torch.no_grad():
+        y=model(X)
+    return y.cpu().numpy()
+
+if __name__=='__main__':
+    path='models/train_gru/f0_c0/train/model0_best.h5'
+    with h5py.File('models/train_gru/f0_c0/ism_scores.h5','r') as f:
+        seqs=f['seqs'][:5]
+        coding=f['coding'][:5]
+        splice=f['splice'][:5]
+    X=np.concatenate([seqs.astype(np.float32), coding[...,None].astype(np.float32), splice[...,None].astype(np.float32)], axis=2)
+    X=torch.from_numpy(X).permute(0,2,1).contiguous()
+    pred=predict(path,X)
+    print('pred',pred.ravel())
+    with h5py.File('models/train_gru/f0_c0/test0_preds.h5','r') as f:
+        ref=f['preds'][:5]
+    print('ref ',ref.ravel())
+    print('diff',pred.ravel()-ref.ravel())
+PY
+python saluki_torch.py"

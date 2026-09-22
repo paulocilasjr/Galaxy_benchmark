@@ -1,0 +1,73 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,csv,re,collections
+# Sei meta
+meta=json.load(open('sei_cistrome_meta.json'))
+sei_geo=[]; sei_enc=[]
+for cid,v in meta.items():
+ et=v.get('external_id_type'); ext=v.get('external_id')
+ if et=='GEO': sei_geo.append((cid,ext))
+ elif et=='ENCODE': sei_enc.append((cid,ext,ext.split('_')[0],ext.split('_')[1] if '_' in ext else None))
+print('sei geo tracks',len(sei_geo),'enc tracks',len(sei_enc))
+# Borzoi rows, file meta
+rows=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+fm=json.load(open('borzoi_encff_meta.json'))
+# map experiment accession -> set of biological replicates used by Borzoi file (use file dataset current, not path)
+exp_used_reps=collections.defaultdict(set)
+for r in rows:
+ ident=r['identifier'].strip(); mm=re.match(r'(ENCFF\\d{3}[A-Z]{3})',ident)
+ if not mm: continue
+ acc=mm.group(1); m=fm.get(acc)
+ if not m: continue
+ ds=m.get('dataset',''); ex=ds.rstrip('/').split('/')[-1] if ds else ''
+ for b in m.get('biological_replicates',[]): exp_used_reps[ex].add(str(b))
+print('bor used exps',len(exp_used_reps))
+# experiment reps metadata
+exp_reps=json.load(open('borzoi_exp_reps.json'))
+lib_map=json.load(open('borzoi_lib_gsm_map.json'))
+# Build file-specific GSM set by experiment + bio rep union
+file_gsm=set()
+for e in exp_reps:
+ ex=e['accession']; used=exp_used_reps.get(ex)
+ if not used: continue
+ for rep in e.get('replicates',[]):
+  bio=str(rep.get('bio')) if rep.get('bio') is not None else None
+  if bio is None or bio not in used: continue
+  lib=rep.get('library')
+  if lib and lib in lib_map:
+   file_gsm.update(lib_map[lib])
+print('file-specific gsm count',len(file_gsm))
+# count Sei GEO tracks whose GSM in file_gsm
+count=sum(1 for cid,g in sei_geo if g in file_gsm)
+print('sei geo exact sample matches tracks',count,'unique gsms',len(set(g for cid,g in sei_geo if g in file_gsm)))
+# also direct Borzoi GSM tracks exact
+bor_direct=set()
+for r in rows:
+ if re.match(r'GSM\\d+"'$'"',r['identifier'].strip()): bor_direct.add(r['identifier'].strip())
+# count Sei geo tracks matching direct
+dcount=sum(1 for cid,g in sei_geo if g in bor_direct)
+print('direct matches tracks',dcount)
+# union file-specific + direct
+all_exact_gsm=file_gsm|bor_direct
+count_all=sum(1 for cid,g in sei_geo if g in all_exact_gsm)
+print('sei geo exact all tracks',count_all)
+# exact ENCODE match as before (experiment+rep)
+bor_reps=set()
+for ex,reps in exp_used_reps.items():
+ for b in reps: bor_reps.add((ex,b))
+enc_exact=0
+for cid,ext,base,rep in sei_enc:
+ if rep is not None and (base,rep) in bor_reps: enc_exact+=1
+ elif rep is None and base in exp_used_reps: enc_exact+=1
+print('enc exact',enc_exact)
+print('total exact',count_all+enc_exact)
+# Broad counts for comparison
+# file gsm broad from borzoi_encode_experiments all
+exp_all=json.load(open('borzoi_encode_experiments.json'))
+broad_gsm=set()
+for e in exp_all:
+ for g in e.get('gsms','').split(','):
+  if g: broad_gsm.add(g)
+broad_direct=bor_direct
+count_broad=sum(1 for cid,g in sei_geo if g in (broad_gsm|broad_direct))
+print('broad geo',count_broad)
+PY"

@@ -1,0 +1,39 @@
+/bin/bash -c "cat > mixture_score.py <<'PY'
+import numpy as np
+from sklearn.mixture import GaussianMixture
+PB=np.load('pb_dense.npy')
+donors=np.load('donor_names.npy', allow_pickle=True)
+genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy', allow_pickle=True)])
+lib=PB.sum(axis=0,keepdims=True); log=np.log2(PB/lib*1e6+1)
+# curated gene lists
+healthy=['FCER1A','CLEC4C','CD1C','CLEC10A','CCR7','SELL','TCF7','LEF1','IL7R','GIMAP7','S1PR1','LTB','PLD4','LILRA4','IRF7','MS4A1','IGHD','TCL1A','IL3RA','CST3','FCGR2B']
+covid=['IFI27','IFITM3','ISG15','MX1','OAS1','IFI44L','IFIT1','RSAD2','S100A8','S100A9','S100A12','SOCS3','ADM','HP','MKI67','TOP2A','IGHG1','IGHG3','IGHA1','MZB1','XBP1','CD38','TNFRSF17','FCGR1A','CLU','RNASE1','RNASE2','BIRC5','TYMS','UBE2C']
+def get(gs): return log[[np.where(genes==g)[0][0] for g in gs if g in genes],:].mean(axis=0)
+score=get(healthy)-get(covid)
+X=score.reshape(-1,1)
+for n in [2,3]:
+    gm=GaussianMixture(n_components=n, covariance_type='full', random_state=0, n_init=20).fit(X)
+    means=gm.means_.ravel(); labels=gm.predict(X)
+    print('n',n,'means',means,'weights',gm.weights_)
+    for lab in np.argsort(means):
+        ids=sorted([int(d[5:]) for d,l in zip(donors,labels) if l==lab])
+        print('comp',lab,'mean',means[lab],'n',len(ids),'ids',ids)
+# also use PCA first component
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+mean=log.mean(axis=1); var=log.var(axis=1)
+idx=np.where(mean>0.2)[0]; top=np.argsort(var[idx])[::-1][:2000]; idx=idx[top]
+Xs=StandardScaler().fit_transform(log[idx,:].T)
+pca=PCA(n_components=5,random_state=0).fit(Xs)
+pc=pca.fit_transform(Xs)[:,0]
+# orient PC so healthy likely high? check correlation
+print('corr pc1 with score', np.corrcoef(pc,score)[0,1])
+for n in [2,3]:
+    gm=GaussianMixture(n_components=n, covariance_type='full', random_state=0, n_init=20).fit(pc.reshape(-1,1))
+    means=gm.means_.ravel(); labels=gm.predict(pc.reshape(-1,1))
+    print('PC n',n,'means',means,'weights',gm.weights_)
+    for lab in np.argsort(means):
+        ids=sorted([int(d[5:]) for d,l in zip(donors,labels) if l==lab])
+        print('comp',lab,'mean',means[lab],'n',len(ids),'ids',ids)
+PY
+python mixture_score.py"

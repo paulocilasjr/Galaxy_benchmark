@@ -1,0 +1,56 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+import gzip,math
+fa={}
+for l in open('read.proportions.q1.fa'):
+ l=l.strip()
+ if l.startswith('>'): n=l[1:].split()[0];fa[n]=''
+ else:fa[n]+=l
+keys=list(fa);L=36;M=3000-L+1
+comp=str.maketrans('ACGTN','TGCAN');rc=lambda s:s.translate(comp)[::-1]
+# all exact match set, forward genome windows only for observed read in either orientation
+ix=defaultdict(set)
+for ci,c in enumerate(keys):
+ g=fa[c]
+ for p in range(M):ix[g[p:p+L]].add(ci)
+obs=Counter(); allzero=0
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while f.readline():
+  r=f.readline().strip();f.readline();f.readline()
+  hs=ix.get(r,set())|ix.get(rc(r),set())
+  if hs:
+   obs[tuple(sorted(hs))]+=1;allzero+=1
+print('exact any',allzero)
+print('observed exact match sets')
+for S,n in sorted(obs.items()):print(''.join(str(i+1) for i in S),n)
+# predicted count classes for each source under forward/rev random, treating set exact across forward windows
+pred={}
+for ci,c in enumerate(keys):
+ cnt=Counter()
+ g=fa[c]
+ for p in range(M):
+  for q in (g[p:p+L],rc(g[p:p+L])):
+   hs=ix.get(q,set())
+   cnt[tuple(sorted(hs))]+=0.5
+ pred[ci]=cnt
+ print('source',ci+1,'classes nonzero',len(cnt),'total',sum(cnt.values()))
+ print(' ',{''.join(str(i+1) for i in S):v for S,v in sorted(cnt.items())})
+# Build matrix and solve scipy? print likelihood grid or numpy least sq
+import numpy as np
+classes=sorted(set(obs)|set().union(*(set(p) for p in pred.values())))
+A=np.array([[pred[ci][S]/M for ci in range(4)] for S in classes])
+y=np.array([obs[S]/allzero for S in classes])
+# constrained least squares via scipy
+try:
+ from scipy.optimize import minimize
+ fun=lambda x: -sum(y[j]*math.log(max(1e-300,float(A[j]@x))) for j in range(len(classes)))
+ res=minimize(fun,[.25]*4,bounds=[(0,1)]*4,constraints={'type':'eq','fun':lambda x:x.sum()-1},method='SLSQP',options={'ftol':1e-12,'maxiter':1000})
+ print('MLE',res.x,res.fun,res.success,res.message)
+except Exception as e:
+ print('scipy err',e)
+# linear lstsq
+print('lstsq',np.linalg.lstsq(A,y,rcond=None)[0])
+print('classes A/y rows')
+for S,row,yy in zip(classes,A,y):
+ print(''.join(str(i+1) for i in S),yy,row)
+PY"

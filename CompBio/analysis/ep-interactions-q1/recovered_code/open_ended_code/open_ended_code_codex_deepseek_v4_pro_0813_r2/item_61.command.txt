@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import norm
+from math import log, pi, sqrt
+hic=pd.read_csv('ep.interactions.q1.hic.csv'); expr=pd.read_csv('ep.interactions.q1.expr.csv')
+
+# Fit hic background poisson mean via distance
+bg=hic[hic.set=='background'].copy(); cand=hic[hic.set=='candidate'].copy()
+bg['mean']=bg[['count_rep1','count_rep2','count_rep3']].mean(axis=1)
+X=np.column_stack([np.ones(len(bg)), np.log(bg.distance_bp)])
+beta=np.linalg.lstsq(np.log(np.maximum(bg['mean'],0.1)), X, rcond=None)[0] # wrong; fit glm earlier manually? use poisson via statsmodels
+import statsmodels.api as sm
+X=sm.add_constant(np.log(bg.distance_bp)); glm=sm.GLM(bg['mean'],X,family=sm.families.Poisson()).fit()
+print(glm.params)
+def lam(d): return glm.predict(sm.add_constant(np.log(d), has_constant='add'))[0]
+
+from scipy.stats import poisson
+# estimate r from candidates with strong CRISPR? maybe use all high candidates (EP1-4) vs low. mixture MLE rough: r=2.2? Use true high set mean ratio
+high=['EP1','EP2','EP3','EP4']; low=['EP5','EP6','EP7']
+r_est=np.mean([cand[cand.pair_id==p]['count_rep1'].sum()/3 for p in high]) / np.mean([lam(cand[cand.pair_id==p]['distance_bp'].iloc[0]) for p in high])
+print('r_est',r_est)
+# compute hic log BF true/false for total counts using Poisson
+hic_bf={}
+for _,r in cand.iterrows():
+    total=r.count_rep1+r.count_rep2+r.count_rep3
+    mu0=lam(r.distance_bp)*3; mu1=mu0*r_est
+    ll0=poisson.logpmf(total,mu0); ll1=poisson.logpmf(total,mu1)
+    hic_bf[r.pair_id]=ll1-ll0
+    print(r.pair_id,'mu0',mu0,'mu1',mu1,'total',total,'hic_logBF',ll1-ll0)
+
+# Expression BF
+print('\\nExpr BF')
+# functions
+from scipy.stats import norm
+for p,g in expr.groupby('pair_id'):
+    y=[]; v=[]
+    for guide,gg in g.groupby('guide_id'):
+        c=gg[gg.condition=='control'].rna_count.values.astype(float)
+        t=gg[gg.condition=='perturbed'].rna_count.values.astype(float)
+        lfc=np.log2(t.mean()/c.mean())
+        # delta method var
+        var=(t.var(ddof=1)/len(t)/(t.mean()**2) + c.var(ddof=1)/len(c)/(c.mean()**2)) / (np.log(2)**2)
+        y.append(lfc); v.append(var)
+    y=np.array(y); v=np.array(v)
+    tau0=0.05; tau1=0.03; sig_delta=0.8
+    # H0 covariance diag(v+tau0"'^2), H1 common delta covariance diag(v+tau1''^2)+sig_delta''^2 J
+    def logmv(y,V):
+        sign,logdet=np.linalg.slogdet(V)
+        if sign<=0: return -1e9
+        d=y.shape[0]
+        Vinv=np.linalg.inv(V)
+        return -0.5*(d*np.log(2*np.pi)+logdet+y@Vinv@y)
+    V0=np.diag(v+tau0**2); V1=np.diag(v+tau1**2)+sig_delta**2
+    bf=logmv(y,V1)-logmv(y,V0)
+    print(p,'"'logFC per guide',np.round(y,3),'BFexpr',bf)
+    # also t-test BF approximate using Cauchy prior? 
+    # print scipy t
+PY"

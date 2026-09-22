@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+D=np.load('donor_sum.npz')
+sums=D['sum']; nnz=D['nnz']; cats=D['cats']
+print(cats)
+# compute means from sums and cell counts? cell counts stored? sums/ncells from analyze output not saved? derive nnz? no. We'll recompute by reading adata? Actually sum divided by n cells, cell counts known from output or from npz? Let's save cell_counts too later. Use known list.
+cell_counts=np.array([11264,10595,11327,17134,11067,6663,8490,7888,7837,14101,5942,8704,5756,15886,5857,6108,8626,7557,7523,5868,9332,5492,5762,7828,6916,10801,8364,6157,10745,5185,5851,7848,5159])
+means=sums/cell_counts.reshape(1,-1)
+logmean=np.log1p(means)
+# known isg genes in dataset (manually from earlier and check names)
+isgs=['ISG15','IFI27','IFI44L','IFIT1','IFIT2','IFIT3','IFIT5','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI6','IFIH1','IFI44','IFI35','IFITM1','IFITM2','IFITM3','ISG20']
+# load var names
+import anndata as ad
+adata=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+names=list(adata.var['feature_name'].astype(str))
+idx=[names.index(g) for g in isgs if g in names]
+print('isgs found', [names[j] for j in idx])
+score=logmean[idx,:].mean(axis=0)
+print('scores')
+for c,s in zip(cats,score): print(c, round(s,3))
+from sklearn.mixture import GaussianMixture
+X=score.reshape(-1,1)
+for k in [2,3]:
+ g=GaussianMixture(n_components=k, random_state=0).fit(X)
+ labs=g.predict(X)
+ print('k',k, 'means', g.means_.ravel(), 'counts', np.bincount(labs))
+ print('groups')
+ for lab in range(k):
+  print(' group',lab, 'donors', sorted([str(c) for c,s,l in zip(cats,score,labs) if l==lab]))
+PY"

@@ -1,0 +1,25 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, collections, json
+# get all alignments and unfiltered alignments 50bp hg38
+rows=[]
+for out in ['alignments','unfiltered alignments']:
+ url=f'https://www.encodeproject.org/search/?type=File&mapped_read_length=50&assembly=GRCh38&file_format=bam&output_type={requests.utils.quote(out)}&format=json&limit=all&field=accession&field=assay_title&field=assay_term_name&field=dataset&field=biosample_ontology.term_name&field=biosample_ontology.classification&field=mapped_run_type&field=file_size'
+ r=requests.get(url,timeout=180); data=r.json().get('@graph',[]); print(out,len(data)); rows+=data
+print('total',len(rows))
+# filter cell line (classification in biosample_ontology)
+cells=[f for f in rows if f.get('biosample_ontology',{}).get('classification')=='cell line']
+print('cell_line files',len(cells))
+# group by assay_title/term
+ca=collections.Counter(tuple(f.get('assay_term_name',[])) if isinstance(f.get('assay_term_name'),list) else f.get('assay_term_name') for f in cells)
+print(ca)
+# group unique cell lines per assay term
+cell_by_assay=collections.defaultdict(set)
+for f in cells:
+ terms=f.get('assay_term_name')
+ if isinstance(terms,list): terms=tuple(terms)
+ else: terms=(terms,)
+ for t in terms: cell_by_assay[t].add(f['biosample_ontology']['term_name'])
+for t,cs in cell_by_assay.items(): print(t,len(cs),sorted(cs)[:30])
+# save rows
+with open('hg38_50bp_files.json','w') as fh: json.dump(rows,fh)
+PY"

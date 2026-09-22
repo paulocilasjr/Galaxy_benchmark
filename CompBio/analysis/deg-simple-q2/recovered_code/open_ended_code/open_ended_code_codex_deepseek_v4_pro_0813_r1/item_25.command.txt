@@ -1,0 +1,86 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, csv, collections, math
+hdr={}
+with gzip.open('ref/Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as f:
+    for line in f:
+        if line.startswith('>'):
+            tid=line.split()[0][1:]
+            gs=re.search(r'gene_symbol:(\\S+)', line)
+            gene=re.search(r'gene:(\\S+)', line)
+            hdr[tid]=(gs.group(1) if gs else '', gene.group(1) if gene else '')
+quants={}
+for s in ['sampleA','sampleB']:
+    with open(f'quant/{s}/quant.sf') as f:
+        quants[s]={row['Name']: float(row['NumReads']) for row in csv.DictReader(f, delimiter='\\t')}
+# gather transcripts observed > 0.01 in either
+tids=set(hdr)&(set(quants['sampleA'])|set(quants['sampleB']))
+# aggregate gene and list transcripts with rounded counts
+# Use raw counts. Filter transcripts if max count >= 1.
+data=[]
+for t in tids:
+    a=quants['sampleA'].get(t,0.0); b=quants['sampleB'].get(t,0.0)
+    if a+b>=1:
+        data.append((t,hdr[t][0],hdr[t][1],a,b))
+genes=collections.defaultdict(list)
+for t,gs,g,a,b in data:
+    genes[g].append((gs,t,a,b))
+print('genes with >=1 read transcript',len(genes))
+def gtest(table):
+    # table rows transcripts, cols A/B; returns G statistic and df, p (not pseudocount)
+    # remove rows all zero
+    rows=[r for r in table if sum(r)>0]
+    if len(rows)<2: return 0,0,1
+    colsum=[sum(r[c] for r in rows) for c in range(len(rows[0]))]
+    n=sum(colsum)
+    if n==0: return 0,0,1
+    G=0
+    for r in rows:
+        rowsum=sum(r)
+        if rowsum==0: continue
+        for c in range(len(r)):
+            obs=r[c]
+            exp=rowsum*colsum[c]/n
+            if obs>0 and exp>0:
+                G += obs*math.log(obs/exp)
+    G*=2
+    df=(len(rows)-1)*(len(colsum)-1)
+    return G,df,1.0 if df==0 else float('nan')
+from scipy.stats import chi2
+results=[]
+for g,lst in genes.items():
+    # only transcript rows with either count >=1, but include all; aggregate low maybe
+    table=[]
+    for gs,t,a,b in lst:
+        # round to nearest integer? G-test needs integers, but EM counts. Use counts rounded with deterministic.
+        table.append([a,b])
+    # Remove transcripts with total <0.5? already >=1. Round? 
+    table=[[int(round(a)),int(round(b))] for _,_,a,b in lst if a+b>=1]
+    if len(table)<2: continue
+    if sum(x+y for x,y in table)<10: continue
+    G,df,_=gtest(table)
+    p=chi2.sf(G,df) if df>0 and math.isfinite(G) else 1
+    totalA=sum(x for x,y in table); totalB=sum(y for x,y in table)
+    # Also compute L1 proportion difference
+    propA=[x/totalA for x,y in table]; propB=[y/totalB for x,y in table]
+    l1=sum(abs(pa-pb) for pa,pb in zip(propA,propB))
+    results.append((G,p,l1,totalA,totalB,g,[(gs,t,a,b) for gs,t,a,b in lst if a+b>=1]))
+results.sort(key=lambda x:x[0], reverse=True)
+print('top 40 G-test')
+for G,p,l1,totA,totB,g,rows in results[:40]:
+    gs=rows[0][0]
+    print(f'G={G:.1f} p={p:.3g} L1={l1:.3f} counts={totA:.0f}/{totB:.0f} {gs} {g}')
+    # print top transcript rows by contribution for top 5 maybe
+    if len(results[:40])>0 and G>results[0][0]-10000:
+        pass
+print('\\nTop 40 by L1 among total>=50')
+res2=sorted([r for r in results if r[3]>=50 and r[4]>=50], key=lambda x:-x[2])[:40]
+for G,p,l1,totA,totB,g,rows in res2:
+    print(f'G={G:.1f} p={p:.3g} L1={l1:.3f} counts={totA:.0f}/{totB:.0f} {rows[0][0]} {g}')
+    # show top rows by abs prop diff
+    totA=sum(x for _,_,x,y in rows); totB=sum(y for _,_,x,y in rows)
+    diffs=[]
+    for gs,t,a,b in rows:
+        diffs.append((abs(a/totA-b/totB), gs,t,a,b))
+    for d,gs,t,a,b in sorted(diffs,reverse=True)[:4]:
+        print('   ',gs,t,f'{a:.0f}->{b:.0f} d={d:.3f}')
+PY"

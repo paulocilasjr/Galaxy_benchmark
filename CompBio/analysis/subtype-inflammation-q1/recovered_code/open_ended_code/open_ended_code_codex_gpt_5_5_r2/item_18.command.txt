@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import gzip
+import numpy as np, pandas as pd
+from scipy import io, sparse
+from collections import defaultdict
+
+# Reuse definitions from script
+from analyze_inflammation import read_genes, read_matrix, log_norm, gene_cols, module_score, CELL_MARKERS, INFLAMMATION
+symbols,index=read_genes()
+xs=[]; labels=[]
+for sample,path in [('eye1','subtype.inflammation.q1.1.mtx.gz'),('eye2','subtype.inflammation.q1.2.mtx.gz')]:
+    raw=read_matrix(path); xs.append(log_norm(raw)); labels += [sample]*raw.shape[0]
+x=sparse.vstack(xs,format='csr'); labels=np.array(labels)
+scores={ct:module_score(x,gene_cols(index,genes)[0]) for ct,genes in CELL_MARKERS.items()}
+df=pd.DataFrame(scores); df['sample']=labels; df['cell_type']=df[list(CELL_MARKERS)].idxmax(axis=1)
+# print group means for glial markers and inflammatory markers in astro/muller assigned cells by sample
+check_genes=['RLBP1','GLUL','VIM','CA2','AQP4','SLC1A3','CLU','APOE','GFAP','ALDH1L1','S100B','SOX9','PAX6','HES1','CCL5','CXCL9','CXCL10','CXCL11','CCL2','IL1B','IL6','NFKBIA','IRF7','STAT1','HLA-B','HLA-C','B2M']
+cols,names=gene_cols(index,check_genes)
+print('genes present',names)
+for ct in ['muller glia cell','astrocyte','RPE cell','bipolar cell','rod cell']:
+  for sample in ['eye1','eye2']:
+    mask=(df.cell_type.values==ct)&(labels==sample)
+    if mask.sum()==0: continue
+    means=np.asarray(x[mask][:,cols].mean(axis=0)).ravel()
+    print('\\nGROUP',ct,sample,'n',mask.sum())
+    for g,v in sorted(zip(names,means), key=lambda kv: kv[1], reverse=True)[:18]:
+      print(g,round(float(v),3))
+PY"

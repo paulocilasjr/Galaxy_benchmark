@@ -1,0 +1,35 @@
+/bin/bash -lc "cat > prepare_inputs.py <<'PY'
+import pandas as pd, numpy as np, pickle
+INP_LEN=2114
+full=pd.read_pickle('snp_seqs_hg38.pkl')
+# define one-hot exactly
+def dna_to_one_hot(seqs):
+    seq_len=len(seqs[0])
+    assert all(len(s)==seq_len for s in seqs)
+    seq_concat=''.join(seqs).upper()+'ACGT'
+    one_hot_map=np.identity(5)[:,:-1].astype(np.int8)
+    base_vals=np.frombuffer(bytearray(seq_concat,'utf8'),dtype=np.int8)
+    base_vals[~np.isin(base_vals,np.array([65,67,71,84]))]=85
+    _, base_inds=np.unique(base_vals,return_inverse=True)
+    return one_hot_map[base_inds[:-4]].reshape((len(seqs),seq_len,4))
+
+ref_seqs=[]; alt_seqs=[]
+for _,row in full.iterrows():
+    pos=INP_LEN//2-1
+    if row.seq is None or pd.isna(row.seq):
+        # placeholder zeros, will overwrite score
+        seq='N'*INP_LEN
+        ref=seq; alt=seq
+    else:
+        seq=row.seq[:INP_LEN]
+        ref=seq
+        alt=seq[:pos]+row.adj_alt+seq[pos+1:]
+    ref_seqs.append(ref)
+    alt_seqs.append(alt)
+ref_onehot=dna_to_one_hot(ref_seqs)
+alt_onehot=dna_to_one_hot(alt_seqs)
+np.savez_compressed('rod_inputs.npz',ref=ref_onehot.astype(np.float32),alt=alt_onehot.astype(np.float32),label=full.label.values)
+print(ref_onehot.shape, alt_onehot.shape)
+print('placeholder idx',full.index[full.seq.isna()].tolist())
+PY
+python prepare_inputs.py"

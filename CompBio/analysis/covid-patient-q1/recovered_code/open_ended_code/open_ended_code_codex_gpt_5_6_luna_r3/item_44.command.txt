@@ -1,0 +1,42 @@
+/bin/bash -lc "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python - <<'PY'
+import h5py,numpy as np,re
+from scipy.sparse import csr_matrix
+p='covid.patients.q1.h5ad'; B=20000
+mods={
+'T': 'CD3D CD3E TRBC1 TRBC2 LTB IL7R CCR7 MALAT1'.split(),
+'B': 'MS4A1 CD79A CD37 CD74 HLA-DRA CD79B CD22 CD83'.split(),
+'NK': 'NKG7 GNLY GZMB PRF1 KLRD1 FCGR3A TYROBP'.split(),
+'Mono': 'LYZ LST1 FCN1 S100A8 S100A9 CTSS LGALS3 LILRB1'.split(),
+'DC': 'FCER1A CLEC10A CD1C CST3 HLA-DRA'.split(),
+'Platelet': 'PPBP PF4 NRGN'.split(),
+}
+isg='ISG15 IFIT1 IFIT2 IFIT3 IFIT5 MX1 IFI6 IFI27 IFI44 IFI44L IFITM1 IFITM2 IFITM3 OAS1 OAS2 OAS3 OASL RSAD2 USP18 IRF7 DDX58 IFIH1 XAF1 SAMD9L EPSTI1 PARP9 GBP1 GBP2 GBP4 GBP5 CMPK2 BST2 HERC5 TRIM22'.split()
+with h5py.File(p,'r') as f:
+ def dec(a):return [x.decode() if isinstance(x,bytes) else str(x) for x in a]
+ dn=dec(f['obs/donor_id/categories'][:]); codes=f['obs/donor_id/codes'][:]; ind=f['X/indptr'][:]; data=f['X/data']; ixds=f['X/indices']; n=len(codes); ng=int(f['X'].attrs['shape'][1]); cats=dec(f['var/feature_name/categories'][:]); fc=f['var/feature_name/codes'][:]; genes=np.array([cats[i] for i in fc]); gm={q:int(np.where(genes==q)[0][0]) for q in set(genes)}
+ allmods={k:[gm[q] for q in v if q in gm] for k,v in mods.items()}; isgi=[gm[q] for q in isg if q in gm]
+ # collect per-cell module score, assigned type, isg, donor
+ typ=[]; isc=[]; dlist=[]
+ for st in range(0,n,B):
+  en=min(n,st+B);lo=int(ind[st]);hi=int(ind[en]);ptr=ind[st:en+1]-lo; xb=csr_matrix((data[lo:hi],ixds[lo:hi],ptr),shape=(en-st,ng)); lib=np.asarray(xb.sum(1)).ravel()
+  def score(ids): return np.log1p(xb[:,ids].toarray()/(lib[:,None]+1e-9)*1e4).mean(1) if ids else np.zeros(en-st)
+  ms=np.vstack([score(v) for v in allmods.values()]).T
+  # platelet first if high, else max of main groups
+  names=list(allmods)
+  ass=np.array([names[i] for i in np.argmax(ms,axis=1)],dtype=object)
+  # Require reasonably separated? retain max
+  typ.append(ass);isc.append(score(isgi));dlist.append(codes[st:en])
+ typ=np.concatenate(typ);isc=np.concatenate(isc);dlist=np.concatenate(dlist)
+ order=np.argsort([int(re.search(r'\\d+',x).group()) for x in dn])
+ print('type counts by donor (percent)')
+ for q in order:
+  m=dlist==q; vals={k:np.mean(typ[m]==k) for k in allmods}
+  print(dn[q], ' '.join(f'{k}:{100*v:.1f}' for k,v in vals.items()), 'ISGmed',round(np.median(isc[m]),3))
+ print('\\nISG by donor/type median, fraction >0.8')
+ for q in order:
+  m=dlist==q; chunks=[]
+  for k in allmods:
+   mm=m&(typ==k)
+   if mm.sum(): chunks.append(f'{k}:{np.median(isc[mm]):.2f}/{np.mean(isc[mm]>.8):.2f}({mm.sum()})')
+  print(dn[q], ' '.join(chunks))
+PY"

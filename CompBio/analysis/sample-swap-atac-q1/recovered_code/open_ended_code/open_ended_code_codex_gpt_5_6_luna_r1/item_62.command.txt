@@ -1,0 +1,62 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections,numpy as np
+# matrix
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+ names=f.readline().rstrip().split('\\t')[3:]
+ rows=[]; coords=[]
+ for l in f:
+  x=l.rstrip().split('\\t'); coords.append((x[0],int(x[1]),int(x[2]))); rows.append([int(v) for v in x[3:]])
+a=np.asarray(rows,dtype=np.float32)
+# chunk offsets
+sizes=[]; bybase=collections.defaultdict(list)
+for l in open('sample.swap.atac.q1.chrom.sizes'):
+ n,v=l.split(); v=int(v); base=re.sub(r'_\\d+"'$'"','',n); bybase[base].append((n,v))
+off={}
+for base,items in bybase.items():
+ # file is in _numeric order; no suffix is sole chunk
+ cur=0
+ for n,v in sorted(items,key=lambda z: int(z[0].rsplit('_',1)[1]) if '_' in z[0] else 0):
+  off[n]=(base,cur); cur+=v
+# matrix global index
+idx={}
+for i,(c,s,e) in enumerate(coords):
+ base,oo=off[c]; idx[(base,oo+s)]=i
+# parse genes, marker gene names
+markers=['ALB','APOA1','APOA2','TTR','HNF4A','CYP3A','CYP2','FABP1','FABP2','ALPI','VIL1','MUC2','GAST','MUC5AC','ATP4A','ATP4B','INS','GCG','AMY2A','PRSS1','REG1','SFTPA1','SFTPB','SFTPC','SCGB1A1','FOXJ1','AQP5','UPK1A','UPK1B','UPK2','UPK3A','KRT20','KRT19','KRT8','KRT18','MYH6','MYH7','TNNT2','ACTC1','RYR2','DES','MYOD1','MYOG','PAX7','PAX3','SOX9','COL1A1','COL1A2','ACTA1','RBFOX3','SYN1','SNAP25','TUBB3','MAP2','GRIN1','CAMK2A','SLC17A7','GAD1','GAD2','AQP2','UMOD','SLC12A1','WT1','PAX2','CD74','MS4A1','CD3D','LST1','TYROBP','SPI1','NKG7','KLK3','NKX3-1','SRD5A2','KRT5','KRT14','MUC1']
+# names normalized: parse gene_name first token before [ etc, aliases list
+found=[]
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.clean.gtf.gz','rt') as f:
+ for l in f:
+  if l.startswith('#'): continue
+  x=l.rstrip().split('\\t')
+  if x[2]"'!='"'gene': continue
+  attr=x[8]
+  gid=re.search(r'gene_id \"(["'^"]+)"'"',attr)
+  gn=re.search(r'gene_name \"(["'^"]+)"'"',attr)
+  if not gid: continue
+  # all names in gene_name split aliases and strip species tags
+  alln=[]
+  for z in (gn.group(1) if gn else gid.group(1)).split('|'):
+   z=re.sub(r'\\s*\\[["'^]]+'"\\]','',z).strip()
+   alln.append(z)
+  hits=[m for m in markers if any(z.upper()==m.upper() or z.upper().startswith(m.upper()+'.') for z in alln)]
+  if not hits: continue
+  st,en=int(x[3]),int(x[4]); strand=x[6]; tss=st if strand=='+' else en
+  base=x[0]
+  # convert 1-based tss to 0-based-ish coordinate, bin starts 0,10000...
+  # locate chunk using global coord and local bin start
+  items=bybase[base]
+  cur=0
+  for cn,sz in sorted(items,key=lambda z:int(z[0].rsplit('_',1)[1]) if '_' in z[0] else 0):
+   if tss-1 < cur+sz:
+    local=tss-1-cur; globalp=cur+local; ii=idx.get((base,globalp//10000*10000+cur - cur))
+    # above wrong key? global coordinate = cur + local bin
+    ii=idx.get((base,cur+(local//10000)*10000))
+    break
+   cur+=sz
+  if ii is not None:
+   found.append((hits[0],alln[0],base,tss,ii,a[ii].astype(int)))
+print('samples',names,'found',len(found))
+for rec in found:
+ print(rec[:5],dict(zip(names,rec[5])))
+PY"

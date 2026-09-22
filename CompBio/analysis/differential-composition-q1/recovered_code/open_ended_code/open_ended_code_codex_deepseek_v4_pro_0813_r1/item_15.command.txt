@@ -1,0 +1,59 @@
+/bin/bash -lc "cat > annotate.R <<'EOF'
+suppressMessages({library(Seurat); library(Matrix)})
+obj <- readRDS('integrated.rds')
+genes <- read.table(gzfile('differential.composition.q1.genes.txt.gz'), header=TRUE, sep='\\t', stringsAsFactors=FALSE, comment.char='')
+id2sym <- setNames(genes"'$gene_symbols, genes$gene_ids)
+sym2ids <- split(genes$gene_ids, genes$gene_symbols)
+cat('"'cells', ncol(obj), 'clusters', length(unique(obj"'$seurat_clusters)), '"'\\n')
+print(table(obj"'$seurat_clusters, obj$sample))
+# average RNA normalized per cluster
+avg <- AverageExpression(obj, assays='"'RNA', group.by='seurat_clusters', slot='data', verbose=FALSE)"'$RNA
+# Map rownames to symbols, handle duplicates by picking first? For display we can convert IDs to symbols where unique and not duplicated.
+# compute mean expression for each marker set
+markers <- list(
+  astrocyte=c('"'GFAP','AQP4','SLC1A3','GJA1','S100B'),
+  microglia=c('C1QA','C1QB','C1QC','CSF1R','PTPRC','AIF1','TYROBP'),
+  RPE=c('RPE65','BEST1','RLBP1','TTR','SERPINF1','PMEL','SLC16A8'),
+  cone=c('ARR3','PDE6H','GNAT2','OPN1SW','OPN1MW','OPN1LW','GUCA1A','GNGT2'),
+  rod=c('RHO','NRL','PDE6A','PDE6B','CNGA1','NR2E3','GNAT1','SAG'),
+  horizontal=c('ONECUT1','LHX1','CALB2','SLC17A8','GAD1','GAD2'),
+  bipolar=c('VSX2','CABP5','GRIK1','TRPM1','GRM6','ISL1','PKCα'),
+  RGC=c('RBPMS','SNCG','NEFL','NEFM','POU4F2','THY1','SLIT2','ISL1'),
+  T_cells=c('CD3D','CD3E','CD3G','TRAC','IL7R','CCL5'),
+  macrophage=c('CD68','LYZ','C1QA','C1QB','C1QC','CD163','ITGAX'),
+  Schwann=c('MPZ','MBP','SOX10','PLP1','NGFR'),
+  pericyte=c('RGS5','NOTCH3','PDGFRB','ACTA2','TAGLN'),
+  B_cells=c('CD79A','MS4A1','CD19','BANK1','PAX5'),
+  fibroblast=c('DCN','COL1A1','LUM','COL1A2','SERPINE1'),
+  endothelial=c('PECAM1','VWF','CLDN5','FLT1','KDR','CDH5','EGFL7'),
+  muller=c('RLBP1','GLUL','SOX9','VIM','SLC1A3','DKK3','APOE')
+)
+score_mat <- function(set) {
+  idx <- unique(unlist(sym2ids[intersect(set, names(sym2ids))], use.names=FALSE))
+  idx <- idx[idx %in% rownames(avg)]
+  if(length(idx)==0) return(rep(0,ncol(avg)))
+  colMeans(avg[idx,,drop=FALSE])
+}
+scores <- do.call(rbind, lapply(names(markers), function(nm) score_mat(markers[[nm]])))
+rownames(scores) <- names(markers)
+print(round(scores,3))
+# zscore across clusters for each type
+z <- t(scale(t(scores)))
+print(round(z,3))
+cat('best cluster by score\\n')
+print(apply(scores,1,function(x) which.max(x)))
+# Specific top genes per cluster (by avg - mean over clusters)
+spec <- avg - rowMeans(avg)
+topn <- 25
+for(cl in colnames(spec)) {
+  ord <- order(spec[,cl], decreasing=TRUE)[1:topn]
+  ids <- rownames(spec)[ord]
+  syms <- ifelse("'!is.na(id2sym[ids]), id2sym[ids], ids)
+  cat('"'\\nCluster', cl, 'sample counts', paste(names(table(obj"'$sample[obj$seurat_clusters==cl])), table(obj$sample[obj$seurat_clusters==cl]), collapse='"' '), '\\n')
+  cat(paste0(syms, '(', round(spec[ids,cl],2), ')', collapse=', '), '\\n')
+}
+# save csv of scores and avg subset
+write.csv(scores, 'type_scores_clusters.csv')
+write.csv(avg, 'avg_RNA_clusters.csv')
+EOF
+Rscript annotate.R"

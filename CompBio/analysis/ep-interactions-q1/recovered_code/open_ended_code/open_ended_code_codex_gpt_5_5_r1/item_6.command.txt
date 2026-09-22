@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+from collections import defaultdict
+# read hic
+hic=[]
+with open('ep.interactions.q1.hic.csv') as f:
+    for r in csv.DictReader(f):
+        vals=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+        r['counts']=vals; r['mean']=sum(vals)/3; r['distance_bp']=int(r['distance_bp'])
+        hic.append(r)
+print('Candidates HIC')
+for r in hic:
+    if r['set']=='candidate': print(r['pair_id'], r['distance_bp'], r['counts'], r['mean'])
+# background by distance bins maybe nearest +/-? compute expected via simple regression log(count+1) ~ log(distance)
+import numpy as np
+bg=[r for r in hic if r['set']=='background']
+X=np.array([[1, math.log(r['distance_bp'])] for r in bg for c in r['counts']])
+y=np.array([math.log(c+1) for r in bg for c in r['counts']])
+beta=np.linalg.lstsq(X,y,rcond=None)[0]
+res=y-X@beta
+sd=res.std(ddof=2)
+print('log model beta sd', beta, sd)
+for r in [r for r in hic if r['set']=='candidate']:
+    pred=float(np.array([1,math.log(r['distance_bp'])])@beta)
+    obs=math.log(r['mean']+1)
+    z=(obs-pred)/sd
+    print('hic z',r['pair_id'], 'obsmean',r['mean'], 'predcount',math.exp(pred)-1, 'z',z)
+# expression stats
+rows=[]
+with open('ep.interactions.q1.expr.csv') as f:
+    rows=list(csv.DictReader(f))
+by=defaultdict(lambda: defaultdict(lambda: {'control':[], 'perturbed':[]}))
+for r in rows:
+    by[r['pair_id']][r['guide_id']][r['condition']].append(int(r['rna_count']))
+print('Expr guide ratios pert/control')
+for ep in sorted(by):
+    ratios=[]; diffs=[]
+    for g in sorted(by[ep]):
+        c=statistics.mean(by[ep][g]['control']); p=statistics.mean(by[ep][g]['perturbed'])
+        ratios.append(p/c); diffs.append(p-c)
+        print(ep,g,'c',round(c,1),'p',round(p,1),'ratio',round(p/c,3),'diff',round(p-c,1))
+    print(ep, 'overall ratio', round(statistics.mean([v for g in by[ep].values() for v in g['perturbed']])/statistics.mean([v for g in by[ep].values() for v in g['control']]),3), 'guide ratio mean', round(statistics.mean(ratios),3), 'sd',round(statistics.stdev(ratios),3))
+PY"

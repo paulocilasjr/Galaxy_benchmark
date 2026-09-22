@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, gzip, time
+print('loading counts...')
+t=time.time()
+counts=pd.read_csv('[REDACTED LOCAL PATH]',sep='\\t',index_col=0)
+print('loaded',counts.shape,'time',time.time()-t)
+# annot
+ann=pd.read_csv('[REDACTED LOCAL PATH]',sep='\\t',index_col=0)
+# merge cell types: normalize names to our 12
+rename={'epidermis_1':'epidermis','epidermis_2':'epidermis','epidermal_neural1':'epidermal_neural','epidermal_neural2':'epidermal_neural','neural_like1':'neural_like','neural_like2':'neural_like'}
+ann['ct']=ann['cell_type'].map(rename).fillna(ann['cell_type'])
+print(ann.ct.value_counts())
+# subset counts columns to cells with our ct (exclude HyTh/DiMes)
+cts=set(['endoderm','endostyle_csg','epidermal_neural','epidermis','mesodermal_notochord','muscular_somites','neural','neural_like','putative_neuro_endo','somite','tailbud','tailbud_neural'])
+cells=ann[ann.ct.isin(cts)].index
+print('cells kept',len(cells),'of',len(ann))
+common_cols=counts.columns.intersection(cells)
+print('common cols',len(common_cols))
+# subset and aggregate sum by ct
+sub=counts.loc[:,common_cols]
+print('sub shape',sub.shape)
+ct=ann.loc[common_cols,'ct']
+agg=sub.groupby(ct,axis=1).sum()
+print('agg shape',agg.shape)
+# normalize each column to sum 1e6 (like our file)
+cpm=agg.div(agg.sum(axis=0),axis=1)*1e6
+# subset genes to ours
+ours=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+common_genes=ours.index.intersection(cpm.index)
+print('genes common',len(common_genes))
+ref=cpm.loc[common_genes]
+our=ours.loc[common_genes]
+print('ref columns',ref.columns.tolist())
+# save
+ref.to_csv('ref_pseudobulk_cpm.tsv',sep='\\t')
+our.to_csv('our_subset.tsv',sep='\\t')
+print('done')
+PY"

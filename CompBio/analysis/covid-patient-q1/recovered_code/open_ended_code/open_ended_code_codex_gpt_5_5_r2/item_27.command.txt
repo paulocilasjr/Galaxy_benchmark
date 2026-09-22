@@ -1,0 +1,61 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from scipy.cluster.hierarchy import linkage, fcluster, leaves_list
+from scipy.spatial.distance import pdist, squareform
+z=np.load('donor_pseudobulk.npz', allow_pickle=True)
+counts=z['counts']; donors=z['donors'].astype(str); genes=z['genes'].astype(str); cell_counts=z['cell_counts']
+nums=np.array([int(d.replace('donor','')) for d in donors])
+lib=counts.sum(axis=1)
+logcpm=np.log1p(counts/lib[:,None]*1e6)
+# filter genes by mean and variance
+mean=logcpm.mean(axis=0); var=logcpm.var(axis=0)
+# exclude ribosomal/mito/hb? no MT- maybe feature symbols
+mask=(mean>0.05)
+# top variable by CV adjusted just use variance after zscore later
+idx=np.where(mask)[0]
+top=idx[np.argsort(var[idx])[-1000:]]
+X=logcpm[:,top]
+# z per gene across donors
+X=(X-X.mean(axis=0))/(X.std(axis=0)+1e-8)
+# PCA via SVD
+U,S,Vt=np.linalg.svd(X, full_matrices=False)
+pc=U*S
+print('explained first 8', (S**2/np.sum(S**2))[:8])
+print('PC donor coords numeric order')
+df=pd.DataFrame({'donor':donors,'num':nums,'PC1':pc[:,0],'PC2':pc[:,1],'PC3':pc[:,2],'PC4':pc[:,3]})
+print(df.sort_values('num').to_string(index=False, float_format=lambda x:f'{x:8.3f}'))
+# hierarchical clusters for k=2..5 using correlation/euclidean
+for metric in ['euclidean','correlation']:
+    print('\\nmetric',metric)
+    D=pdist(X, metric=metric)
+    Z=linkage(D, method='ward' if metric=='euclidean' else 'average')
+    order=leaves_list(Z)
+    print('leaf order', ','.join(donors[order]))
+    for k in [2,3,4,5,6]:
+        labs=fcluster(Z, k, criterion='maxclust')
+        groups=[]
+        for lab in sorted(set(labs)):
+            group=sorted(nums[labs==lab])
+            groups.append(group)
+        print('k',k,groups)
+# simple kmeans 2 on PCs/top X deterministic multiple seeds
+rng=np.random.default_rng(1)
+def kmeans(Y,k=2,ninit=100):
+    best=None
+    n=Y.shape[0]
+    for _ in range(ninit):
+        centers=Y[rng.choice(n,k,replace=False)].copy()
+        for it in range(100):
+            dist=((Y[:,None,:]-centers[None,:,:])**2).sum(2)
+            lab=dist.argmin(1)
+            new=np.array([Y[lab==j].mean(0) if np.any(lab==j) else centers[j] for j in range(k)])
+            if np.allclose(new,centers): break
+            centers=new
+        inertia=sum(((Y[lab==j]-centers[j])**2).sum() for j in range(k))
+        if best is None or inertia<best[0]: best=(inertia,lab,centers)
+    return best
+for dims in [2,3,5,10,20]:
+    _,lab,_=kmeans(pc[:,:dims],2,200)
+    # orient small/high PC maybe print groups
+    print('kmeans pc',dims, [sorted(nums[lab==j].tolist()) for j in [0,1]])
+PY"

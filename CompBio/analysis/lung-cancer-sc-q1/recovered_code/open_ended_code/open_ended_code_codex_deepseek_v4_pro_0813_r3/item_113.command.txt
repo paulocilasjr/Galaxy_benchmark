@@ -1,0 +1,60 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, pandas as pd, numpy as np, h5py, scipy.sparse as sp, time, sys
+p='luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad'
+out='centroids_celltype_tumor.npz'
+# load our symbols and full var symbols
+our=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+oursym=our.var['symbol'].values
+f=ad.read_h5ad(p, backed='r')
+fvar=f.var.index.values  # 6000 symbols
+obs=f.obs
+labels=obs['cell_type_tumor'].astype(str).values
+total_counts=obs['total_counts'].values.astype(np.float64)
+# common mapping full->our
+oursym_to_idx=pd.Series(np.arange(len(oursym)), index=oursym)
+common_full=[]; common_our=[]
+for j,g in enumerate(fvar):
+    if g in oursym_to_idx.index:
+        common_full.append(j); common_our.append(oursym_to_idx[g])
+common_full=np.array(common_full,dtype=np.int64)
+common_our=np.array(common_our,dtype=np.int64)
+print('n common',len(common_full),'n full genes',len(fvar))
+cats, codes=np.unique(labels, return_inverse=True)
+n_cat=len(cats); n_genes=len(common_full)
+print('n cats',n_cat)
+# open h5py raw_counts arrays
+h=h5py.File(p,'r')
+g=h['layers/raw_counts']
+data=g['data']; indices=g['indices']; indptr=g['indptr']
+n=h['obs/_index'].shape[0]
+# aggregate sums and counts
+sums=np.zeros((n_cat,n_genes),dtype=np.float64)
+counts=np.zeros(n_cat,dtype=np.float64)
+chunk=50000
+start_time=time.time()
+for start in range(0,n,chunk):
+    end=min(start+chunk,n)
+    # build csr for chunk full genes
+    s=indptr[start]; e=indptr[end]
+    row=indices[s:e].astype(np.int64)
+    col=data[s:e].astype(np.float64)
+    rows=np.repeat(np.arange(end-start), np.diff(indptr[start:end+1]))
+    Xfull=sp.csr_matrix((col,(rows,row)),shape=(end-start,len(fvar)))
+    Xc=Xfull[:,common_full]
+    lib=total_counts[start:end].copy(); lib[lib<=0]=1
+    Xn=Xc.multiply(1e4/lib[:,None]).tocsr()
+    Xn.data=np.log1p(Xn.data)
+    # one-hot O
+    O=sp.csr_matrix((np.ones(end-start), (np.arange(end-start), codes[start:end])), shape=(end-start,n_cat))
+    M=Xn.T @ O
+    sums += M.T.toarray()
+    counts += np.bincount(codes[start:end], minlength=n_cat)
+    if (start//chunk)%3==0:
+        print('chunk',start,'elapsed',time.time()-start_time,flush=True)
+h.close()
+means=sums/counts[:,None]
+np.savez_compressed(out, means=means, cats=cats, counts=counts, common_full=common_full, common_our=common_our)
+print('saved',out,'time',time.time()-start_time)
+print(pd.Series(counts,index=cats).to_string())
+PY
+python [REDACTED LOCAL PATH]"

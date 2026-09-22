@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+id2target=dict(zip(ref.id, ref.target_gene_name))
+calls['target']=calls.feature_call.map(id2target)
+bc2col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc2col)
+lib=np.asarray(mat.sum(axis=0)).ravel()
+path=features[:20]
+sub=mat[[features.index(g) for g in path],:].tocsc()
+logmat=np.log2(1 + np.asarray(sub.todense()) * (10000/lib[None,:]))
+df=pd.DataFrame(logmat.T, columns=path)
+df['cell']=barcodes
+df=df.merge(calls[['cell_barcode','target','col']], left_on='cell', right_on='cell_barcode')
+nt=df[df.target=='Non-Targeting']
+for t in ['STAT1','ISG15']:
+    grp=df[df.target==t]
+    print('\\nTarget', t, 'n', len(grp))
+    for g in path:
+        print(f'{g:10s} target={grp[g].mean():6.3f} NT={nt[g].mean():6.3f} diff={grp[g].mean()-nt[g].mean():7.3f}')
+    # count genes with diff < -0.5 excluding target
+    exclude=[t] if t in path else []
+    genes=[g for g in path if g not in exclude]
+    big=[g for g in genes if grp[g].mean()-nt[g].mean() < -0.5]
+    print('genes (excl target) with diff<-0.5:', big)
+PY"

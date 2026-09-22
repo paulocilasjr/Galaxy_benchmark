@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('aln.chr22.bam')
+fa=pysam.FastaFile('chr22.fa')
+start,end=27079100,27080650
+base_counts=collections.defaultdict(collections.Counter)
+ins_counts=collections.defaultdict(collections.Counter) # insertion after pos (1-based pos before insertion), seq or ''
+del_counts=collections.defaultdict(collections.Counter) # deletion starting at pos, length count maybe D length at every deleted pos
+cov=collections.Counter()
+for r in bam.fetch('chr22', start-1, end):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    qpos=0; refpos=r.reference_start+1
+    cig=r.cigartuples
+    for op,l in cig:
+        if op==0 or op==7 or op==8: # M/=/X
+            seq=r.query_sequence[qpos:qpos+l]
+            for i,b in enumerate(seq):
+                p=refpos+i
+                if start<=p<=end:
+                    base_counts[p][b]+=1; cov[p]+=1
+            qpos+=l; refpos+=l
+        elif op==1: # insertion before refpos, after refpos-1
+            seq=r.query_sequence[qpos:qpos+l]
+            p=refpos-1
+            if start<=p<=end: ins_counts[p][seq]+=1
+            qpos+=l
+        elif op==2: # deletion from refpos length l
+            for p in range(refpos,refpos+l):
+                if start<=p<=end: del_counts[p][l]+=1
+            refpos+=l
+        elif op==4:
+            qpos+=l
+        elif op==3:
+            refpos+=l
+# print candidate bases where nonref >5 and freq, or two alleles >10
+for p in range(start,end+1):
+    c=base_counts[p]
+    if sum(c.values())==0: continue
+    ref=fa.fetch('chr22',p-1,p).upper()
+    total=sum(c.values())+sum(del_counts[p].values())
+    alleles=[]
+    for b,n in c.items(): alleles.append((b,n))
+    for l,n in del_counts[p].items(): alleles.append((f'D{l}',n))
+    major=sorted(alleles,key=lambda x:x[1],reverse=True)
+    if len(major)>=2 and major[1][1]>=20 or (major and major[0][0]"'!=ref and major[0][1]>=20 and major[0][1]/max(1,total)>0.8):
+        print('"'POS',p,'ref',ref,'total',total,'base',dict(c),'del',dict(del_counts[p]),'ins_after_prev',dict(ins_counts.get(p-1,{})),'ins_after_here',dict(ins_counts.get(p,{})))
+print('insertions with support')
+for p,c in sorted(ins_counts.items()):
+    if sum(c.values())>=5: print(p,dict(c),'refbase',fa.fetch('chr22',p-1,p).upper())
+PY"

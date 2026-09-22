@@ -1,0 +1,23 @@
+/bin/bash -lc "TF_CPP_MIN_LOG_LEVEL=1 arch -arm64 .venv-arm/bin/python - <<'PY'
+import json
+import numpy as np
+import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
+import optimize_saluki as o
+history=json.load(open('optimization_history.json'))
+top=sorted(history[1]['all_candidates'], key=lambda x:x['mean_score'], reverse=True)[:3]
+seqs=[x['sequence'] for x in top]
+model=o.build_model()
+@tf.function(input_signature=[tf.TensorSpec((3,o.MAX_LENGTH,6),tf.float32)])
+def infer(x): return model(x,training=False)
+x=o.encode(seqs)
+values=[]
+for path in o.MODEL_FILES:
+ model.load_weights(path)
+ values.append(infer(x).numpy()[:,0])
+values=np.array(values,dtype=np.float64)
+print('devices',tf.config.get_visible_devices())
+for candidate,mean,std in zip(top,values.mean(0),values.std(0)):
+ print(candidate['edit'],format(mean,'.12f'),format(std,'.12f'))
+print('cpu_margin',format(values.mean(0)[0]-values.mean(0)[1],'.12f'))
+PY"

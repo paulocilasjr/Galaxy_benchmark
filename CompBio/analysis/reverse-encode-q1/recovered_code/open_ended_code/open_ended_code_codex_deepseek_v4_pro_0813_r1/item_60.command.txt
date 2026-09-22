@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, collections
+exps=json.load(open('experiments_analyses.json'))['@graph']
+bw=json.load(open('files_bigwig_meta.json'))['@graph']
+bwmap={f['accession']:f for f in bw}
+out=[]
+for e in exps:
+ acc=e['accession']
+ anas=[a for a in e.get('analyses',[]) if a.get('pipeline_version')=='3.0.0-alpha.2']
+ if not anas: continue
+ afiles=set()
+ for a in anas: afiles.update(x.split('/')[-2] for x in a.get('files',[]))
+ files=[]
+ for aid in afiles:
+  f=bwmap.get(aid)
+  if f and f.get('output_type')=='read-depth normalized signal' and f.get('file_size'):
+   key=f['s3_uri'].replace('s3://encode-public/','')
+   files.append({'accession':f['accession'],'rep':f.get('biological_replicates',[]),'url':'https://encode-public.s3.amazonaws.com/'+key,'size':f['file_size']})
+ if files:
+  # sort by rep first
+  files.sort(key=lambda x: x['rep'][0] if x['rep'] else 0)
+  out.append({'exp':acc,'files':files})
+json.dump(out,open('candidate_bw.json','w'),indent=2)
+print('candidates',len(out),'files',sum(len(c['files']) for c in out))
+print('multi files',sum(len(c['files'])>1 for c in out))
+print(json.dumps(out[:2],indent=2))
+PY"

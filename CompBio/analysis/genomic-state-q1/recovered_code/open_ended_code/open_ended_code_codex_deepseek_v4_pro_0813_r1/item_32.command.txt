@@ -1,0 +1,32 @@
+/bin/bash -c "python3 - <<'PY'
+import json, urllib.parse, urllib.request, concurrent.futures
+j=json.load(open('[REDACTED LOCAL PATH]'))['hg38']['coreCcres']['cCREs_view']
+children=[]
+for k,v in j.items():
+    if isinstance(v,dict) and v.get('type','').startswith('bigBed') and v.get('subGroups','') and 'view=cCREs_view' in v.get('subGroups',''):
+        children.append((k,v.get('subGroups','')))
+organs=['brain','liver','embryo']
+sel=[c for c in children if any(f'organ={o}' in c[1] for o in organs)]
+print('selected',len(sel))
+def query(item):
+    k,sg=item
+    url='https://api.genome.ucsc.edu/getData/track?'+urllib.parse.urlencode({'genome':'hg38','track':k,'chrom':'chr11','start':124738681,'end':124738772})
+    try:
+        with urllib.request.urlopen(url,timeout=20) as r:
+            d=json.load(r)
+        arr=d.get(k,[])
+        if arr:
+            return (k,sg,arr)
+    except Exception as e:
+        return (k,sg,['ERR',str(e)])
+    return None
+hits=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+    for res in ex.map(query,sel):
+        if res: hits.append(res)
+print('hits',len(hits))
+for k,sg,arr in hits:
+    print('\\n',k, sg)
+    for item in arr:
+        print(item)
+PY"

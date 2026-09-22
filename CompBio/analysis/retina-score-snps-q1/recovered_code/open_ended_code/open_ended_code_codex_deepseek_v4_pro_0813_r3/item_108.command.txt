@@ -1,0 +1,87 @@
+/bin/bash -c "cat > work/score_rod.py <<'PY'
+import pandas as pd, numpy as np, torch, h5py, time, sys, os
+out=pd.read_pickle('work/snps_final_hg38_with_seq.pkl')
+INP_LEN=2114; HALF=1056
+# build ref/alt sequences
+ref_seqs=[]; alt_seqs=[]
+for _,r in out.iterrows():
+    seq=r['seq']; ref=r['ref']; alt=r['alt']
+    # mimic notebook correction: if base at center doesn't match ref, replace len(ref)
+    if ref "'!= seq[HALF:HALF+len(ref)]:
+        refseq = seq[:HALF] + ref + seq[HALF+len(ref):]
+    else:
+        refseq = seq
+    altseq = refseq[:HALF] + alt + refseq[HALF+len(ref):]
+    ref_seqs.append(refseq); alt_seqs.append(altseq)
+
+def one_hot(seqs):
+    map_={'"'A':0,'C':1,'G':2,'T':3}
+    arr=np.zeros((len(seqs),4,INP_LEN),dtype=np.float32)
+    for i,s in enumerate(seqs):
+        for j,ch in enumerate(s):
+            if ch in map_:
+                arr[i,map_[ch],j]=1.0
+    return arr
+print('one-hot building',flush=True)
+ref_x=torch.from_numpy(one_hot(ref_seqs))
+alt_x=torch.from_numpy(one_hot(alt_seqs))
+print('ref alt shapes',ref_x.shape,alt_x.shape,flush=True)
+torch.set_num_threads(12)
+
+def load_model(path):
+    f=h5py.File(path,'r')
+    def ds(p): return torch.from_numpy(np.array(f[p]))
+    w1=ds('model_weights/conv1d/conv1d/kernel:0').permute(2,1,0).contiguous()
+    b1=ds('model_weights/conv1d/conv1d/bias:0').contiguous()
+    ws=[]
+    for i in range(1,9):
+        w=ds(f'model_weights/conv1d_{i}/conv1d_{i}/kernel:0').permute(2,1,0).contiguous()
+        b=ds(f'model_weights/conv1d_{i}/conv1d_{i}/bias:0').contiguous()
+        ws.append((w,b))
+    wct=ds('model_weights/logcounts/logcounts/kernel:0').reshape(1,512,1).contiguous()
+    bct=ds('model_weights/logcounts/logcounts/bias:0').reshape(1).contiguous()
+    f.close()
+    return w1,b1,ws,wct,bct
+
+@torch.no_grad()
+def predict(x, params):
+    w1,b1,ws,wct,bct=params
+    out=torch.relu(torch.nn.functional.conv1d(x,w1,b1))
+    for i,(w,b) in enumerate(ws,1):
+        y=torch.relu(torch.nn.functional.conv1d(out,w,b,dilation=2**i))
+        xlen=out.shape[2]; ylen=y.shape[2]; crop=(xlen-ylen)//2
+        out=y+out[:,:,crop:crop+ylen]
+    avg=out.mean(dim=2)
+    return torch.nn.functional.linear(avg,wct.reshape(1,512),bct).reshape(-1)
+
+def predict_in_batches(x, params, batch_size=32):
+    preds=[]
+    n=x.shape[0]
+    for start in range(0,n,batch_size):
+        preds.append(predict(x[start:start+batch_size],params))
+    return torch.cat(preds).numpy()
+
+FOLDS=5
+all_ref=np.zeros((FOLDS,len(ref_x)),dtype=np.float32)
+all_alt=np.zeros((FOLDS,len(ref_x)),dtype=np.float32)
+for fold in range(FOLDS):
+    t=time.time()
+    path=f'work/Rod_fold{fold}.h5'
+    print('loading',path,flush=True)
+    params=load_model(path)
+    print('predicting ref',flush=True)
+    r=predict_in_batches(ref_x,params,32)
+    print('predicting alt',flush=True)
+    a=predict_in_batches(alt_x,params,32)
+    all_ref[fold]=r; all_alt[fold]=a
+    print('fold',fold,'done in',time.time()-t,'ref mean',r.mean(),'alt mean',a.mean(),flush=True)
+
+lfc=(all_alt-all_ref).mean(axis=0)
+out['Rod_fold_avg_lfc']=lfc
+out['abs_Rod_fold_avg_lfc']=np.abs(lfc)
+out[['idx','chr','pos1','ref','alt','strand','label','Rod_fold_avg_lfc','abs_Rod_fold_avg_lfc']].to_csv('work/rod_scores.tsv',sep='\\t',index=False)
+np.save('work/rod_lfc.npy',lfc)
+print('saved scores',flush=True)
+print(out[['label','abs_Rod_fold_avg_lfc']].head())
+PY
+python work/score_rod.py"

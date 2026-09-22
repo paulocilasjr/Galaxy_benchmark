@@ -1,0 +1,25 @@
+/bin/bash -lc "cd work && python3 - <<'PY'
+import numpy as np
+from collections import Counter, defaultdict
+bc_list=[]; umi_list=[]
+with open('read_bc_umi.tsv') as f:
+    for l in f:
+        rid,b,u=l.rstrip().split('\\t'); bc_list.append(b); umi_list.append(u)
+barcodes=sorted(set(bc_list)); bidx={b:i for i,b in enumerate(barcodes)}; ridx=np.array([bidx[b] for b in bc_list],dtype=np.int32)
+h=np.load('human_scores.npy');m=np.load('mouse_scores.npy');p=np.load('pig_scores.npy')
+S=np.vstack([h,m,p]).T
+# read argmax and second
+order=np.argsort(-S,axis=1); best=S[np.arange(len(S)),order[:,0]]; second=S[np.arange(len(S)),order[:,1]]; top_read=order[:,0]
+for margin in [0,1,2,5,10]:
+    assign=np.where((best-second>=margin), top_read, -1)
+    # UMI unique species per barcode
+    umi_sets=[defaultdict(set) for _ in barcodes]
+    for i,sp in enumerate(assign):
+        if sp>=0: umi_sets[ridx[i]][sp].add(umi_list[i])
+    counts=np.zeros((len(barcodes),3),dtype=int)
+    for i in range(len(barcodes)):
+        for sp,s in umi_sets[i].items(): counts[i,sp]=len(s)
+    top=counts.argmax(axis=1); c=Counter(top)
+    print('margin',margin,'counts',[c[i] for i in range(3)],'pcts',[round(c[i]/len(barcodes)*100) for i in range(3)])
+    # also count total UMIs per species (not unique per barcode? top species by total assigned reads) 
+PY"

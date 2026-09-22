@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections, itertools
+bam=pysam.AlignmentFile('reads_vs_contigs.bam','rb')
+varpos=[181,241,541,700,950,1150,1151,1152,1399]
+labels=[str(x) for x in varpos]
+# extract observations per alignment at SNP and insertion, query/contig 1 based
+obs_by_name=collections.defaultdict(dict)
+for a in bam.fetch(until_eof=True):
+ if a.is_unmapped or a.is_secondary or a.is_supplementary: continue
+ # aligned pairs with ref positions; for indel inspect cigar by stepping
+ for q,r in a.get_aligned_pairs(matches_only=False):
+  if r is None: continue
+  p=r+1
+  if p in varpos and q is not None:
+   obs_by_name[a.query_name][p]=a.query_sequence[q]
+ # insertion following ref coordinate 700: parse
+ refpos=a.reference_start
+ qpos=0
+ for op,n in a.cigartuples or []:
+  if op in (0,7,8):
+   # M consumes both
+   ref_end=refpos+n
+   if refpos <= 699 < ref_end and op in (0,7,8):
+    # insertion immediately after 700 occurs after offset 700-refpos+1; if next op I
+    pass
+   refpos += n; qpos += n
+  elif op==1:
+   # insertion after previous reference pos
+   if refpos==700: # 0-based next reference coordinate is 700 => after 1-based 700
+    seq=a.query_sequence[qpos:qpos+n]
+    obs_by_name[a.query_name][700]='I'+seq
+   qpos += n
+  elif op in (2,3):
+   # deletion consumes reference; no insert
+   refpos += n
+  elif op==4: qpos+=n
+# print counts and pair-wise links
+for p in varpos:
+ c=collections.Counter()
+ for o in obs_by_name.values():
+  if p in o: c[o[p]]+=1
+ print('site',p,c)
+print('\\nper pair observations all')
+for name,o in sorted(obs_by_name.items(),key=lambda x:int(x[0].split('_')[-1])):
+ # only pairs with >=2 var obs
+ if len(o)>=2:
+  print(name,' '.join(f'{p}:{o[p]}' for p in varpos if p in o))
+# create co-observation links
+print('\\nco-links')
+for p,q in itertools.combinations(varpos,2):
+ c=collections.Counter()
+ for o in obs_by_name.values():
+  if p in o and q in o: c[(o[p],o[q])]+=1
+ if c: print(p,q,c)
+PY"

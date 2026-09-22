@@ -1,0 +1,85 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, sys, math
+from collections import defaultdict
+
+def read_intervals(path):
+    d=defaultdict(list)
+    with gzip.open(path,'rt') as f:
+        for line in f:
+            if line.startswith('track') or line.startswith('#'):
+                continue
+            p=line.rstrip('\\n').split('\\t')
+            if len(p)<3:
+                continue
+            chrom=p[0]; start=int(p[1]); end=int(p[2]); name=p[3] if len(p)>3 else ''
+            d[chrom].append((start,end,name))
+    for chrom in d:
+        d[chrom].sort()
+    return d
+
+def merge_intervals(intervals):
+    out=[]
+    for s,e in intervals:
+        if out and s <= out[-1][1]:
+            if e>out[-1][1]: out[-1]=(out[-1][0],e)
+        else:
+            out.append((s,e))
+    return out
+
+peaks=read_intervals('ENCFF333TAT.bed.gz')
+ann=read_intervals('E055_15_coreMarks_dense.bed.gz')
+
+# naive sum of all peaks
+naive_peak_total=sum(e-s for intervals in peaks.values() for s,e,_ in intervals)
+print('naive peak bases', naive_peak_total)
+
+peak_merged={c:merge_intervals([(s,e) for s,e,_ in v]) for c,v in peaks.items()}
+union_total=sum(e-s for v in peak_merged.values() for s,e in v)
+print('merged peak bases', union_total, 'intervals', sum(len(v) for v in peak_merged.values()))
+
+# annotation merge any and state
+any_merged={}
+state_merged={}
+ann_total=0
+state_total=0
+for c, intervals in ann.items():
+    any_int=[(s,e) for s,e,_ in intervals]
+    ann_total += sum(e-s for s,e,_ in intervals)
+    state_total += sum(e-s for s,e,n in intervals if n=='14_ReprPCWk')
+    any_merged[c]=merge_intervals(any_int)
+    state_merged[c]=merge_intervals([(s,e) for s,e,n in intervals if n=='14_ReprPCWk'])
+print('ann total bases', ann_total)
+print('state total bases', state_total)
+
+def overlap_length(a_list, b_list):
+    total=0; j=0; m=len(b_list)
+    for sa,ea in a_list:
+        while j<m and b_list[j][1] <= sa:
+            j+=1
+        k=j
+        while k<m and b_list[k][0] < ea:
+            s=max(sa,b_list[k][0]); e=min(ea,b_list[k][1])
+            if e>s: total += e-s
+            if b_list[k][1] >= ea:
+                break
+            k+=1
+    return total
+
+den=0; num=0
+for c, v in peak_merged.items():
+    den += overlap_length(v, any_merged.get(c, []))
+    num += overlap_length(v, state_merged.get(c, []))
+print('den annotated peak bases', den)
+print('num state overlap peak bases', num)
+print('pct', num/den*100, 'round', round(num/den*100))
+# using union_total den
+print('pct union den', num/union_total*100, round(num/union_total*100))
+
+# naive intersect: sum overlap per original peak (double counts overlapping peaks)
+naive_den=0; naive_num=0
+for c, intervals in peaks.items():
+    peaks_int=[(s,e) for s,e,_ in intervals]
+    naive_den += overlap_length(peaks_int, any_merged.get(c, []))
+    naive_num += overlap_length(peaks_int, state_merged.get(c, []))
+print('naive den', naive_den, 'num', naive_num, 'pct', naive_num/naive_den*100, round(naive_num/naive_den*100))
+PY"

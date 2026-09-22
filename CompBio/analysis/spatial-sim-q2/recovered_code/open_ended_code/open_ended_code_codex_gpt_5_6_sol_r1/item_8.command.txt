@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+X=mmread('matrix.mtx.gz').tocsr().T.toarray().astype(float)
+types=sorted(meta.cell_type.unique()); Y=sc.values.astype(float); Yn=Y/Y.sum(1,keepdims=True)*1e4
+A=np.stack([Yn[meta.cell_type.values==t].mean(0) for t in types],1); fold=(A+.1)/(np.median(A,1)[:,None]+.1); sel=np.unique(np.concatenate([np.argsort(fold[:,j])[-100:] for j in range(6)]))
+Xn=X/X.sum(1,keepdims=True)*1e4; P=np.array([nnls(A[sel],x[sel])[0] for x in Xn]);P/=P.sum(1,keepdims=True)
+for j,t in enumerate(types):
+ h,e=np.histogram(P[:,j],bins=np.arange(0,1.051,.05)); print('\\n',t); print(' '.join(f'{e[i]:.2f}:{h[i]}' for i in range(len(h)) if h[i]))
+# presence patterns around tumor, distance tests based threshold
+pos=pd.read_csv('tissue_positions.csv'); coords=pos[['array_row','array_col']].values.astype(float); D=np.sqrt(((coords[:,None]-coords[None,:])**2).sum(2)); np.fill_diagonal(D,np.inf)
+rng=np.random.default_rng(1)
+for cutoff in [.05,.1,.15,.2,.25,.3]:
+ pres=P>cutoff; tumor=pres[:,-1]
+ print('\\ncut',cutoff,'tc',tumor.sum())
+ for j,t in enumerate(types[:-1]):
+  a=pres[:,j]; obs=D[a][:,tumor].min(1).mean()
+  # randomized TC locations same n; evaluates clustering vs fixed type
+  null=np.array([D[a][:,rng.choice(900,tumor.sum(),replace=False)].min(1).mean() for _ in range(1000)])
+  z=(obs-null.mean())/null.std(); p=(1+(null<=obs).sum())/1001
+  # label permutation type spots too preserving n? same equivalent expected
+  print(f'{t:20s} n={a.sum():3} d={obs:.2f} z={z:.1f} p={p:.3g}')
+PY"

@@ -1,0 +1,84 @@
+/bin/bash -lc "cat > analyze_shift_fast.py <<'PY'
+import gzip, py2bit, numpy as np, pandas as pd, time, sys
+frag='unknown.shift.frag.bed.gz'
+tb=py2bit.open('hg38.2bit')
+valid=set(tb.chroms()); chromlen=tb.chroms()
+bases='ACGT'
+# range
+Amin,Amax=-10,10
+Bmin,Bmax=-10,10
+w=10; W=2*w+1
+Avals=np.arange(Amin,Amax+1,dtype=int); Bvals=np.arange(Bmin,Bmax+1,dtype=int)
+NA=len(Avals); NB=len(Bvals)
+# broad windows
+LL=90; RL=90
+lstart_off=-40; rend_off=40; rstart_off=-50; lend_off=50
+# load fragments
+t=time.time()
+df=pd.read_csv(frag, sep='\\t', header=None, names=['chrom','start','end','barcode','count'], usecols=['chrom','start','end'], dtype={'chrom':str,'start':int,'end':int})
+mask=df['chrom'].isin(valid).values
+df=df[mask].reset_index(drop=True)
+N=len(df)
+print('N',N,'load',time.time()-t, file=sys.stderr)
+Larr=np.full((N,LL), -1, dtype=np.int8)
+Rarr=np.full((N,RL), -1, dtype=np.int8)
+base_idx=np.full(256,-1,dtype=np.int8)
+for i,b in enumerate(bases): base_idx[ord(b)]=i
+# encode function
+def get_codes(chrom, st, en, width):
+    clen=chromlen[chrom]
+    if en<=st: return np.full(width,-1,dtype=np.int8)
+    qs=max(st,0); qe=min(en,clen)
+    seq=''
+    if qs<qe:
+        seq=tb.sequence(chrom,qs,qe).upper()
+    # pad with N => code -1
+    arr=np.full(width,-1,dtype=np.int8)
+    off=qs-st
+    # fill Ns already -1, then actual
+    arr[off:off+len(seq)] = base_idx[np.frombuffer(seq.encode('ascii'),dtype=np.uint8).copy()]
+    return arr
+# Loop; use apply? no
+for idx,row in df.iterrows():
+    s=int(row['start']); e=int(row['end']); chrom=row['chrom']
+    Larr[idx]=get_codes(chrom, s+lstart_off, s+lstart_off+LL, LL)
+    Rarr[idx]=get_codes(chrom, e+rstart_off, e+rstart_off+RL, RL)
+    if (idx+1)%20000==0:
+        print('fetched',idx+1,'time',time.time()-t, file=sys.stderr)
+print('fetched all',N,'time',time.time()-t, file=sys.stderr)
+# counts
+def compute_counts(arr, vals, base_start):
+    counts=np.zeros((len(vals),W,4),dtype=np.float64)
+    for i,v in enumerate(vals):
+        si=base_start-v
+        sub=arr[:,si:si+W]  # N x W
+        for p in range(W):
+            col=sub[:,p]
+            for b in range(4):
+                counts[i,p,b]=np.count_nonzero(col==b)
+        if (i+1)%5==0: print('cand',v,'time',time.time()-t, file=sys.stderr)
+    return counts
+left_counts=compute_counts(Larr, Avals, 44-w)
+right_counts=compute_counts(Rarr, Bvals, 45-w)
+# scores
+def kl(counts):
+    bg=np.array([0.25]*4)
+    totals=counts.sum(axis=2,keepdims=True)
+    freq=counts/np.maximum(totals,1e-12)
+    return (freq*np.log((freq+1e-12)/(bg+1e-12))).sum(axis=2).sum(axis=1)
+def ent(counts):
+    totals=counts.sum(axis=2,keepdims=True)
+    freq=counts/np.maximum(totals,1e-12)
+    return -(freq*np.log2(freq+1e-12)).sum(axis=2).sum(axis=1)
+print('LEFT KL')
+for A,sc in zip(Avals,kl(left_counts)): print(f'{A}\\t{sc:.4f}')
+print('LEFT ENT')
+for A,sc in zip(Avals,ent(left_counts)): print(f'{A}\\t{sc:.4f}')
+print('RIGHT KL')
+for B,sc in zip(Bvals,kl(right_counts)): print(f'{B}\\t{sc:.4f}')
+print('RIGHT ENT')
+for B,sc in zip(Bvals,ent(right_counts)): print(f'{B}\\t{sc:.4f}')
+np.savez('shift_counts_fast.npz', Avals=Avals,Bvals=Bvals,left_counts=left_counts,right_counts=right_counts)
+tb.close()
+PY
+python analyze_shift_fast.py > shift_scores_fast.txt"

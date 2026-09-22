@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, os, urllib.request, gzip, h5py, time
+loc=[x.decode() for x in h5py.File('finding.geo.q1.h5ad','r')['var/_index'][:]]
+records=[]; acc=None
+for line in open('geo_filelist_barcode_hits.tsv'):
+    if not line.startswith('\\t'):
+        acc=line.split('\\t')[0] if line.strip() else None
+    elif ('genes.tsv.gz' in line or 'features.tsv.gz' in line):
+        parts=line.strip().split('\\t')
+        if len(parts)>=5:
+            fname=parts[1]
+            try: size=int(parts[3])
+            except: size=0
+            if 180000 <= size <= 240000:
+                records.append((acc,fname,size))
+print('records',len(records))
+
+def url_for(acc,fname):
+    if fname.startswith('GSM'):
+        m=re.match(r'(GSM\\d+)', fname); gsm=m.group(1)
+        n=int(gsm[3:]); gp=f'GSM{n//1000:04d}nnn'
+        return f'https://ftp.ncbi.nlm.nih.gov/geo/samples/{gp}/{gsm}/suppl/{fname}'
+    n=int(acc[3:]); sp=f'GSE{n//1000:03d}nnn'
+    return f'https://ftp.ncbi.nlm.nih.gov/geo/series/{sp}/{acc}/suppl/{fname}'
+for idx,(acc,fname,size) in enumerate(records):
+    path='genescheck_'+fname.replace('/','_')
+    if not os.path.exists(path):
+        try: urllib.request.urlretrieve(url_for(acc,fname), path)
+        except Exception as e: print('ERR',acc,fname,e); continue
+    try: ids=[l.decode().split('\\t')[0].split()[0] for l in gzip.open(path)]
+    except Exception as e: print('READERR',acc,fname,e); continue
+    exact=(ids==loc); prefix=sum(a==b for a,b in zip(ids,loc))
+    if len(ids)==28692 or exact or prefix>20000:
+        print('MATCHLIKE',acc,fname,'size',size,'n',len(ids),'exact',exact,'prefix',prefix)
+    elif len(ids) not in (27998,31053,32285,31253,31210):
+        print('other',acc,fname,'n',len(ids),'prefix',prefix)
+PY"

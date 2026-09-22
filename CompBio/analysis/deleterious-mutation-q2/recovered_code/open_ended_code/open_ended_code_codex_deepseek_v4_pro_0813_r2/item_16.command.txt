@@ -1,0 +1,122 @@
+/bin/bash -c "python3 - <<'PY'
+import gzip, pysam, sys, json
+# Parse GTF CDS
+transcripts={}
+gene_info={}
+with gzip.open('ann/gencode.v47.annotation.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        chrom=p[0]; typ=p[2]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+        if typ"'!='"'CDS': continue
+        # parse attrs
+        d={}
+        for x in attrs.split(';'):
+            x=x.strip()
+            if not x: continue
+            # format key \"value\" or key value?
+            parts=x.split(' ',1)
+            if len(parts)==2:
+                d[parts[0]]=parts[1].strip().strip('\"')
+            else:
+                kv=x.split('=')
+                if len(kv)==2: d[kv[0]]=kv[1].strip().strip('\"')
+        tid=d.get('transcript_id'); gid=d.get('gene_id'); gname=d.get('gene_name'); gtype=d.get('gene_type')
+        if not tid: continue
+        if gid not in gene_info:
+            gene_info[gid]={'gene_name':gname,'gene_type':gtype}
+        t=transcripts.setdefault(tid,{'chrom':chrom,'strand':strand,'gene_id':gid,'exons':[]})
+        t['exons'].append((start,end))
+print('genes',len(gene_info),'transcripts',len(transcripts))
+# build coding maps
+fa=pysam.FastaFile('ref/chr9.fa')
+comp=str.maketrans('ACGTN','TGCAN')
+def revcomp(s): return s.translate(comp)[::-1]
+# Only chr9 transcripts; build cds positions list
+coding_maps={}
+for tid,t in transcripts.items():
+    if t['chrom']"'!='"'chr9': continue
+    ex=t['exons']
+    strand=t['strand']
+    if strand=='+':
+        ordered=sorted(ex)
+        poslist=[]
+        for s,e in ordered:
+            poslist.extend(range(s,e+1))
+        seq=''.join(fa.fetch('chr9',p-1,p).upper() for p in poslist)
+    else:
+        ordered=sorted(ex, reverse=True)
+        poslist=[]
+        for s,e in ordered:
+            poslist.extend(range(e,s-1,-1))
+        seq=''.join(revcomp(fa.fetch('chr9',p-1,p).upper()) for p in poslist)
+    if len(seq)%3"'!=0:
+        # incomplete CDS; still process, translation will truncate; effect classification approximate
+        pass
+    coding_maps[tid]={'"'chrom':'chr9','strand':strand,'gene_id':t['gene_id'],'poslist':poslist,'seq':seq,'pos_index':{p:i for i,p in enumerate(poslist)}}
+print('chr9 transcripts',len(coding_maps))
+# codon table
+bases='TCAG'
+codons=[a+b+c for a in bases for b in bases for c in bases]
+aa='FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG'
+codon_table=dict(zip(codons,aa))
+def translate(s):
+    return ''.join(codon_table.get(s[i:i+3],'X') for i in range(0,len(s)-2,3))
+
+# Parse raw VCF variants; keep SNV with DP>=5 and altAD>=2 maybe all; annotate nonsense
+candidates=[]
+with open('raw.vcf') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        parts=line.rstrip().split('\\t')
+        if len(parts)<10: continue
+        chrom,pos,id,ref,alts,qual,filter,info,fmt,sample=parts[:10]
+        if chrom"'!='"'chr9': continue
+        if len(ref)"'!=1 or len(alts)!=1: continue
+        alt=alts
+        d=dict(zip(fmt.split('"':'),sample.split(':')))
+        try: dp=int(d['DP'])
+        except: continue
+        ad=d.get('AD','')
+        adp=ad.split(',') if ad else []
+        refad=int(adp[0]) if len(adp)>0 else 0
+        altad=int(adp[1]) if len(adp)>1 else 0
+        if dp==0: continue
+        af=altad/dp
+        if dp<3 or altad<1: continue
+        posi=int(pos)
+        # annotate
+        effects=[]
+        for tid,cm in coding_maps.items():
+            if posi not in cm['pos_index']: continue
+            idx=cm['pos_index'][posi]
+            ref_trans=cm['seq'][idx]
+            if ref_trans.upper()"'!=ref.upper():
+                # mismatch reference orientation issue? report but skip ref check? 
+                pass
+            alt_trans=alt if cm['"'strand']=='+' else revcomp(alt)
+            codon_idx=idx//3
+            start=codon_idx*3
+            if start+3>len(cm['seq']): continue
+            codon=list(cm['seq'][start:start+3])
+            if codon[idx%3].upper()"'!=ref.upper():
+                # ref not matching, possible due to position overlap/incomplete; continue
+                continue
+            ref_aa=codon_table.get('"''.join(codon),'X')
+            codon[idx%3]=alt_trans.upper()
+            alt_codon=''.join(codon)
+            alt_aa=codon_table.get(alt_codon,'X')
+            if ref_aa"'!='"'*' and alt_aa=='*':
+                effects.append(('nonsense',cm['gene_id'],tid,ref_aa,alt_aa,ref_trans,alt_trans,cm['strand'],idx%3,codon_idx))
+            elif ref_aa=='*' and alt_aa"'!='"'*':
+                effects.append(('stop_loss',cm['gene_id'],tid,ref_aa,alt_aa,ref_trans,alt_trans,cm['strand'],idx%3,codon_idx))
+        if effects:
+            for eff in effects:
+                if eff[0]=='nonsense':
+                    gid=eff[1]
+                    candidates.append((posi,ref,alt,dp,refad,altad,af,qual,gene_info.get(gid,{}).get('gene_name'),gid,eff))
+print('nonsense candidates',len(candidates))
+for c in candidates:
+    print(c)
+PY"

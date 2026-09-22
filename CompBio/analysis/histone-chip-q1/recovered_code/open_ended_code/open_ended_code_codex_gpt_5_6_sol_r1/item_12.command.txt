@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re
+from collections import defaultdict
+import numpy as np
+scale=44795356/27051753
+D={}
+for kind in ['signal','control']:
+ d={}
+ with open(kind+'.10kb.bedgraph') as f:
+  for line in f:
+   c,s,e,n=line.split();
+   if c in [f'chr{i}' for i in range(1,23)]+['chrX','chrY']:
+    d[(c,int(s)//10000)]=int(n)
+ D[kind]=d
+
+def region(c,s,e):
+ ks=[(c,b) for b in range(s//10000,(e+9999)//10000)]
+ S=sum(D['signal'].get(k,0) for k in ks); C=sum(D['control'].get(k,0) for k in ks)
+ return S,C,(S+scale)/(scale*(C+1))
+for c,s,e,name in [
+ ('chr7',27000000,27300000,'HOXA'),('chr17',46500000,46900000,'HOXB'),('chr12',54200000,54700000,'HOXC'),('chr2',176000000,177000000,'HOXD'),
+ ('chr19',20000000,25000000,'chr19 ZNF1'),('chr19',50000000,59000000,'chr19 ZNF2'),
+ ('chr1',120000000,130000000,'chr1 centromere'),('chr9',40000000,70000000,'chr9 centromere'),('chr16',34000000,47000000,'chr16 centromere'),
+ ('chrX',55000000,65000000,'chrX centromere')]:
+ print(name,region(c,s,e))
+# extract unique RefGene coding gene locations/categories
+cats=defaultdict(list); seen=set()
+with gzip.open('refGene.txt.gz','rt') as f:
+ for line in f:
+  x=line.rstrip().split('\\t')
+  if len(x)<13: continue
+  c,strand,s,e,cs,ce,name=x[2],x[3],int(x[4]),int(x[5]),int(x[6]),int(x[7]),x[12]
+  if cs==ce or (c,name) in seen: continue
+  seen.add((c,name)); t=s if strand=='+' else e
+  if re.fullmatch(r'HOX[A-D]\\d+',name): cats['HOX'].append((c,t,name))
+  if re.fullmatch(r'(PAX|SOX|GATA|FOX)[A-Z0-9]+',name): cats['devTF'].append((c,t,name))
+  if re.fullmatch(r'ZNF\\d+',name): cats['ZNF'].append((c,t,name))
+  if re.fullmatch(r'OR\\d+[A-Z]\\d+',name): cats['OR'].append((c,t,name))
+  if re.fullmatch(r'(RPL|RPS)\\d+[A-Z]*',name): cats['ribosomal'].append((c,t,name))
+for cat,genes in cats.items():
+ S=C=0
+ for c,t,n in genes:
+  s,c0,r=region(c,max(0,t-50000),t+50000);S+=s;C+=c0
+ print(cat,len(genes),'S',S,'C',C,'ratio',(S+scale)/(scale*(C+1)))
+PY"

@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import re, numpy as np, pandas as pd
+z=np.load('allele_counts.npz');keys=z['keys'];dp=z['dp'].astype(int);ad=z['ad'].astype(int);rows=keys>>16;cells=keys&65535;cb=z['barcodes'].astype(str)
+hold=set(np.load('cv_site_sets.npz')['hold'].tolist());hm=np.array([int(r) in hold for r in rows]);
+# Only held-out allele pairs
+hr=rows[hm];hc=cells[hm];hdp=dp[hm];had=ad[hm]
+print('heldout pairs/read',len(hr),hdp.sum())
+for n in range(2,9):
+ df=pd.read_csv(f'cv_train_N{n}/donor_ids.tsv',sep='\\t')
+ c2i={x:i for i,x in enumerate(cb)}
+ lab=np.full(len(cb),-1,dtype=int);prob=np.zeros(len(cb))
+ for _,r in df.iterrows():
+  i=c2i.get(r.cell)
+  if i is None:continue
+  m=re.fullmatch(r'donor(\\d+)',str(r.donor_id))
+  if m: lab[i]=int(m.group(1));prob[i]=float(r.prob_max)
+ for clean in [False,True]:
+  use=(lab[hc]>=0)&((~clean)|(prob[hc]>=.9))
+  rr=hr[use];cc=hc[use];dd=hdp[use];aa=had[use]; ll=0.; total=0
+  # aggregate per donor/site on heldout
+  geno={}
+  for g in range(n):
+   q=(lab[cc]==g)
+   if not q.any():continue
+   key=(rr[q].astype(np.int64)<<32)|g
+   uk,inv=np.unique(key,return_inverse=True)
+   ads=np.bincount(inv,weights=aa[q]); dps=np.bincount(inv,weights=dd[q])
+   rs=(uk>>32).astype(int)
+   for site,a,d in zip(rs,ads,dps):
+    best=None
+    for state in [0.,.5,1.]:
+     p=.01+.98*state
+     x=a*np.log(p)+(d-a)*np.log1p(-p)
+     if best is None or x>best[0]:best=(x,p)
+    geno[(int(site),g)]=best[1]
+  for r,c,d,a in zip(rr,cc,dd,aa):
+   p=geno.get((int(r),int(lab[c])),.5); ll += a*np.log(p)+(d-a)*np.log1p(-p); total+=d
+  print('N',n,'clean',clean,'cells',use.sum(),'reads',total,'ll',round(ll,1),'perread',round(ll/total,5),'sites',len(geno))
+PY"

@@ -1,0 +1,34 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+X=a.X
+lib=np.asarray(X.sum(axis=1)).ravel(); med=np.median(lib)
+Xn=X.multiply(1.0/lib[:,None]).tocsr()*med
+Xn.data=np.log1p(Xn.data)
+sym=a.var.symbol.values
+sym_to_idx=pd.Series(np.arange(a.n_vars),index=sym)
+sets={
+'LUAD':['NKX2-1','NAPSA','SFTPA1','SFTPA2','SFTPB','SFTPC','AGER','SCGB1A1','SCGB3A2','MUC1','KRT7'],
+'LUSC_basal':['KRT5','KRT6A','KRT6B','KRT13','KRT14','KRT17','TP63','DSC3','DSG3','SOX2','SERPINB3','SERPINB4'],
+'epithelial':['EPCAM','KRT18','KRT8','CDH1'],
+'immune':['PTPRC'],
+}
+def score(genes):
+    idx=[sym_to_idx[g] for g in genes if g in sym_to_idx.index]
+    return np.asarray(Xn[:,idx].mean(axis=1)).ravel()
+S={k:score(g) for k,g in sets.items()}
+S['sampleID']=a.obs.sampleID.values
+df=pd.DataFrame(S)
+# classify cells: malignant if epithelial > 0.1 or subtype score > 0.3
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    sub=df[df.sampleID==s].copy()
+    epi_cells=sub[(sub.epithelial>0.05)|(sub.LUAD>0.2)|(sub.LUSC_basal>0.2)]
+    luad=(epi_cells.LUAD>epi_cells.LUSC_basal).sum()
+    lusc=(epi_cells.LUSC_basal>epi_cells.LUAD).sum()
+    print(s,'n',len(sub),'epi candidate',len(epi_cells),'luad',luad,'lusc',lusc,
+          'mean LUAD',round(sub.LUAD.mean(),3),'mean LUSC',round(sub.LUSC_basal.mean(),3),
+          'epi mean',round(sub.epithelial.mean(),3))
+    # top malignant-like cells
+    top=sub.nlargest(10,'epithelial')[['LUAD','LUSC_basal','epithelial','immune']]
+    print(top.round(2).to_string())
+PY"

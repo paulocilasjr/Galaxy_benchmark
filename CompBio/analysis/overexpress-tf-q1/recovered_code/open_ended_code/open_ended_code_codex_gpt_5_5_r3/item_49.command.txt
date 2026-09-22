@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, heapq
+canonical=re.compile(r'"'^chr([1-9]|1[0-9]|2[0-2]|X|Y)$'"')
+# top gained table already sorted by z desc, but collect robustly for background
+Ns=[1000,3000,10000,30000]
+gain={N:[] for N in Ns}
+bg=[]
+with open('diff_bins.tsv') as f:
+    header=f.readline().strip().split('\\t')
+    idx={k:i for i,k in enumerate(header)}
+    gain_rows=[]
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        chrom=parts[idx['chrom']]
+        if not canonical.match(chrom): continue
+        logfc=float(parts[idx['logfc']]); z=float(parts[idx['z']])
+        start=int(parts[idx['start']]); end=int(parts[idx['end']])
+        ref=int(parts[idx['ref']]); pert=int(parts[idx['pert']])
+        ref_cpm=float(parts[idx['ref_cpm']]); pert_cpm=float(parts[idx['pert_cpm']])
+        gain_rows.append((z,logfc,chrom,start,end))
+        if ref>=5 and pert>=5 and abs(logfc)<0.08 and abs(z)<0.8:
+            total=ref_cpm+pert_cpm
+            bg.append((total,chrom,start,end))
+for N in Ns:
+    sub=sorted(gain_rows, key=lambda x:(x[0],x[1]), reverse=True)[:N]
+    seen=set()
+    with open(f'gain_top{N}.bed','w') as w:
+        i=0
+        for z,logfc,chrom,start,end in sub:
+            s=max(0,start+250-500); e=start+250+500
+            key=(chrom,s,e)
+            if key in seen: continue
+            seen.add(key)
+            w.write(f'{chrom}\\t{s}\\t{e}\\tgain_{i}\\n'); i+=1
+bg=sorted(bg, key=lambda x:x[0], reverse=True)
+for N in Ns:
+    sub=bg[:N]
+    seen=set()
+    with open(f'bg_top{N}.bed','w') as w:
+        i=0
+        for total,chrom,start,end in sub:
+            s=max(0,start+250-500); e=start+250+500
+            key=(chrom,s,e)
+            if key in seen: continue
+            seen.add(key)
+            w.write(f'{chrom}\\t{s}\\t{e}\\tbg_{i}\\n'); i+=1
+print('gain rows',len(gain_rows),'bg rows',len(bg))
+for fn in ['gain_top1000.bed','gain_top3000.bed','bg_top1000.bed','bg_top3000.bed']:
+    print(fn, sum(1 for _ in open(fn)))
+PY"

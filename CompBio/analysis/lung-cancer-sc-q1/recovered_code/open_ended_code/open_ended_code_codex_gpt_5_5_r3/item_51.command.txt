@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, anndata as ad
+adata=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+obs=adata.obs.copy()
+obs['bench_cell']=obs.index.astype(str)
+obs['bench_sample']=obs['sampleID'].astype(str)
+obs['barcode']=obs['bench_cell'].str.replace(r'"'^Patient_'"\\d+_', '', regex=True)
+meta=pd.read_csv('source_meta.csv', low_memory=False)
+meta['barcode']=meta['Cells'].str.replace(r'"'^[''^_]+_'"', '', regex=True)
+source_sets={sid:set(g['barcode']) for sid,g in meta.groupby('SampleID')}
+bench_sets={sid:set(g['barcode']) for sid,g in obs.groupby('bench_sample')}
+rows=[]
+for bs,bset in bench_sets.items():
+    vals=[]
+    for ss,sset in source_sets.items():
+        inter=len(bset & sset)
+        if inter:
+            exact=(inter==len(bset)==len(sset))
+            vals.append({'bench':bs,'source':ss,'inter':inter,'bench_n':len(bset),'source_n':len(sset),'frac_bench':inter/len(bset),'frac_source':inter/len(sset),'exact':exact})
+    # prefer exact; then full bench coverage and closest source size; then inter
+    vals=sorted(vals, key=lambda r:(r['exact'], r['frac_bench'], -abs(r['source_n']-r['bench_n']), r['inter']), reverse=True)
+    rows.append(vals[0])
+map_df=pd.DataFrame(rows).sort_values('bench')
+print(map_df.to_string(index=False))
+print('nonexact', map_df[~map_df.exact].to_string(index=False))
+# join
+obs['source_sample']=obs['bench_sample'].map(dict(zip(map_df.bench,map_df.source)))
+obs['key']=obs['source_sample']+'|'+obs['barcode']
+meta['key']=meta['SampleID']+'|'+meta['barcode']
+ann=meta.set_index('key')[['SampleID','Cells','PatientID','Disease','Stage','Tissue','CellName']]
+j=obs.join(ann,on='key')
+print('missing', j.CellName.isna().sum())
+print('disease', j.Disease.value_counts(dropna=False).to_string())
+print('cell counts', j.CellName.value_counts().to_string())
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    x=j[j.bench_sample==s]
+    print('selected',s,x.source_sample.iloc[0],x.PatientID.iloc[0],x.Disease.iloc[0],len(x),(x.CellName=='DC').sum(),100*(x.CellName=='DC').mean())
+nonimmune=['Epi','ATII','Basal','Cilia','Club','EC','Fib','NE']
+non=j[j.CellName.isin(nonimmune)]
+num=non[(non.CellName=='Basal') & (non.Disease=='LUSC')]
+print('benchmark denom',len(non),'num basal LUSC',len(num),'pct',100*len(num)/len(non))
+print('nonimmune crosstab bench')
+print(pd.crosstab(non.Disease, non.CellName).to_string())
+# save corrected
+j[['bench_cell','bench_sample','source_sample','PatientID','Disease','Stage','Tissue','CellName']].to_csv('annotated_benchmark_cells.csv',index=False)
+PY"

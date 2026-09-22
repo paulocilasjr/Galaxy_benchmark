@@ -1,0 +1,27 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import stats
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','gene','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().T
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+meta=bc.merge(calls,left_on='barcode',right_on='cell_barcode').merge(ref[['id','target_gene_name']],left_on='feature_call',right_on='id')
+lib=np.asarray(X.sum(1)).ravel(); Y=X.multiply(1e4/lib[:,None]).tocsr(); Y.data=np.log1p(Y.data)
+nt=(meta.target_gene_name=='Non-Targeting').values
+nt_raw=np.asarray(X[nt].sum(0)).ravel(); nt_cpm=(nt_raw+1)/(nt_raw.sum()+1000)*1e6
+nt_mean=np.asarray(Y[nt].mean(0)).ravel(); mod=np.asarray(Y[:,:20].mean(1)).ravel()
+rows=[]
+for target, inds0 in meta.groupby('target_gene_name').groups.items():
+ inds=np.array(list(inds0)); raw=np.asarray(X[inds].sum(0)).ravel(); cpm=(raw+1)/(raw.sum()+1000)*1e6; lfc=np.log2(cpm/nt_cpm); dif=np.asarray(Y[inds].mean(0)).ravel()-nt_mean
+ p=stats.mannwhitneyu(mod[inds],mod[nt],alternative='less').pvalue
+ rows.append([target,len(inds),mod[inds].mean(),mod[inds].mean()-mod[nt].mean(),dif[:20].mean(),np.median(dif[:20]),lfc[:20].mean(),np.median(lfc[:20]),p])
+out=pd.DataFrame(rows,columns=['target','n','mod','mod_delta','gene_delta','median_delta','pb_lfc','median_lfc','p'])
+print('shape',X.shape,'NT mean',mod[nt].mean())
+print(out.sort_values('mod').head(25).to_csv(index=False,float_format='%.6g'))
+print('top detailed normalized deltas')
+for t in out.sort_values('mod').target.head(8):
+ inds=(meta.target_gene_name==t).values; d=np.asarray(Y[inds].mean(0)).ravel()-nt_mean
+ print(t, ' '.join(f'{g}:{v:.2f}' for g,v in zip(feat.gene[:20],d[:20])))
+PY"

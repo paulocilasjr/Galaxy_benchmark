@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, gzip, re, collections, csv, math, sys
+# Build tx2gene and tx length
+annot='Homo_sapiens.GRCh38.113.gtf.gz'
+tx2gene={}; gene2tx=collections.defaultdict(set); txlen={}
+with gzip.open(annot,'rt') as fh:
+    for line in fh:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9: continue
+        attrs=dict(re.findall(r'(\\S+?)\\s+\"(["'^"]*)"'"', parts[8]))
+        tid=attrs.get('transcript_id'); gname=attrs.get('gene_name')
+        if not tid: continue
+        if gname and tid not in tx2gene:
+            tx2gene[tid]=gname; gene2tx[gname].add(tid)
+        if parts[2]=='transcript':
+            if tid not in txlen:
+                txlen[tid]=int(parts[4])-int(parts[3])+1
+
+counts={}
+for sample,bam in [('A','A.bam'),('B','B.bam')]:
+    c=collections.Counter()
+    f=pysam.AlignmentFile(bam,'rb')
+    for r in f.fetch(until_eof=True):
+        if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+        # strip version from reference? keep full
+        c[r.reference_name]+=1
+    counts[sample]=c
+    f.close()
+
+# Summarize per gene primary counts
+for sample in 'AB':
+    gcounts=collections.Counter()
+    for tx,c in counts[sample].items():
+        gene=tx2gene.get(tx)
+        if gene: gcounts[gene]+=c
+    print(sample, 'genes with reads',len(gcounts),'total assigned',sum(gcounts.values()))
+
+# Normalized primary count ratio, find genes where transcript usage differs.
+# For each gene with >=2 transcripts and enough counts, compute proportions per transcript in A and B.
+print('\\nTop genes by abs proportion change / total counts')
+rows=[]
+for gene, txs in gene2tx.items():
+    ca=sum(counts['A'].get(t,0) for t in txs)
+    cb=sum(counts['B'].get(t,0) for t in txs)
+    if ca+cb < 100: continue
+    # choose transcript proportions for txs with total > 5
+    props={}
+    for t in txs:
+        a=counts['A'].get(t,0); b=counts['B'].get(t,0)
+        if a+b>=10:
+            props[t]=(a/(ca or 1), b/(cb or 1))
+    if len(props)<2: continue
+    # max abs diff of any transcript proportion between samples
+    diffs=[abs(pa-pb) for pa,pb in props.values()]
+    # also proportion difference sum / 2
+    maxd=max(diffs)
+    rows.append((maxd, ca, cb, gene, len(txs), props))
+rows.sort(reverse=True)
+for r in rows[:50]:
+    maxd,ca,cb,gene,ntx,props=r
+    print(f'{gene:15s} A={ca:4d} B={cb:4d} maxdiff={maxd:.3f}')
+    for t,(pa,pb) in sorted(props.items(), key=lambda kv: abs(kv[1][0]-kv[1][1]), reverse=True)[:6]:
+        print(f'   {t:24s} A={counts[\"A\"].get(t,0):4d} pA={pa:.3f} B={counts[\"B\"].get(t,0):4d} pB={pb:.3f}')
+PY"

@@ -1,0 +1,97 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, math, csv
+from collections import defaultdict
+import numpy as np
+from scipy.stats import chi2, spearmanr, pearsonr
+from cyvcf2 import VCF
+
+pop_by_sample={}; super_by_sample={}
+with open('refs/integrated_call_samples_v3.20130502.ALL.panel') as f:
+    next(f)
+    for line in f:
+        parts=line.split()
+        if len(parts)>=3:
+            s,p,sp=parts[:3]
+            pop_by_sample[s]=p; super_by_sample[s]=sp
+
+windows=[('locus1',16500000,18000000),('locus2',171500000,172500000)]
+gwas_by_key={}; key_by_id={}; region_keys=defaultdict(list)
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        if row['P']=='NA': continue
+        chrom,pos,ref,alt=row['SNPID'].split(':')
+        pos=int(pos)
+        p=float(row['P'])
+        if p<=0 or p>1: continue
+        key=(pos,ref,alt)
+        rec={'id':row['RSID'], 'pos':pos, 'p':p, 'chi':chi2.isf(p,1), 'key':key}
+        gwas_by_key[key]=rec
+        key_by_id[row['RSID']]=key
+        for name,a,b in windows:
+            if a<=pos<=b:
+                region_keys[name].append(key)
+
+vcf=VCF('refs/kg_chr1_loci.vcf.gz')
+samples=vcf.samples
+superpops=sorted(set(super_by_sample.values()))
+idx_by_super={sp:np.array([i for i,s in enumerate(samples) if super_by_sample.get(s)==sp], dtype=int) for sp in superpops}
+print('sample counts', {k:len(v) for k,v in idx_by_super.items()})
+
+geno_by_key={}; pos_by_key={}
+for v in vcf:
+    if len(v.REF)"'!=1 or len(v.ALT)!=1 or len(v.ALT[0])!=1: continue
+    key=(v.POS, v.REF, v.ALT[0])
+    if key not in gwas_by_key: continue
+    arr=np.array([(a+b if a>=0 and b>=0 else np.nan) for a,b,*_ in v.genotypes], dtype=float)
+    geno_by_key[key]=arr
+    pos_by_key[key]=v.POS
+print('"'gwas matched', len(geno_by_key), 'of', len(gwas_by_key))
+
+for name,keys in region_keys.items():
+    keys2=[k for k in keys if k in geno_by_key]
+    top=sorted([gwas_by_key[k] for k in keys2], key=lambda x:x['p'])[:10]
+    print('\\n',name,'gwas keys',len(keys),'matched',len(keys2),'top',[(t['id'],t['pos'],t['p'],round(t['chi'],2)) for t in top])
+    if not keys2: continue
+    y=np.array([gwas_by_key[k]['chi'] for k in keys2])
+    for sp,idx in idx_by_super.items():
+        X=np.vstack([geno_by_key[k][idx] for k in keys2])
+        vars_=np.nanvar(X,axis=1)
+        keep=np.isfinite(y) & (vars_>1e-6)
+        keys_keep=[k for k,ok in zip(keys2,keep) if ok]
+        X=X[keep]; yy=y[keep]
+        if len(keys_keep)<20: continue
+        X=(X-X.mean(axis=1,keepdims=True))/X.std(axis=1,keepdims=True)
+        order=np.argsort(-yy)
+        cand_idx=set(order[:min(200,len(order))])
+        for j,val in enumerate(yy):
+            if val>chi2.isf(1e-5,1): cand_idx.add(j)
+        best=None
+        for ci in cand_idx:
+            r=(X @ X[ci])/(X.shape[1]-1)
+            r2=np.clip(r*r,0,1)
+            cpos=pos_by_key[keys_keep[ci]]
+            locmask=np.array([abs(pos_by_key[k]-cpos)<=500000 for k in keys_keep])
+            if locmask.sum()<20: continue
+            yy2=yy[locmask]
+            r22=r2[locmask]
+            if np.std(r22)==0: continue
+            pr=pearsonr(yy2,r22).statistic
+            sr=spearmanr(yy2,r22).statistic
+            A=np.vstack([np.ones_like(r22),r22]).T
+            coef=np.linalg.lstsq(A,yy2,rcond=None)[0]
+            pred=A@coef
+            sse=float(((yy2-pred)**2).sum())
+            r2fit=1-sse/float(((yy2-yy2.mean())**2).sum()) if ((yy2-yy2.mean())**2).sum()>0 else -np.inf
+            # emphasize fit around high-chi SNPs too
+            high=yy2>=chi2.isf(1e-4,1)
+            if high.sum()>=5:
+                prh=pearsonr(yy2[high],r22[high]).statistic if np.std(r22[high])>0 else 0
+            else:
+                prh=0
+            score=(0 if math.isnan(pr) else pr)+(0 if math.isnan(sr) else sr)+r2fit+0.5*(0 if math.isnan(prh) else prh)
+            if best is None or score>best[0]:
+                rec=gwas_by_key[keys_keep[ci]]
+                best=(score, rec['id'], rec['pos'], rec['p'], pr, sr, r2fit, prh, coef.tolist(), int(locmask.sum()))
+        print(sp, 'best', best)
+PY"

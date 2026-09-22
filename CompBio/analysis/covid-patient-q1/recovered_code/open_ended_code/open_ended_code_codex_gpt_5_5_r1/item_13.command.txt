@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, os, math, time
+p='covid.patients.q1.h5ad'
+markers = ['ISG15','IFI6','IFIT1','IFIT2','IFIT3','IFI44L','MX1','OAS1','OAS2','OAS3','RSAD2','IRF7','STAT1','CXCL10','S100A8','S100A9','IL1B','LYZ','LST1','FCGR3A','MS4A1','CD3D','CD3E','CD8A','NKG7','GNLY','PPBP','PF4','MKI67','HBB','HBA1','HBA2','MALAT1']
+with h5py.File(p,'r') as f:
+    cats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/donor_id/categories'][:]]
+    codes=f['obs/donor_id/codes'][:].astype(np.int16)
+    gcats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['var/feature_name/categories'][:]]
+    gcodes=f['var/feature_name/codes'][:]
+    genes=[gcats[c] if c>=0 else idx.decode() if isinstance(idx,bytes) else str(idx) for c,idx in zip(gcodes, f['var/_index'][:])]
+    gene_to_idx={g:i for i,g in enumerate(genes)}
+    print('shape', f['X'].attrs['shape'])
+    print('marker_indices')
+    for g in markers:
+        print(g, gene_to_idx.get(g))
+    n_d=len(cats); n_g=len(genes); n=f['X'].attrs['shape'][0]
+    sel=[gene_to_idx[g] for g in markers if g in gene_to_idx]
+    sel_names=[g for g in markers if g in gene_to_idx]
+    sel_pos={j:k for k,j in enumerate(sel)}
+    sums_sel=np.zeros((n_d,len(sel)), dtype=np.float64)
+    total_counts=np.zeros(n_d,dtype=np.float64)
+    nnz_counts=np.zeros(n_d,dtype=np.float64)
+    cells=np.bincount(codes, minlength=n_d).astype(np.int64)
+    data=f['X/data']; indices=f['X/indices']; indptr=f['X/indptr'][:]
+    # loop rows; selected lookup via set
+    sel_set=set(sel)
+    for i in range(n):
+        d=codes[i]
+        st=indptr[i]; en=indptr[i+1]
+        vals=data[st:en]
+        idxs=indices[st:en]
+        total_counts[d]+=float(vals.sum())
+        nnz_counts[d]+=en-st
+        # selected genes in row
+        for idx,val in zip(idxs, vals):
+            k=sel_pos.get(int(idx))
+            if k is not None:
+                sums_sel[d,k]+=float(val)
+    print('donor,cells,total_per_cell,genes_per_cell,'+','.join(sel_names))
+    for di,don in enumerate(cats):
+        vals=sums_sel[di]/cells[di]
+        print(don,cells[di],round(total_counts[di]/cells[di],1),round(nnz_counts[di]/cells[di],1),','.join(f'{v:.4f}' for v in vals),sep=',')
+PY"

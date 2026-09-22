@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+# Direct scan offsets using saved arrays? re-extract quickly and scan t/u
+import gzip, py2bit, numpy as np, pandas as pd, time
+frag='unknown.shift.frag.bed.gz'; tb=py2bit.open('hg38.2bit'); valid=set(tb.chroms()); chromlen=tb.chroms()
+mat=[]
+for line in open('Tn5_sepcat_bias.transfac'):
+ p=line.strip().split()
+ if len(p)==5 and p[0].isdigit(): mat.append([float(x) for x in p[1:]])
+mat=np.array(mat); L=len(mat); bg=np.array([.25]*4); logp=np.log((mat+0.1)/(mat.sum(1,keepdims=True)+0.4)/bg)
+df=pd.read_csv(frag,sep='\\t',header=None,names=['chrom','start','end','barcode','count'],usecols=['chrom','start','end'],dtype={'chrom':str,'start':int,'end':int}); df=df[df.chrom.isin(valid)].reset_index(drop=True); N=len(df)
+base_idx=np.full(256,-1,dtype=np.int8)
+for i,b in enumerate('ACGT'): base_idx[ord(b)]=i
+W=160; off=-80
+Larr=np.full((N,W),-1,dtype=np.int8); Rarr=np.full((N,W),-1,dtype=np.int8)
+for idx,row in df.iterrows():
+ chrom=row.chrom; s=row.start; e=row.end; clen=chromlen[chrom]
+ for arr,pos in [(Larr,s),(Rarr,e)]:
+  st=pos+off;en=st+W;qs=max(st,0);qe=min(en,clen);seq=''
+  if qs<qe: seq=tb.sequence(chrom,qs,qe).upper()
+  fo=qs-st; arr[idx,fo:fo+len(seq)]=base_idx[np.frombuffer(seq.encode(),dtype=np.uint8).copy()]
+# base idx for left: candidate coordinate final_start + t, window start = s+t-15; broad start s-80 => index=t+65.
+# right: final_end+u, index=u+65.
+def scan(arr):
+ out=[]
+ for t in range(-30,31):
+  si=t+65
+  sub=arr[:,si:si+L]
+  sc=np.zeros(N)
+  for p in range(L):
+   codes=sub[:,p]
+   for b in range(4): sc += np.where(codes==b, logp[p,b],0)
+  out.append(sc.mean())
+ return out
+ls=scan(Larr); rs=scan(Rarr)
+for name,sc in [('left',ls),('right',rs)]:
+ best=sorted(enumerate(sc), key=lambda x:-x[1])[:10]
+ print(name, [(i-30,round(v,3)) for i,v in best])
+tb.close()
+PY"

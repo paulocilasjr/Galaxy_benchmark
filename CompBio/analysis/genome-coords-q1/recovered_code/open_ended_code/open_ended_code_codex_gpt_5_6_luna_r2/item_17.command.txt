@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import pandas as pd, numpy as np
+D=pd.read_csv('single_cell_dynamics_question.csv')
+D['d']=np.sqrt((D.enh_x-D.prom_x)**2+(D.enh_y-D.prom_y)**2+(D.enh_z-D.prom_z)**2)
+D['c']=(D.d<=260).astype(int)
+# Explicit time-aligned lag-1 transition values and exact tests
+prev=D.sort_values(['cell_id','time']).groupby('cell_id')[['c','transcription']].shift(1).rename(columns={'c':'c_prev','transcription':'t_prev'})
+X=pd.concat([D[['c','transcription']],prev],axis=1).dropna()
+print('rows',len(X),'first/last time checks',D.groupby('cell_id').time.agg(['min','max','count']).head(1).to_dict('records'))
+for y,prevvar in [('c','t_prev'),('transcription','c_prev')]:
+ print(y,'given',prevvar)
+ print(X.groupby(prevvar)[y].agg(['count','mean']).to_string())
+print('joint cross lag contingency prev T -> current C')
+print(pd.crosstab(X.t_prev,X.c,normalize='index').to_string())
+print('joint cross lag contingency prev C -> current T')
+print(pd.crosstab(X.c_prev,X.transcription,normalize='index').to_string())
+# contemporaneous exact and lagged Fisher p-values
+from scipy.stats import chi2_contingency
+for a,b,label in [('c','transcription','same'),('t_prev','c','Tprev-Cnow'),('c_prev','transcription','Cprev-Tnow')]:
+ tab=pd.crosstab(X[a],X[b])
+ print(label,tab.to_dict(), 'chi2 p',chi2_contingency(tab)[1])
+PY"

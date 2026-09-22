@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.stats import chi2, pearsonr, spearmanr
+samples=[x.strip() for x in open('samples.txt')]
+panel=pd.read_csv('integrated_call_samples_v3.20130502.ALL.panel',sep='\\t')
+panel=panel.set_index('sample').loc[samples]
+groups={g:np.where(panel.super_pop.values==g)[0] for g in panel.super_pop.unique()}
+obs={}
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+ next(f)
+ for line in f:
+  a=line.rstrip().split('\\t')
+  if a[6]"'!='"'NA': obs[int(a[3])]=float(a[6])
+G={}; alleles={}
+for line in open('locus17.genotypes.tsv'):
+ a=line.rstrip().split('\\t'); pos=int(a[0])
+ if pos not in obs or ',' in a[2]: continue
+ vals=[]
+ for gt in a[3:]:
+  if '.' in gt: vals.append(np.nan)
+  else: vals.append(sum(map(int,gt.replace('|','/').split('/'))))
+ G[pos]=np.asarray(vals,float); alleles[pos]=(a[1],a[2])
+lead=17311190
+print('matched',len(G),'lead',alleles.get(lead), 'p',obs[lead])
+positions=sorted(G)
+y=np.array([chi2.isf(obs[p],1) for p in positions])
+for group,idx in groups.items():
+ x=[]; yy=[]; pp=[]
+ gl=G[lead][idx]
+ for p,yo in zip(positions,y):
+  gp=G[p][idx]; ok=np.isfinite(gl)&np.isfinite(gp)
+  if ok.sum()<10 or np.std(gl[ok])==0 or np.std(gp[ok])==0: continue
+  r=np.corrcoef(gl[ok],gp[ok])[0,1]; x.append(r*r); yy.append(yo); pp.append(p)
+ x=np.array(x); yy=np.array(yy)
+ # regression score over associated variants, and corr with chi-square
+ for cut in [1,5,10]:
+  k=yy>cut
+  if k.sum()>2:
+   print(group,'n',len(idx),'cut',cut,'m',k.sum(),'pear',pearsonr(x[k],yy[k]).statistic,'spear',spearmanr(x[k],yy[k]).statistic,'msefit',np.mean((yy[k]-(np.polyval(np.polyfit(x[k],yy[k],1),x[k])))**2))
+PY"

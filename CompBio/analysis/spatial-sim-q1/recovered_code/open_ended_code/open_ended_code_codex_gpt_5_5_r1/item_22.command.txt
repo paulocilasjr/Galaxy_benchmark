@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+X=mmread('matrix.mtx.gz').tocsc()
+barcodes=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+types=sorted(meta.cell_type.unique())
+means=np.vstack([sc.loc[meta.cell_type==t].mean(axis=0).to_numpy() for t in types]).T
+coefs=[]; norms=[]
+for j in range(X.shape[1]):
+    y=np.asarray(X[:,j].todense()).ravel()
+    c,r=nnls(means,y)
+    coefs.append(c); norms.append(r)
+C=np.vstack(coefs)
+print('coef quantiles by type')
+for i,t in enumerate(types):
+    qs=np.quantile(C[:,i],[0,0.01,0.05,0.1,0.25,0.5,0.75,0.9,0.95,0.99,1])
+    print(t, ' '.join(f'{q:.3f}' for q in qs))
+print('counts > thresholds')
+for thr in [0.05,0.1,0.2,0.5,0.75]:
+    print('thr',thr, {t:int((C[:,i]>thr).sum()) for i,t in enumerate(types)})
+idx=barcodes.index('Spot_710-1')
+print('target raw', dict(zip(types,C[idx])))
+print('target >0.2', [t for i,t in enumerate(types) if C[idx,i]>0.2])
+# nearest neighbors in coefficient space to target
+ct=C[idx]
+d=np.linalg.norm(C-ct,axis=1)
+for k in np.argsort(d)[:10]:
+    print(k, barcodes[k], 'dist', round(float(d[k]),3), dict(zip(types, np.round(C[k],2))))
+# Determine unique binary patterns using threshold 0.2/0.5
+for thr in [0.2,0.5]:
+    pats={}
+    for row in C:
+        key=tuple(t for i,t in enumerate(types) if row[i]>thr)
+        pats[key]=pats.get(key,0)+1
+    print('patterns thr',thr, 'n', len(pats))
+    for key,n in sorted(pats.items(), key=lambda kv:(len(kv[0]),kv[0])):
+        print(n,key)
+PY"

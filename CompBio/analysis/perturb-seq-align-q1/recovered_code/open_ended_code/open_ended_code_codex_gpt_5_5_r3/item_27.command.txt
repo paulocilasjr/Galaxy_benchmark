@@ -1,0 +1,53 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+
+def dec(ds): return [x.decode() if isinstance(x,bytes) else str(x) for x in ds[:]]
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        X=sparse.csc_matrix((f['X/data'][:].astype(float),f['X/indices'][:],f['X/indptr'][:]),shape=tuple(f['X'].attrs['shape'])).tocsr()
+        return X, dec(f['obs/guide/categories']), f['obs/guide/codes'][:].astype(int), dec(f['var/_index'])
+def normalize(X, kind):
+    if kind=='raw': return X.astype(float).tocsr()
+    lib=np.asarray(X.sum(axis=1)).ravel(); s=np.divide(1e4,lib,out=np.zeros_like(lib,dtype=float),where=lib>0)
+    Y=X.multiply(s[:,None]).tocsr()
+    if kind=='lognorm': Y.data=np.log1p(Y.data)
+    return Y
+def get(Y,g,c):
+    nt=[i for i,x in enumerate(g) if x.startswith('NT-')]; base=np.asarray(Y[np.isin(c,nt)].mean(0)).ravel();
+    sig={}; mean={}; n={}
+    for i,x in enumerate(g):
+        m=c==i
+        if m.sum():
+            mu=np.asarray(Y[m].mean(0)).ravel(); mean[x]=mu; sig[x]=mu-base; n[x]=int(m.sum())
+    return sig,mean,n
+def pearson(A,B):
+    A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True)
+    A=A/np.maximum(A.std(1,keepdims=True),1e-12); B=B/np.maximum(B.std(1,keepdims=True),1e-12)
+    return A@B.T/A.shape[1]
+Xr,gr,cr,genr=load('perturb.seq.align.q1.ref.h5ad'); Xq,gq,cq,genq=load('perturb.seq.align.q1.query.h5ad')
+common=list(set(genr)&set(genq)); ri=np.array([genr.index(x) for x in common]); qi=np.array([genq.index(x) for x in common])
+ref=[x for x in gr if not x.startswith('NT-')]; que=[x for x in gq if not x.startswith('NT-')]
+for kind in ['lognorm','cpm','raw']:
+    Yr=normalize(Xr, kind if kind"'!='"'cpm' else 'cpm'); Yq=normalize(Xq, kind if kind"'!='"'cpm' else 'cpm')
+    sr,mr,nr=get(Yr,gr,cr); sq,mq,nq=get(Yq,gq,cq)
+    for usemean in [False, True]:
+        R=np.vstack([(mr if usemean else sr)[x][ri] for x in ref]); Q=np.vstack([(mq if usemean else sq)[x][qi] for x in que])
+        # variants: row corr, gene-wise z then row corr, cosine raw, Spearman ranks maybe skip
+        mats=[]
+        mats.append(('row', R, Q))
+        Rgz=(R-R.mean(0,keepdims=True))/np.maximum(R.std(0,keepdims=True),1e-12)
+        Qgz=(Q-Q.mean(0,keepdims=True))/np.maximum(Q.std(0,keepdims=True),1e-12)
+        mats.append(('genez', Rgz, Qgz))
+        # top genes by abs target ref for each request: use all for matrix no
+        print('\\nKIND',kind,'mean' if usemean else 'sig')
+        for mn,A,B in mats:
+            C=pearson(A,B)
+            print(' metric',mn)
+            for rg in ['PABPC1-I1','NUDT21-I3','LEO1-I2','CDC73-I2','CTR9-I7','PAF1-I6']:
+                i=ref.index(rg); top=np.argsort(C[i])[::-1][:6]
+                print(' ',rg,[(que[j],round(float(C[i,j]),3)) for j in top])
+            rows,cols=linear_sum_assignment(-C); lookup={ref[i]:que[j] for i,j in zip(rows,cols)}
+            print(' assign', {rg:lookup.get(rg) for rg in ['PABPC1-I1','NUDT21-I3','LEO1-I2','CDC73-I2','CTR9-I7','PAF1-I6']})
+PY"

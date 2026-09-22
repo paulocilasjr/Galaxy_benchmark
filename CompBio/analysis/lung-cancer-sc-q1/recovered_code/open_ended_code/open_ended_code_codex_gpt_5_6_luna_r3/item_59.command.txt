@@ -1,0 +1,26 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, anndata as ad
+m=pd.read_csv('source_meta.csv',low_memory=False)
+immune={'B','CD4','CD8','DC','Gran','Mast','Mo','NK','Tregs'}
+source_groups=m.groupby('SampleID',sort=False).agg(n=('Cells','size'),disease=('Disease','first'))
+source_groups=source_groups[source_groups.disease.isin(['LUAD','LUSC'])]
+A=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r')
+task_counts=A.obs['sampleID'].astype(str).value_counts(sort=False)
+assert list(source_groups.n)==list(task_counts)
+assert len(source_groups)==len(task_counts)==67
+parts=[]
+for ss in source_groups.index:
+ parts.append(m[m.SampleID==ss])
+meta=pd.concat(parts,ignore_index=True)
+assert len(meta)==A.n_obs
+# curated source labels mapped to task observations
+print('task cells',len(meta),'immune',meta.CellName.isin(immune).sum(),'nonimmune',(~meta.CellName.isin(immune)).sum())
+print('LUSC basal',((meta.Disease=='LUSC')&(meta.CellName=='Basal')).sum())
+print('pct',((meta.Disease=='LUSC')&(meta.CellName=='Basal')).sum()/(~meta.CellName.isin(immune)).sum()*100)
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+ ss=source_groups.index[list(task_counts.index).index(s)]
+ g=m[m.SampleID==ss]
+ print(s,ss,g.Disease.iloc[0],len(g),(g.CellName=='DC').sum(),(g.CellName=='DC').mean()*100)
+print('cellname counts task')
+print(meta.CellName.value_counts().to_string())
+PY"

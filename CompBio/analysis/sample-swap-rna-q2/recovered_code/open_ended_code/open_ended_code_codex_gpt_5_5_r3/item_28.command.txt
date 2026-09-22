@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,math,urllib.parse,urllib.request,collections,sys,time
+# load local matrix
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t'); cols=next(r)[1:]
+    rows=[]
+    for row in r:
+        vals=[float(x) for x in row[1:]]
+        rows.append((row[0], vals))
+# choose top specific genes per observed column by ratio to second highest, min expression
+selected=[]; byobs={}
+for j,c in enumerate(cols):
+    scored=[]
+    for g,v in rows:
+        order=sorted(range(len(cols)), key=lambda k: v[k], reverse=True)
+        if order[0]==j and v[j] >= 5:
+            ratio=(v[j]+1)/(v[order[1]]+1)
+            # require absolute margin too
+            scored.append((ratio, v[j], g))
+    scored.sort(reverse=True)
+    genes=[g for _,_,g in scored[:60]]
+    byobs[c]=genes
+    selected.extend(genes)
+selected=list(dict.fromkeys(selected))
+print('selected unique', len(selected))
+# query reference in chunks
+ref={}  # gene -> cluster -> avg_exp_scaled, avg_exp
+base='https://wheatomics.sdau.edu.cn/scRNA/download_dotplot_data.php'
+for i in range(0,len(selected),80):
+    chunk=selected[i:i+80]
+    qs=urllib.parse.urlencode({'genome':'Chinese_Spring','folder':'root','genes':','.join(chunk)})
+    url=base+'?'+qs
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        text=resp.read().decode()
+    lines=text.strip().splitlines()
+    #print('chunk',i,len(text),lines[:1])
+    cr=csv.DictReader(lines, delimiter='\\t')
+    for rec in cr:
+        g=rec['gene']; cl=rec['cluster'];
+        ref.setdefault(g,{})[cl]=(float(rec['avg_exp_scaled']), float(rec['avg_exp']))
+    time.sleep(0.2)
+# mapping reference names to local labels
+mapcl={'Cortex':'cortex','Endodermis':'endodermis','Epidermis':'epidermis','Meristems':'meristems','Dividing Cells':'meristems','Pericycle':'pericycle','Phloem':'phloem','Provascular cells':'provascular','Root Cap':'root_cap','Root Hair':'root_hair','Xylem':'xylem'}
+# include only clusters of interest; ignore unknown and Endodermis/Phloem for max? maybe max should include them if top
+valid=set(mapcl)
+print('ref genes',len(ref))
+for c,genes in byobs.items():
+    counts=collections.Counter(); weighted=collections.Counter(); missing=[]; details=[]
+    for rank,g in enumerate(genes,1):
+        if g not in ref:
+            missing.append(g); continue
+        # select max avg_exp_scaled among mapped clusters, but record unknown if max overall
+        items=[(cl,vals[0],vals[1]) for cl,vals in ref[g].items() if cl in mapcl]
+        if not items: continue
+        cl,sc,avg=max(items, key=lambda x: x[1])
+        label=mapcl[cl]
+        counts[label]+=1
+        weighted[label]+=1.0/rank
+        details.append((g,label,cl,sc,avg))
+    print('\\nOBS',c,'missing',len(missing))
+    print('counts', counts.most_common())
+    print('weighted', [(k,round(v,3)) for k,v in weighted.most_common()])
+    print('first20', details[:20])
+PY"

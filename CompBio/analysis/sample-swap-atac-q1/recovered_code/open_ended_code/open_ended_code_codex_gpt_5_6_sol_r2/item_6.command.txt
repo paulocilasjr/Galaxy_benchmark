@@ -1,0 +1,26 @@
+/bin/bash -lc "ls -lh atac_summary.npz 2>/dev/null || true; python - <<'PY'
+import pandas as pd, numpy as np
+p='sample.swap.atac.q1.tsv.gz'
+libs=None; nz=None; nrow=0
+# streaming stats/correlations using random systematic subset, retain top candidates by total count
+reservoir=[]
+for k,df in enumerate(pd.read_csv(p,sep='\\t',chunksize=100000)):
+ X=df.iloc[:,3:].to_numpy(dtype=np.float64)
+ if libs is None: libs=X.sum(0); nz=(X"'!=0).sum(0); names=list(df.columns[3:])
+ else: libs+=X.sum(0); nz+=(X!=0).sum(0)
+ nrow += len(X)
+ # deterministic sample 1/50
+ reservoir.append(X[::50])
+print('"'shape',nrow,len(names))
+for n,v,z in zip(names,libs,nz): print(n,int(v),int(z))
+X=np.vstack(reservoir)
+Y=np.log1p(X/libs*1e6)
+var=Y.var(1)
+sel=var>=np.quantile(var,0.8)
+C=np.corrcoef(Y[sel].T)
+print('top correlations')
+for i in range(len(names)):
+ o=np.argsort(C[i])[::-1]
+ print(names[i], ', '.join(f'{names[j]}:{C[i,j]:.3f}' for j in o[1:6]))
+np.savez_compressed('atac_summary.npz', names=names, libs=libs, corr=C)
+PY"

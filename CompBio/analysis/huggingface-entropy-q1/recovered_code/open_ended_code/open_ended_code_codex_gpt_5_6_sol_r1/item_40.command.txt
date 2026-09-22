@@ -1,0 +1,15 @@
+/bin/bash -lc 'PYTHONPATH="$PWD/.deps" PYTORCH_ENABLE_MPS_FALLBACK=1 python3 -u - <<'"'PY'
+import json, torch
+from run_caduceus import CaduceusPH
+seq=json.load(open('hg38_chr12_7792299_7793299.json'))['dna'].upper()
+mp={'A':7,'C':8,'G':9,'T':10,'N':11}
+ids=torch.tensor([[mp[c] for c in seq]+[1]])
+pos=torch.tensor([49,50,51,52])
+x=ids.repeat(4,1); x[torch.arange(4),pos]=3
+model=CaduceusPH('model/model.safetensors',torch.device('mps'),torch.float32,32)
+logits=model.forward_selected(x.to('mps'),pos.to('mps'))
+p=logits.softmax(-1); h=-(p*p.clamp_min(1e-30).log2()).sum(-1)
+print([(int(i),seq[i],float(v)) for i,v in zip(pos,h.cpu())])
+old=json.load(open('entropy_results.json'))['full_entropy']
+print('max_abs_diff',max(abs(float(v)-old[int(i)]) for i,v in zip(pos,h.cpu())))
+PY"

@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+import csv, itertools, collections, h5py, numpy as np
+rows=[]
+with open('portal_meta.csv', newline='') as fh:
+    for row in csv.DictReader(fh): rows.append(row)
+# group rows by SampleID (contiguous? use all rows by SampleID preserving insertion)
+groups=[]
+for sid,gp in itertools.groupby(rows, key=lambda x:x['SampleID']):
+    g=list(gp)
+    groups.append({'SampleID':sid,'n':len(g),'first':g[0]['Cells'].split('_',1)[1], 'last':g[-1]['Cells'].split('_',1)[1], 'PatientID':g[0]['PatientID'],'Disease':g[0]['Disease'],'Tissue':g[0]['Tissue'],'counts':collections.Counter(x['CellName'] for x in g)})
+print('all groups',len(groups), 'sum', sum(g['n'] for g in groups))
+# include full lists maybe some sampleID repeats not contiguous? check count by unique sampleID
+print('unique sampleIDs', len({r['SampleID'] for r in rows}))
+# local groups
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+    cats=[x.decode() for x in f['obs/sampleID/categories'][:]]; codes=f['obs/sampleID/codes'][:]; idx=[x.decode() for x in f['obs/_index'][:]]
+local=[]
+for i,cat in enumerate(cats):
+    inds=np.where(codes==i)[0]
+    local.append({'Patient':cat,'n':len(inds), 'first':idx[inds[0]].split('_',2)[2], 'last':idx[inds[-1]].split('_',2)[2]})
+# index groups by first,last,n
+keymap={ (g['n'],g['first'],g['last']): g for g in groups }
+matched=[]; unmatched=[]
+for l in local:
+    g=keymap.get((l['n'],l['first'],l['last']))
+    if not g: unmatched.append(l)
+    else: matched.append((l,g))
+print('matched',len(matched),'unmatched',len(unmatched))
+for l in unmatched: print('UN',l)
+print('matched local -> source')
+for l,g in matched:
+    print(l['Patient'], l['n'], g['SampleID'], g['PatientID'], g['Disease'], g['Tissue'], g['counts'].most_common(3))
+# compute selected from matched map
+d={l['Patient']:g for l,g in matched}
+print('\\nselected exact')
+for pat in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    g=d[pat]; print(pat,g['SampleID'],g['PatientID'],g['Disease'],g['Tissue'],'n',g['n'],'DC',g['counts'].get('DC',0),'prop',g['counts'].get('DC',0)/g['n'])
+# compute counts with label mappings
+# local cell label inventory across matched
+inv=collections.Counter()
+for l,g in matched: inv.update(g['counts'])
+print('\\nlabel inventory',inv)
+# We know all local samples should be asked; maybe if local includes normal, it may still be patient LUAD/LUSC? Use CellName nonimmune labels as in meta.
+nonimmune={'ATI','ATII','AT1','AT2','Basal','Cilia','Club','EC','Fib','NE','Epi'}
+for include_epi in [False, True]:
+    ni=set(nonimmune)
+    if not include_epi: ni.discard('Epi')
+    total_nonimmune=sum(n for l,g in matched for cell,n in g['counts'].items() if cell in ni)
+    lusc_basal=sum(g['counts'].get('Basal',0) for l,g in matched if g['Disease']=='LUSC')
+    print('include_epi',include_epi,'total_nonimmune',total_nonimmune,'lusc_basal',lusc_basal,'pct',100*lusc_basal/total_nonimmune,'nearest20',round((100*lusc_basal/total_nonimmune)/20)*20)
+# if use only tumor LUAD/LUSC matched samples
+for include_epi in [False, True]:
+    ni=set(nonimmune)
+    if not include_epi: ni.discard('Epi')
+    ms=[(l,g) for l,g in matched if g['Tissue']=='Tumor' and g['Disease'] in ('LUAD','LUSC')]
+    total_nonimmune=sum(n for l,g in ms for cell,n in g['counts'].items() if cell in ni)
+    lusc_basal=sum(g['counts'].get('Basal',0) for l,g in ms if g['Disease']=='LUSC')
+    print('T LUAD/LUSC include_epi',include_epi,'samples',len(ms),'total_nonimmune',total_nonimmune,'lusc_basal',lusc_basal,'pct',100*lusc_basal/total_nonimmune,'nearest20',round((100*lusc_basal/total_nonimmune)/20)*20)
+PY"

@@ -1,0 +1,57 @@
+/bin/bash -lc "cat > compute_refs.py <<'PY'
+import gzip, numpy as np, os, sys, time
+from concurrent.futures import ProcessPoolExecutor
+FN='sample.swap.atac.q2.tsv.gz'
+# build bin index once in main; pickled to workers via global? ProcessPool on mac spawn may require picklable; we'll use fork? Python default spawn on mac. Could pass function building inside.
+def build_bins():
+    chr_starts={}; chr_ids={}
+    with gzip.open(FN,'rt') as f:
+        f.readline()
+        rows=[]
+        # collect per chr
+        for i,line in enumerate(f):
+            p=line.rstrip().split('\\t')
+            c=p[0]; s=int(p[1])
+            rows.append((c,s,i))
+    # sort by c then s? Original file already chr order, but per chr we'll sort
+    from collections import defaultdict
+    d=defaultdict(list)
+    for c,s,i in rows:
+        d[c].append((s,i))
+    for c,lst in d.items():
+        lst.sort()
+        chr_starts[c]=np.array([s for s,i in lst],dtype=np.int64)
+        chr_ids[c]=np.array([i for s,i in lst],dtype=np.int64)
+    return chr_starts,chr_ids,len(rows)
+
+def compute_ref(args):
+    ref_file, typ, chr_starts, chr_ids, nrows = args
+    ref=np.zeros(nrows,dtype=np.float64)
+    with gzip.open(ref_file,'rt') as f:
+        for line in f:
+            p=line.rstrip().split('\\t')
+            c=p[0]; start=int(p[1]); cnt=int(p[4])
+            if c not in chr_starts: continue
+            pos=np.searchsorted(chr_starts[c],start,side='right')-1
+            if pos<0: pos=0
+            ref[chr_ids[c][pos]] += cnt
+    print('computed',typ,'sum',ref.sum(),'nonzero',np.count_nonzero(ref),flush=True)
+    return typ, ref
+
+if __name__=='__main__':
+    start=time.time()
+    chr_starts,chr_ids,nrows=build_bins()
+    print('built bins',time.time()-start,nrows,flush=True)
+    types=['Astrocyte','Cone','GABAamacrine','Horizontal','Microglia','Mullerglia','Retinalganglioncell']
+    # AII already maybe compute too? include all except Rod? Let's include AII from existing file for verification.
+    types=['AIIamacrine']+types
+    args=[]
+    for t in types:
+        args.append((f'ref_{t}_frags.tsv.gz',t,chr_starts,chr_ids,nrows))
+    with ProcessPoolExecutor(max_workers=4) as ex:
+        results=list(ex.map(compute_ref,args))
+    for typ,ref in results:
+        np.save(f'ref_{typ}.npy',ref)
+    print('all saved',time.time()-start,flush=True)
+PY
+python3 compute_refs.py"

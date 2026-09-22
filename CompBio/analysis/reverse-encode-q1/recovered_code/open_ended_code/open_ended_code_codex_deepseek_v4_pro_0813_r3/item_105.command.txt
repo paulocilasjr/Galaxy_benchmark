@@ -1,0 +1,25 @@
+/bin/bash -c "cat > process_bam_counts.py <<'PY'
+import subprocess, collections, json, sys, time
+bam=sys.argv[1]
+t=time.time()
+counts=collections.Counter()
+p1=subprocess.Popen(['samtools','view','-q','30','-b',bam], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+p2=subprocess.Popen(['bamToBed','-i','stdin'], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=1024*1024)
+p1.stdout.close()
+n=0
+for line in p2.stdout:
+    fields=line.split(b'\\t',3)
+    chrom=fields[0].decode()
+    start=int(fields[1])
+    counts[(chrom,start//10000)] += 1
+    n+=1
+    if n%10000000==0:
+        print('read',n,'elapsed',round(time.time()-t,1), file=sys.stderr, flush=True)
+p2.stdout.close(); p2.wait(); p1.wait()
+print('total reads',n,sum(counts.values()),'elapsed',round(time.time()-t,1), file=sys.stderr)
+# save counts to json
+out={'counts':{f'{c}:{b}':v for (c,b),v in counts.items()}}
+with open('bam_counts.json','w') as f: json.dump(out,f)
+print('saved bam_counts.json')
+PY
+python3 process_bam_counts.py ENCFF051GHB.bam"

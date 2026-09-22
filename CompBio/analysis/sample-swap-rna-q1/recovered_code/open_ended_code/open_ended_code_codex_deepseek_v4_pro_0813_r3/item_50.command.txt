@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, csv, re, numpy as np, json
+mat='sample.swap.rna.q1.tsv.gz'
+with gzip.open(mat,'rt') as f:
+    r=csv.reader(f,delimiter='\\t'); header=next(r); genes=[]; rows=[]
+    for row in r:
+        genes.append(row[0]); rows.append([float(x) for x in row[1:]])
+A=np.array(rows); cols=header[1:]
+trans2name={}
+with gzip.open('BraLan3.gff.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'mRNA': continue
+        attr=p[8]
+        nt=re.search(r'Note=ID:(["'^;%]+)'"',attr)
+        gn=re.search(r'gene=(["'^;]+)'"',attr)
+        if nt and gn:
+            trans=nt.group(1)
+            # strip _isoform suffix if present
+            base=re.sub(r'_\\d+"'$'"','',trans)
+            trans2name[base]=gn.group(1)
+print('mapped',sum(g in trans2name for g in genes), 'unique names',len(set(trans2name.get(g,g) for g in genes)))
+unm=[g for g in genes if g not in trans2name]
+print('unmapped',len(unm), unm[:20])
+names=[trans2name.get(g,g) for g in genes]
+# map names to gene IDs
+id2name=dict(zip(genes,names))
+# save
+with open('id2name.json','w') as f: json.dump(id2name,f)
+# top genes
+X=np.log2(A+1)
+mean=X.mean(axis=1,keepdims=True); std=X.std(axis=1,keepdims=True); std[std==0]=1
+Z=(X-mean)/std
+for j,c in enumerate(cols):
+    vals=Z[:,j]
+    order=np.argsort(-vals)
+    top=[]
+    for idx in order:
+        if A[idx,j]>5 and vals[idx]>2:
+            top.append((names[idx], id2name.get(genes[idx],''), round(float(A[idx,j]),2), round(float(vals[idx]),2)))
+        if len(top)>=25: break
+    print('\\n###',c)
+    for x in top: print(x)
+PY"

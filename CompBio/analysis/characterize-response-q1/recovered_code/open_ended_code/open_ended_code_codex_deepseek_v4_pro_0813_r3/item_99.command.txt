@@ -1,0 +1,58 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, mygene, re, os, json, pickle
+mg=mygene.MyGeneInfo(); qset={g.upper() for g in open('characterize.response.q1.txt').read().split()}
+cache_file='probe_symbol_cache.pkl'
+cache={}
+if os.path.exists(cache_file): cache=pickle.load(open(cache_file,'rb'))
+def get_syms(probes):
+ missing=[p for p in probes if p not in cache]
+ if missing:
+  res=mg.querymany(missing, scopes='reporter', species='mouse', fields='symbol', returnall=True, verbose=False)
+  for o in res['out']:
+   if o.get('symbol'): cache[o['query']]=o['symbol']
+  for p in res.get('missing',[]): cache[p]=None
+  pickle.dump(cache,open(cache_file,'wb'))
+ return [cache.get(p) for p in probes]
+def parse_series(path):
+ lines=open(path).read().splitlines()
+ for i,l in enumerate(lines):
+  if l.startswith('"'!series_matrix_table_begin'"'): start=i+1
+  if l.startswith('"'!series_matrix_table_end'"'): end=i
+ header=lines[start].split('\\t'); data=[l.split('\\t') for l in lines[start+1:end]]
+ st=None
+ for l in lines:
+  if l.startswith('"'!Sample_title'"'): st=l.split('\\t'); break
+ titles=[s.strip('\"') for s in st[1:]]
+ return titles,data
+def compute(path, name, patA, patB):
+ titles,data=parse_series(path)
+ ia=[i for i,t in enumerate(titles) if re.search(patA,t,re.I)]
+ ib=[i for i,t in enumerate(titles) if re.search(patB,t,re.I)]
+ print('\\n###',path,name,'nA',len(ia),'nB',len(ib), 'A',titles[ia[0]] if ia else '', 'B',titles[ib[0]] if ib else '')
+ probes=[]; vals=[]
+ for row in data:
+  probe=row[0].strip('\"')
+  try: v=np.array([float(x) for x in row[1:]])
+  except: continue
+  probes.append(probe); vals.append(v)
+ syms=get_syms(probes)
+ lf=[]
+ for v in vals:
+  a=v[ia].mean(); b=v[ib].mean(); lf.append(np.log2((b+1)/(a+1)))
+ lf=np.array(lf); order=np.argsort(-np.abs(lf))
+ top=[]; seen=set()
+ for i in order:
+  s=syms[i]
+  if s and s.upper() not in seen:
+   seen.add(s.upper()); top.append(s)
+   if len(top)>=250: break
+ inter=[g for g in top if g.upper() in qset]
+ print('top50:',','.join(top[:50]))
+ print('inter:',','.join(inter[:80]), 'count top112',len([g for g in top[:112] if g.upper() in qset]))
+
+compute('GSE14769.txt','LPS_240_vs_0',r'240',r'-0"'$'"')
+compute('GSE14769.txt','LPS_120_vs_0',r'120"'$'"',r'-0"'$'"')
+compute('GSE14769.txt','LPS_60_vs_0',r'60"'$'"',r'-0"'$'"')
+compute('GSE22103.txt','LPS_vs_Unst',r'"'^LPS_'"',r'"'^Unst_'"')
+compute('GSE63739.txt','WT_LPS3h_vs_0h',r'WT_LPS 3h',r'WT_LPS 0h')
+PY"

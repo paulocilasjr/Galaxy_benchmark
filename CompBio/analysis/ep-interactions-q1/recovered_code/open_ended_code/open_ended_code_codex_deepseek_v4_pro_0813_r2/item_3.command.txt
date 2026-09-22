@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+hic=pd.read_csv('ep.interactions.q1.hic.csv')
+expr=pd.read_csv('ep.interactions.q1.expr.csv')
+# hic summary
+for _,r in hic.iterrows():
+    if r.set=='candidate':
+        c=[r.count_rep1,r.count_rep2,r.count_rep3]
+        bg=hic[hic.set=='background']
+        # distance window perhaps 100kb
+        win=bg[(bg.distance_bp>r.distance_bp-100000)&(bg.distance_bp<r.distance_bp+100000)]
+        mean=win[['count_rep1','count_rep2','count_rep3']].values.mean()
+        sd=win[['count_rep1','count_rep2','count_rep3']].values.std()
+        z=(np.mean(c)-mean)/sd if sd>0 else np.nan
+        print(r.pair_id, 'dist',r.distance_bp,'counts',c,'mean',np.mean(c), 'win',len(win),'winmean',mean,'z',z)
+print('\\nCRISPR stats')
+res=[]
+for p, g in expr.groupby('pair_id'):
+    ctl=g[g.condition=='control'].rna_count.values
+    pert=g[g.condition=='perturbed'].rna_count.values
+    t,pv=stats.ttest_ind(pert,ctl,equal_var=False)
+    logfc=np.log2(pert.mean()/ctl.mean())
+    # effect size Glass? 
+    d=(pert.mean()-ctl.mean())/ctl.std()
+    print(p,'ctl',ctl.mean(),ctl.std(),'pert',pert.mean(),pert.std(),'log2FC',logfc,'cohenD',d,'t',t,'p',pv)
+    res.append((p,logfc,d,pv))
+print('\\nCandidate hic ranks')
+cand=hic[hic.set=='candidate'].copy()
+cand['mean_count']=cand[['count_rep1','count_rep2','count_rep3']].mean(axis=1)
+print(cand.sort_values('mean_count').to_string())
+PY"

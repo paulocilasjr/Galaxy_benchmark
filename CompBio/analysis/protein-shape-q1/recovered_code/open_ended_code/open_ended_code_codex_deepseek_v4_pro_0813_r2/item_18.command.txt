@@ -1,0 +1,66 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, math
+from PIL import Image, ImageDraw, ImageFont
+from skimage.transform import rotate
+from scipy.ndimage import gaussian_filter
+coords=np.array([list(map(float,[l[30:38],l[38:46],l[46:54]])) for l in open('protein.shape.q1.pdb') if l.startswith('ATOM')])
+N=80; font_path='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+letters='BDFHJLNPRTVXZ'
+def make_template(ch):
+ img=Image.new('L',(N,N),0); d=ImageDraw.Draw(img)
+ font_size=100; font=ImageFont.truetype(font_path,font_size)
+ bbox=d.textbbox((0,0),ch,font=font); w=bbox[2]-bbox[0]; h=bbox[3]-bbox[1]
+ target=0.82*N; scale=target/max(w,h); font_size=max(1,int(font_size*scale)); font=ImageFont.truetype(font_path,font_size)
+ bbox=d.textbbox((0,0),ch,font=font); w=bbox[2]-bbox[0]; h=bbox[3]-bbox[1]
+ d.text(((N-w)/2-bbox[0],(N-h)/2-bbox[1]),ch,font=font,fill=255)
+ return np.array(img)>40
+
+def project_image(pts,n):
+ n=np.asarray(n,float); n/=np.linalg.norm(n)
+ a=np.array([0.,0.,1.]) if abs(n[2])<0.9 else np.array([1.,0.,0.])
+ u=np.cross(n,a); u/=np.linalg.norm(u); v=np.cross(n,u); v/=np.linalg.norm(v)
+ p=pts-pts.mean(0); x=p@u; y=p@v
+ margin=4; span=max(x.max()-x.min(),y.max()-y.min()); scale=(N-2*margin)/span
+ xi=((x-x.min())*scale+margin).astype(int); yi=((y-y.min())*scale+margin).astype(int)
+ img=np.zeros((N,N),np.float32)
+ for xx,yy in zip(xi,yi):
+  if 0<=xx<N and 0<=yy<N: img[yy,xx]=1
+ img=gaussian_filter(img,0.7); img=img>0.12
+ return img
+
+def overlay(pts,n,ch,ang):
+ imgp=project_image(pts,n)
+ base=make_template(ch)
+ t=rotate(base.astype(np.float32),ang,order=1,mode='constant',cval=0,preserve_range=True)>0.5
+ corr=np.fft.irfft2(np.fft.rfft2(imgp.astype(np.float32))*np.conj(np.fft.rfft2(t.astype(np.float32))),s=imgp.shape).real
+ idx=np.unravel_index(np.argmax(corr),corr.shape)
+ # Need shift convention: correlation C[k] = sum imgp[i,j]*t[i-k,j-k]? Let's find shift by trial all possible? use argmax and convention same as fftconvolve(imgp,t[::-1,::-1]). We'll brute locate max correlation by ndimage? Could use scipy.ndimage.correlate for clarity, but only need approx.
+ # Let's use correlation_shift via scipy.ndimage.correlate returns C[k]=sum p[i+k] t[i]; max shift directly shift to apply template.
+ from scipy.ndimage import correlate
+ corr2=correlate(imgp.astype(float),t.astype(float),mode='constant',cval=0)
+ maxidx=np.unravel_index(np.argmax(corr2),corr2.shape)
+ center=(N//2,N//2)
+ sy=maxidx[0]-center[0]; sx=maxidx[1]-center[1]
+ # apply shift to t: roll
+ ts=np.roll(t,(-sy,-sx),axis=(0,1))
+ return imgp,ts
+
+cases=[('F',15,[0.80097915,-0.09795154,-0.590625]),('P',30,[-0.90018718,0.13007271,0.415625]),('L',175,[0.39265629,0.08632438,0.915625])]
+for ch,ang,n in cases:
+ p,t=overlay(coords,n,ch,ang)
+ # print at downsample maybe 80 columns too wide. use 64 rows? We'll print 60x30
+ H,W=p.shape; ys=np.linspace(0,H,36,endpoint=False,dtype=int); xs=np.linspace(0,W,72,endpoint=False,dtype=int)
+ print('\\n===',ch,'dir',n,'ang',ang,'===')
+ for r in range(len(ys)):
+  y=ys[r]
+  line=''
+  for c in range(len(xs)):
+   x=xs[c]
+   pv=p[y,x]; tv=t[y,x]
+   if pv and tv: line+='*'
+   elif pv: line+='#'
+   elif tv: line+='.'
+   else: line+=' '
+  print(line)
+PY
+python3 [REDACTED LOCAL PATH]"

@@ -1,0 +1,27 @@
+/bin/bash -lc "arch -arm64 env PYTHONPATH=armdeps TF_CPP_MIN_LOG_LEVEL=2 /usr/bin/python3 - <<'PY'
+import json,urllib.parse,urllib.request
+import numpy as np
+import tensorflow as tf
+chrom='chr13'; pos=54569291; ref='T'; alt='G'; L=2114; v=L//2-1
+u='https://api.genome.ucsc.edu/getData/sequence?'+urllib.parse.urlencode({'genome':'hg38','chrom':chrom,'start':pos-L//2,'end':pos+L//2})
+s=json.load(urllib.request.urlopen(u))['dna'].upper()
+assert len(s)==L and s[v]==ref,(len(s),s[v])
+seqs=[s,s[:v]+alt+s[v+1:]]
+bases={x:i for i,x in enumerate('ACGT')}
+a=np.zeros((2,L,4),np.float32)
+for i,seq in enumerate(seqs):
+ for j,b in enumerate(seq):
+  if b in bases:a[i,j,bases[b]]=1
+expected=[-0.38262796,-0.22281218,-0.50627375,-0.6776943,-0.43265867]
+observed=[]
+for fold in range(5):
+ m=tf.keras.models.load_model(f'model_files/fold{fold}/Rod.h5',compile=False)
+ cm=tf.keras.Model(m.input,m.outputs[1])
+ p=cm(a,training=False).numpy().ravel()
+ observed.append(float(p[1]-p[0]))
+ tf.keras.backend.clear_session()
+print('expected',expected)
+print('observed',observed)
+print('max_abs_error',max(abs(a-b) for a,b in zip(expected,observed)))
+print('expected_avg',np.mean(expected),'observed_avg',np.mean(observed))
+PY"

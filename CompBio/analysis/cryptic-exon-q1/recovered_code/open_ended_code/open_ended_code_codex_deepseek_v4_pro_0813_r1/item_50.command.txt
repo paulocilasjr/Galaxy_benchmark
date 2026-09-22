@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, re, collections
+# known introns
+known=collections.defaultdict(set)
+exons=collections.defaultdict(lambda: collections.defaultdict(list))
+for line in open('gencode.v47.annotation.gtf'):
+    if line.startswith('#'): continue
+    f=line.rstrip('\\n').split('\\t')
+    if len(f)<9 or f[2]"'!='"'exon': continue
+    attrs=dict(re.findall(r'(\\S+?) \"(["'^"]*)"'"', f[8]))
+    exons[attrs.get('gene_name','')][attrs.get('transcript_id','')].append((int(f[3]),int(f[4])))
+for gn,txs in exons.items():
+    for tx,es in txs.items():
+        es=sorted(es)
+        for (s1,e1),(s2,e2) in zip(es,es[1:]):
+            if s2>e1+1: known[gn].add((e1+1,s2-1))
+# parse reads with 2+ Ns and check both novel
+hits=[]
+for line in subprocess.Popen(['samtools','view','-F','4','cand_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6: continue
+    flag=int(f[1]); mapq=int(f[4]); cigar=f[5]
+    if flag & 0x900: continue
+    if mapq<10: continue
+    if len(re.findall(r'\\d+N',cigar))<2: continue
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"', f[2])
+    if not m: continue
+    gene=m.group(1); ref_start=int(m.group(3)); pos=int(f[3])
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    left=0; intervals=[]
+    for n,op in ops:
+        n=int(n)
+        if op=='N':
+            gs=ref_start+1+(pos-1)+left
+            intervals.append((gs,gs+n-1,n))
+            left+=n
+        elif op in 'MDN=X': left+=n
+    # determine novel statuses and middle exon lengths between consecutive Ns
+    for i in range(len(intervals)-1):
+        a=intervals[i][:2]; b=intervals[i+1][:2]
+        nov_a = a not in known.get(gene,set())
+        nov_b = b not in known.get(gene,set())
+        # exon between introns: start a_end+1, end b_start-1
+        exon_len = b[0]-a[1]-1
+        if nov_a and nov_b:
+            hits.append((gene, f[1], f[2], pos, mapq, cigar, intervals, a,b,exon_len))
+print('pairs of adjacent novel junctions:',len(hits))
+for h in hits:
+    gene,rid,rname,pos,mapq,cigar,ints,a,b,elen=h
+    print(f'{gene}\\t{rid}\\tpos={pos}\\tmapq={mapq}\\telen={elen}\\tints={ints}\\tcigar={cigar}')
+PY"

@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, os, glob, bisect
+import numpy as np
+primary=re.compile(r'"'^chr([1-9]|1[0-9]|2[0-2]|X|Y|M):'"')
+# blacklisted bin keys at 10k and 100k
+black={10000:set(),100000:set()}
+with gzip.open('refs/ENCFF356LFX.bed.gz','rt') as f:
+ for line in f:
+  chrom,s,e=line.split()[:3]; s=int(s); e=int(e)
+  for w in black:
+   for b in range(s//w, (e-1)//w+1): black[w].add(f'{chrom}:{b}')
+for key in ['chr11:241','chr11:2410']:
+ print('black',key, any(key in black[w] for w in black))
+for dirname,w in [('bins10000',10000),('bins100k',100000)]:
+ files=sorted(glob.glob(dirname+'/*.tsv'), key=lambda p:int(os.path.basename(p).split('.')[0]))
+ keys=set(); vals=[]
+ for f in files:
+  d={}
+  for line in open(f):
+   k,v=line.rstrip('\\n').split('\\t')
+   if primary.match(k) and k not in black[w]: d[k]=int(v); keys.add(k)
+  vals.append(d)
+ keys=sorted(keys); X=np.array([[d.get(k,0) for k in keys] for d in vals],float)
+ print('\\n',dirname,'shape',X.shape)
+ for mode in ['raw','sqrt','log1p','cap99_log1p']:
+  Y=X.copy()
+  if mode.startswith('cap'):
+   for i in range(10):
+    nz=Y[i][Y[i]>0]; Y[i]=np.minimum(Y[i],np.percentile(nz,99))
+  if 'sqrt' in mode: Y=np.sqrt(Y)
+  elif 'log' in mode: Y=np.log1p(Y)
+  C=np.corrcoef(Y); avgs=[(r.sum()-1)/9 for r in C]
+  print(mode, 'order', ' '.join(f'{i+1}:{avgs[i]:.4f}' for i in np.argsort(avgs)))
+PY"

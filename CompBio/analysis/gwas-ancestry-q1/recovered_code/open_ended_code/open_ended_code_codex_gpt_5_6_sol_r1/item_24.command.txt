@@ -1,0 +1,33 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.stats import chi2, pearsonr
+samples=[x.strip() for x in open('samples.txt')]
+panel=pd.read_csv('integrated_call_samples_v3.20130502.ALL.panel',sep='\\t').set_index('sample').loc[samples]
+groups={g:np.where(panel['pop'].values==g)[0] for g in panel['pop'].unique()}
+obs={}
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+ next(f)
+ for line in f:
+  a=line.rstrip().split('\\t')
+  if a[6]"'!='"'NA': obs[int(a[3])]=float(a[6])
+G={}
+for line in open('matched.genotypes.tsv'):
+ a=line.rstrip().split('\\t'); p=int(a[0])
+ if p not in obs or ',' in a[2] or a[2].startswith('<'): continue
+ try:G[p]=np.array([np.nan if '.' in x else sum(map(int,x.replace('|','/').split('/'))) for x in a[3:]],float)
+ except:pass
+regs=[tuple(map(int,x.split()[1:])) for x in open('regions.bed')]
+score={g:[] for g in groups}
+for lo0,hi in regs:
+ lo=lo0+1; ps=[p for p in G if lo<=p<=hi]; lead=min(ps,key=lambda p:obs[p]); yy=np.array([chi2.isf(obs[p],1) for p in ps]); k=yy>2
+ for g,idx in groups.items():
+  gl=G[lead][idx]; x=[]; y=[]
+  for p,yo,kk in zip(ps,yy,k):
+   if not kk:continue
+   gp=G[p][idx]; ok=np.isfinite(gl)&np.isfinite(gp)
+   if ok.sum()<30 or np.std(gl[ok])==0 or np.std(gp[ok])==0:continue
+   x.append(np.corrcoef(gl[ok],gp[ok])[0,1]**2); y.append(yo)
+  if len(x)>4:score[g].append((pearsonr(x,y).statistic,len(x)))
+for g,v in sorted(score.items(),key=lambda kv:-np.average([q[0] for q in kv[1]],weights=[q[1] for q in kv[1]])):
+ print(g,panel.loc[panel['pop']==g,'super_pop'].iloc[0],len(groups[g]),'wpear',round(np.average([q[0] for q in v],weights=[q[1] for q in v]),3),'mean',round(np.mean([q[0] for q in v]),3))
+PY"

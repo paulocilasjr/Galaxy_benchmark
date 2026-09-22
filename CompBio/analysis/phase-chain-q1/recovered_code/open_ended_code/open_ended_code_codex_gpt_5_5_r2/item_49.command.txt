@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, json, copy
+REG_START=27079126
+seq=json.load(open('ucsc_seq.json'))['dna'].upper()
+with open('local.fa','w') as f:
+    f.write('>local\\n')
+    for i in range(0,len(seq),60): f.write(seq[i:i+60]+'\\n')
+header={'HD': {'VN':'1.6'}, 'SQ':[{'SN':'local','LN':len(seq)}]}
+inbam=pysam.AlignmentFile('aln.hg38.bam','rb')
+out=pysam.AlignmentFile('local.bam','wb',header=header)
+for r in inbam.fetch('chr22', REG_START-1, REG_START-1+len(seq)):
+    if r.is_secondary or r.is_supplementary: continue
+    a=pysam.AlignedSegment(out.header)
+    a.query_name=r.query_name
+    a.query_sequence=r.query_sequence
+    a.flag=r.flag
+    a.reference_id=0
+    a.reference_start=r.reference_start-(REG_START-1)
+    a.mapping_quality=r.mapping_quality
+    a.cigar=r.cigar
+    a.next_reference_id=0 if r.next_reference_id>=0 else -1
+    a.next_reference_start=r.next_reference_start-(REG_START-1) if r.next_reference_start>=0 else -1
+    a.template_length=r.template_length
+    a.query_qualities=r.query_qualities
+    # copy tags excluding MD/NM maybe stale due same ref coords but same alignment; keep NM useful? remove MD
+    tags=[]
+    for t,v in r.tags:
+        if t not in ('MD',): tags.append((t,v))
+    a.tags=tags
+    out.write(a)
+out.close()
+pysam.sort('-o','local.sorted.bam','local.bam')
+pysam.index('local.sorted.bam')
+print(len(seq))
+PY
+samtools faidx local.fa
+bcftools mpileup -f local.fa -Ou -Q 10 -q 20 -a FORMAT/AD,FORMAT/DP local.sorted.bam | bcftools call -mv -Ov > calls.local.vcf
+cat calls.local.vcf"

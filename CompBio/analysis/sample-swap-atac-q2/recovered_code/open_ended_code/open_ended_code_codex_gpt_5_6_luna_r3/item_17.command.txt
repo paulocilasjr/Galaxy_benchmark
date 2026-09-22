@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+# Use MyGene positions and matrix to print winner for expanded marker genes.
+import gzip, urllib.parse, urllib.request, json, numpy as np
+sets={
+'Rod':'RHO PDE6A PDE6B GNAT1 NRL NR2E3 SAG ROM1 GRK1 GNB1 CNGB1 PDE6D RDH12 ABCC5',
+'Cone':'ARR3 OPN1SW OPN1MW OPN1LW PDE6C GNAT2 CNGB3 GUCA1C RXRG THRB OPN1LW OPN1MW',
+'RGC':'RBPMS SNCG POU4F1 POU4F2 POU4F3 ISL1 THY1 NEFL NEFM TUBB3 GAP43 SLC17A6',
+'Horizontal':'LHX1 ONECUT1 ONECUT2 PROX1 CALB1 TFAP2A',
+'GABA':'GAD1 GAD2 SLC6A1 SLC32A1 GABRA1 GABRA3 GABRB2 PAX6 RELN',
+'AII':'CALB2 ACHE TFAP2A PAX6 RELN GAD1 GAD2 SLC32A1',
+'Astrocyte':'GFAP AQP4 SLC1A3 ALDH1L1 S100B CLDN10 APOE',
+'Mullerglia':'RLBP1 GLUL KCNJ10 VIM SOX9 SLC1A3 RAX CLU DIO2 SLC6A11',
+'Microglia':'AIF1 C1QA C1QB C1QC TYROBP P2RY12 CX3CR1 TMEM119 LST1 FCER1G CTSS LILRB1'
+}
+allsyms=[]
+for v in sets.values(): allsyms+=v.split()
+allsyms=list(dict.fromkeys(allsyms))
+q=' OR '.join('symbol:'+s for s in allsyms)
+u='https://mygene.info/v3/query?'+urllib.parse.urlencode({'q':q,'species':'human','fields':'symbol,genomic_pos','size':1000})
+data=json.load(urllib.request.urlopen(u))
+pos={}
+for h in data.get('hits',[]):
+ p=h.get('genomic_pos',{})
+ if isinstance(p,list): p=p[0]
+ if 'chr' in p: pos[h['symbol']]=p
+names=[]; coords=[]; vals=[]
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ names=f.readline().rstrip().split('\\t')[3:]
+ for line in f:
+  a=line.rstrip().split('\\t'); coords.append((a[0],int(a[1]),int(a[2]))); vals.append([int(x) for x in a[3:]])
+x=np.asarray(vals,dtype=float); y=x/x.sum(0)*1e6
+# one score per gene: sum around its gene (+20kb), normalize to median across labels or max
+scores={}
+for sym,p in pos.items():
+ chrom='chr'+p['chr']; mask=np.array([(c==chrom and e>=p['start']-20000 and s<=p['end']+20000) for c,s,e in coords])
+ if mask.any(): scores[sym]=y[mask].sum(0)
+for group,sstr in sets.items():
+ print('\\n'+group)
+ for sym in sstr.split():
+  if sym in scores:
+   z=scores[sym]; win=names[int(z.argmax())]
+   print(f'{sym:9s}: {win:20s} '+ ' '.join(f'{v:6.1f}' for v in z))
+PY"

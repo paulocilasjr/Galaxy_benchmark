@@ -1,0 +1,28 @@
+/bin/bash -lc "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python - <<'PY'
+import h5py,numpy as np,re
+from scipy.sparse import csr_matrix
+p='covid.patients.q1.h5ad'; B=20000
+isg='ISG15 IFIT1 IFIT2 IFIT3 IFIT5 MX1 IFI6 IFI27 IFI44 IFI44L IFITM1 IFITM2 IFITM3 OAS1 OAS2 OAS3 OASL RSAD2 USP18 IRF7 DDX58 IFIH1 XAF1 SAMD9L EPSTI1 PARP9 GBP1 GBP2 GBP4 GBP5 CMPK2 BST2 HERC5 TRIM22'.split()
+with h5py.File(p,'r') as f:
+ def dec(a): return [x.decode() if isinstance(x,bytes) else str(x) for x in a]
+ dn=dec(f['obs/donor_id/categories'][:]); codes=f['obs/donor_id/codes'][:]; ind=f['X/indptr'][:]; data=f['X/data']; idx=f['X/indices']; n=len(codes); ng=f['X'].attrs['shape'][1]
+ cats=dec(f['var/feature_name/categories'][:]); fc=f['var/feature_name/codes'][:]; genes=np.array([cats[i] for i in fc])
+ idxs=[int(np.where(genes==q)[0][0]) for q in isg if q in set(genes)]
+ isg2=[q for q in isg if q in set(genes)]
+ scores=[[] for _ in dn]; detected=[[] for _ in dn]
+ # also sums in raw counts and cell total
+ for st in range(0,n,B):
+  en=min(n,st+B); lo=int(ind[st]); hi=int(ind[en]); ptr=ind[st:en+1]-lo
+  xb=csr_matrix((data[lo:hi],idx[lo:hi],ptr),shape=(en-st,ng))
+  lib=np.asarray(xb.sum(1)).ravel()
+  arr=xb[:,idxs].toarray()
+  val=np.log1p(arr/(lib[:,None]+1e-9)*1e4).mean(1)
+  det=(arr>0).sum(1)
+  for q in np.unique(codes[st:en]):
+   m=codes[st:en]==q; scores[q].append(val[m]);detected[q].append(det[m])
+ print('ISG genes',len(isg2),isg2)
+ order=np.argsort([int(re.search(r'\\d+',x).group()) for x in dn])
+ for q in order:
+  v=np.concatenate(scores[q]); dt=np.concatenate(detected[q])
+  print(f'{dn[q]:7s} n={len(v):5d} mean={v.mean():.3f} med={np.median(v):.3f} q90={np.quantile(v,.9):.3f} q99={np.quantile(v,.99):.3f} >1={np.mean(v>1):.3f} >2={np.mean(v>2):.3f} >3={np.mean(v>3):.3f} detmean={dt.mean():.2f}')
+PY"

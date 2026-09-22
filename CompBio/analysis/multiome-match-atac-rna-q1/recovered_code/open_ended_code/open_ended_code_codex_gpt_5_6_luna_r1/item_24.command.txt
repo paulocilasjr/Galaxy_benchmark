@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 -u - <<'PY'
+# Recompute compact direct gene-locus feature matrix from known coordinates (promoter +/-10kb bins) and print RNA-vs-ATAC column correlations.
+import gzip,numpy as np
+# coordinates in hg38 from UCSC RefSeq, one representative TSS per listed marker
+# (chromosome, TSS), selected markers grouped by RNA columns
+G={
+0:[('GDF5','chr20',35433346),('PSG4','chr19',43192701),('CCN5','chr20',44714860),('PTX3','chr3',157436849),('TCF21','chr6',133889112),('ADH1B','chr4',99321400),('KCNG2','chr18',79797937),('FMO2','chr1',171185299),('NNMT','chr11',114257805),('WNT2','chr7',117323057),('CLEC3B','chr3',45026302),('MYLK','chr3',123620547),('F10','chr13',113122798),('LMOD1','chr1',201896455),('IL7R','chr5',35856890)],
+1:[('CXCL8','chr4',73740568),('CSF3','chr17',40015439),('IL24','chr1',206897442),('IL1B','chr2',112836778),('CCL7','chr17',34270220),('CXCL6','chr4',73836677),('NPPB','chr1',11858944),('TREM1','chr6',41286681),('MMP3','chr11',102843608),('AREG','chr4',74445135),('CXCL10','chr4',76023496),('PTGS2','chr1',186680422),('MMP7','chr11',102530746),('CTSS','chr1',150765777),('CHI3L1','chr1',203186703)],
+2:[('SLURP1','chr8',142742405),('KISS1R','chr19',917332),('LY6D','chr8',142786538),('ASCL2','chr11',2268497),('CDSN','chr6',31120445),('HBA1','chr16',176679),('HBA2','chr16',172875),('LILRB2','chr19',54281109),('SLURP2','chr8',142769827),('CKM','chr19',45322874),('SCNN1D','chr1',1280435),('KRT13','chr17',41505611),('S100P','chr4',6693877),('LCN6','chr9',136748524),('MUC2','chr11',1110507),('KLK11','chr19',51026615),('CEACAM7','chr19',41688269),('KRT14','chr17',41586894),('KRT6A','chr12',52493256),('KRT16','chr17',41612766)],
+3:[('LINC01048','chr13',37484783),('PTPRC','chr1',198638712),('CFHR1','chr1',196819730),('IL31RA','chr5',55839788),('PKHD1L1','chr8',109362460),('SCGB1A1','chr11',62419032),('NR0B1','chrX',30309389),('WNT16','chr7',121325366),('ADPRHL1','chr13',113414392)],
+4:[('CLEC1A','chr12',10098984),('OGN','chr9',92404577),('NPY','chr7',24284189),('SUCNR1','chr3',151873642),('SOST','chr17',43758790),('LDLRAD4','chr18',13217681),('SYNPR','chr3',63200603),('SCN3A','chr2',165140997),('GRIN3A','chr9',101738646),('MMP13','chr11',102955731),('TENM2','chr5',166979028),('VEGFD','chrX',15384412),('SNTG1','chr8',49909795),('KCNN3','chr1',154859875),('IRX3','chr16',54286786),('AKR1C3','chr10',5048780),('SPARCL1','chr4',87529375),('COL2A1','chr12',48001552)],
+5:[('BMX','chrX',15500806),('HAND1','chr5',154478226),('ARHGAP36','chrX',131058345),('CAPN8','chr1',223665700),('ALDH1A2','chr15',58014022),('CGA','chr6',87095105),('CXCR1','chr2',218166961),('SLC17A8','chr12',100357073),('CHI3L2','chr1',111227658),('LRRTM3','chr10',66926035),('FOLR1','chr11',72189708),('CD36','chr7',80602206),('IL12B','chr5',159330486),('NANOS1','chr10',119029713),('IAPP','chr12',21354958)],
+6:[('VCX2','chrX',8171266),('VCX','chrX',7842261),('ALPG','chr2',232406843),('DPPA3','chr12',7711432),('NLRP7','chr19',54947529),('BRDT','chr1',91949370),('TCL1B','chr14',95686425),('ATP12A','chr13',24680407),('KHDC1L','chr6',73225495),('FGF4','chr11',69775340),('SFTPD','chr10',79982382),('TACSTD2','chr1',58575432)],
+7:[('NLGN4X','chrX',5890041),('CRABP1','chr15',78340352),('ONECUT1','chr15',52780884),('SIX3','chr2',44941701),('SHISA9','chr16',12901597),('GALNT17','chr7',71132143),('WFDC2','chr20',45469752),('LRRN1','chr3',3799430),('RBM46','chr4',154781271),('ELAVL2','chr9',23690103),('SOX3','chrX',140505068),('RORB','chr9',74497334),('PRAC1','chr17',48722517),('MACC1','chr7',20134654),('TOX3','chr16',52436415),('GRIN2A','chr16',9753403),('SIX6','chr14',60509145),('LRAT','chr4',154740837),('ZIC5','chr13',99962963),('TCEAL2','chrX',102125678),('IRX1','chr5',3595831),('OTX2','chr14',56799904),('ZIC2','chr13',99981783),('NEUROG3','chr10',69571484),('POU5F1','chr6',31167169),('KLF4','chr9',107489768),('SOX2','chr3',181711924)],
+}
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+ f.readline(); names=[]; rows=[]
+ for l in f:
+  q=l.rstrip().split('\\t');names.append(q[0]);rows.append([float(x) for x in q[1:]])
+R=np.asarray(rows); rix={n:i for i,n in enumerate(names)}
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+ f.readline(); an=[]; rows=[]
+ for l in f:
+  q=l.rstrip().split('\\t');an.append(q[0]);rows.append([float(x) for x in q[1:]])
+A=np.asarray(rows); an=np.asarray(an)
+ac=np.array([x.split('_')[0] for x in an]); ast=np.array([int(x.split('_')[1]) for x in an])
+# Each marker gets mean accessibility within bin starts tss +/- 10kb
+rv=[]; av=[]; labels=[]
+for k,gs in G.items():
+ for g,c,tss in gs:
+  ids=np.where((ac==c)&(ast>=tss-10000)&(ast<=tss+10000))[0]
+  if len(ids):
+   rv.append(np.log1p(R[rix[g]])); av.append(np.log1p(A[ids].mean(0))); labels.append((k,g,c,tss,len(ids)))
+rv=np.array(rv); av=np.array(av)
+print('features',len(rv))
+# correlation across genes of each RNA col vs each ATAC col
+C=np.corrcoef(np.concatenate([rv.T,av.T],axis=0))[:8,8:]
+print('corr log RNA gene expression vs ATAC local accessibility')
+print(np.array2string(C,precision=3,suppress_small=True))
+for i in range(8): print(i,'best',np.argmax(C[i]),C[i,np.argmax(C[i])])
+# correlations on row standardized values / direct cosine
+for typ in ['raw','log','rank']:
+ x=np.log1p(rv) if typ=='log' else rv.copy()
+ if typ=='rank':
+  x=np.apply_along_axis(__import__('scipy').stats.rankdata,0,x)
+ y=np.log1p(av) if typ=='log' else av.copy()
+ if typ=='rank': y=np.apply_along_axis(__import__('scipy').stats.rankdata,0,y)
+ # row z (features equalized)
+ x=(x-x.mean(0,keepdims=True))/(x.std(0,keepdims=True)+1e-12)
+ y=(y-y.mean(0,keepdims=True))/(y.std(0,keepdims=True)+1e-12)
+ print(typ,'z corr',np.array2string(x.T@y/len(x),precision=3,suppress_small=True))
+PY"

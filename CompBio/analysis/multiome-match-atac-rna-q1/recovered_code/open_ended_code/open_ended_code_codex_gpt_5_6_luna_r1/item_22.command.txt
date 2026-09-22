@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import subprocess,json,concurrent.futures
+# Marker genes with substantial differential expression across the 8 RNA columns.
+genes='GDF5 PSG4 CCN5 PTX3 TCF21 ADH1B KCNG2 FMO2 NNMT WNT2 CLEC3B MYLK F10 LMOD1 IL7R CXCL8 CSF3 IL24 IL1B CCL7 CXCL6 NPPB TREM1 MMP3 AREG CXCL10 PTGS2 MMP7 CTSS CHI3L1 SLURP1 KISS1R LY6D ASCL2 CDSN HBA1 HBA2 LILRB2 SLURP2 CKM SCNN1D KRT13 S100P LCN6 MUC2 KLK11 CEACAM7 KRT14 KRT6A KRT16 LINC01048 PTPRC CFHR1 IL31RA PKHD1L1 SCGB1A1 NR0B1 WNT16 ADPRHL1 CLEC1A OGN NPY SUCNR1 SOST TRDC LDLRAD4 SYNPR SCN3A GRIN3A MMP13 TENM2 VEGFD SNTG1 KCNN3 IRX3 AKR1C3 SPARCL1 COL2A1 BMX HAND1 ARHGAP36 CAPN8 ALDH1A2 CGA CXCR1 SLC17A8 CHI3L2 LRRTM3 FOLR1 CD36 IL12B NANOS1 IAPP VCX2 VCX ALPG DPPA3 NLRP7 BRDT TCL1B ATP12A KHDC1L FGF4 SFTPD TACSTD2 NLGN4X CRABP1 ONECUT1 SIX3 SHISA9 GALNT17 WFDC2 LRRN1 RBM46 ELAVL2 SOX3 RORB PRAC1 MACC1 TOX3 GRIN2A SIX6 LRAT ZIC5 TCEAL2 IRX1 OTX2 ZIC2 NEUROG3 POU5F1 KLF4 SOX2'.split()
+target=set(genes)
+lens={str(i):n for i,n in enumerate([248956422,242193529,198295559,190214555,181538259,170805979,159345973,145138636,138394717,133797422,135086622,133275309,114364328,107043718,101991189,90338345,83257441,80373285,58617616,64444167,46709983,50818468,156040895,57227415])}
+# keys 1..22,X,Y; lengths list currently last indexes 23? fix
+chroms=[str(i) for i in range(1,23)]+['X','Y']
+lengths=[248956422,242193529,198295559,190214555,181538259,170805979,159345973,145138636,138394717,133797422,135086622,133275309,114364328,107043718,101991189,90338345,83257441,80373285,58617616,64444167,46709983,50818468,156040895,57227415]
+def one(ch,L):
+ u=f'https://api.genome.ucsc.edu/getData/track?genome=hg38;track=ncbiRefSeq;chrom=chr{ch};start=0;end={L}'
+ try:
+  b=subprocess.check_output(['curl','-L','--max-time','40','-sS',u],stderr=subprocess.DEVNULL)
+  d=json.loads(b)
+  out=[]
+  for x in d.get('ncbiRefSeq',[]):
+   if x.get('name2') in target: out.append((x.get('name2'),x.get('chrom'),x.get('txStart'),x.get('txEnd'),x.get('strand'),x.get('name')))
+  return out
+ except Exception as e:
+  print('ERR',ch,e,flush=True); return []
+allout=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+ for out in ex.map(one,chroms,lengths): allout.extend(out)
+by={}
+for x in allout: by.setdefault(x[0],[]).append(x[1:])
+print('found symbols',len(by),'of',len(target))
+for g in genes:
+ if g in by:
+  # unique loci
+  loc=sorted(set(by[g]))
+  print(g, loc[:3])
+ else: print(g,'NOT_FOUND')
+PY"

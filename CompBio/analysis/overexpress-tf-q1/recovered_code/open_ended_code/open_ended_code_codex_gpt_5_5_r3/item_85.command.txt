@@ -1,0 +1,84 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile,re,bisect
+import numpy as np
+from scipy.stats import fisher_exact, mannwhitneyu
+candidates=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']
+profiles={c:[] for c in candidates}
+z=zipfile.ZipFile('PFMs.zip')
+for name in z.namelist():
+    if not name.endswith('.jaspar'): continue
+    lines=z.read(name).decode().strip().splitlines(); m=re.match(r'>\\s*(\\S+)\\s+(\\S+)',lines[0])
+    if not m: continue
+    mid,gene=m.groups()
+    for c in candidates:
+        if gene.upper()==c:
+            mat=np.array([[float(x) for x in re.findall(r'[0-9.]+',line)] for line in lines[1:]])
+            pc=0.1; probs=(mat+pc)/(mat.sum(axis=0,keepdims=True)+4*pc)
+            pwm=np.log2(probs/0.25); profiles[c].append((mid,pwm,pwm.min(axis=0).sum(),pwm.max(axis=0).sum()))
+comp=np.array([3,2,1,0],dtype=np.int8)
+trans=np.full(256,4,dtype=np.uint8)
+for ch,i in zip(b'ACGT',range(4)): trans[ch]=i
+def read_fa(fn):
+    seqs=[]; cur=[]
+    for line in open(fn,'rb'):
+        if line.startswith(b'>'):
+            if cur: seqs.append(b''.join(cur)); cur=[]
+        else: cur.append(line.strip().upper())
+    if cur: seqs.append(b''.join(cur))
+    L=max(map(len,seqs)); arr=np.full((len(seqs),L),4,dtype=np.uint8)
+    for i,s in enumerate(seqs): arr[i,:len(s)]=trans[np.frombuffer(s,dtype=np.uint8)]
+    return arr
+def gc(arr):
+    valid=arr<4; return ((arr==1)|(arr==2)).sum(axis=1)/valid.sum(axis=1)
+def match_by_gc(garr, parr):
+    gg=gc(garr); pg=gc(parr)
+    order=sorted(range(len(pg)), key=lambda i: pg[i])
+    vals=[pg[i] for i in order]
+    chosen=[]; used=set(); diffs=[]
+    # greedily choose nearest among local neighborhood; sort gains to match distribution
+    for gi in sorted(range(len(gg)), key=lambda i: gg[i]):
+        target=gg[gi]; pos=bisect.bisect_left(vals,target)
+        best=None; bestd=9
+        lo=max(0,pos-100); hi=min(len(vals),pos+100)
+        # expand if all used
+        while True:
+            for j in range(lo,hi):
+                idx=order[j]
+                if idx in used: continue
+                d=abs(vals[j]-target)
+                if d<bestd: bestd=d; best=idx
+            if best is not None or (lo==0 and hi==len(vals)): break
+            lo=max(0,lo-200); hi=min(len(vals),hi+200)
+        used.add(best); chosen.append(best); diffs.append(bestd)
+    return parr[chosen], np.array(diffs)
+def scan(arr, profs, thr_rel):
+    N,L=arr.shape; best=np.full(N,-1e9,dtype=np.float32); hit=np.zeros(N,dtype=bool)
+    for mid,pwm,mn,mx in profs:
+        m=pwm.shape[1]; thr=mn+thr_rel*(mx-mn)
+        for mat in (pwm,pwm[comp,::-1]):
+            scores=np.zeros((N,L-m+1),dtype=np.float32); valid=np.ones((N,L-m+1),dtype=bool)
+            for j in range(m):
+                bases=arr[:,j:j+L-m+1]; ok=bases<4; valid &= ok
+                b=bases.copy(); b[~ok]=0; scores += mat[b,j]
+            scores[~valid]=-1e9
+            mxs=scores.max(axis=1); rel=(mxs-mn)/(mx-mn)
+            best=np.maximum(best,rel); hit |= mxs>=thr
+    return hit,best
+pool=read_fa('bg_pool_z2_lfc03.fa')
+for N in [3000,10000]:
+    gain=read_fa(f'gain_top{N}.fa')
+    bg,diffs=match_by_gc(gain,pool)
+    print('\\nN',N,'GC gain/match mean',gc(gain).mean(),gc(bg).mean(),'median',np.median(gc(gain)),np.median(gc(bg)),'match maxdiff',diffs.max(),'meanabsdiff',diffs.mean())
+    for thr in [0.8,0.85,0.9]:
+        rows=[]
+        for cand in candidates:
+            h1,s1=scan(gain,profiles[cand],thr); h0,s0=scan(bg,profiles[cand],thr)
+            a=int(h1.sum()); c=int(h0.sum()); n=len(h1); m=len(h0)
+            odds,p=fisher_exact([[a,n-a],[c,m-c]], alternative='greater')
+            _,pmw=mannwhitneyu(s1,s0,alternative='greater')
+            rows.append((p,pmw,odds,a/n,c/m,a,c,cand,float(np.mean(s1)),float(np.mean(s0))))
+        rows.sort(key=lambda x:x[0])
+        print('thr',thr)
+        for p,pmw,odds,frg,frb,a,c,cand,mg,mb in rows:
+            print(f'{cand:7s} fish={p:.1e} mw={pmw:.1e} OR={odds:.2f} hit={frg:.3f}/{frb:.3f} cnt={a}/{c} mean={mg:.3f}/{mb:.3f}')
+PY"

@@ -1,0 +1,35 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np, anndata as ad
+meta=pd.read_csv('meta_website.csv')
+print(meta.shape, meta.columns.tolist())
+print(meta['SampleID'].nunique(), 'patients', meta['PatientID'].nunique())
+print(meta['Disease'].value_counts())
+print(meta['CellName'].value_counts())
+# our obs
+A=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+obs=A.obs.copy()
+obs['barcode']=[x.split('_',1)[1] for x in obs.index]
+meta['barcode']=meta['Cells'].str.split('_',1).str[1]
+# for each our sample, compare barcodes to meta SampleID
+our_counts=obs.groupby('sampleID').size()
+meta_counts=meta.groupby('SampleID').size()
+print('our samples',len(our_counts),'meta samples',len(meta_counts))
+# build sets per meta sample
+meta_sets={s:set(g['barcode']) for s,g in meta.groupby('SampleID')}
+our_sets={s:set(g['barcode']) for s,g in obs.groupby('sampleID')}
+# For each our sample, find meta sample with max Jaccard overlap
+rows=[]
+for s, ours in our_sets.items():
+    best=[]
+    for ms, ms_set in meta_sets.items():
+        inter=len(ours & ms_set)
+        if inter==0: continue
+        jac=inter/len(ours|ms_set)
+        best.append((jac,inter,ms,len(ms_set)))
+    best.sort(reverse=True)
+    top=best[:3]
+    rows.append((s,len(ours),top))
+for r in rows:
+    print(r)
+# map if clear
+PY"

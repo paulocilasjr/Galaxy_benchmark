@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np, re, collections, os
+from scipy.stats import spearmanr
+# load matrices
+
+def load(fn):
+    with gzip.open(fn,'rt') as f:
+        header=next(f).rstrip().split('\\t')
+        names=[]; vals=[]
+        for line in f:
+            z=line.rstrip().split('\\t'); names.append(z[0]); vals.append([float(x) for x in z[1:]])
+    return names,np.asarray(vals,dtype=np.float32)
+rnames,R=load('multiome.match.atac.rna.q1.rna.tsv.gz')
+anames,A=load('multiome.match.atac.rna.q1.atac.tsv.gz')
+# ATAC map bin by exact chrom/start
+amap={}
+for k,n in enumerate(anames):
+    c,s,e=n.rsplit('_',2); amap[(c,int(s))]=k
+# parse NCBI RefSeq transcripts by gene
+trans=collections.defaultdict(list)
+with gzip.open('hg38.ncbiRefSeq.txt.gz','rt') as f:
+    for line in f:
+        z=line.rstrip('\\n').split('\\t')
+        if len(z)<13: continue
+        c, strand=z[2], z[3]
+        if c not in {f'chr{i}' for i in range(1,23)}|{'chrX'}: continue
+        tx0,tx1=int(z[4]),int(z[5]); sym=z[12]
+        tss=tx0 if strand=='+' else tx1-1
+        trans[sym].append((c,tss,tx0,tx1,strand))
+print('RNA genes',len(rnames),'annotated symbols',sum(x in trans for x in rnames), 'unique genes annot',len(trans))
+# Various mappings
+for mode in ['tss','promoter','bodymean','bodymax']:
+    y=[]; used=[];
+    for sym in rnames:
+        ts=trans.get(sym)
+        if not ts: continue
+        # gene aggregate across transcripts: collect ATAC vectors from selected bins
+        inds=[]
+        if mode=='tss':
+            # first exact TSS bin per transcript
+            inds=[amap[(c,(pos//10000)*10000)] for c,pos,*_ in ts if (c,(pos//10000)*10000) in amap]
+        elif mode=='promoter':
+            for c,pos,*_ in ts:
+                inds += [amap[(c,b)] for b in range(max(0,((pos-10000)//10000)*10000),((pos+10000)//10000+1)*10000,10000) if (c,b) in amap]
+        else:
+            for c,pos,tx0,tx1,*_ in ts:
+                starts=range((tx0//10000)*10000, ((tx1-1)//10000+1)*10000,10000)
+                inds += [amap[(c,b)] for b in starts if (c,b) in amap]
+        if not inds: continue
+        v=A[np.unique(inds)]
+        if mode=='bodymax': val=v.max(0)
+        else: val=v.mean(0)
+        y.append(val); used.append(rnames.index(sym)) # duplicates unlikely
+    y=np.array(y); x=R[used]
+    print('\\n',mode,'n',len(y))
+    for metric in ['pearson','spearman']:
+      sim=np.empty((8,8))
+      for i in range(8):
+       for j in range(8):
+        xx=np.log1p(x[:,i]); yy=np.log1p(y[:,j])
+        if metric=='pearson': sim[i,j]=np.corrcoef(xx,yy)[0,1]
+        else: sim[i,j]=spearmanr(xx,yy).statistic
+      print(metric); print(np.round(sim,3)); print('best',sim.argmax(1),'score',sim.max(1))
+PY"

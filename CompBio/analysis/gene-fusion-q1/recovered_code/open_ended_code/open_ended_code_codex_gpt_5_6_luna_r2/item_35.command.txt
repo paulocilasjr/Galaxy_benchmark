@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,pysam,collections
+# map transcript to symbol and sequence for just candidate refs
+t2g={}; seqs={}
+with gzip.open('Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as h:
+    tid=None; chunks=[]
+    for line in h:
+      if line.startswith('>'):
+        if tid in {'ENST00000325404.3'}:
+          seqs[tid]=''.join(chunks).upper()
+        tid=line[1:].split(None,1)[0]; chunks=[]
+        m=re.search(r'gene_symbol:(["'^ ]+)'"',line)
+        if m:t2g[tid]=m.group(1)
+      else:
+        if tid in {'ENST00000325404.3'}: chunks.append(line.strip())
+    if tid in {'ENST00000325404.3'}:seqs[tid]=''.join(chunks).upper()
+# get qnames where nonsecondary split involves GAPDH/SOX2, then print all nonsecondary records
+b=pysam.AlignmentFile('cdna.aln.bam')
+by=collections.defaultdict(list)
+for a in b.fetch(until_eof=True):
+  if not a.is_secondary: by[a.query_name].append(a)
+qs=[]
+for q,aa in by.items():
+  gs={t2g.get(a.reference_name,'?') for a in aa if not a.is_unmapped}
+  if {'GAPDH','SOX2'} <= gs: qs.append(q)
+print('candidate qnames',len(qs),qs)
+for q in sorted(qs,key=lambda x:int(x.split('_')[1])):
+  print('\\n',q)
+  for a in sorted(by[q],key=lambda x:(x.is_read2,x.is_supplementary)):
+    g=t2g.get(a.reference_name,'?') if not a.is_unmapped else '*'
+    print(('R1' if a.is_read1 else 'R2'),('SUP' if a.is_supplementary else 'PRI'), 'flag',a.flag,'gene',g,'tid',a.reference_name,'pos',a.reference_start+1 if not a.is_unmapped else 0,'cigar',a.cigarstring,'mapq',a.mapping_quality,'NM',a.get_tag('NM') if a.has_tag('NM') else None,'seq',a.query_sequence)
+PY"

@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections, itertools
+loci = [
+    (27079306, 'SNP', ['C','A']),
+    (27079366, 'SNP', ['T','C']),
+    (27079666, 'SNP', ['T','A']),
+    (27079826, 'COMPLEX', ['G','D']),
+    (27080076, 'SNP', ['C','G']),
+    (27080275, 'DEL', ['A','D']),
+    (27080279, 'COMPLEX', ['G','D']),
+    (27080526, 'SNP', ['G','A']),
+]
+bam=pysam.AlignmentFile('aln.sorted.bam','rb')
+def allele_at_read(r,pos1):
+    p0=pos1-1
+    for qp,rp in r.get_aligned_pairs(matches_only=False):
+        if rp==p0:
+            return 'D' if qp is None else r.query_sequence[qp]
+    return None
+reads={}
+for r in bam.fetch('chr22',27079000,27080700):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    reads[r.query_name,'R1' if r.is_read1 else 'R2']=[allele_at_read(r,p) for p,_,_ in loci]
+bam.close()
+pair_calls={}
+for name in set(k[0] for k in reads if k[1]=='R1'):
+    arr=[None]*len(loci)
+    for mate in ['R1','R2']:
+        for i,c in enumerate(reads.get((name,mate),[])):
+            if c is None: continue
+            if arr[i] is None: arr[i]=c
+            elif arr[i]"'!=c:
+                # conflict rare: treat None to avoid
+                arr[i]=None
+    pair_calls[name]=arr
+# filter major alleles
+major=[]
+for idx,(pos,typ,alleles) in enumerate(loci):
+    c=collections.Counter(a[idx] for a in pair_calls.values() if a[idx] is not None)
+    top=[x for x,_ in c.most_common(2)]
+    major.append(top)
+print('"'major',major)
+print('\\nPairwise linkage: i j alleles count table; D sign indicates phase relation between top allele at i and top allele at j')
+for i in range(len(loci)):
+    for j in range(i+1,len(loci)):
+        ai=major[i]; aj=major[j]
+        table=collections.Counter()
+        for arr in pair_calls.values():
+            a=arr[i]; b=arr[j]
+            if a in ai and b in aj:
+                table[(a,b)]+=1
+        n=sum(table.values())
+        if n<5: continue
+        # print table with allele orders
+        print(f'{i}-{j} pos {loci[i][0]}-{loci[j][0]} n={n}')
+        for a in ai:
+            row=[]
+            for b in aj:
+                row.append(table.get((a,b),0))
+            print(' ',a,row)
+        # calculate D for first alleles
+        x=table.get((ai[0],aj[0]),0); y=table.get((ai[0],aj[1]),0); z=table.get((ai[1],aj[0]),0); w=table.get((ai[1],aj[1]),0)
+        # D = (x*w - y*z)/n"'^2
+        D=(x*w - y*z)/(n*n)
+        print('"' D=',D)
+PY"

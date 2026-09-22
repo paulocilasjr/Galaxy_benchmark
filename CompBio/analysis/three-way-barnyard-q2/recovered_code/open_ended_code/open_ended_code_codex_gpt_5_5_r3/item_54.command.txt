@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections
+cbs=['']
+with gzip.open('three.way.barnyard.q2.R1.fq.gz','rt') as f:
+ while True:
+  h=f.readline()
+  if not h: break
+  seq=f.readline().strip(); f.readline(); f.readline(); cbs.append(seq[:16])
+target={}
+with open('refs/cds/t2gene.tsv') as f:
+ for line in f:
+  tid,sp,gene,sym,desc=line.rstrip('\\n').split('\\t')
+  target[tid]=(sp,sym.upper())
+readno_re=re.compile(r'READ_(\\d+)')
+allsp=collections.defaultdict(lambda: collections.Counter())
+mark=collections.defaultdict(lambda: collections.Counter())
+skin={'KRT12','KRT17','KRT10','KRT5','KRT14','KRT15','KRT1'}; testis={'PRM1','PRM2','TNP1','TNP2','DDX4','DAZL','SYCP3','TEX101','ACR'}
+with open('cds_primary.paf') as f:
+ for line in f:
+  p=line.split('\\t'); matches=int(p[9]); aln=int(p[10])
+  if aln<45 or matches/max(aln,1)<0.88: continue
+  i=int(readno_re.match(p[0]).group(1)); cb=cbs[i]
+  sp,sym=target[p[5]]; allsp[cb][sp]+=1
+  if sp=='pig':
+   if sym in skin: mark[cb]['skin']+=1
+   if sym in testis: mark[cb]['testis']+=1
+pig_cbs=[]
+for cb,c in allsp.items():
+ tot=sum(c.values()); sp,n=c.most_common(1)[0]
+ if tot>=20 and sp=='pig' and n/tot>=0.7: pig_cbs.append(cb)
+print('pig cbs',len(pig_cbs))
+print('with skin',sum(mark[cb]['skin']>0 for cb in pig_cbs),'with testis',sum(mark[cb]['testis']>0 for cb in pig_cbs),'both',sum(mark[cb]['skin']>0 and mark[cb]['testis']>0 for cb in pig_cbs))
+print('skin total',sum(mark[cb]['skin'] for cb in pig_cbs),'testis total',sum(mark[cb]['testis'] for cb in pig_cbs))
+print('top by skin', sorted([(mark[cb]['skin'], mark[cb]['testis'], cb) for cb in pig_cbs], reverse=True)[:20])
+print('top by testis', sorted([(mark[cb]['testis'], mark[cb]['skin'], cb) for cb in pig_cbs], reverse=True)[:20])
+PY"

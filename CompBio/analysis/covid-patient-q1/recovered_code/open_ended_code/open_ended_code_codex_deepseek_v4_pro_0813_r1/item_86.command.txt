@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, anndata as ad
+from scipy.stats import spearmanr, pearsonr
+adata=ad.read_h5ad('covid.patients.q1.h5ad')
+our_names=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); our_sums=D['sum']; our_cats=D['cats']; our_cc=D['cell_counts']
+our_log=np.log1p(our_sums/our_sums.sum(axis=0,keepdims=True)*1e6)
+
+def best(path):
+    orig=pd.read_csv(path,index_col=0)
+    orig.index=orig.index.astype(str)
+    seen=set(); idx=[]
+    for g in our_names:
+        if g in orig.index and g not in seen:
+            seen.add(g); idx.append(np.where(our_names==g)[0][0])
+    idx=np.array(idx); genes=[our_names[i] for i in idx]
+    A=our_log[idx,:] # genes x 33
+    Braw=orig.loc[genes]; cols=Braw.columns
+    B=np.log1p(Braw.values/Braw.values.sum(axis=0,keepdims=True)*1e6)
+    # combine and zscore each gene across columns
+    M=np.hstack([A,B]) # genes x (33+ncols)
+    Mz=(M-M.mean(axis=1,keepdims=True))/(M.std(axis=1,keepdims=True)+1e-9)
+    Az=Mz[:,:len(our_cats)].T
+    Bz=Mz[:,len(our_cats):].T
+    # Pearson
+    P=np.corrcoef(Az,Bz)[:len(our_cats),len(our_cats):]
+    # Spearman per pair maybe slow 33*ncols, okay
+    S=np.zeros_like(P)
+    from scipy.stats import spearmanr
+    for i in range(len(our_cats)):
+        for j in range(Bz.shape[0]):
+            S[i,j]=spearmanr(Az[i],Bz[j]).correlation
+    print('\\nPATH',path)
+    for i,c in enumerate(our_cats):
+        # top pearson
+        ptop=np.argsort(P[i])[::-1][:5]
+        stop=np.argsort(S[i])[::-1][:5]
+        print(c, 'P', [(cols[t],round(P[i,t],3)) for t in ptop], 'S', [(cols[t],round(S[i,t],3)) for t in stop])
+    return P,S,cols
+for path in ['group_sums_sample_label.csv' if False else 'group_sums_Donor.csv','group_sums_sample_id.csv','group_sums_sample.csv']:
+    best(path)
+PY"

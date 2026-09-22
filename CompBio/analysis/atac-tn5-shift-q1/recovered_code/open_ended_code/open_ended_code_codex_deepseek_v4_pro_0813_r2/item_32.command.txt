@@ -1,0 +1,81 @@
+/bin/bash -lc "cat > analyze_shift.py <<'PY'
+import gzip, sys, math
+import pysam
+
+fasta = pysam.FastaFile('hg38.fa')
+# load positions
+starts=[]; ends=[]; chrs=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        ch=parts[0]; s=int(parts[1]); e=int(parts[2])
+        # only consider standard chrom? include all
+        chrs.append((ch,s,e))
+print('loaded',len(chrs), flush=True)
+# limit maybe all
+# Extract sequences around start/end and compute PFM for candidate shifts
+
+def extract(ch, c, flank=45):
+    # fetch c-flank, c+flank+1 length 2*flank+1, index flank = c
+    lo=c-flank; hi=c+flank+1
+    if lo<0: return None
+    try:
+        seq=fasta.fetch(ch, lo, hi).upper()
+    except Exception as ex:
+        return None
+    if len(seq)"'!=2*flank+1:
+        return None
+    return seq
+
+def pfm_counts(pos_type, dmin=-30,dmax=30, flank=45, win=21):
+    # for each candidate d, PFM over positions rel to center c-d, position j=-10..10
+    D=dmax-dmin+1
+    counts=[[[0]*4 for _ in range(win)] for __ in range(D)]
+    for ch,s,e in chrs:
+        c=s if pos_type=='"'start' else (e-1 if pos_type=='end' else None)
+        seq=extract(ch,c,flank)
+        if seq is None: continue
+        ci=flank
+        baseidx={'A':0,'C':1,'G':2,'T':3}
+        for di,d in enumerate(range(dmin,dmax+1)):
+            center=ci-d
+            lo=center-(win//2)
+            hi=lo+win
+            if lo<0 or hi>len(seq): continue
+            for j,b in enumerate(seq[lo:hi]):
+                if b in baseidx:
+                    counts[di][j][baseidx[b]]+=1
+    return counts
+
+for pos_type in ['start','end']:
+    print('computing',pos_type,flush=True)
+    counts=pfm_counts(pos_type,dmin=-30,dmax=30,flank=45,win=21)
+    # compute KL divergence per candidate relative uniform and relative overall bg
+    # total background
+    total=[0]*4
+    for dmat in counts:
+        for pos in dmat:
+            for i in range(4): total[i]+=pos[i]
+    N=sum(total)
+    bg=[(x+1)/(N+4) for x in total]
+    print('bg',bg)
+    vals=[]
+    for di,d in enumerate(range(-30,31)):
+        # sum over positions of KL(pos || bg)
+        kl=0.0; nonz=0
+        for pos in counts[di]:
+            n=sum(pos)
+            if n==0: continue
+            nonz+=1
+            for i in range(4):
+                p=pos[i]/n
+                if p>0:
+                    kl += p*math.log(p/bg[i])
+        vals.append((d,kl,nonz))
+    for d,kl,nonz in vals:
+        print(f'{d}\\t{kl:.5f}\\t{nonz}')
+    print('TOP')
+    for d,kl,nonz in sorted(vals,key=lambda x:x[1],reverse=True)[:10]:
+        print(d,kl,nonz)
+PY
+python3 analyze_shift.py"

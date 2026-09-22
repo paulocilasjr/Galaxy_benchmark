@@ -1,0 +1,70 @@
+/bin/bash -c "cat > test_candidates.py <<'PY'
+import json, math
+from collections import defaultdict
+j=json.load(open('dnase_v1_files_qm.json'))['@graph']
+cand=[x for x in j if (x.get('analysis_step_version') or {}).get('name')=='dnase-alignment-filtering-step-v-1-0']
+exps=defaultdict(list)
+for x in cand:
+    d=x['dataset']
+    qm=x.get('quality_metrics',[])
+    mapped=None
+    for q in qm:
+        if 'mapped' in q:
+            mapped=q['mapped']; break
+    if mapped is None:
+        for q in qm:
+            if 'total' in q: mapped=q['total']; break
+    if mapped is not None:
+        exps[d].append(mapped)
+    else:
+        exps[d].append(None)
+print('cand files',len(cand),'exps',len(exps),'missing',sum(1 for v in exps.values() if any(m is None for m in v)))
+vals=[]
+with open('track.tsv') as f:
+    for line in f:
+        vals.append(float(line.split()[3]))
+vals_nonzero=[v for v in vals if v>0]
+# deterministic subset for quick check: values >= 1.0 maybe 1000?
+subset = vals[:5000] + vals[100000:105000] + vals[-5000:]
+# maybe use high values unique
+# quick check exact for candidate N with subset
+def ok(N, arr):
+    S=1000000.0
+    # use exact-ish
+    maxdiff=0.0
+    for v in arr:
+        k=round(v*N/S)
+        if k>0:
+            r=round(k*S/N, 3)
+            d=abs(r-v)
+            if d>1e-12:
+                return False
+    return True
+# but float round issues: use Decimal? Use integer arithmetic
+from decimal import Decimal, ROUND_HALF_UP, getcontext
+getcontext().prec=50
+def ok_exact(N, arr):
+    # condition for all v: v == Decimal(round(Decimal(v)*N/S).quantize? ) 
+    # use float enough because v has 3 decimals; compute k = round(v*N/S) with Python float may be ok up to 2e8; use Decimal for final
+    for v in arr:
+        # avoid slow decimal for each initially; use float
+        k=round(v*N/1000000.0)
+        if k>0:
+            r=round(k*1000000.0/N, 3)
+            if r "'!= v:
+                return False
+    return True
+
+scores=[]
+for d,ms in exps.items():
+    if any(m is None for m in ms): continue
+    N=sum(ms)
+    if N<=0 or N>2_000_000_000: continue
+    scores.append((d,N,len(ms)))
+print('"'num score candidates',len(scores))
+# quick subset
+quick=[(d,N,r) for d,N,r in scores if ok_exact(N, vals[:10000])]
+print('quick pass',len(quick))
+for item in quick[:50]: print(item)
+PY
+python3 test_candidates.py"

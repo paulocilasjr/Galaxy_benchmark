@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import collections, re
+# parse cdna headers
+gs={}
+for line in open('cdna.fa'):
+    if line.startswith('>'):
+        parts=line.rstrip().split(' ')
+        tid=parts[0][1:]
+        d={}
+        for p in parts[1:]:
+            if ':' in p:
+                k,v=p.split(':',1); d[k]=v
+        gs[tid]=d.get('gene_symbol')
+# parse SAM
+reads={}
+counts=collections.defaultdict(int)
+different=[]
+# Need line refs etc. primary alignments only; skip secondary/supplementary
+for line in open('aln.sam'):
+    if line.startswith('@'): continue
+    f=line.split('\\t')
+    qname=f[0]; flag=int(f[1]); rname=f[2]; pos=int(f[3]); cigar=f[5]
+    if flag & 0x900: # secondary/supp
+        continue
+    if flag & 0x4: # unmapped
+        mate = f[6] if len(f)>6 else '*'
+        prev=reads.get(qname)
+        if prev is not None:
+            pass
+        continue
+    prev=reads.get(qname)
+    if prev is not None:
+        g1=gs.get(prev[0]); g2=gs.get(rname)
+        pair=(g1,g2)
+        counts[pair]+=1
+        if g1 and g2 and g1"'!=g2:
+            different.append((qname, prev, f))
+        del reads[qname]
+    else:
+        reads[qname]=(rname,pos,cigar,flag,f)
+print('"'total pairs', sum(counts.values()))
+print('diff pair count', len(different))
+diffc=collections.Counter((a[1][0], a[2][2]) for a in different) # actually a structure
+# structure: qname, prev=(rname,pos,cigar,flag,f), f=list
+diffc=collections.Counter((a[1][0], a[2][2]) for a in different)
+diffg=collections.Counter((gs.get(a[1][0]), gs.get(a[2][2])) for a in different)
+print('top transcript pairs:')
+for p,c in diffc.most_common(50): print(c,p)
+print('\\ntop gene pairs:')
+for p,c in diffg.most_common(50): print(c,p)
+print('\\ncounts top any pairs:')
+for p,c in counts.most_common(20): print(c,p)
+PY"

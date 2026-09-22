@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv
+import pandas as pd, numpy as np
+counts=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t')
+cols=list(counts.columns[3:])
+lib=counts[cols].sum(); log=np.log1p(counts[cols].div(lib,axis=1)*1e6)
+# parse best longest tx
+best={}
+with gzip.open('refGene.hg38.txt.gz','rt') as f:
+    for row in csv.reader(f,delimiter='\\t'):
+        if len(row)<13: continue
+        chrom,strand,txStart,txEnd,gene=row[2],row[3],int(row[4]),int(row[5]),row[12]
+        if '_' in chrom: continue
+        if gene not in best or txEnd-txStart > best[gene][3]-best[gene][2]: best[gene]=(chrom,strand,txStart,txEnd)
+idx_by_chr={c:np.where(counts['chrom'].values==c)[0] for c in counts['chrom'].unique()}
+starts=counts['start'].values; ends=counts['end'].values
+
+def region_score(g, mode='tss', flank=50000):
+    if g not in best: return None
+    chrom,strand,txStart,txEnd=best[g]
+    if mode=='tss':
+        tss=txStart if strand=='+' else txEnd; a,b=tss-flank,tss+flank
+    else: a,b=txStart-flank,txEnd+flank
+    ii=idx_by_chr.get(chrom,[])
+    ii=ii[(ends[ii]>a)&(starts[ii]<b)]
+    if len(ii)==0: return None
+    return log.iloc[ii].mean(axis=0)
+markers=['GFAP','ALDH1L1','AQP4','S100B','GJA1','PAX2','TNC','SOX9','FGFR3','SLC1A3','GLUL','RLBP1','VIM','CLU','APOE','CRYAB','CA2','LHX2','SLC1A2','KCNJ10','RGR','LRP1','DKK3','FABP7']
+for mode,flank in [('tss',10000),('tss',50000),('gene',20000)]:
+    print('\\n',mode,flank)
+    for g in markers:
+        s=region_score(g,mode,flank)
+        if s is None: print(g,'missing'); continue
+        top=s.sort_values(ascending=False).head(5)
+        print(g, 'Astro',round(s['Astrocyte'],3),'Muller',round(s['Mullerglia'],3),'top', {k:round(v,3) for k,v in top.items()})
+PY"

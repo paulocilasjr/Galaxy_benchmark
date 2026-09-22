@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, statistics
+from collections import defaultdict, Counter
+path='single_cell_dynamics_question.csv'
+rows=[]
+with open(path,newline='') as f:
+    rd=csv.DictReader(f)
+    print('fields', rd.fieldnames)
+    for r in rd:
+        ex,ey,ez=(float(r[k]) for k in ('enh_x','enh_y','enh_z'))
+        px,py,pz=(float(r[k]) for k in ('prom_x','prom_y','prom_z'))
+        d=math.sqrt((ex-px)**2+(ey-py)**2+(ez-pz)**2)
+        rows.append((int(r['cell_id']),int(r['time']),d,int(r['transcription'])))
+print('n',len(rows),'cells',len(set(x[0] for x in rows)),'times',len(set(x[1] for x in rows)))
+ds=[r[2] for r in rows]
+y=[r[3] for r in rows]
+c=[d<=260 for d in ds]
+print('d min max mean median',min(ds),max(ds),sum(ds)/len(ds),statistics.median(ds))
+print('contact n frac',sum(c),sum(c)/len(c),'tx n frac',sum(y),sum(y)/len(y))
+print('contingency contact/tx',Counter((int(c0),y0) for c0,y0 in zip(c,y)))
+# grouped by cell/time
+a=defaultdict(list)
+for cell,t,d,tx in rows: a[cell].append((t,d, int(d<=260),tx))
+for cell in a: a[cell].sort()
+
+def corr(xs,zs):
+    n=len(xs); mx=sum(xs)/n; mz=sum(zs)/n
+    num=sum((x-mx)*(z-mz) for x,z in zip(xs,zs))
+    den=(sum((x-mx)**2 for x in xs)*sum((z-mz)**2 for z in zs))**.5
+    return num/den
+print('corr D tx',corr(ds,y), 'corr contact tx',corr([int(x) for x in c],y))
+for nm,arr in [('distance',ds),('contact',[int(x) for x in c])]:
+    a0=[v for v,tv in zip(arr,y) if tv==0]; a1=[v for v,tv in zip(arr,y) if tv==1]
+    print(nm,'tx0 mean',sum(a0)/len(a0),'tx1 mean',sum(a1)/len(a1))
+for lag in range(1,11):
+    priorC=[]; nowY=[]; priorY=[]; nowC=[]
+    for vals in a.values():
+        vals.sort()
+        pc=[v[2] for v in vals]; yy=[v[3] for v in vals]
+        priorC.extend(pc[:-lag]); nowY.extend(yy[lag:]); priorY.extend(yy[:-lag]); nowC.extend(pc[lag:])
+    p1=[n for p,n in zip(priorC,nowY) if p==1]; p0=[n for p,n in zip(priorC,nowY) if p==0]
+    q1=[n for p,n in zip(priorY,nowC) if p==1]; q0=[n for p,n in zip(priorY,nowC) if p==0]
+    print('lag',lag,'Y|C1',sum(p1)/len(p1),'Y|C0',sum(p0)/len(p0),'diff',sum(p1)/len(p1)-sum(p0)/len(p0),'C|Y1',sum(q1)/len(q1),'C|Y0',sum(q0)/len(q0),'diff',sum(q1)/len(q1)-sum(q0)/len(q0))
+PY"

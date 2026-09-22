@@ -1,0 +1,21 @@
+/bin/bash -lc "python - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csc_matrix,csr_matrix
+with h5py.File('GSM3578982_raw_gene_bc_matrices_h5.h5','r') as f:
+ g=f['output_genome2']; print('shape',g['shape'][:]); print('genes',g['genes'][:5],g['genes'][-5:]); print('names',g['gene_names'][:5],g['gene_names'][-5:]); print('bars',g['barcodes'][:5],g['barcodes'][-5:])
+ A=csc_matrix((g['data'][:],g['indices'][:],g['indptr'][:]),shape=tuple(g['shape'][:]))
+ bars=np.array([x.decode() for x in g['barcodes'][:]]); genes=np.array([x.decode() for x in g['genes'][:]])
+ sums=np.asarray(A.sum(0)).ravel()
+with h5py.File('finding.geo.q1.h5ad','r') as f:
+ B=csr_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]),shape=tuple(f['X'].attrs['shape']))
+ bb=np.array([x.decode() for x in f['obs/_index'][:]]); gg=np.array([x.decode() for x in f['var/_index'][:]])
+bs={x:i for i,x in enumerate(bars)}; gi={x:i for i,x in enumerate(genes)}
+print('all bars found',all(x in bs for x in bb),'all genes found',all(x in gi for x in gg))
+sel=np.array([bs[x] for x in bb]); print('barcode ordered',np.all(sel[:-1]<sel[1:]), sel[:5]);
+print('sums equality',np.array_equal(sums[sel],np.asarray(B.sum(1)).ravel()),np.max(np.abs(sums[sel]-np.asarray(B.sum(1)).ravel())))
+print('candidate selection is >273',len(sel),(sums>273).sum(),np.array_equal(np.where(sums>273)[0],sel),'outside max',sums[np.setdiff1d(np.arange(len(sums)),sel)].max())
+print('missing genes',set(genes)-set(gg)); print('extra',set(gg)-set(genes))
+# exact sparse compare once aligned genes; compare per cell original submatrix transpose and B
+rows=np.array([gi[x] for x in gg]); C=A[rows][:,sel].T.tocsr()
+print('exact shape/nnz/data/indices/indptr',C.shape,C.nnz,B.nnz,np.array_equal(C.data,B.data),np.array_equal(C.indices,B.indices),np.array_equal(C.indptr,B.indptr),(C"'!=B).nnz)
+PY'

@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5aec9cff08376d9c7",
+  "history_id": "bbd44e69cb8906b5f662138ef2d3f2d4",
+  "tool_id": "malignant_basal_diag_1786770482",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-15T05:08:03.130867",
+  "update_time": "2026-08-15T05:08:54.942317",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > malig_diag.py <<'PYCODE'\nimport sys,json\nfrom collections import Counter\nimport h5py, numpy as np\nfrom scipy import sparse\nmarkers={\"Basal\": [\"KRT5\", \"KRT6A\", \"KRT6B\", \"KRT14\", \"KRT15\", \"KRT17\", \"TP63\", \"DSG3\", \"SOX2\"], \"AT2\": [\"SFTPA1\", \"SFTPA2\", \"SFTPB\", \"SFTPC\", \"SLC34A2\", \"NAPSA\", \"ABCA3\"], \"AT1\": [\"AGER\", \"PDPN\", \"AQP5\", \"CAV1\", \"EMP2\"], \"Cilia\": [\"FOXJ1\", \"TPPP3\", \"PIFO\", \"CAPS\", \"DNAH5\"], \"Club\": [\"SCGB1A1\", \"SCGB3A1\", \"SCGB3A2\", \"MUC5B\"], \"EC\": [\"PECAM1\", \"VWF\", \"CLDN5\", \"KDR\", \"RAMP2\"], \"Fib\": [\"COL1A1\", \"COL1A2\", \"DCN\", \"LUM\", \"PDGFRA\", \"COL3A1\"], \"NE\": [\"CHGA\", \"CHGB\", \"ASCL1\", \"GRP\", \"CALCA\"], \"T\": [\"CD3D\", \"CD3E\", \"TRAC\", \"IL7R\"], \"CD8\": [\"CD8A\", \"CD8B\", \"GZMK\"], \"NK\": [\"NKG7\", \"GNLY\", \"KLRD1\", \"KLRF1\"], \"B\": [\"MS4A1\", \"CD79A\", \"CD79B\", \"BANK1\"], \"DC\": [\"FCER1A\", \"CD1C\", \"CLEC10A\", \"LILRA4\", \"CLEC4C\", \"IRF8\", \"LAMP3\", \"CCR7\"], \"Mac\": [\"C1QA\", \"C1QB\", \"C1QC\", \"MARCO\", \"CD68\", \"APOE\"], \"Mast\": [\"TPSAB1\", \"TPSB2\", \"CPA3\", \"MS4A2\"], \"Gran\": [\"S100A8\", \"S100A9\", \"FCGR3B\", \"CSF3R\"]}\npatients=set(['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040'])\nnonimmune=set(['Basal','AT2','AT1','Cilia','Club','EC','Fib','NE'])\npath,out=sys.argv[1],sys.argv[2]\ndef dec(x): return x.decode('utf-8','replace') if isinstance(x,bytes) else str(x)\ndef read_cat(g):\n    cats=[dec(x) for x in g['categories'][()]]; codes=g['codes'][()]\n    return np.array([cats[int(c)] if int(c)>=0 else '' for c in codes], dtype=object)\nwith h5py.File(path,'r') as f:\n    samples=read_cat(f['obs/sampleID'])\n    genes=[dec(x) for x in f['var/symbol'][()]]; gi={g:i for i,g in enumerate(genes)}\n    X=sparse.csr_matrix((f['X/data'][()],f['X/indices'][()],f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape']))\nlib=np.asarray(X.sum(axis=1)).ravel().astype(float); lib[lib==0]=1\nnames=[]; sc=[]\nfor n,gs in markers.items():\n    names.append(n); cols=[gi[g] for g in gs if g in gi]\n    if cols:\n        vals=X[:,cols].astype(float).multiply(10000.0/lib[:,None])\n        sc.append(np.asarray(np.log1p(vals).mean(axis=1)).ravel())\n    else: sc.append(np.zeros(X.shape[0]))\nS=np.vstack(sc).T; labels=np.array([names[i] for i in np.argmax(S,axis=1)], dtype=object); labels[S.max(axis=1)<=0]='Unassigned'\nbasal=S[:,names.index('Basal')]; at2=S[:,names.index('AT2')]\n# sample LUSC rule from epithelial signatures\nsample_lusc={s for s in sorted(set(samples)) if basal[samples==s].mean()>at2[samples==s].mean() and basal[samples==s].mean()>0.05}\n# malignant basal marker normalized expression\nextra=['KPNA2','PPT1','MKI67','TOP2A','MCM2','PCNA']\nextra_cols=[gi[g] for g in extra if g in gi]\nE=X[:,extra_cols].astype(float).multiply(10000.0/lib[:,None]) if extra_cols else sparse.csr_matrix((X.shape[0],0))\nElog=np.log1p(E.toarray()) if extra_cols else np.zeros((X.shape[0],0))\nextra_names=[g for g in extra if g in gi]\nbase_mask=np.array([(s in sample_lusc) for s in samples]) & (labels=='Basal')\nnonimmune_mask=np.array([lab in nonimmune for lab in labels])\nwith open(out,'w') as fh:\n    fh.write('sample_lusc\\t%s\\n' % json.dumps(sorted(sample_lusc)))\n    fh.write('candidate_lusc_dc\\t%s\\n' % json.dumps({s:float(((samples==s)&(labels=='DC')).sum()/max(1,(samples==s).sum())) for s in patients if s in sample_lusc}, sort_keys=True))\n    fh.write('nonimmune_total\\t%d\\n' % int(nonimmune_mask.sum()))\n    fh.write('basal_lusc_all\\t%d\\t%.6f\\n' % (int(base_mask.sum()), 100*base_mask.sum()/nonimmune_mask.sum()))\n    fh.write('extra_names\\t%s\\n' % json.dumps(extra_names))\n    for thr in [0,0.1,0.25,0.5,0.75,1.0,1.25,1.5]:\n        if Elog.shape[1]:\n            m=base_mask & (Elog.max(axis=1)>thr)\n        else: m=base_mask\n        pct=100*m.sum()/nonimmune_mask.sum()\n        fh.write('malig_thr_max_extra_gt\\t%.2f\\t%d\\t%.6f\\tnearest20_%d\\n' % (thr,int(m.sum()),pct,int(round(pct/20)*20)))\nPYCODE\npython malig_diag.py /jetstream2/scratch/main/jobs/79147721/inputs/dataset_c95cbee0-c584-452a-a7a2-728184049fe0.dat malignant_basal_diagnostic.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "h5ad": {
+      "id": "f9cad7b01a47213517e10d7c71faa2a8",
+      "src": "hda",
+      "uuid": "c95cbee0-c584-452a-a7a2-728184049fe0"
+    }
+  },
+  "outputs": {
+    "malignant_basal_diagnostic": {
+      "id": "f9cad7b01a472135f38d85b77375d16d",
+      "src": "hda",
+      "uuid": "f58e024d-0949-4123-be8a-b679b3e8474c"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

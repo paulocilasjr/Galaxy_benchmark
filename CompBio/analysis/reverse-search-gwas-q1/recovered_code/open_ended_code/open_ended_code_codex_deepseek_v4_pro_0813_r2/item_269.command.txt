@@ -1,0 +1,64 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-75ef2592a72e3e4756a02858/workspace && cat > query_target_assoc.py <<'PY'
+import subprocess,json,sys,concurrent.futures,time
+
+def curl_json(url, timeout=120):
+    out=subprocess.check_output(['curl','--http1.1','-L','--max-time',str(timeout),'-sS',url],stderr=subprocess.DEVNULL,text=True,timeout=timeout+5)
+    return json.loads(out)
+
+def get_assoc(rs):
+    url=f'https://www.ebi.ac.uk/gwas/rest/api/singleNucleotidePolymorphisms/{rs}/associations?size=1000'
+    d=curl_json(url)
+    arr=(d.get('_embedded',{}) or {}).get('associations',[])
+    out=[]
+    for a in arr:
+        assoc_id=a.get('_links',{}).get('self',{}).get('href','').rstrip('/').split('/')[-1]
+        study_href=a.get('_links',{}).get('study',{}).get('href','')
+        pval=a.get('pvalue')
+        beta=a.get('betaNum'); se=a.get('standardError'); rf=a.get('riskFrequency')
+        genes=[]
+        for loc in a.get('loci',[]):
+            for g in loc.get('authorReportedGenes',[]): genes.append(g.get('geneName'))
+        out.append({'rs':rs,'assoc_id':assoc_id,'study_href':study_href,'pvalue':pval,'beta':beta,'se':se,'rf':rf,'genes':list(set(genes))})
+    return out
+
+def get_study(href):
+    d=curl_json(href)
+    return {
+      'accession': d.get('accessionId'),
+      'pubmed': d.get('publicationInfo',{}).get('pubmedId'),
+      'trait': d.get('diseaseTrait',{}).get('trait'),
+      'title': d.get('title','')[:300] if d.get('title') else d.get('publicationInfo',{}).get('title','')[:300],
+      'initial': d.get('initialSampleSize'),
+      'full': d.get('fullPvalueSet'),
+      'snpCount': d.get('snpCount'),
+      'date': d.get('publicationDate'),
+      'cohort': d.get('cohort'),
+    }
+
+rss=['rs1150756','rs4690098','rs11097787','rs1260326','rs6918046','rs2122699769','rs72717048','rs34562254','rs374039502','rs4849748']
+all_rows=[]
+for rs in rss:
+    try:
+        rows=get_assoc(rs)
+        print('RS',rs,'n',len(rows),file=sys.stderr)
+        all_rows += rows
+    except Exception as e:
+        print('ERR',rs,e,file=sys.stderr)
+hrefs=[]; seen=set()
+for r in all_rows:
+    h=r['study_href']
+    if h and h not in seen: seen.add(h); hrefs.append(h)
+print('unique studies',len(hrefs),file=sys.stderr)
+cache={}
+def one(h): return h,get_study(h)
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+    for h,s in ex.map(one,hrefs):
+        cache[h]=s
+with open('target_assoc_results.tsv','w') as f:
+    f.write('rs\\tassoc_id\\tpvalue\\tbeta\\tse\\trf\\tgenes\\tstudy_acc\\tpubmed\\ttrait\\ttitle\\tinitial\\tfull\\tsnpCount\\tdate\\tcohort\\n')
+    for r in all_rows:
+        s=cache.get(r['study_href'],{})
+        f.write('\\t'.join([r['rs'],r['assoc_id'],str(r['pvalue']),str(r['beta']),str(r['se']),str(r['rf']),','.join(r['genes']),str(s.get('accession')),str(s.get('pubmed')),str(s.get('trait')),s.get('title',''),str(s.get('initial')),str(s.get('full')),str(s.get('snpCount')),str(s.get('date')),str(s.get('cohort'))])+'\\n')
+print('done')
+PY
+python3 query_target_assoc.py"

@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse, pandas as pd, numpy as np, gzip
+from scipy import stats
+query=open('characterize.response.q1.txt').read().split()
+for f in ['geo/GSE108289_family.soft.gz','geo/GSE69076_family.soft.gz']:
+ gse=GEOparse.get_GEO(filepath=f, silent=True)
+ gpl=list(gse.gpls.values())[0]
+ sym=gpl.table.set_index('ID')['GENE_SYMBOL'].to_dict()
+ # build matrix
+ mats={}
+ for n,gsm in gse.gsms.items():
+  df=gsm.table.set_index('ID_REF')['VALUE']
+  mats[n]=df
+ mat=pd.DataFrame(mats)
+ print('\\n',f,mat.shape)
+ if 'GSE108289' in f:
+  imm=[c for c in mat.columns if 'immature' in gse.gsms[c].metadata['title'][0]]
+  matu=[c for c in mat.columns if 'maturation' in gse.gsms[c].metadata['title'][0]]
+  groups=[('immature',imm),('mature',matu)]
+ elif 'GSE69076' in f:
+  ctrl=[c for c in mat.columns if 'Unstimulated' in gse.gsms[c].metadata['title'][0]]
+  lps=[c for c in mat.columns if 'LPS 6hr' in gse.gsms[c].metadata['title'][0]]
+  groups=[('ctrl',ctrl),('lps6',lps)]
+ print('groups',groups)
+ a=mat[groups[0][1]].mean(axis=1); b=mat[groups[1][1]].mean(axis=1)
+ logfc=b-a
+ absfc=logfc.abs().sort_values(ascending=False)
+ # map symbols, collapse duplicates by max abs
+ res=[]
+ seen=set()
+ for pid in absfc.index:
+  s=sym.get(pid)
+  if not isinstance(s,str) or s=='nan' or s=='': continue
+  # strip possible list
+  # collapse case
+  su=s.upper()
+  if su in seen: continue
+  seen.add(su)
+  res.append((s, logfc.loc[pid]))
+ # query uppercase exact?
+ top=[x[0] for x in res[:112]]
+ q=[g.upper() for g in query]
+ print('first 40 top', top[:40])
+ overlap=sum(1 for g in q if g in [x.upper() for x in top])
+ print('overlap query in top112',overlap,'of',len(q))
+ # Jaccard top list
+ # check common manually
+ common=[x for x in top if x.upper() in q]
+ print('common',common)
+ # rank sum of common?
+PY"

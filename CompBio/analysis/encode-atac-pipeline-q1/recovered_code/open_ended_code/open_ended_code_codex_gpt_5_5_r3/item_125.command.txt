@@ -1,0 +1,29 @@
+/bin/bash -lc 'set -euo pipefail
+ROOT="$PWD"
+export PATH="$ROOT/envs/atac/bin:$ROOT/atac-seq-pipeline/src:$PATH"
+export PYTHONPATH="$ROOT/atac-seq-pipeline/src"
+export TMPDIR="$ROOT/tmp"
+CHRSZ="$ROOT/ref/GRCh38_EBV.chrom.sizes.tsv"
+BLACKLIST="$ROOT/ref/ENCFF356LFX.bed.gz"
+mkdir -p "$ROOT/run"/{bam2ta,spr,peak_rep,peak_pr1,peak_pr2,idr,repro,qc}
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_bam2ta.py" "$ROOT/run/filter/rep1.nodup.no_chrM_MT.bam" --paired-end --mito-chr-name chrM --subsample 0 --mem-gb 4 --nth 6 --out-dir "$ROOT/run/bam2ta"
+TA="$ROOT/run/bam2ta/rep1.nodup.no_chrM_MT.tn5.tagAlign.gz"
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_spr.py" "$TA" --paired-end --pseudoreplication-random-seed 0 --out-dir "$ROOT/run/spr"
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_macs2_atac.py" "$TA" --gensz hs --chrsz "$CHRSZ" --cap-num-peak 300000 --pval-thresh 0.01 --smooth-win 150 --mem-gb 4 --out-dir "$ROOT/run/peak_rep"
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_macs2_atac.py" "$ROOT/run/spr/rep1.nodup.no_chrM_MT.tn5.pr1.tagAlign.gz" --gensz hs --chrsz "$CHRSZ" --cap-num-peak 300000 --pval-thresh 0.01 --smooth-win 150 --mem-gb 4 --out-dir "$ROOT/run/peak_pr1"
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_macs2_atac.py" "$ROOT/run/spr/rep1.nodup.no_chrM_MT.tn5.pr2.tagAlign.gz" --gensz hs --chrsz "$CHRSZ" --cap-num-peak 300000 --pval-thresh 0.01 --smooth-win 150 --mem-gb 4 --out-dir "$ROOT/run/peak_pr2"
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_idr.py" "$ROOT/run/peak_pr1/rep1.nodup.no_chrM_MT.tn5.pr1.pval0.01.300K.narrowPeak.gz" "$ROOT/run/peak_pr2/rep1.nodup.no_chrM_MT.tn5.pr2.pval0.01.300K.narrowPeak.gz" "$ROOT/run/peak_rep/rep1.nodup.no_chrM_MT.tn5.pval0.01.300K.narrowPeak.gz" --prefix rep1-pr1_vs_rep1-pr2 --idr-thresh 0.05 --peak-type narrowPeak --idr-rank p.value --chrsz "$CHRSZ" --blacklist "$BLACKLIST" --regex-bfilt-peak-chr-name '"'chr[\\dXY]+' --ta \""'$TA" --out-dir "$ROOT/run/idr"
+python3 "$ROOT/atac-seq-pipeline/src/encode_task_reproducibility.py" --peaks-pr "$ROOT/run/idr/rep1-pr1_vs_rep1-pr2.idr0.05.bfilt.narrowPeak.gz" --prefix idr --peak-type narrowPeak --chrsz "$CHRSZ" --out-dir "$ROOT/run/repro"
+python3 - <<'"'PY'
+import json, os
+root = os.getcwd()
+repro = os.path.join(root, 'run', 'repro', 'idr.reproducibility.qc')
+with open(repro) as fh:
+    header = fh.readline().rstrip('\\n').split('\\t')
+    values = fh.readline().rstrip('\\n').split('\\t')
+record = dict(zip(header, values))
+qc = {'reproducibility': {'idr': {k: int(v) if k.startswith('N') else float(v) if k.endswith('_ratio') else v for k, v in record.items()}}}
+with open(os.path.join(root, 'run', 'qc', 'qc.json'), 'w') as out:
+    json.dump(qc, out, indent=4)
+print(record['N_opt'])
+PY"

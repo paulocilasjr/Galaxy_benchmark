@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, re as regex, gzip, collections
+# function parse CIGAR M length and clipped
+def mlen(c):
+ return sum(int(x) for x,op in regex.findall(r'(\\d+)([MIDNSHP=X])',c) if op in 'MDN=X')
+# collect read sets for genome clusters (specific genomic breakpoints)
+cluster_sets=collections.defaultdict(set)
+# We'll parse all SA records primary only and cluster as before, using gene_at simple for MYC/SP1/CATSPER4/ZIC2 by coordinates
+for line in subprocess.Popen(['samtools','view','-F','0x900','reads_candchrs_sr.bam'],stdout=subprocess.PIPE,text=True).stdout:
+ p=line.rstrip().split('\\t');flag=int(p[1]);chrom=p[2];pos=int(p[3]);cigar=p[5]
+ tags={}
+ for f in p[11:]:
+  if ':' in f:
+   k,t,v=f.split(':',2);tags[k]=v
+ sa=tags.get('SA')
+ if not sa:continue
+ for entry in sa.rstrip(';').split(';'):
+  if not entry:continue
+  parts=entry.split(',')
+  if len(parts)<6:continue
+  rt=parts[0];spos=int(parts[1]);sc=parts[3]
+  # identify SP1-CATSPER4 and SP1-ZIC2 clusters by chromosome positions rounded broad
+  if (chrom=='12' and rt=='1') or (chrom=='1' and rt=='12'):
+   # cluster by exact positions? collect if near known
+   if (chrom=='12' and rt=='1'): key=('SP1','CATSPER4'); bp1=pos;bp2=spos
+   else: key=('SP1','CATSPER4'); bp1=spos;bp2=pos
+   if (bp1,bp2)==(53409563,26202486) or (bp1,bp2)==(26202486,53409563):
+    cluster_sets[('SP1','CATSPER4')].add(p[0])
+  if (chrom=='12' and rt=='13') or (chrom=='13' and rt=='12'):
+   if (chrom=='12' and rt=='13'): key=('SP1','ZIC2'); bp1=pos;bp2=spos
+   else: key=('SP1','ZIC2'); bp1=spos;bp2=pos
+   if (bp1,bp2)==(53406754,99984944) or (bp1,bp2)==(99984944,53406754):
+    cluster_sets[('SP1','ZIC2')].add(p[0])
+# now get max transcriptome aligned length for each read
+maxlen=collections.defaultdict(int)
+bestcigar=collections.defaultdict(str)
+for line in subprocess.Popen(['samtools','view','reads_cdna.bam'],stdout=subprocess.PIPE,text=True).stdout:
+ p=line.rstrip().split('\\t');name=p[0];cigar=p[5]
+ if cigar=='*':continue
+ ml=mlen(cigar)
+ if ml>maxlen[name]: maxlen[name]=ml;bestcigar[name]=cigar
+for key,s in cluster_sets.items():
+ print('\\nCLUSTER',key,'reads',len(s))
+ hist=collections.Counter()
+ full=0; examples=[]
+ for name in s:
+  ml=maxlen.get(name,0);hist[ml]+=1
+  if ml>=95:full+=1
+  if len(examples)<10:examples.append((name,ml,bestcigar.get(name)))
+ print('max aligned len hist',hist.most_common(15))
+ print('full>=95',full)
+ print('examples',examples)
+PY"

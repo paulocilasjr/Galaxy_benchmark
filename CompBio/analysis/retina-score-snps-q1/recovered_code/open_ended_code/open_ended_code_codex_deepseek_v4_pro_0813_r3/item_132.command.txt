@@ -1,0 +1,44 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd,numpy as np,torch,h5py,time,json,urllib.request
+# We'll use same model forward function, process 2 alternatives.
+out=pd.read_pickle('work/snps_final_hg38_with_seq.pkl')
+INP_LEN=2114; HALF=1056
+# original rows 52,53: chr10, start file 0-based, ref C alt A. Negative p0 adjusted currently pos0 = 46090345, 46054916? Actually current pos0 in final table for 52/53 = 46090345/46054916 (p0-1). We'll use unadjusted p0+1? Need p0 from pyliftover is current pos0+1.
+rows=[]
+for idx in [52,53]:
+    r=out.iloc[idx]
+    # unadjusted target 0-based = current pos0 + 1
+    p=int(r['pos0'])+1
+    chrom=r['chr']
+    start=p-HALF
+    url=f'https://api.genome.ucsc.edu/getData/sequence?genome=hg38;chrom={chrom};start={start};end={start+INP_LEN}'
+    seq=json.load(urllib.request.urlopen(url))['dna'].upper()
+    ref=r['orig_ref']; alt=r['orig_alt']
+    if ref "'!= seq[HALF:HALF+len(ref)]:
+        refseq=seq[:HALF]+ref+seq[HALF+len(ref):]
+    else: refseq=seq
+    altseq=refseq[:HALF]+alt+refseq[HALF+len(ref):]
+    rows.append((idx,refseq,altseq))
+print('"'alt rows',rows[0][1][HALF],rows[0][2][HALF],rows[1][1][HALF],rows[1][2][HALF])
+# load models and predict
+def one_hot(seqs):
+    m={'A':0,'C':1,'G':2,'T':3}; a=np.zeros((len(seqs),4,INP_LEN),np.float32)
+    for i,s in enumerate(seqs):
+        for j,ch in enumerate(s):
+            if ch in m:a[i,m[ch],j]=1
+    return a
+def load(path):
+ f=h5py.File(path,'r'); ds=lambda p:torch.from_numpy(np.array(f[p]))
+ w1=ds('model_weights/conv1d/conv1d/kernel:0').permute(2,1,0).contiguous(); b1=ds('model_weights/conv1d/conv1d/bias:0').contiguous(); ws=[]
+ for i in range(1,9): ws.append((ds(f'model_weights/conv1d_{i}/conv1d_{i}/kernel:0').permute(2,1,0).contiguous(),ds(f'model_weights/conv1d_{i}/conv1d_{i}/bias:0').contiguous()))
+ wct=ds('model_weights/logcounts/logcounts/kernel:0').reshape(1,512,1).contiguous(); bct=ds('model_weights/logcounts/logcounts/bias:0').reshape(1).contiguous(); f.close(); return w1,b1,ws,wct,bct
+@torch.no_grad()
+def forward(x,pms):
+ w1,b1,ws,wct,bct=pms; o=torch.relu(torch.nn.functional.conv1d(x,w1,b1))
+ for i,(w,b) in enumerate(ws,1):
+  y=torch.relu(torch.nn.functional.conv1d(o,w,b,dilation=2**i)); xl=o.shape[2]; yl=y.shape[2]; c=(xl-yl)//2; o=y+o[:,:,c:c+yl]
+ return torch.nn.functional.linear(o.mean(dim=2),wct.reshape(1,512),bct).reshape(-1)
+refx=torch.from_numpy(one_hot([r[1] for r in rows])); altx=torch.from_numpy(one_hot([r[2] for r in rows]))
+for f in range(5):
+ pms=load(f'work/Rod_fold{f}.h5'); rp=forward(refx,pms); ap=forward(altx,pms); print('fold',f,'lfc alt',(ap-rp).numpy())
+PY"

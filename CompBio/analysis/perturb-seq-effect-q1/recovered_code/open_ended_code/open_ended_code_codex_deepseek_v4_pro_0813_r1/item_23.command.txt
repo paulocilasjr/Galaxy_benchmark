@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+id2target=dict(zip(ref.id, ref.target_gene_name))
+calls['target']=calls.feature_call.map(id2target)
+bc2col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc2col)
+lib=np.asarray(mat.sum(axis=0)).ravel()
+path=features[:20]
+logall=np.log2(1 + np.asarray(mat.todense())*(10000/lib[None,:])) # genes x cells
+df=pd.DataFrame({'cell':barcodes}).merge(calls[['cell_barcode','target','col']], left_on='cell', right_on='cell_barcode')
+# base score excluding none? For each target exclude itself if in path
+nt_idx=df[df.target=='Non-Targeting'].index
+rows=[]
+for t in df[df.target"'!='"'Non-Targeting'].target.unique():
+    genes=path.copy()
+    if t in genes: genes.remove(t)
+    idx=np.array([features.index(g) for g in genes])
+    score=logall[idx,:].mean(axis=0)
+    nt_score=score[nt_idx]
+    grp_score=score[df[df.target==t].index]
+    p=stats.mannwhitneyu(grp_score, nt_score, alternative='two-sided').pvalue
+    rows.append((t, grp_score.mean()-nt_score.mean(), p, len(grp_score), grp_score.mean(), nt_score.mean()))
+res=pd.DataFrame(rows,columns=['target','diff','p','n','mean_target','mean_NT']).sort_values('p')
+res['bh']=multipletests(res.p, method='fdr_bh')[1]
+print(res.head(10).to_string(index=False))
+PY"

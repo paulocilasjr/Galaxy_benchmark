@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip, itertools, numpy as np
+from scipy.stats import rankdata
+
+def load(fn):
+    with gzip.open(fn,'rt') as f:
+        f.readline(); return np.loadtxt(f,delimiter='\\t',usecols=range(1,9))
+R=load('multiome.match.atac.rna.q1.rna.tsv.gz'); print('R',R.shape,flush=True)
+A=load('multiome.match.atac.rna.q1.atac.tsv.gz'); print('A',A.shape,flush=True)
+
+def corr(x): return np.corrcoef(x.T)
+def cosine(x): return (x.T@x)/np.sqrt((x*x).sum(0)[:,None]*(x*x).sum(0)[None,:])
+def rankcols(x): return np.apply_along_axis(rankdata,0,x)
+tri=np.triu_indices(8,1)
+perms=np.array(list(itertools.permutations(range(8))),dtype=int)
+print('perms',len(perms),flush=True)
+for label, f in [('rawcorr',lambda x:corr(x)),('logcorr',lambda x:corr(np.log1p(x))),('sqrtcorr',lambda x:corr(np.sqrt(x))),('rankcorr',lambda x:corr(rankcols(x))),('rawcos',lambda x:cosine(x)),('logcos',lambda x:cosine(np.log1p(x))),('sqrtcos',lambda x:cosine(np.sqrt(x))),('rankcos',lambda x:cosine(rankcols(x)))]:
+    SR=f(R); SA=f(A)
+    vr=SR[tri]
+    xa=SA[perms[:, :, None],perms[:, None, :]]
+    va=xa[:,tri[0],tri[1]]
+    # corr across 28 entries
+    cr=vr-vr.mean(); ca=va-va.mean(1,keepdims=True)
+    scores=(ca@cr)/(np.sqrt((ca*ca).sum(1))*np.sqrt((cr*cr).sum()))
+    mse=((va-vr)**2).mean(1)
+    order=np.argsort(-scores)[:5]
+    orderm=np.argsort(mse)[:5]
+    print('\\n'+label+' topcorr',flush=True)
+    for i in order: print(f'{scores[i]:.8f} mse={mse[i]:.8f} p={\";\".join(map(str,perms[i]))}',flush=True)
+    print(label+' topmse',flush=True)
+    for i in orderm: print(f'{scores[i]:.8f} mse={mse[i]:.8f} p={\";\".join(map(str,perms[i]))}',flush=True)
+PY"

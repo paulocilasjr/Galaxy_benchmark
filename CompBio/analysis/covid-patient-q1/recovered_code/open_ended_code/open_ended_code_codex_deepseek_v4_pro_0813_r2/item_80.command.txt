@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.spatial.distance import cdist
+D=np.load('cell_scores.npz', allow_pickle=True)
+cats=D['cats']; df={}
+for k in D.keys():
+ if k"'!='"'cats': df[k]=D[k]
+df=pd.DataFrame(df,index=cats)
+for k in ['type_CD14_Mono','type_CD16_Mono','type_T','type_NK','type_B','type_Plasma','type_cDC','type_pDC','type_Platelet','type_RBC']:
+ df[k+'_prop']=df[k]/df['total_cells']
+our=pd.DataFrame(index=cats)
+our['T']=df['type_T_prop']; our['NK']=df['type_NK_prop']; our['B']=df['type_B_prop']+df['type_Plasma_prop']; our['Mono']=df['type_CD14_Mono_prop']+df['type_CD16_Mono_prop']; our['DC']=df['type_cDC_prop']+df['type_pDC_prop']; our['Platelet']=df['type_Platelet_prop']; our['RBC']=df['type_RBC_prop']
+known=our.sum(axis=1); our=our.div(known,axis=0)
+meta=pd.read_csv('ahern_donor_celltypes.csv')
+a=pd.DataFrame(index=meta['donor']); a['disease']=meta['disease'].values
+a['T']=meta[['CD4-positive, alpha-beta T cell','CD8-positive, alpha-beta T cell','gamma-delta T cell','mucosal invariant T cell','double-positive, alpha-beta thymocyte','double negative T regulatory cell']].sum(axis=1)
+a['NK']=meta['natural killer cell']
+a['B']=meta[['B cell','plasmablast']].sum(axis=1)
+a['Mono']=meta[['classical monocyte','non-classical monocyte']].sum(axis=1)
+a['DC']=meta['dendritic cell']
+a['Platelet']=0
+a['RBC']=meta[['enucleated reticulocyte','megakaryocyte-erythroid progenitor cell']].sum(axis=1)
+feats=['T','NK','B','Mono','DC','Platelet','RBC']
+known_a=a[feats].sum(axis=1); a[feats]=a[feats].div(known_a,axis=0)
+Dmat=cdist(np.sqrt(our[feats].values), np.sqrt(a[feats].values))
+idx=np.argsort(Dmat,axis=1)
+print('matching our to Ahern (top3)')
+for i,don in enumerate(cats):
+    ns=a.index[idx[i,:3]].tolist(); ds=[a.loc[d,'disease'] for d in ns]
+    print(don, ns, ds, round(Dmat[i,idx[i,0]],3))
+PY"

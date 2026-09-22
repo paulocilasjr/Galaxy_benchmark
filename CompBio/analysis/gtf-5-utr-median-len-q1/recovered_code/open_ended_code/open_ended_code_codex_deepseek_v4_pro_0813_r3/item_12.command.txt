@@ -1,0 +1,68 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, gzip, re, collections
+fn='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std=set([f'chr{i}' for i in list(range(1,23))+['X','Y']])
+tx=collections.defaultdict(lambda: {'exons':[], 'cds':[], 'strand':None})
+with gzip.open(fn,'rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  p=line.rstrip('\\n').split('\\t')
+  if len(p)<9: continue
+  chrom=p[0]; typ=p[2]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+  if chrom not in std: continue
+  m=re.search(r'transcript_id \"(["'^"]+)"'"',attrs)
+  if not m: continue
+  tid=m.group(1)
+  if 'tag \"MANE Select\"' not in attrs: continue
+  tx[tid]['strand']=strand
+  if typ=='exon': tx[tid]['exons'].append((start,end))
+  elif typ in ('CDS','stop_codon','start_codon'): tx[tid]['cds'].append((start,end))
+def union(intervals):
+ if not intervals: return []
+ intervals=sorted(intervals); out=[]; a,b=intervals[0]
+ for c,d in intervals[1:]:
+  if c<=b+1: b=max(b,d)
+  else: out.append((a,b)); a,b=c,d
+ out.append((a,b)); return out
+arr=[[],[],[]]
+for tid,d in tx.items():
+ exons=union(d['exons']); cds=union(d['cds']); strand=d['strand']
+ if strand=='+':
+  exons=exons
+ else:
+  exons=[(a,b) for a,b in exons][::-1]
+ # Build transcript coordinate positions from sorted exons in orientation, storing genomic position
+ positions=[] # (transcript_index 1-based, genomic_start, genomic_end?) create intervals
+ # Instead build list of genomic intervals in transcript orientation
+ intervals=exons
+ # Build mapping for coding: use per-genomic interval intersection
+ trans_coding=[] # transcript positions coding
+ pos=0
+ for a,b in intervals: # intervals in transcript orientation (for minus, from high to low but each a<=b)
+  length=b-a+1
+  # Determine coding positions within this genomic interval by intersections with cds intervals (genomic sorted)
+  coding_positions=[]
+  for c,d in cds:
+   o=max(a,c); e=min(b,d)
+   if o<=e:
+    # transcript offset depending strand: for plus interval a is low; for minus interval a high, orientation reversed within interval? Wait each exon interval a,b is low-high, transcript goes from high to low, so transcript position within exon from b down to a.
+    for g in range(o,e+1):
+     if strand=='+': off=pos+(g-a)
+     else: off=pos+(b-g)
+     coding_positions.append(off)
+  trans_coding.extend(coding_positions)
+  pos+=length
+ total=pos
+ trans_coding=set(trans_coding)
+ if not trans_coding:
+  print('no cds'); continue
+ first=min(trans_coding); last=max(trans_coding)
+ five=first-1
+ three=total-last
+ cds_len=len(trans_coding)
+ arr[0].append(five); arr[1].append(cds_len); arr[2].append(three)
+ if total "'!= five+three+cds_len:
+  print('"'bad',tid,total,five,three,cds_len)
+print(len(arr[0]))
+print([int(np.floor(np.median(a))) for a in arr])
+PY"

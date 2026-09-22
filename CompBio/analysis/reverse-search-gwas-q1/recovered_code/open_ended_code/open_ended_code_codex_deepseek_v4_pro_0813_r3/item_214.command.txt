@@ -1,0 +1,45 @@
+/bin/bash -lc "cat > query_catalog_many.py <<'PY'
+import json, urllib.request, os, time, sys, math
+rsids='rs72717048 rs144126567 rs379794 rs748818876 rs147174426 rs140970775 rs7554873 rs1150756 rs1150753 rs3132451 rs1150757 rs3132941 rs4690098 rs34562254 rs374039502 rs4849748 rs1260326 rs11097787 rs3117301 rs9257004 rs9265969 rs9274623 rs6918046'.split()
+# Our p-values (rough)
+our={'rs72717048':9.31e-23,'rs144126567':1.07e-22,'rs379794':1.09e-22,'rs147174426':1.57e-22,'rs140970775':1.68e-22,'rs7554873':7.85e-21,'rs1150756':4.86e-19,'rs1150753':8.64e-19,'rs3132451':9.02e-19,'rs1150757':9.19e-19,'rs3132941':9.80e-19,'rs4690098':1.62e-10,'rs34562254':1.42e-16,'rs374039502':1.32e-8,'rs4849748':1.26e-8,'rs1260326':3.44e-8,'rs11097787':1.13e-8,'rs3117301':1.91e-10,'rs9257004':2.68e-16,'rs9265969':8.69e-17,'rs9274623':1.68e-18,'rs6918046':3.78e-8}
+studies={} # acc -> dict of rs -> list p
+for rs in rsids:
+ out=f'catalog_{rs}.json'
+ if not os.path.exists(out):
+  url=f'https://www.ebi.ac.uk/gwas/rest/api/associations/search/findByRsId?rsId={rs}'
+  try:
+   req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+   open(out,'wb').write(urllib.request.urlopen(req,timeout=60).read())
+  except Exception as e: print('ERR',rs,e); continue
+  time.sleep(.1)
+ try: j=json.load(open(out)); assoc=j['_embedded']['associations']
+ except Exception as e: print('parse',rs,e); continue
+ for idx,a in enumerate(assoc):
+  p=a.get('pvalue')
+  if p is None or p>1e-6: continue
+  # get study cache
+  sf=f'study_{idx}_{rs}.json'
+  if not os.path.exists(sf):
+   su=a['_links']['study']['href'].replace('http:','https:')
+   try:
+    req=urllib.request.Request(su,headers={'User-Agent':'Mozilla/5.0'})
+    open(sf,'wb').write(urllib.request.urlopen(req,timeout=30).read())
+   except: pass
+  acc='';trait='';pub=''
+  if os.path.exists(sf):
+   try:
+    sj=json.load(open(sf)); acc=sj.get('accessionId',''); trait=sj.get('diseaseTrait',{}).get('trait',''); pub=sj.get('pubmedId','')
+   except: pass
+  if acc:
+   studies.setdefault(acc,{'traits':set(),'pubs':set(),'variants':{}})
+   studies[acc]['traits'].add(trait); studies[acc]['pubs'].add(str(pub)); studies[acc]['variants'].setdefault(rs,[]).append(p)
+# Print studies with >=3 target rs and pub/traits/variants
+for acc,d in sorted(studies.items(), key=lambda kv:-len(kv[1]['variants'])):
+ n=len(d['variants'])
+ if n>=3:
+  print('\\n',acc,'n=',n,'pubs=',','.join(sorted(d['pubs'])),'traits=',','.join(list(d['traits'])[:5]))
+  for rs,ps in d['variants'].items():
+   print(' ',rs,ps, 'our',our.get(rs))
+PY
+python3 query_catalog_many.py"

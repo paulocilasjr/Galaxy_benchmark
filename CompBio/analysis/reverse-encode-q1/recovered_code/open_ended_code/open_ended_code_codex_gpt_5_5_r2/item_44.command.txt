@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,math,sys,time
+import pysam
+# target bins: top 20 plus a few moderate random deterministic
+bins=[]
+for line in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+    chrom,s,e,v=line.split(); v=float(v)
+    bins.append((v,chrom,int(s),int(e)))
+bins=sorted(bins, reverse=True)[:20]
+print('bins')
+for b in bins[:5]: print(b)
+rows=json.load(open('encode4_filtered_bams.json'))
+# shortlist by total near 76.27M +/- maybe 5M and single/multi summed; produce dataset rows
+from collections import defaultdict
+by=defaultdict(list)
+for r in rows:
+    if r.get('total'): by[tuple(r['datasets'])].append(r)
+cands=[]
+for key,rs in by.items():
+    s=sum(r['total'] for r in rs)
+    if 70_000_000 <= s <= 82_000_000:
+        cands.append((abs(s-76_275_700),s,key,rs))
+cands=sorted(cands)[:25]
+# include dnanexus v2 EPK manually? skip for now exact pipeline
+print('candidates',len(cands))
+for diff,s,key,rs in cands[:10]: print(key,s,[r['file'] for r in rs])
+
+def count_file(acc, bins):
+    url=f'https://www.encodeproject.org/files/{acc}/@@download/{acc}.bam'
+    af=pysam.AlignmentFile(url,'rb')
+    counts=[]
+    for v,chrom,s,e in bins:
+        c=0
+        try:
+            for rec in af.fetch(chrom,s,e):
+                if rec.mapping_quality>=30 and not rec.is_unmapped:
+                    # overlap according to reference interval
+                    if rec.reference_start < e and rec.reference_end and rec.reference_end > s:
+                        c+=1
+        except ValueError as ex:
+            c=None
+        counts.append(c)
+    af.close()
+    return counts
+
+for diff,s,key,rs in cands[:25]:
+    total_counts=[0]*len(bins)
+    t0=time.time()
+    ok=True
+    for r in rs:
+        try:
+            cs=count_file(r['file'], bins)
+            total_counts=[a+b for a,b in zip(total_counts,cs)]
+        except Exception as e:
+            print('ERR',key,r['file'],e, file=sys.stderr); ok=False; break
+    if not ok: continue
+    # Estimate denominator N_i = count*1e6/value; variation should be low for true match.
+    Ns=[c*1_000_000/v for c,(v,_,_,_) in zip(total_counts,bins) if v>0 and c>0]
+    mean=sum(Ns)/len(Ns)
+    rmse=(sum((n-mean)**2 for n in Ns)/len(Ns))**0.5
+    # Also compare against N=76275600 rounded expected
+    N0=76275600
+    diffs=[c-round(v*N0/1_000_000) for c,(v,_,_,_) in zip(total_counts,bins)]
+    print(key[0], 'mapped',s,'files',[r['file'] for r in rs], 'counts', total_counts[:5], 'Nmean',round(mean),'cv',rmse/mean, 'diffs0',diffs[:10], 'time',round(time.time()-t0,1), flush=True)
+PY"

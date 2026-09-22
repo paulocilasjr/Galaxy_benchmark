@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, gzip
+h={}
+with pysam.AlignmentFile('results/human.map.bam') as b:
+ for r in b:
+  if not r.is_secondary: h[r.query_name]=r.is_unmapped
+p=[]
+with pysam.AlignmentFile('results/pig.map.bam') as b:
+ for r in b:
+  if r.is_secondary: continue
+  if h.get(r.query_name,False) and not r.is_unmapped and r.mapping_quality>=50 and r.has_tag('NM') and r.get_tag('NM')<=1 and r.query_alignment_length>=70:
+   p.append((r.query_name,r.reference_name,r.mapping_quality,r.get_tag('NM'),r.get_tag('AS')))
+ids={x[0] for x in p}
+seqs={}
+with gzip.open('contaminated.rna.q2.fq.gz','rt') as f:
+ while True:
+  a=f.readline().rstrip(); s=f.readline().rstrip(); plus=f.readline(); q=f.readline()
+  if not a: break
+  name=a[1:].split()[0]
+  if name in ids: seqs[name]=s
+with open('results/pig_specific.fa','w') as out:
+ for name,ref,mq,nm,ass in p:
+  if name in seqs: out.write(f'>{name}|{ref}|mq{mq}|nm{nm}|as{ass}\\n{seqs[name]}\\n')
+print('candidate alignments',len(p),'sequences',len(seqs),'unique refs',len({x[1] for x in p}))
+from collections import Counter
+print(Counter(x[1] for x in p).most_common(20))
+PY
+wc -l results/pig_specific.fa; head -6 results/pig_specific.fa"

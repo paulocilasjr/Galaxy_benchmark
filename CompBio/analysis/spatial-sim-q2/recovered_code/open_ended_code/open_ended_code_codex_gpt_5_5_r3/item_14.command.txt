@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, pandas as pd, gzip
+from scipy.io import mmread
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, spearmanr
+# marker blocks inferred from sc means: Tumor 0-49, Fibro 50-99, T 100-149, B 150-199, Macro 200-249, Endo 250-299
+blocks={
+ 'Tumor_Core': range(0,50),
+ 'Fibroblast_Stroma': range(50,100),
+ 'T_Cell': range(100,150),
+ 'B_Cell': range(150,200),
+ 'Macrophage': range(200,250),
+ 'Endothelial': range(250,300),
+}
+types=sorted(blocks)
+X=mmread('matrix.mtx.gz').tocsc().toarray().astype(float)
+pos=pd.read_csv('tissue_positions.csv')
+barcodes=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+p=pos.set_index('barcode').loc[barcodes]
+coords=p[['pxl_row_in_fullres','pxl_col_in_fullres']].values.astype(float)
+# block marker density corrected by block total? use fraction within first 300 marker genes and full lib.
+S=np.column_stack([X[list(blocks[t]),:].sum(axis=0) for t in types])
+frac=S/S.sum(axis=1,keepdims=True)
+# dominant marker class
+cls=np.array(types)[frac.argmax(axis=1)]
+print('marker dominant counts', pd.Series(cls).value_counts().sort_index())
+print('tumor marker frac percentiles', np.percentile(frac[:,types.index('Tumor_Core')],[0,5,25,50,75,90,95,97,99,100]))
+# If define tumor-containing by tumor dominance, tumor frac > 0.25/0.3/0.4/0.5; proximity abundances
+for thr in [0.2,0.25,0.3,0.35,0.4,0.5,0.6]:
+    tumor=frac[:,types.index('Tumor_Core')]>thr
+    if tumor.sum()==0: continue
+    nearest=cdist(coords, coords[tumor]).min(axis=1)
+    print('\\nthreshold',thr,'tumor spots',tumor.sum(),'nearest percentiles',np.percentile(nearest,[0,25,50,75,100]))
+    for t in sorted(set(types)-{'Tumor_Core'}):
+        vals=nearest[cls==t]
+        others=nearest[(cls"'!=t)&(~tumor)]
+        pval=mannwhitneyu(vals, others, alternative='"'less').pvalue if len(vals)>0 and len(others)>0 else np.nan
+        rho,pv=spearmanr(frac[:,types.index(t)], nearest)
+        print(t, 'dom n', (cls==t).sum(), 'dom mean', vals.mean() if len(vals) else np.nan, 'dom med', np.median(vals) if len(vals) else np.nan, 'dom p', pval, 'frac_rho', rho, 'frac_p', pv)
+# map with marker cls
+abbr={'B_Cell':'B','Endothelial':'E','Fibroblast_Stroma':'F','Macrophage':'M','T_Cell':'T','Tumor_Core':'C'}
+grid=np.full((30,30),'.',object)
+for i,(r,c) in enumerate(zip(p.array_row,p.array_col)): grid[r,c]=abbr[cls[i]]
+print('\\nmarker map')
+for row in grid: print(''.join(row))
+PY"

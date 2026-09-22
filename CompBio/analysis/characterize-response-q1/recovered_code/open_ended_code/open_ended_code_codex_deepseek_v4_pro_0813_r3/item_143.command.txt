@@ -1,0 +1,47 @@
+/bin/bash -lc "cat > rank_libs.py <<'PY'
+import os, glob, math
+q=[l.strip().upper() for l in open('characterize.response.q1.txt') if l.strip()]
+qset=set(q); qmap={g:i for i,g in enumerate(q)}
+exclude=['Jensen_TISSUES','Jensen_COMPARTMENTS','TISSUES_Curated_2025','Jensen_DISEASES_Experimental_2025','DisGeNET','GTEx_Tissue_Expression_','HDSigDB_','TG_GATES_2020','ARCHS4_Tissues','TRANSFAC','JASPAR','ENCODE','ChEA','CellMarker','Rare_Diseases','Descartes','Tabula_Sapiens','UK_Biobank']
+rows=[]
+for f in glob.glob('all_libs/*.gmt'):
+ lib=os.path.basename(f)[:-4]
+ # skip broad excluded
+ if any(e.lower() in lib.lower() for e in exclude): continue
+ for line in open(f, errors='ignore'):
+  p=line.rstrip('\\n').split('\\t')
+  if len(p)<3: continue
+  term=p[0]
+  genes=[g.upper() for g in p[1:] if g.strip()]
+  s=set(genes); ov=qset & s
+  if not ov: continue
+  # rank correlation for genes in term order
+  ordered=[g for g in genes if g in qset]
+  # duplicate preserve first maybe
+  seen=set(); ordered2=[]
+  for g in genes:
+   if g in qset and g not in seen: seen.add(g); ordered2.append(g)
+  # Kendall tau? use spearman if >=5
+  rho=None
+  if len(ordered2)>=5:
+   from scipy.stats import spearmanr
+   qranks=[qmap[g] for g in ordered2]
+   tranks=list(range(len(ordered2)))
+   rho,_=spearmanr(qranks,tranks)
+  jaccard=len(ov)/(len(s)+112-len(ov))
+  frac_q=len(ov)/112
+  # top50 overlap
+  top50=sum(1 for g in q[:50] if g in s)
+  top20=sum(1 for g in q[:20] if g in s)
+  rows.append((len(ov),frac_q,jaccard,rho,top50,top20,lib,term,len(genes),ordered2))
+print('TOP 150 by jaccard')
+for r in sorted(rows, key=lambda r:(-r[2],-r[0]))[:150]:
+ print(f'{r[0]:2d}/{r[8]:<5d} qfrac={r[1]:.2f} jac={r[2]:.3f} rho={r[3] if r[3] is None else round(r[3],2)} top50={r[4]} top20={r[5]} {r[6]:45s} | {r[7]}')
+print('\\nTOP 150 by rho among overlap>=20')
+f=[r for r in rows if r[0]>=20 and r[3] is not None]
+for r in sorted(f,key=lambda r:(-r[3],-r[0]))[:150]:
+ print(f'{r[0]:2d}/{r[8]:<5d} qfrac={r[1]:.2f} jac={r[2]:.3f} rho={r[3]:.2f} top50={r[4]} top20={r[5]} {r[6]:45s} | {r[7]}')
+PY
+python3 rank_libs.py > rank_libs.txt
+wc -l rank_libs.txt
+sed -n '1,320p' rank_libs.txt"

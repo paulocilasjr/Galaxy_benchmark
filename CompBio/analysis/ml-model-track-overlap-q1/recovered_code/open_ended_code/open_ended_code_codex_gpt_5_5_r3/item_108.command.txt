@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,re,gzip,csv
+TOKEN_RE=re.compile(r'\\b(?:GSM|GSE|SRR|SRA|ERR|DRR|ERP|DRP|ENCFF|ENCSR|CNhs)\\w+\\b', re.I)
+# define helper same as script
+def norm(t): return t.upper() if not t.startswith('CNhs') else t
+def toks_from_fields(fields):
+ s=set()
+ for f in fields:
+  if not f: continue
+  for t in TOKEN_RE.findall(str(f)): s.add(norm(t))
+ return s
+rows=list(csv.DictReader(gzip.open('borzoi/data/targets_human.txt.gz','rt'), delimiter='\\t'))
+direct=set()
+for r in rows:
+ for t in TOKEN_RE.findall('\\t'.join(str(v) for v in r.values())): direct.add(norm(t))
+enc=json.load(open('encode_borzoi_experiments.json'))
+encode=set()
+for exp in enc.values():
+ encode.add(exp['accession'])
+ for f in exp.get('dbxrefs',[])+exp.get('aliases',[]):
+  for t in TOKEN_RE.findall(str(f)): encode.add(norm(t))
+legacy=json.load(open('cistrome_legacy_sei_inspector.json'))
+new=json.load(open('cistrome_sei_samples.json'))
+ids=[]
+for line in open('sei-framework/model/target.names'):
+ m=re.search(r'ID:(\\d+)',line)
+ if m: ids.append(m.group(1))
+def sample_toks(cid):
+ ss=set()
+ l=legacy.get(cid)
+ if l:
+  fields=[l.get('unique_id'),l.get('link'),l.get('other_ids'),l.get('paper__reference')]
+  try: fields += list(json.loads(l.get('other_ids') or '{}').values())
+  except Exception: pass
+  ss |= toks_from_fields(fields)
+ n=new.get(cid)
+ if n:
+  fields=[n.get('external_id'), n.get('external_id_type'), n.get('title')]
+  for series in n.get('series') or []:
+   fields += [series.get('external_id'), series.get('external_id_type'), series.get('title')]
+   paper=series.get('paper') or {}; fields += [paper.get('external_id'), paper.get('title')]
+  ss |= toks_from_fields(fields)
+ return ss
+for label, pro in [('direct_only', direct), ('encode_only', encode), ('direct_plus_encode', direct|encode)]:
+ cnt=sum(bool(sample_toks(cid)&pro) for cid in ids)
+ print(label, cnt, round(cnt/100)*100)
+PY"

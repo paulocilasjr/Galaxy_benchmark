@@ -1,0 +1,29 @@
+/bin/bash -lc "cat > verify_files.py <<'PY'
+import concurrent.futures
+import csv
+import json
+from pathlib import Path
+import requests
+
+out = Path('file_records')
+out.mkdir(exist_ok=True)
+rows = list(csv.DictReader(open('matched_samples.tsv'), delimiter='\\t'))
+def verify(row):
+    accession = row['File accession']
+    url = f'https://www.encodeproject.org/files/{accession}/?format=json'
+    response = requests.get(url, timeout=45)
+    response.raise_for_status()
+    item = response.json()
+    (out / f'{accession}.json').write_text(json.dumps(item, indent=2))
+    assert item['md5sum'] == row['md5sum'], accession
+    assert item['assembly'] == 'GRCh38', accession
+    assert item['output_type'] == 'alignments', accession
+    assert item['file_format'] == 'bam', accession
+    assert item['status'] == 'released', accession
+    assert '/call-filter/' in item['submitted_file_name'], accession
+    return accession
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    verified = list(pool.map(verify, rows))
+print(f'Confirmed {len(verified)} filtered BAM records and checksums')
+PY
+python verify_files.py"

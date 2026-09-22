@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse, stats
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f: features=[l.rstrip('\\n').split('\\t')[1] for l in f]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f: barcodes=[l.strip() for l in f]
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+lib=np.asarray(X.sum(axis=0)).ravel()
+Xn=X @ sparse.diags(1/np.maximum(lib,1)*1e4); Xn.data=np.log1p(Xn.data)
+Xc=Xn.T.tocsr()
+calls=pd.read_csv('protospacer_calls_per_cell.csv').set_index('cell_barcode').loc[barcodes]
+ref=pd.read_csv('feature_reference.csv').set_index('id')
+guides=calls['feature_call'].values
+targets=np.array([ref.loc[g,'target_gene_name'] for g in guides])
+idx=list(range(20))
+S=np.asarray(Xn[idx,:].mean(axis=0)).ravel()
+nt=targets=='Non-Targeting'
+print('NT score quantiles', np.quantile(S[nt],[0, .05,.25,.5,.75,.95,1]))
+for guide in ['guide_011','guide_012','guide_029','guide_026']:
+    m=guides==guide
+    print('\\n',guide, ref.loc[guide,'target_gene_name'], 'n',m.sum())
+    print('score quantiles', np.quantile(S[m],[0,.25,.5,.75,1]))
+    print('score each', np.round(S[m],3))
+    # per first20 gene delta vs NT
+    means=np.asarray(Xc[m][:,idx].mean(axis=0)).ravel()
+    ntmeans=np.asarray(Xc[nt][:,idx].mean(axis=0)).ravel()
+    df=pd.DataFrame({'gene':[features[i] for i in idx], 'delta':means-ntmeans, 'mean':means, 'ntmean':ntmeans}).sort_values('delta')
+    print(df.to_string(index=False, float_format=lambda x: f'{x:.3f}'))
+PY"

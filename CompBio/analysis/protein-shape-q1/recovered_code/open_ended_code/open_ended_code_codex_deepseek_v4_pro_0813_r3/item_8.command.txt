@@ -1,0 +1,138 @@
+/bin/bash -c "cat > shape_match.py <<'PY'
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from scipy.ndimage import rotate as ndrotate
+
+coords=np.load('ca_coords.npy')
+chains=np.load('ca_chains.npy')
+# center
+coords=coords-coords.mean(0)
+# get chain paths (consecutive CA)
+paths=[]
+for ch in np.unique(chains):
+    p=coords[chains==ch]
+    paths.append(p)
+allcoords=coords
+
+def rasterize_proj(basis, N=64, paths=None, coords=None, line=True):
+    # basis shape (2,3)
+    uv=coords @ basis.T
+    # normalize bbox preserving aspect with margin
+    umin,umax=uv[:,0].min(),uv[:,0].max(); vmin,vmax=uv[:,1].min(),uv[:,1].max()
+    span_u=umax-umin or 1; span_v=vmax-vmin or 1
+    scale=(N-1)/max(span_u,span_v)
+    su=(uv[:,0]-umin)*scale + (N-1 - (N-1)*min(span_u,span_v)/max(span_u,span_v))/2  # hmm not exact; use center
+    # center with margin
+    su=(uv[:,0]-(umin+umax)/2)*scale + (N-1)/2
+    sv=(uv[:,1]-(vmin+vmax)/2)*scale + (N-1)/2
+    img=np.zeros((N,N),dtype=np.uint8)
+    # mark points plus line segments along paths
+    for p in paths:
+        u=(p[:,0]-(umin+umax)/2)*scale + (N-1)/2
+        v=(p[:,1]-(vmin+vmax)/2)*scale + (N-1)/2
+        for k in range(len(u)-1):
+            # sample line
+            steps=max(1,int(np.hypot(u[k+1]-u[k], v[k+1]-v[k])*2)+1)
+            for t in np.linspace(0,1,steps):
+                x=int(round(u[k]+t*(u[k+1]-u[k]))); y=int(round(v[k]+t*(v[k+1]-v[k])))
+                if 0<=x<N and 0<=y<N: img[y,x]=1
+        # also mark points if isolated
+        xs=np.clip(np.round(u).astype(int),0,N-1); ys=np.clip(np.round(v).astype(int),0,N-1)
+        img[ys,xs]=1
+    return img
+
+def letter_mask(ch, N=64, fontpath=None):
+    if fontpath is None:
+        # try common
+        import glob, os
+        cands=glob.glob('/System/Library/Fonts/**/Helvetica.ttc', recursive=True)+glob.glob('/System/Library/Fonts/**/*.ttf', recursive=True)
+        if cands: fontpath=cands[0]
+        else: fontpath='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+    try:
+        font=ImageFont.truetype(fontpath, N*4)
+    except Exception:
+        font=ImageFont.load_default()
+    # render with padding
+    M=N*2
+    im=Image.new('L',(M,M),0); d=ImageDraw.Draw(im)
+    d.text((M//4,M//4),ch,fill=255,font=font)
+    a=np.array(im)>127
+    ys,xs=np.where(a)
+    if len(xs)==0: return np.zeros((N,N),dtype=np.uint8)
+    x0,x1=xs.min(),xs.max(); y0,y1=ys.min(),ys.max()
+    crop=Image.fromarray((a[y0:y1+1,x0:x1+1]*255).astype(np.uint8))
+    span=max(x1-x0+1,y1-y0+1)
+    scale=(N-2)/span
+    w=max(1,int(round((x1-x0+1)*scale))); h=max(1,int(round((y1-y0+1)*scale)))
+    crop=crop.resize((w,h),Image.Resampling.LANCZOS)
+    out=np.zeros((N,N),dtype=np.uint8)
+    y=(N-h)//2; x=(N-w)//2
+    out[y:y+h,x:x+w]=(np.array(crop)>127).astype(np.uint8)
+    return out
+
+def dice(a,b):
+    a=a.astype(bool); b=b.astype(bool)
+    inter=np.logical_and(a,b).sum(); denom=a.sum()+b.sum()
+    return (2*inter)/denom if denom else 0
+
+def iou(a,b):
+    inter=np.logical_and(a,b).sum(); union=np.logical_or(a,b).sum()
+    return inter/union if union else 0
+
+letters=list('BDFHJLNPRTVXZ')
+letters_dict={ch:letter_mask(ch) for ch in letters}
+# save reference masks maybe
+np.savez('letter_masks.npz', **{ch:letters_dict[ch] for ch in letters})
+
+# basis for given normal
+def basis_from_n(n):
+    n=n/np.linalg.norm(n)
+    # choose e1
+    if abs(n[0])<0.9:
+        e1=np.cross(n,[1,0,0]); e1=e1/np.linalg.norm(e1)
+    else:
+        e1=np.cross(n,[0,1,0]); e1=e1/np.linalg.norm(e1)
+    e2=np.cross(n,e1)
+    return np.vstack([e1,e2])
+
+def fib_sphere(n):
+    i=np.arange(n); phi=np.arccos(1-2*(i+0.5)/n); theta=np.pi*(1+5**0.5)*i
+    x=np.sin(phi)*np.cos(theta); y=np.sin(phi)*np.sin(theta); z=np.cos(phi)
+    return np.stack([x,y,z],axis=1)
+
+def evaluate_dir(n):
+    basis=basis_from_n(n)
+    img=rasterize_proj(basis, paths=paths, coords=allcoords)
+    scores={}
+    for ch,lm in letters_dict.items():
+        best=0
+        for rot in rotations:
+            lmr=ndrotate(lm.astype(np.uint8),rot,reshape=False,order=0)>0.5
+            s=dice(img,lmr)
+            if s>best: best=s
+        scores[ch]=best
+    return img,scores
+
+rotations=[0,90,180,270]
+# initial directions: axes and pca
+dirs=[]
+for i in range(3):
+    n=np.zeros(3); n[i]=1; dirs.append(n); dirs.append(-n)
+# PCA
+c=allcoords
+u,s,vt=np.linalg.svd(c,full_matrices=False)
+for i in range(3): dirs.append(vt[i]); dirs.append(-vt[i])
+# fib sample
+fib=fib_sphere(200)
+best_scores={ch:0 for ch in letters}
+for n in dirs:
+    img,scores=evaluate_dir(n)
+    for ch,val in scores.items():
+        if val>best_scores[ch]: best_scores[ch]=val
+print('dirs initial best', {ch:round(v,3) for ch,v in best_scores.items()})
+# save images for first few dirs
+for idx,n in enumerate(dirs[:6]):
+    basis=basis_from_n(n); img=rasterize_proj(basis,paths=paths,coords=allcoords)
+    Image.fromarray((img*255).astype(np.uint8)).save(f'proj_dir{idx}.png')
+PY
+python shape_match.py"

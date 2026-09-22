@@ -1,0 +1,22 @@
+/bin/bash -lc "python3 - <<'PY'
+import pyBigWig,time,gzip,math,statistics
+u='https://encode-public.s3.amazonaws.com/2020/11/12/31cec132-6555-4b4e-a906-18ba1b587b94/ENCFF389PZY.bigWig'
+b=pyBigWig.open(u); t=time.time(); out=[];N=76275859
+for c,L in b.chroms().items():
+ if c not in {'chr1','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrX','chrY'}: continue
+ n=(L+9999)//10000; end=min(n*10000,L)
+ # Full-length bins are equal-width only for first n-1; use a separate query for final bin.
+ x=b.stats(c,0,(n-1)*10000,nBins=n-1,exact=True) if n>1 else []
+ x.append(b.stats(c,(n-1)*10000,L,nBins=1,exact=True)[0])
+ out += [(c,i*10000,min((i+1)*10000,L),v*10000 if v is not None else 0) for i,v in enumerate(x)]
+ print(c,n,'elapsed',round(time.time()-t,1),flush=True)
+b.close()
+print('bins',len(out),'elapsed',time.time()-t,'sum bw',sum(x[3] for x in out))
+# correlate by reading target in same order
+ys=[]; xs=[]
+for line,(c,s,e,x) in zip(gzip.open('reverse.encode.q1.tsv.gz','rt'),out):
+ cc,ss,ee,v=line.rstrip().split('\\t'); assert (cc,int(ss),int(ee))==(c,s,e),(cc,ss,ee,c,s,e)
+ ys.append(int(float(v)*N/1e6+0.5));xs.append(x)
+my=sum(ys)/len(ys);mx=sum(xs)/len(xs); cor=sum((a-my)*(b-mx) for a,b in zip(ys,xs))/(sum((a-my)**2 for a in ys)*sum((b-mx)**2 for b in xs))**.5
+print('sum target',sum(ys),'corr',cor,'mean ratio',sum(y/x for y,x in zip(ys,xs) if x>0)/sum(x>0 for x in xs))
+PY"

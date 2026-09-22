@@ -1,0 +1,111 @@
+/bin/bash -c "python3 - <<'PY'
+import gzip, pysam, sys, re, json
+ref='chr9.fa'
+fasta=pysam.FastaFile(ref)
+chrom='chr9'
+seq=fasta.fetch(chrom)
+
+# parse refGene transcripts for chr9
+txs=[]
+with gzip.open('refGene.txt.gz','rt') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<16: continue
+        chrom_=parts[2]
+        if chrom_"'!=chrom: continue
+        name=parts[1]
+        strand=parts[3]
+        txStart=int(parts[4]); txEnd=int(parts[5])
+        cdsStart=int(parts[6]); cdsEnd=int(parts[7])
+        exonCount=int(parts[8])
+        starts=[int(x) for x in parts[9].rstrip('"',').split(',') if x]
+        ends=[int(x) for x in parts[10].rstrip(',').split(',') if x]
+        gene=parts[12]
+        if cdsStart>=cdsEnd or exonCount==0: continue
+        exons=list(zip(starts,ends))
+        # collect coding positions in transcript order [1-based genomic coordinates]
+        pos=[]
+        if strand=='+':
+            # exons are ascending; for each exon intersect with cds
+            for st,en in exons:
+                lo=max(st+1,cdsStart+1); hi=min(en,cdsEnd)
+                for p in range(lo,hi+1):
+                    pos.append(p)
+        elif strand=='-':
+            # transcription starts high, exons ascending; reverse exons, each positions descending
+            for st,en in reversed(exons):
+                lo=max(st+1,cdsStart+1); hi=min(en,cdsEnd)
+                for p in range(hi,lo-1,-1):
+                    pos.append(p)
+        else: continue
+        if len(pos)%3"'!=0:
+            # warn but still use full length maybe truncated
+            pass
+        txs.append({'"'name':name,'gene':gene,'strand':strand,'cdsStart':cdsStart,'cdsEnd':cdsEnd,'pos':pos})
+
+print('transcripts chr9 with CDS', len(txs))
+
+# parse variants.vcf; filter homozygous SNVs
+variants=[]
+with open('variants.vcf') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        ch,pos,id,ref,alt,qual,filter,info,format,sample=p[:10]
+        if ch"'!=chrom or len(ref)!=1 or len(alt)!=1: continue
+        if sample.split('"':')[0].split('/')[0] "'!= sample.split('"':')[0].split('/')[1] or sample.split(':')[0].split('/')[0]"'!='"'1':
+            # only 1/1 or 1|1
+            gt=sample.split(':')[0]
+            if not (gt=='1/1' or gt=='1|1'): continue
+        dp=None
+        for field in info.split(';'):
+            if field.startswith('DP='): dp=int(field[3:])
+            if field.startswith('DP4='):
+                d=field[4:].split(','); dp4=list(map(int,d))
+        # store DP4 as ref f,r alt f,r
+        dp4=None
+        m=re.search(r'DP4=([0-9,]+)', info)
+        if m: dp4=list(map(int,m.group(1).split(',')))
+        mq0f=None; m=re.search(r'MQ0F=(["'^;]+)'"', info); 
+        if m: mq0f=float(m.group(1))
+        mq=None; m=re.search(r'(?<"'![A-Z])MQ=([0-9.]+)'"', info)
+        if m: mq=float(m.group(1))
+        variants.append({'ch':ch,'pos':int(pos),'ref':ref,'alt':alt,'qual':float(qual),'dp':dp,'dp4':dp4,'mq0f':mq0f,'mq':mq,'info':info,'sample':sample})
+
+print('homo SNVs', len(variants))
+
+comp=str.maketrans('ACGTN','TGCAN')
+def revcomp(s): return s.translate(comp)[::-1]
+
+# annotate stop_gain per transcript
+results=[]
+for v in variants:
+    pos=v['pos']
+    for t in txs:
+        if pos in t['pos']:
+            idx=t['pos'].index(pos)  # first occurrence only
+            codon_start=idx//3*3
+            if codon_start+3>len(t['pos']): continue
+            gp=t['pos'][codon_start:codon_start+3]
+            # reference coding bases
+            if t['strand']=='+':
+                bases=[seq[p-1] for p in gp]
+                alt_base=v['alt']
+            else:
+                bases=[revcomp(seq[p-1]) for p in gp]
+                alt_base=revcomp(v['alt'])
+            ref_codon=''.join(bases).upper()
+            if not set(ref_codon)<=set('ACGTN'): continue
+            mut=list(ref_codon); mut[idx%3]=alt_base
+            mut_codon=''.join(mut)
+            aa_ref=codon_to_aa.get(ref_codon,'X')
+            aa_alt=codon_to_aa.get(mut_codon,'X')
+            if aa_alt=='*' and aa_ref"'!='"'*':
+                # compute hgvsc maybe simple
+                c_pos=idx+1
+                hgvs=f\"c.{c_pos}{ref_codon.upper()}>? not\"
+                results.append({'pos':pos,'ref':v['ref'],'alt':v['alt'],'gene':t['gene'],'transcript':t['name'],'strand':t['strand'],'ref_codon':ref_codon,'mut_codon':mut_codon,'aa_ref':aa_ref,'aa_alt':aa_alt,'dp':v['dp'],'dp4':v['dp4'],'qual':v['qual'],'mq':v['mq'],'mq0f':v['mq0f'],'sample':v['sample']})
+
+# codon table
+# define above missing? reorder
+PY"

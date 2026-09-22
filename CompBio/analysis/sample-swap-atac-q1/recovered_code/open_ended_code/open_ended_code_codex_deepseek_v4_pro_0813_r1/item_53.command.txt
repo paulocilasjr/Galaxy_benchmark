@@ -1,0 +1,71 @@
+/bin/bash -lc "cat > marker_scores.py <<'PY'
+import numpy as np
+D=np.load('promoter_matrix.npz',allow_pickle=True)
+G=D['G']; genes=list(D['genes']); names=list(D['names'])
+# total counts from matrix_data for normalization
+Md=np.load('matrix_data.npz',allow_pickle=True); X=Md['X']; totals=X.sum(axis=0)
+# Build gene index exact -> list
+from collections import defaultdict
+idx=defaultdict(list)
+for i,g in enumerate(genes): idx[g].append(i)
+# marker dict tissue -> patterns with exact preference or substring
+markers={
+'Brain':['NEUROD1[nr]','SOX2','GFAP','RBFOX3','TUBB3.L[nr]|TUBB3[hs]','MBP.L[nr]|MBP[hs]'],
+'Heart':['TNNT2','NPPA.S[nr]','NKX2-5','LOC115458003[nr]|MYH6[hs]'],
+'Liver':['ALB[nr]','APOA1','FGB','TTR[nr]','HNF4A'],
+'Kidney':['NPHS1[nr]','NPHS2','SLC12A1'],
+'Lung':['SFTPC','NKX2-1'],
+'Pancreas':['CPA1','GCG','SST','PDX1','INS','LOC115471867[nr]|AMY2A[hs]','LOC104526273[nr]|AMY2A[hs]'],
+'Intestine':['VIL1','SI[nr]|MGAM[hs]','MUC2','CDX1[nr]|CDX2[hs]','FABP2'],
+'Stomach':['GKN1','TFF2','LOC115479045[nr]|SLC26A3[hs]','MUC5AC'],
+'Bladder':['UPK1B','UPK2.S[nr]','UPK3A'],
+'GallBladder':['SOX17','HNF1B[hs]','CFTR','KRT19'],
+'Gill':['FOXI1','ATP6V1B1','LOC115094121[nr]|CA4[hs]','SLC4A4','STC1'],
+'Cloaca':['UPK1B','UPK3A','CFTR','KRT19'],
+'Limb':['PAX7','SOX9','COL2A1[hs]','HOXD13'],
+'Prostate':['NKX3-1','MSMB','LOC104073169[nr]|MSMB[hs]','LOC104478335[nr]|MSMB[hs]'],
+'Spleen':['PTPRC','LOC108785844[nr]|MPO[hs]','HBA1[hs]','HBZ[hs]','EPOR'],
+}
+# helper find genes
+def find_genes(pat):
+    if pat in idx: return idx[pat]
+    return [i for i,g in enumerate(genes) if pat.lower() in g.lower()]
+# raw normalized by total then z-score across samples
+Gnorm=G/(totals[None,:]+1e-9)
+# log2
+L=np.log2(Gnorm*1e6+1)
+# zscore per gene across samples
+mu=L.mean(axis=1,keepdims=True); sd=L.std(axis=1,keepdims=True)+1e-9
+Z=(L-mu)/sd
+# for each marker set, average z of unique matched genes
+sets={}
+for t,pats in markers.items():
+    rows=[]
+    for p in pats:
+        inds=find_genes(p)
+        if inds:
+            rows.extend(inds)
+    # unique rows, but allow duplicates? unique
+    rows=sorted(set(rows))
+    sets[t]=rows
+    print(t,'markers',len(rows))
+# score matrix
+score=np.full((len(markers),len(names)),np.nan)
+for ti,t in enumerate(markers):
+    rows=sets[t]
+    if rows: score[ti]=Z[rows].mean(axis=0)
+print('\\nMarker scores (z across samples)')
+print('tissue\\t'+'\\t'.join(names))
+for ti,t in enumerate(markers):
+ print(t+'\\t'+'\\t'.join(f'{score[ti,j]:.2f}' for j in range(len(names))))
+print('\\nArgmax sample per tissue marker')
+for ti,t in enumerate(markers):
+ order=np.argsort(score[ti])[::-1]
+ print(f'{t:12s} best {names[order[0]]:12s} {score[ti,order[0]]:.2f} 2nd {names[order[1]]:12s} {score[ti,order[1]]:.2f} 3rd {names[order[2]]:12s} {score[ti,order[2]]:.2f}')
+# top tissue per sample
+print('\\nTop marker tissue per sample')
+for j,s in enumerate(names):
+ order=np.argsort(score[:,j])[::-1]
+ print(f'{s:12s} best {list(markers)[order[0]]:12s} {score[order[0],j]:.2f} 2nd {list(markers)[order[1]]:12s} {score[order[1],j]:.2f}')
+PY
+python3 marker_scores.py"

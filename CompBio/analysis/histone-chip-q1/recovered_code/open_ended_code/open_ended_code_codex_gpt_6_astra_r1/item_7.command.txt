@@ -1,0 +1,28 @@
+/bin/bash -lc "cat > features.py <<'PY'
+exec(open('profiles.py').read().split(\"print('Genes'\")[0])
+from scipy.ndimage import uniform_filter1d, maximum_filter1d
+masks={k:{c:np.zeros(len(S[c]),bool) for c in S} for k in ['tss1k','tss2k','body','tes2k']}
+for gene,(c,strand,a,b) in genes.items():
+ t=a if strand=='+' else b; e=b if strand=='+' else a
+ for k,x,y in [('tss1k',t-1000,t+1000),('tss2k',t-2000,t+2000),('body',a,b),('tes2k',e-2000,e+2000)]:
+  masks[k][c][max(0,x//200):min(len(S[c]),y//200)]=True
+for k in masks:
+ s=sum(S[c][masks[k][c]].sum() for c in S); co=sum(C[c][masks[k][c]].sum() for c in S)
+ print(k,'fraction signal',s/ns,'fraction control',co/nc,'fold',s/(co*ratio))
+for w in [5,25]:
+ print('window bp',w*200)
+ for threshold in [2,3,5]:
+  widths=[]; score=[]; tss=0; body=0; num=0
+  for c in S:
+   if c in ['chrX','chrY']:continue
+   ss=uniform_filter1d(S[c].astype(float),size=w)*w; cc=uniform_filter1d(C[c].astype(float),size=w)*w*ratio
+   enriched=((ss+5)/(cc+5)>threshold)&(ss>30)
+   boundaries=np.diff(np.r_[False,enriched,False].astype(int)); starts=np.where(boundaries==1)[0];ends=np.where(boundaries==-1)[0]
+   for a,b in zip(starts,ends):
+    widths.append((b-a)*200);num+=1
+    tss+=np.any(masks['tss2k'][c][a:b]);body+=np.any(masks['body'][c][a:b])
+    score.append((float(np.sum(ss[a:b]-cc[a:b])),c,a*200,b*200))
+  print(threshold,'regions',num,'widths',np.percentile(widths,[25,50,75,90,99]),'overlap TSS',tss/num,'body',body/num)
+  if threshold==3:
+   print('Top regions',sorted(score,reverse=True)[:30])
+PY"

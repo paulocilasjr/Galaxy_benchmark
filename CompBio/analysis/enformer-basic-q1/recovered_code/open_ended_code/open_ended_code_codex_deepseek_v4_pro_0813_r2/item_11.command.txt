@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+C=1536
+filters=[768,896,1024,1152,1280,1536]
+def conv1d(inp,out,width,bias=True):
+    return (width*inp+(1 if bias else 0))*out
+
+# stem
+stem=conv1d(4,C//2,15) + (2*(C//2)) + conv1d(C//2,C//2,1) + (C//2)**2
+# wait conv_block pointwise includes BN scale+offset 2*out, conv1d; stem Residual pointwise included.
+print('stem conv initial',conv1d(4,768,15))
+print('stem bn pointwise',2*768)
+print('stem pointwise conv',conv1d(768,768,1))
+print('stem pool',768**2)
+print('stem total',stem)
+# conv tower
+tower=0
+inp=C//2
+for F in filters:
+    block = 2*inp + conv1d(inp,F,5) + 2*F + conv1d(F,F,1) + F*F
+    tower += block
+    print('tower F',F,'in',inp,'block',block)
+    inp=F
+print('tower total',tower)
+# transformer
+mha = conv1d(C,8*64,1,bias=False)*2 + conv1d(C,C,1,bias=False) + conv1d(C,C,1) + 192*512 + 2*8*64
+print('q/k',conv1d(C,512,1,bias=False))
+print('v',conv1d(C,C,1,bias=False))
+print('emb',conv1d(C,C,1))
+print('rk',192*512,'biases',2*512)
+print('mha',mha)
+block=mha+2*C+conv1d(C,2*C,1)+conv1d(2*C,C,1)
+print('block',block)
+trans=11*block
+print('trans',trans)
+# final pointwise
+final=2*C+conv1d(C,2*C,1)
+print('final',final)
+heads=conv1d(C,5313,1)+conv1d(C,1643,1)
+print('heads human',conv1d(C,5313,1),'mouse',conv1d(C,1643,1),'total',heads)
+total=stem+tower+trans+final+heads
+print('TOTAL', total)
+print(f'{total:,}')
+PY"

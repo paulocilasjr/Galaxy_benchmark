@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections, itertools, h5py, numpy as np
+# Count portal meta by tissue disease and cell names
+by=collections.Counter(); cell_by=collections.Counter(); sample_by=[]
+with open('portal_meta.csv', newline='') as fh:
+    r=csv.DictReader(fh)
+    rows=list(r)
+for row in rows:
+    by[(row['Tissue'],row['Disease'])]+=1
+    cell_by[(row['Tissue'],row['Disease'],row['CellName'])]+=1
+print('by tissue/disease')
+for k,v in sorted(by.items()): print(k,v)
+print('tumor all total', sum(v for (t,d),v in by.items() if t=='Tumor'))
+print('tumor groups all')
+tumor=[x for x in rows if x['Tissue']=='Tumor']
+orig=[]
+for sid,gp in itertools.groupby(tumor, key=lambda x:x['SampleID']):
+    g=list(gp); orig.append((sid,len(g),g[0]['PatientID'],g[0]['Disease'],g[0]['Tissue'],g[0]['Cells'],g[-1]['Cells'],collections.Counter(x['CellName'] for x in g)))
+print('n groups',len(orig),'sum',sum(x[1] for x in orig))
+for i,x in enumerate(orig,1):
+    print(i,x[:5],x[7].most_common(5))
+# local order compare all tumor groups
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+    cats=[x.decode() for x in f['obs/sampleID/categories'][:]]; codes=f['obs/sampleID/codes'][:]; idx=[x.decode() for x in f['obs/_index'][:]]
+local=[]
+for i,cat in enumerate(cats):
+    inds=np.where(codes==i)[0]
+    local.append((cat,len(inds),idx[inds[0]],idx[inds[-1]]))
+print('compare local vs all tumor groups len',len(local),len(orig))
+mis=[]
+for a,b in zip(local,orig):
+    # compare suffix after last underscore? Original SampleID may contain underscores? local Patient_001 has two underscores. Barcode suffix begins after Patient_001_ = split('_',2)[2]
+    loc_first=a[2].split('_',2)[2]
+    loc_last=a[3].split('_',2)[2]
+    orig_first=b[5].split('_',1)[1]
+    orig_last=b[6].split('_',1)[1]
+    if a[1]"'!=b[1] or loc_first!=orig_first or loc_last!=orig_last:
+        mis.append((a[:2],b[:5],loc_first,orig_first,loc_last,orig_last))
+print('"'mismatch all',len(mis))
+for x in mis[:10]: print(x)
+PY"

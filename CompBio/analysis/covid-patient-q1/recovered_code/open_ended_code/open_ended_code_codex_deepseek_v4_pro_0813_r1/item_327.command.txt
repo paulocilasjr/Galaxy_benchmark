@@ -1,0 +1,65 @@
+/bin/bash -lc "cat > cell_classifier.py <<'PY'
+import numpy as np, pandas as pd, scipy.io as sio, scipy.sparse as sp, anndata as ad, time
+from sklearn.linear_model import SGDClassifier, LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
+print('loading orig mtx')
+M=sio.mmread('match_common_counts.mtx').tocsr()
+print(M.shape,M.nnz)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False)
+# ensure row order same length; assume
+y=(meta['Class'].astype(str).values=='HC').astype(int)
+print('class counts',np.bincount(y), 'len',len(y))
+# align h5ad genes
+genes=[l.strip() for l in open('match_genes.txt') if l.strip()]
+g2c={g.lower():i for i,g in enumerate(genes)}
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array([str(x) if x is not None else '' for x in A.var['feature_name']])
+gene_col=np.full(len(wnames),-1,dtype=np.int32)
+for i,name in enumerate(wnames):
+ c=g2c.get(name.lower())
+ if c is not None: gene_col[i]=c
+obs=A.obs['donor_id'].astype(str).values
+# Build working sparse matrix aligned to 1512 cols by streaming? Better read chunks and remap
+# For memory, process chunks and predict directly.
+# Train model on raw counts with standardization no centering
+print('fitting scaler')
+scaler=StandardScaler(with_mean=False)
+scaler.fit(M)
+print('transform orig')
+Xtr=scaler.transform(M)
+# Use LogisticRegression with saga balanced; may be slow but okay on 85M nnz, 1512 cols
+# Try SGD first with calibration
+clf=LogisticRegression(C=1.0, class_weight='balanced', solver='saga', max_iter=100, tol=1e-3, n_jobs=-1, random_state=0, verbose=1)
+print('fit lr')
+t=time.time(); clf.fit(Xtr,y); print('fit time',time.time()-t)
+# aggregate work
+donors=sorted(set(obs)); di={d:i for i,d in enumerate(donors)}
+p_sum=np.zeros(len(donors)); n=np.zeros(len(donors)); p_median_list=[[] for _ in donors]
+chunk=5000; N=A.shape[0]
+for start in range(0,N,chunk):
+ X=A.X[start:start+chunk]
+ if sp.issparse(X): X=X.tocsr()
+ else: X=sp.csr_matrix(X)
+ # remap to 1512 cols: build list rows in coo
+ rows=[]; cols=[]; vals=[]
+ coo=X.tocoo()
+ for k in range(len(coo.data)):
+  c=gene_col[coo.col[k]]
+  if c>=0:
+   rows.append(coo.row[k]); cols.append(c); vals.append(coo.data[k])
+ Xr=sp.csr_matrix((vals,(rows,cols)),shape=(X.shape[0],1512))
+ Xr=scaler.transform(Xr)
+ p=clf.predict_proba(Xr)[:,1]
+ ob=np.array([di[d] for d in obs[start:start+chunk]])
+ for k in range(len(ob)):
+  p_sum[ob[k]]+=p[k]; n[ob[k]]+=1; p_median_list[ob[k]].append(p[k])
+ if start%50000==0: print('pred',start,time.time()-t,flush=True)
+res=pd.DataFrame({'donor':donors,'n':n,'p_hc_mean':p_sum/n})
+res['donor_num']=res.donor.str[5:].astype(int)
+res=res.sort_values('p_hc_mean',ascending=False)
+print(res.to_string(index=False))
+res.to_csv('cell_classifier_probs.csv',index=False)
+print('top14',','.join(map(str,res.head(14).donor_num.tolist())))
+PY
+python3 cell_classifier.py"

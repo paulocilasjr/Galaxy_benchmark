@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections, gzip
+bam=pysam.AlignmentFile('aln.bam','rb')
+chrom='AL008638.1'
+events=[('63763',63763),('63823',63823),('64123',64123),('64283delC',64283),('64533',64533),('64732delA',64732),('64736delT',64736),('64983',64983)]
+# define major allowed alleles by counts at each pos
+allowed={
+ '63763':set('AC'), '63823':set('CT'), '64123':set('AT'), '64283delC':set(['D','G']), '64533':set('CG'), '64732delA':set(['D','A']), '64736delT':set(['D','G']), '64983':set('AG')}
+
+def read_calls(aln):
+    d={}
+    # map refpos 1-based -> allele or D
+    for qpos,rpos in aln.get_aligned_pairs(matches_only=False):
+        if rpos is None: continue
+        p=rpos+1
+        for name,pos in events:
+            if p==pos:
+                if qpos is None:
+                    a='D'
+                else:
+                    a=aln.query_sequence[qpos].upper()
+                if a in allowed[name]:
+                    d[name]=a
+    return d
+pair_calls=collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+for aln in bam.fetch(chrom,63000,65200):
+    if aln.is_unmapped: continue
+    calls=read_calls(aln)
+    for k,a in calls.items(): pair_calls[aln.query_name][k][a]+=1
+# consolidate per pair
+rows=[]
+for q,cd in pair_calls.items():
+    row={}
+    for k,c in cd.items():
+        if not c: continue
+        top=c.most_common()
+        if len(top)==1 or top[0][1]>top[1][1]:
+            row[k]=top[0][0]
+    if row: rows.append((q,row))
+print('pairs with calls',len(rows))
+for i,(name,pos) in enumerate(events):
+    cnt=collections.Counter(row.get(name) for _,row in rows if name in row)
+    print(i,name,cnt)
+print('\\nEdge allele pair counts adjacent:')
+for i in range(len(events)-1):
+    e1=events[i][0]; e2=events[i+1][0]
+    cnt=collections.Counter((r[e1],r[e2]) for _,r in rows if e1 in r and e2 in r)
+    print(e1,e2,cnt)
+print('\\nAll coobs strong:')
+for i in range(len(events)):
+  for j in range(i+1,len(events)):
+    e1=events[i][0]; e2=events[j][0]
+    cnt=collections.Counter((r[e1],r[e2]) for _,r in rows if e1 in r and e2 in r)
+    if sum(cnt.values())>=5:
+        print(e1,e2,sum(cnt.values()),cnt)
+# print individual rows with >=2 calls
+print('\\nrows >=2 first 100')
+for q,row in rows:
+    if len(row)>=2:
+        print(q, ' '.join(row.get(e[0],'.') for e in events))
+PY"

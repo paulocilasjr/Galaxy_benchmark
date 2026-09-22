@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+mat=mmread('matrix.mtx.gz').tocsc()
+t=mat[:,710].toarray().ravel().astype(np.int32)
+cts=['B_Cell','Endothelial','Macrophage']
+groups={c:sc.index[meta.cell_type==c].tolist() for c in cts}
+rows={i:sc.iloc[i].values.astype(np.int32) for i in sc.index}
+# build pair dict for B/E (40k) maybe all pair among the 600 candidate cells
+pair_dict={}
+pair_meta={}
+for ci,c in enumerate(cts):
+  inds=groups[c]
+  for di,d in enumerate(cts):
+    if di<ci: continue
+    for a_i,a in enumerate(inds):
+      va=rows[a]
+      for b_i in range(a_i if di==ci else 0, len(groups[d])):
+        b=groups[d][b_i]
+        vb=rows[b]
+        s=va+vb
+        # store tuple? bytes
+        key=s.tobytes()
+        if key not in pair_dict:
+          pair_dict[key]=(a,b)
+          pair_meta[key]=(c,d)
+print('pairs',len(pair_dict))
+# find third cell among any of 1200? For exact triple, third can any type. Check all 1200 rem
+for k_idx in sc.index:
+    rem=t-rows[k_idx]
+    key=rem.tobytes()
+    if key in pair_dict:
+        a,b=pair_dict[key]
+        print('EXACT', k_idx, rows_index, meta.loc[k_idx,'cell_type'], a,b, pair_meta[key])
+        raise SystemExit
+print('no exact among candidate pairs and all third')
+PY"

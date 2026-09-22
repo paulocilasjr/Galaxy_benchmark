@@ -1,0 +1,103 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, time, math
+from PIL import Image, ImageDraw, ImageFont
+from skimage.transform import rotate
+from scipy.ndimage import gaussian_filter
+
+coords=[]; ca=[]
+for line in open('protein.shape.q1.pdb'):
+    if line.startswith('ATOM'):
+        x=float(line[30:38]); y=float(line[38:46]); z=float(line[46:54])
+        coords.append((x,y,z))
+        if line[12:16].strip()=='CA': ca.append((x,y,z))
+coords=np.array(coords); ca=np.array(ca)
+letters='BDFHJLNPRTVXZ'
+N=64
+font_path='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+
+def make_template(ch):
+    img=Image.new('L',(N,N),0); d=ImageDraw.Draw(img)
+    font_size=100; font=ImageFont.truetype(font_path,font_size)
+    bbox=d.textbbox((0,0),ch,font=font); w=bbox[2]-bbox[0]; h=bbox[3]-bbox[1]
+    target=0.82*N; scale=target/max(w,h); font_size=max(1,int(font_size*scale))
+    font=ImageFont.truetype(font_path,font_size)
+    bbox=d.textbbox((0,0),ch,font=font); w=bbox[2]-bbox[0]; h=bbox[3]-bbox[1]
+    d.text(((N-w)/2-bbox[0],(N-h)/2-bbox[1]),ch,font=font,fill=255)
+    return np.array(img)>40
+
+# Precompute rotated templates and FFTs
+angles=np.arange(0,180,5)
+templates={}
+print('precompute templates')
+for ch in letters:
+    base=make_template(ch)
+    arrs=[]; ffts=[]; areas=[]
+    for ang in angles:
+        t=rotate(base.astype(np.float32), ang, order=1, mode='constant', cval=0, preserve_range=True)>0.5
+        t=t.astype(np.float32)
+        arrs.append(t)
+        ffts.append(np.fft.rfft2(t))
+        areas.append(t.sum())
+    templates[ch]=(arrs,ffts,np.array(areas))
+print('done')
+
+def project_image(pts,n):
+    n=np.asarray(n,float); n/=np.linalg.norm(n)
+    a=np.array([0.,0.,1.]) if abs(n[2])<0.9 else np.array([1.,0.,0.])
+    u=np.cross(n,a); u/=np.linalg.norm(u)
+    v=np.cross(n,u); v/=np.linalg.norm(v)
+    p=pts-pts.mean(0)
+    x=p@u; y=p@v
+    margin=3
+    span=max(x.max()-x.min(), y.max()-y.min())
+    scale=(N-2*margin)/span
+    xi=((x-x.min())*scale + margin).astype(np.int32)
+    yi=((y-y.min())*scale + margin).astype(np.int32)
+    img=np.zeros((N,N),np.float32)
+    for xx,yy in zip(xi,yi):
+        if 0<=xx<N and 0<=yy<N: img[yy,xx]=1.0
+    img=gaussian_filter(img,0.6)
+    img=(img>0.1).astype(np.float32)
+    return img
+
+def fib_sphere(k):
+    i=np.arange(k)
+    z=1 - (2*i+1)/k
+    phi=np.arccos(np.clip(z,-1,1))
+    theta=math.pi*(1+5**0.5)*i
+    return np.stack([np.sin(phi)*np.cos(theta), np.sin(phi)*np.sin(theta), z],axis=1)
+
+def score_proj(imgp):
+    area_p=imgp.sum()
+    if area_p==0: return []
+    fp=np.fft.rfft2(imgp)
+    out=[]
+    for ch in letters:
+        arrs,ffts,areas=templates[ch]
+        maxd=0; maxang=0
+        for idx,ft in enumerate(ffts):
+            corr=np.fft.irfft2(fp*np.conj(ft), s=imgp.shape).real
+            m=corr.max()
+            dice=2*m/(area_p+areas[idx]) if area_p+areas[idx]>0 else 0
+            if dice>maxd: maxd=dice; maxang=angles[idx]
+        out.append((maxd,ch,maxang))
+    out.sort(reverse=True, key=lambda z:z[0])
+    return out
+
+for mode, pts in [('all',coords),('ca',ca)]:
+    print('MODE',mode,flush=True)
+    dirs=fib_sphere(320)
+    best_global=[]
+    t0=time.time()
+    for k,n in enumerate(dirs):
+        img=project_image(pts,n)
+        scores=score_proj(img)
+        best_global.append((scores[0][0],scores[0][1],scores[0][2],k,n,scores[:3]))
+        if (k+1)%40==0:
+            print('k',k+1,'elapsed',time.time()-t0,'current top',sorted(best_global,reverse=True,key=lambda z:z[0])[:5],flush=True)
+    best_global.sort(reverse=True,key=lambda z:z[0])
+    print('FINAL TOP mode',mode)
+    for b in best_global[:20]:
+        print(b[0],b[1],b[2],'dir',b[3],'n',np.round(b[4],3),'scores',[(round(x[0],3),x[1],x[2]) for x in b[5]])
+PY
+python3 [REDACTED LOCAL PATH]"

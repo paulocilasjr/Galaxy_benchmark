@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import os, glob, re
+import numpy as np
+from sklearn.decomposition import PCA
+primary=re.compile(r'"'^chr([1-9]|1[0-9]|2[0-2]|X|Y|M):'"')
+for dirname in ['bins10000','bins100k']:
+ files=sorted(glob.glob(dirname+'/*.tsv'), key=lambda p:int(os.path.basename(p).split('.')[0]))
+ keys=set(); vals=[]
+ for f in files:
+  d={}
+  for line in open(f):
+   k,v=line.rstrip('\\n').split('\\t')
+   if primary.match(k): d[k]=int(v); keys.add(k)
+  vals.append(d)
+ keys=sorted(keys); X=np.array([[d.get(k,0) for k in keys] for d in vals],float)
+ for mode in ['log_cpm','cap99_log_cpm','sqrt_cpm']:
+  Y=X.copy()
+  if mode.startswith('cap'):
+   for i in range(Y.shape[0]):
+    nz=Y[i][Y[i]>0]; Y[i]=np.minimum(Y[i], np.percentile(nz,99))
+  # CPM normalize
+  Y=Y/Y.sum(axis=1,keepdims=True)*1e6
+  if 'sqrt' in mode: Y=np.sqrt(Y)
+  else: Y=np.log1p(Y)
+  # zscore features to focus pattern? maybe no, remove zero-variance
+  # sample distances in PC space full rank
+  pca=PCA(n_components=3).fit_transform(Y)
+  center=pca.mean(axis=0); dist=np.linalg.norm(pca-center,axis=1)
+  # leave-one-out centroid distance in original normalized space cosine/euclidean
+  Yn=Y/np.linalg.norm(Y,axis=1,keepdims=True)
+  cos=[]
+  euc=[]
+  for i in range(10):
+   cen=np.delete(Yn,i,axis=0).mean(axis=0); cen=cen/np.linalg.norm(cen)
+   cos.append(float(Yn[i]@cen))
+   cen2=np.delete(Y,i,axis=0).mean(axis=0); euc.append(float(np.linalg.norm(Y[i]-cen2)))
+  print('\\n',dirname,mode)
+  print('PCA coords')
+  for i,(coord,d,c,e) in enumerate(zip(pca,dist,cos,euc),1): print(i, 'pc', ' '.join(f'{x:.2f}' for x in coord), 'dist',f'{d:.2f}','cos2loo',f'{c:.4f}','euc2loo',f'{e:.2f}')
+  print('cos low order', sorted((c,i+1) for i,c in enumerate(cos))[:4])
+  print('euc high order', sorted((e,i+1) for i,e in enumerate(euc), reverse=True)[:4])
+PY"

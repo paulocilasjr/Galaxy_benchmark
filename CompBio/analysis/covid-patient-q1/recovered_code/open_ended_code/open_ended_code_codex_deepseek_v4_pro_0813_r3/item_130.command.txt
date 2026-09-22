@@ -1,0 +1,35 @@
+/bin/bash -c "python - <<'PY'
+import numpy as np, pandas as pd
+raw_counts=np.load('GSE180578_raw_counts.npy')
+raw_names=np.load('GSE180578_raw_names.npy',allow_pickle=True)
+raw_syms=np.load('GSE180578_raw_syms.npy',allow_pickle=True)
+PB=np.load('pb_dense.npy'); donors=np.load('donor_names.npy',allow_pickle=True)
+genes=np.array([g.decode() if isinstance(g,bytes) else str(g) for g in np.load('gene_names.npy',allow_pickle=True)])
+raw_up=np.array([g.upper() for g in raw_syms]); our_up=np.array([g.upper() for g in genes])
+common, raw_idx, our_idx=np.intersect1d(raw_up,our_up,return_indices=True)
+print('common',len(common))
+def logcpm(M):
+    lib=M.sum(axis=1,keepdims=True); lib[lib==0]=1
+    return np.log2(M/lib*1e6+1)
+raw_log=logcpm(raw_counts[:,raw_idx])
+our_log=logcpm(PB[our_idx,:].T)
+# filter variable genes
+mask=(raw_log.var(axis=0)>0.05)&(our_log.var(axis=0)>0)
+raw=raw_log[:,mask]; our=our_log[:,mask]
+# zscore across samples per gene
+def zscore(M):
+    return (M-M.mean(axis=0,keepdims=True))/(M.std(axis=0,keepdims=True)+1e-9)
+Zr=zscore(raw); Zo=zscore(our)
+corr=Zo @ Zr.T / raw.shape[1]  # donors x raw samples
+print('corr shape',corr.shape)
+# For each donor top raw samples
+healthy_like=[]
+for j,d in enumerate(donors):
+    top=np.argsort(corr[j])[::-1][:5]
+    print(d, [(raw_names[t].split('_',1)[1], round(corr[j,t],3)) for t in top])
+# For each raw healthy pool, top donors
+for i,n in enumerate(raw_names):
+    if 'Healthy' in n:
+        top=np.argsort(corr[:,i])[::-1][:5]
+        print('RAW',n,'top donors',[(donors[j],round(corr[j,i],3)) for j in top])
+PY"

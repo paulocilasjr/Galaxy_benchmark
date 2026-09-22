@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile, gzip, re, urllib.parse, time
+# Read our IDs
+ids=[]
+with gzip.open('sample.swap.rna.q1.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    for line in f:
+        ids.append(line.split('\\t',1)[0])
+idset=set(ids)
+print('our ids',len(ids),len(idset))
+mapping={}
+z=zipfile.ZipFile('[REDACTED LOCAL PATH]')
+count=0
+with z.open('ncbi_dataset/data/GCA_927797965.1/genomic.gff') as f:
+    for raw in f:
+        line=raw.decode('utf8','replace').rstrip('\\n')
+        if line.startswith('#'): continue
+        parts=line.split('\\t')
+        if len(parts)<9: continue
+        if parts[2] "'!= '"'mRNA': continue
+        attrs=parts[8]
+        # unquote Note maybe
+        m=re.search(r'ID:(BLAG\\d+)_\\d+', attrs)
+        if not m: continue
+        tid=m.group(1)
+        if tid in idset:
+            gm=re.search(r'gene=(["'^;]+)'"', attrs)
+            lm=re.search(r'locus_tag=(["'^;]+)'"', attrs)
+            pm=re.search(r'Parent=(["'^;]+)'"', attrs)
+            mapping[tid]={'gene': gm.group(1) if gm else '', 'locus_tag': lm.group(1) if lm else '', 'parent':pm.group(1) if pm else ''}
+            count+=1
+print('mapped',len(mapping))
+missing=[i for i in ids if i not in mapping]
+print('missing',len(missing), missing[:20])
+# save mapping
+import json
+json.dump(mapping, open('blag_mrna_mapping.json','w'))
+# print first 50
+for i in ids[:30]:
+    m=mapping.get(i)
+    print(i, m)
+PY"

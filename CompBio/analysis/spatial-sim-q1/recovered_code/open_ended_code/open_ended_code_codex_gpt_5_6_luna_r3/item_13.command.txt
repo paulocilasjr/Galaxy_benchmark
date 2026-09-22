@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+sp=np.asarray(mmread('matrix.mtx.gz').tocsr().todense())
+bar=pd.read_csv('barcodes.tsv.gz',header=None)[0].astype(str).tolist()
+y=sp[:,bar.index('Spot_710-1')]
+types=sorted(md.cell_type.unique())
+A=np.vstack([sc.loc[md.cell_type==t].mean(axis=0).to_numpy() for t in types]).T
+co=[]; res=[]
+for j in range(sp.shape[1]):
+    x,r=nnls(A,sp[:,j]); co.append(x); res.append(r)
+co=np.array(co); res=np.array(res)
+print('NNLS target',dict(zip(types,np.round(co[710],3))))
+print('target coefficients normalized',np.round(co[710]/co[710].sum(),3))
+print('inferred number/type coefficient frequencies (round):')
+print(pd.DataFrame(np.rint(co).astype(int),columns=types).value_counts().head(20).to_string())
+print('similar coefficients')
+d=np.linalg.norm(co-co[710],axis=1); ix=np.argsort(d)[:15]
+for j in ix: print(j,bar[j],np.round(co[j],2),round(res[j],1),round(sp[:,j].sum()))
+means=np.vstack([sc.loc[md.cell_type==t].mean(axis=0).to_numpy() for t in types])
+for ti,t in enumerate(types):
+    other=np.delete(means,ti,axis=0).mean(axis=0)
+    score=(means[ti]+0.1)/(other+0.1)
+    print('\\\\nMARKERS',t)
+    for k in np.argsort(score)[-20:][::-1]: print(k,round(means[ti,k],2),round(other[k],2),round(score[k],2),int(y[k]))
+PY"

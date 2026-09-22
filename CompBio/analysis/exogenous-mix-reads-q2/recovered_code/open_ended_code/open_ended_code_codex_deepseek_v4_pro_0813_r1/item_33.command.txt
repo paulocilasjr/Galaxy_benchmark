@@ -1,0 +1,48 @@
+/bin/bash -c "python3 - <<'PY'
+# compute depth arrays and print top positions for mix-exo (tail extra), plus region
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+A={}
+for name in ['exo','endo','mix']:
+ d=np.zeros(len(seq))
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline(); lab,i=bestpos(s)
+   if lab=='+': d[i:i+50]+=1
+   else:
+    st=len(seq)-50-i; d[st:st+50]+=1
+ A[name]=d
+extra_exo=A['exo']-A['endo']
+extra_mix=A['mix']-A['exo']
+print('extra_exo sum',extra_exo.sum(),'extra_mix sum',extra_mix.sum())
+print('corr extra_exo vs extra_mix',np.corrcoef(extra_exo,extra_mix)[0,1])
+print('Top extra_mix positions (mix-exo)')
+idx=np.argsort(extra_mix)[::-1][:80]
+for j in idx:
+ if extra_mix[j]>0:
+  print(j,seq[j],'extra_mix',extra_mix[j],'extra_exo',extra_exo[j],'endo',A['endo'][j],'exo',A['exo'][j],'mix',A['mix'][j])
+print('\\nTop extra_exo positions with extra_mix')
+idx=np.argsort(extra_exo)[::-1][:80]
+for j in idx:
+ if extra_exo[j]>0:
+  print(j,seq[j],'extra_exo',extra_exo[j],'extra_mix',extra_mix[j],'endo',A['endo'][j],'exo',A['exo'][j],'mix',A['mix'][j])
+PY"

@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+# reuse logic quickly
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import pearsonr, spearmanr
+warnings.filterwarnings('ignore')
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']
+  X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+  gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc])
+  var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  out.append((X,g,var))
+X1,g1,v1=out[0]; X2,g2,v2=out[1]
+common=[x for x in v1 if x in set(v2)]
+X1=X1[:,[v1.index(x) for x in common]].astype(float); X2=X2[:,[v2.index(x) for x in common]].astype(float)
+for X in [X1,X2]:
+ X=X.tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1; X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4)
+nt1=np.array([g.startswith('NT-') for g in g1]); nt2=np.array([g.startswith('NT-') for g in g2])
+mu1=np.asarray(X1[nt1].mean(0)).ravel(); mu2=np.asarray(X2[nt2].mean(0)).ravel()
+def sigs(X,guides,mu):
+ cats=[g for g in sorted(set(guides)) if not g.startswith('NT-')]
+ return {g:np.asarray(X[np.where(guides==g)[0]].mean(0)).ravel()-mu for g in cats}
+rs=sigs(X1,g1,mu1); qs=sigs(X2,g2,mu2)
+for tg in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+ order=np.argsort(-np.abs(rs[tg]))[:50]
+ print(tg,'top50 corr for candidate guides')
+ for q in ['guide2','guide7','guide14','guide15','guide31','guide10','guide18','guide13','guide17']:
+  if q in qs:
+   print(q, 'pearson',round(pearsonr(qs[q][order],rs[tg][order])[0],4),'spear',round(spearmanr(qs[q][order],rs[tg][order]).correlation,4),'count',(g2==q).sum())
+PY"

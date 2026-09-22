@@ -1,0 +1,46 @@
+/bin/bash -lc "PYTHONPATH=./pydeps python - <<'PY'
+import pandas as pd, h5py, numpy as np
+m=pd.read_csv('site_meta.csv',low_memory=False)
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ idx=f['obs/_index'][:].astype(str)
+ samp=f['obs/sampleID/codes'][:]
+ cats=f['obs/sampleID/categories'][:].astype(str)
+ # map h5ad barcode to site meta row using bare cell barcode plus sample mapping established from prefix/sets
+ # easiest sample map by count/first exact suffix as above
+ site_sets={s:set(sub['Cells'].astype(str).str.rsplit('_',n=1).str[-1]) for s,sub in m.groupby('SampleID',sort=False)}
+ map_sample={}
+ for i,cat in enumerate(cats):
+  vals=idx[samp==i]; suffix={v.split('_',2)[2] for v in vals}
+  cand=[s for s,ss in site_sets.items() if len(suffix&ss)==len(suffix) and len(ss)==len(suffix)]
+  assert len(cand)==1,(cat,cand)
+  map_sample[cat]=cand[0]
+# restrict metadata to exact h5ad sample set; h5ad contains all cells each sample, but ensure count
+sub=m[m.SampleID.isin(map_sample.values())].copy()
+# print mapping candidates
+print('h5ad total',len(idx),'meta subset',len(sub),'samples',sub.SampleID.nunique())
+# labels counts
+print('cellnames',sub.CellName.value_counts().to_string())
+print('\\nDisease exact:',sub.Disease.value_counts().to_string())
+# candidate first question
+for p in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+ s=map_sample[p]; d=sub[sub.SampleID==s]
+ print(p,s,d[['PatientID','Disease','Tissue']].drop_duplicates().to_dict('records'),len(d),sum(d.CellName=='DC'),sum(d.CellName=='DC')/len(d)*100)
+# nonimmune denom
+immune={'B','CD4','CD8','DC','Gran','Mast','Mo','NK','Tregs'}
+non=sub[~sub.CellName.isin(immune)]
+print('\\nnonimmune denom',len(non))
+# various numerator:
+# LUSC disease exact, basal, tumor or all
+for filt,name in [
+ ((sub.Disease=='LUSC')&(sub.CellName=='Basal'),'LUSC+basal all matching samples'),
+ ((sub.Disease=='LUSC')&(sub.Tissue=='Tumor')&(sub.CellName=='Basal'),'LUSC tumor+basal'),
+ ((sub.PatientID.str.startswith('PS'))&(sub.Tissue=='Tumor')&(sub.CellName=='Basal'),'PS tumor+basal'),
+ ((sub.PatientID.str.startswith('PS'))&(sub.CellName=='Basal'),'PS all tissue+basal'),
+]:
+ n=filt.sum(); print(name,n,n/len(non)*100, 'nearest20',round(n/len(non)*100/20)*20)
+# count by sample to inspect
+print('\\nLUSC basal by sample')
+print(sub[(sub.Disease=='LUSC')&(sub.CellName=='Basal')].groupby(['SampleID','PatientID','Disease','Tissue']).size().to_string())
+print('\\nall basal by disease/tissue')
+print(sub[sub.CellName=='Basal'].groupby(['Disease','Tissue']).size().to_string())
+PY"

@@ -1,0 +1,19 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess,collections
+from urllib.request import urlopen
+ref=urlopen('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.4&rettype=fasta&retmode=text',timeout=30).read().decode()
+for x in ('exo','endo','mix'):
+  q=f\"awk 'NR%4==1{{print \\\">\\\"substr("'$0,2)}} NR%4==2{{print}}'"' exogenous.mix.reads.q1.{x}.fq\"
+  cmd=f\"blastn -task blastn-short -query <({q}) -subject <(printf '%s' \\\"{ref}\\\") -outfmt '6 qseqid sstart send length pident mismatch gaps' -max_target_seqs 1 -max_hsps 1 -evalue 100\"
+  # quoting ref is safe-ish but contains no shell metachar likely; use direct URL subject process substitution instead
+  cmd=f\"blastn -task blastn-short -query <({q}) -subject <(curl -L --fail --silent 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.4&rettype=fasta&retmode=text') -outfmt '6 qseqid sstart send length pident mismatch gaps' -max_target_seqs 1 -max_hsps 1 -evalue 100\"
+  out=subprocess.run(cmd,shell=True,capture_output=True,text=True).stdout.strip().splitlines()
+  rows=[]
+  for line in out:
+    f=line.split('\\t'); lo=min(int(f[1]),int(f[2])); hi=max(int(f[1]),int(f[2])); rows.append((lo,hi,int(f[3]),float(f[4])))
+  print('\\n',x,'n',len(rows),'lo/hi',min(a for a,b,c,d in rows),max(b for a,b,c,d in rows),'mean pident',sum(d for a,b,c,d in rows)/len(rows))
+  for st,en in [(595,2034),(601,2033),(601,1983),(600,2034),(0,999999)]:
+    cats=collections.Counter('5' if b<st else '3' if a>en else 'CDS/overlap' for a,b,c,d in rows)
+    outside=cats['5']+cats['3']
+    print(st,en,dict(cats),'outside%',100*outside/len(rows))
+PY"

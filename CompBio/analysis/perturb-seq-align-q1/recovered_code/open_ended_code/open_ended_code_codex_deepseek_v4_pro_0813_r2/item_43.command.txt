@@ -1,0 +1,65 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from scipy.stats import spearmanr
+from scipy.optimize import linear_sum_assignment
+from collections import defaultdict
+warnings.filterwarnings('ignore')
+# load ref only, common genes with query already exclude target genes
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']
+  X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+  gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  out.append((X,g,var))
+X1,g1,v1=out[0]; X2,g2,v2=out[1]
+common=[x for x in v1 if x in set(v2)]
+X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr()
+def norm(X):
+ X=X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4); return X.tocsr()
+X=norm(X1)
+nt=np.char.startswith(g1.astype(str),'NT-')
+mu_nt=np.asarray(X[nt].mean(0)).ravel()
+# split each non-NT guide into two halves, keep NT all
+cats=[g for g in sorted(set(g1)) if not g.startswith('NT-')]
+idxA=[]; idxB=[]
+rng=np.random.RandomState(0)
+for g in cats:
+ ids=np.where(g1==g)[0]
+ rng.shuffle(ids)
+ n=len(ids)//2
+ idxA.extend(ids[:n]); idxB.extend(ids[n:2*n])
+idxA=np.array(idxA); idxB=np.array(idxB)
+# add all NT to both? for mean subtraction we use NT separately; signatures use mu_nt global. train/test guide means from half cells
+def sigs(idx):
+ guides=g1[idx]
+ d={}
+ for g in cats:
+  sel=np.where(guides==g)[0]
+  if len(sel)==0: continue
+  d[g]=np.asarray(X[idx[sel]].mean(0)).ravel()-mu_nt
+ return d
+A=sigs(idxA); B=sigs(idxB)
+ac=list(A); bc=list(B)
+def target(g): return re.sub(r'-I\\d+"'$'"','',g)
+# gene variance from A+B
+M=np.vstack([A[g] for g in ac]+[B[g] for g in bc]); gvar=np.var(M,axis=0)
+def hung(S):
+ nrow,ncol=S.shape; C=np.zeros((ncol,ncol)); C[:nrow,:]=-S
+ row,col=linear_sum_assignment(C); mask=row<nrow; return row[mask],col[mask]
+def eval(name,idx):
+ A2=np.array([A[g] for g in ac]); B2=np.array([B[g] for g in bc])
+ if idx is not None: A2=A2[:,idx];B2=B2[:,idx]
+ Sp=np.corrcoef(B2,A2)[:len(bc),len(ac):]; row,col=hung(Sp); mp={bc[i]:ac[j] for i,j in zip(row,col)}
+ correct=sum(target(q)==target(r) for q,r in mp.items())
+ print(name,'correct',correct,'/',len(mp))
+ for t in ['PABPC1','NUDT21','LEO1']:
+  qs=[q for q,r in mp.items() if target(r)==t]
+  print(' ',t,'->',qs,'true',[g for g in bc if target(g)==t])
+for idxname,idx in [('all',None),('var500',np.argsort(gvar)[::-1][:500]),('var1000',np.argsort(gvar)[::-1][:1000]),('var2000',np.argsort(gvar)[::-1][:2000]),('var5000',np.argsort(gvar)[::-1][:5000])]:
+ eval('pearson-'+idxname,idx)
+PY
+python [REDACTED LOCAL PATH]"

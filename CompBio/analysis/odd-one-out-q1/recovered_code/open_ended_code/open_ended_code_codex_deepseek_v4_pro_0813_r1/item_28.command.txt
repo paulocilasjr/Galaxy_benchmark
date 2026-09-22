@@ -1,0 +1,33 @@
+/bin/bash -c "python3 - <<'PY'
+import gzip
+# write canonical gene list: longest per gene from before? create bed with tss, body, exons, introns
+# We'll reconstruct gene list and write annotation beds.
+genes={}
+with gzip.open('refGene.txt.gz','rt') as f:
+ for line in f:
+  p=line.rstrip('\\n').split('\\t')
+  if len(p)<16: continue
+  chrom=p[2]; strand=p[3]; txStart=int(p[4]); txEnd=int(p[5]); name=p[1]; name2=p[12]
+  if not chrom.startswith('chr') or '_' in chrom or chrom=='chrM': continue
+  span=txEnd-txStart
+  key=(name2,chrom)
+  if key not in genes or span>genes[key]['span']:
+   genes[key]={'chrom':chrom,'strand':strand,'s':txStart,'e':txEnd,'span':span,'exonStarts':p[9],'exonEnds':p[10]}
+with open('refGene_genes.bed','w') as body, open('refGene_tss.bed','w') as tss, open('refGene_exons.bed','w') as ex, open('refGene_introns.bed','w') as intr:
+ for key,g in genes.items():
+  chrom=g['chrom']; s=g['s']; e=g['e']; strand=g['strand']; name=key[0]
+  body.write(f'{chrom}\\t{s}\\t{e}\\t{name}\\t0\\t{strand}\\n')
+  t= s if strand=='+' else e
+  tss.write(f'{chrom}\\t{max(0,t-2000)}\\t{t+2000}\\t{name}\\t0\\t{strand}\\n')
+  starts=[int(x) for x in g['exonStarts'].rstrip(',').split(',') if x"'!='"'']
+  ends=[int(x) for x in g['exonEnds'].rstrip(',').split(',') if x"'!='"'']
+  prev=None
+  for st,en in sorted(zip(starts,ends)):
+   ex.write(f'{chrom}\\t{st}\\t{en}\\t{name}\\t0\\t{strand}\\n')
+   if prev is not None and prev < st:
+    intr.write(f'{chrom}\\t{prev}\\t{st}\\t{name}\\t0\\t{strand}\\n')
+   prev=en
+print(len(genes))
+PY
+for f in refGene_genes.bed refGene_tss.bed refGene_exons.bed refGene_introns.bed; do sort -k1,1 -k2,2n "'$f > ${f%.bed}_lex.bed; done
+ls -lh refGene_*_lex.bed'

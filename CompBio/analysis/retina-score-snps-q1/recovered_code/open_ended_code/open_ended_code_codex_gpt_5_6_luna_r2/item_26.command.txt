@@ -1,0 +1,61 @@
+/bin/bash -lc "python -u - <<'PY'
+from pathlib import Path
+import subprocess, concurrent.futures, shutil, os, sys
+root=Path('zenodo')
+url='https://zenodo.org/api/records/6330053/files/retina_models.zip/content'
+# local-header data offsets and compressed sizes from the archive's central directory
+members={
+ 'fold0':(3978450732+88,63984526),
+ 'fold1':(3146890737+88,64978361),
+ 'fold2':(639001506+88,64329784),
+ 'fold3':(2314589782+88,64246455),
+ 'fold4':(1473529125+88,64976922),
+}
+chunk_size=8*1024*1024
+jobs=[]
+for fold,(start,total) in members.items():
+ d=root/'rod_parts'/fold
+ d.mkdir(parents=True,exist_ok=True)
+ n=(total+chunk_size-1)//chunk_size
+ for i in range(n):
+  lo=start+i*chunk_size
+  hi=min(start+total-1,lo+chunk_size-1)
+  out=d/f'{i:03d}.part'
+  expected=hi-lo+1
+  if out.exists() and out.stat().st_size==expected:
+   print('skip',fold,i,expected,flush=True)
+  else:
+   jobs.append((fold,i,lo,hi,out,expected))
+print('chunks to fetch',len(jobs),flush=True)
+
+def fetch(job):
+ fold,i,lo,hi,out,expected=job
+ tmp=out.with_suffix('.tmp')
+ cmd=['curl','-L','--fail','--silent','--show-error','--retry','4','--retry-delay','2','--max-time','90','-r',f'{lo}-{hi}',url,'-o',str(tmp)]
+ last=''
+ for attempt in range(3):
+  p=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+  last=p.stderr[-500:]
+  if p.returncode==0 and tmp.exists() and tmp.stat().st_size==expected:
+   os.replace(tmp,out)
+   return fold,i,expected,None
+  if tmp.exists() and tmp.stat().st_size"'!=expected:
+   try: tmp.unlink()
+   except OSError: pass
+ return fold,i,0,last or f'"'curl return {p.returncode}'
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+ for fold,i,n,err in ex.map(fetch,jobs):
+  if err: print('FAIL',fold,i,err,flush=True); sys.exit(1)
+  print('fetched',fold,i,n,flush=True)
+
+for fold,(start,total) in members.items():
+ parts=sorted((root/'rod_parts'/fold).glob('*.part'))
+ assembled=root/f'{fold}_Rod.deflate.full'
+ with assembled.open('wb') as w:
+  for p in parts:
+   shutil.copyfileobj(p.open('rb'),w)
+ if assembled.stat().st_size "'!= total:
+  raise RuntimeError((fold,'"'assembled size',assembled.stat().st_size,total))
+ print('assembled',fold,assembled.stat().st_size,flush=True)
+PY"

@@ -1,0 +1,40 @@
+/bin/bash -c "cat > umap_peak.py <<'PY'
+import numpy as np, snapatac2 as snap, scanpy as sc, anndata
+from scipy.sparse import csr_matrix
+adata=snap.read('atac_peaks_scrub.h5ad')
+X=adata.X[:].tocsr().astype(np.float32)
+X.data[:]=1
+cell_ids=np.array(adata.obs_names)
+a=anndata.AnnData(X)
+a.obs_names=cell_ids
+sc.pp.normalize_total(a,target_sum=1e4)
+sc.pp.log1p(a)
+# use HVG cell_ranger top 5000 maybe
+sc.pp.highly_variable_genes(a,n_top_genes=10000,flavor='cell_ranger')
+print('hv',a.var.highly_variable.sum())
+# PCA
+sc.pp.pca(a,n_comps=50)
+print('pca',a.obsm['X_pca'].shape)
+sc.pp.neighbors(a,n_neighbors=30,n_pcs=30)
+sc.tl.umap(a)
+sc.tl.leiden(a,resolution=1.0)
+print('leiden clusters',np.unique(a.obs['leiden'],return_counts=True))
+# save coords with names and markers
+markers={'CGAGCAATAGAGGTGG-1','GCGACACGCCGGGCAC-1','CGCACGCGTACTGCAG-1','GACTATAATGATTTTT-1','TGAGCCTCACGCTTCG-1','GGCGACCTCTACGTAG-1','CGTGTGGATCTGGCAG-1','TTCGAGACGTAGAAAA-1','CACGGTTTTCATACAA-1','CATCTGGAAAGTAGGC-1'}
+with open('umap_peak_coords.tsv','w') as f:
+ f.write('barcode\\tUMAP1\\tUMAP2\\tleiden\\tmarker\\n')
+ for i,b in enumerate(cell_ids):
+  f.write(f'{b}\\t{a.obsm[\"X_umap\"][i,0]:.6f}\\t{a.obsm[\"X_umap\"][i,1]:.6f}\\t{a.obs[\"leiden\"][i]}\\t{1 if b in markers else 0}\\n')
+# produce a simple matplotlib scatter image
+import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
+fig,ax=plt.subplots(figsize=(8,8))
+for cl in np.unique(a.obs['leiden']):
+ m=a.obs['leiden']==cl; ax.scatter(a.obsm['X_umap'][m,0],a.obsm['X_umap'][m,1],s=2,label=cl)
+for b in markers:
+ i=np.where(cell_ids==b)[0][0]
+ ax.scatter(a.obsm['X_umap'][i,0],a.obsm['X_umap'][i,1],s=80,facecolors='none',edgecolors='red')
+ ax.text(a.obsm['X_umap'][i,0],a.obsm['X_umap'][i,1],b[:8],fontsize=5)
+ax.legend(markerscale=3,fontsize=5,ncol=2); ax.set_title('scATAC peak UMAP'); fig.savefig('umap_peak.png',dpi=200)
+print('saved')
+PY
+python3 umap_peak.py"

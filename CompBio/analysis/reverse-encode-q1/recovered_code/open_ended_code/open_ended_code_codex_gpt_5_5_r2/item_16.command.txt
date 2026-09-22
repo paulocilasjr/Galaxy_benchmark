@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, random
+ms=[]
+with gzip.open('reverse.encode.q1.tsv.gz','rt') as f:
+    for line in f:
+        v=float(line.split()[3]);
+        if v>0: ms.append(round(v*1000))
+uniq=sorted(set(ms))
+print('unique',len(uniq),'maxm',max(uniq))
+# Determine candidate N where for each observed m, c=round(m*N/1e9) (count) has valid rounding.
+# Use subset of small/medium unique m for scoring.
+sub=uniq[:500] + uniq[500::max(1,(len(uniq)-500)//2000)]
+
+def ok_score(N):
+    bad=0; err=0; maxerr=0
+    for m in sub:
+        c=round(m*N/1_000_000_000)
+        if c<1: c=1
+        pred=round(c*1_000_000_000/N) # integer m if Python bankers issue minor
+        # Real awk/printf likely nearest. Use raw distance in m-units.
+        d=abs(m - c*1_000_000_000/N)
+        if d>0.5000001: bad+=1
+        err+=d*d; maxerr=max(maxerr,d)
+    return bad,err,maxerr
+# coarse scan 70-85M step 1000 using subset
+best=[]
+for N in range(70_000_000,85_000_001,1000):
+    bad,err,maxerr=ok_score(N)
+    if bad==0:
+        best.append((err,N,maxerr))
+        if len(best)>10: best=sorted(best)[:10]
+print('best coarse', sorted(best)[:10])
+# finer around best
+if best:
+    center=sorted(best)[0][1]
+    cand=[]
+    for N in range(center-5000, center+5001):
+        bad,err,maxerr=ok_score(N)
+        if bad==0:
+            cand.append((err,N,maxerr))
+    print('fine count',len(cand),'best', sorted(cand)[:20])
+# alternative infer using min nonzero counts? For each N compute total counts by sum round(v*N/1e6), fixed point.
+for N in [75900000,76000000,76100000,76200000,76300000,76400000,76500000,76923077]:
+    total=sum(round(m*N/1_000_000_000) for m in ms)
+    print(N,total,total-N)
+PY"

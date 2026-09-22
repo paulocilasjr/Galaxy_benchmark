@@ -1,0 +1,22 @@
+/bin/bash -lc "native_venv/bin/python - <<'PY'
+import sys,time,gzip,numpy as np,torch
+sys.path.insert(0,'borzoi_pytorch_repo')
+from borzoi_pytorch import Borzoi
+from borzoi_pytorch.config_borzoi import BorzoiConfig
+from safetensors.torch import load_file
+print('cpu threads',torch.get_num_threads(),flush=True)
+chrom_start,chrom_end=70157360,70353968
+pad=(524288-(chrom_end-chrom_start))//2
+ss,se=chrom_start-pad,chrom_end+pad
+with gzip.open('assets/chr1.fa.gz','rt') as f: seq=''.join(line.strip() for line in f if not line.startswith('>'))
+sub=seq[ss:se].upper(); one=np.zeros((4,len(sub)),np.float32)
+for i,b in enumerate('ACGT'): one[i]=np.frombuffer(sub.encode(),dtype=np.uint8)==ord(b)
+x=torch.from_numpy(one[None])
+t=time.time(); model=Borzoi(BorzoiConfig(return_center_bins_only=True,enable_mouse_head=False)); model.load_state_dict(load_file('assets/borzoi_rep0_model.safetensors',device='cpu')); model.eval(); print('loaded',time.time()-t,flush=True)
+t=time.time()
+with torch.inference_mode(): y=model(x)
+print('inference',time.time()-t,tuple(y.shape),flush=True)
+v=y[0,6068].numpy().astype(np.float64); c=(v/.3)**(4/3)
+print('sum',float(c.sum()),'rawsum',float(v.sum()),'minmax',float(v.min()),float(v.max()),flush=True)
+np.save('assets/borzoi_rep0_pred_cpu.npy',y.numpy())
+PY"

@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, re
+bam=pysam.AlignmentFile('aln_primary.sorted.bam','rb')
+# per transcript primary alignments counts and covered bases/depth
+from collections import defaultdict
+cnt=defaultdict(int); cov=defaultdict(int); bases=defaultdict(int)
+for aln in bam.fetch(until_eof=True):
+    if aln.is_unmapped: continue
+    r=aln.reference_name
+    if r is None: continue
+    cnt[r]+=1
+    # count covered reference positions from alignment blocks
+    for start,end in aln.get_blocks():
+        cov[r]+=end-start
+        bases[r]+=aln.reference_length or 0
+bam.close()
+# load ref lengths
+lengths={}
+with open('gencode.v47.transcripts.fa') as f:
+    name=None; seq=[]
+    for line in f:
+        if line.startswith('>'):
+            if name: lengths[name]=len(''.join(seq))
+            name=line[1:].strip()
+            seq=[]
+        else: seq.append(line.strip())
+    if name: lengths[name]=len(''.join(seq))
+rows=[]
+for r,c in cnt.items():
+    L=lengths.get(r,0)
+    rows.append((c,cov[r]/L if L else 0,cov[r],L,r))
+rows.sort(reverse=True)
+for c,frac,cov,L,r in rows[:100]:
+    f=r.split('|')
+    print(f'{c}\\t{frac:.2f}\\t{cov}\\t{L}\\t{f[5] if len(f)>5 else \"?\"}\\t{r}')
+PY"

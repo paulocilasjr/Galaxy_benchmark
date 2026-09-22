@@ -1,0 +1,56 @@
+/bin/bash -c "cat > analyze_pb.py <<'PY'
+import numpy as np, pandas as pd
+from sklearn.decomposition import PCA
+from scipy.cluster.hierarchy import linkage, fcluster
+from sklearn.preprocessing import StandardScaler
+
+PB=np.load('pb_dense.npy') # genes x donors
+donors=np.load('donor_names.npy', allow_pickle=True)
+genes=np.load('gene_names.npy', allow_pickle=True)
+print(PB.shape, PB.dtype, donors.tolist(), genes.shape)
+lib=PB.sum(axis=0, keepdims=True)
+cpm=PB/lib*1e6
+log=np.log2(cpm+1)
+print('lib sizes', lib.ravel())
+# filter genes low mean var
+mean=log.mean(axis=1)
+var=log.var(axis=1, ddof=1)
+print('mean stats', mean.min(), np.percentile(mean,[10,50,90]), 'var', var.min(), np.percentile(var,[50,90,99]))
+# try several filters/topN and clustering
+for lowmean in [0.2,0.5,1.0]:
+  for topN in [500,1000,2000,3000,5000,12984]:
+    mask=mean>lowmean
+    idx=np.where(mask)[0]
+    if len(idx)>topN:
+      top=np.argsort(var[mask])[::-1][:topN]
+      idx=idx[top]
+    X=log[idx,:].T
+    Xs=StandardScaler().fit_transform(X)
+    Zlink=linkage(Xs, method='ward', metric='euclidean')
+    labels=fcluster(Zlink,2,criterion='maxclust')
+    groups={}
+    for d,l in zip(donors,labels): groups.setdefault(l,[]).append(int(d[5:]))
+    g=sorted([sorted(v) for v in groups.values()])
+    print('lowmean',lowmean,'topN',topN,'groups',g)
+# Focus use lowmean .2 top2000 print PCA/hc details
+idx=np.where(mean>0.2)[0]
+top=np.argsort(var[mask if False else mean>0.2])[::-1][:2000]
+idx=idx[top]
+X=log[idx,:].T
+Xs=StandardScaler().fit_transform(X)
+pca=PCA(n_components=10, random_state=0)
+Z=pca.fit_transform(Xs)
+print('explained', pca.explained_variance_ratio_[:10])
+for i,d in enumerate(donors):
+    print(d, np.round(Z[i,:6],3))
+for method in ['ward','average','complete']:
+    Zlink=linkage(Xs, method=method, metric='euclidean')
+    for k in [2,3,4,5]:
+      labels=fcluster(Zlink,k,criterion='maxclust')
+      groups={}
+      for d,l in zip(donors,labels): groups.setdefault(l,[]).append(int(d[5:]))
+      print(method,k, sorted([sorted(v) for v in groups.values()]))
+# save coords for plotting maybe
+np.save('pca_z.npy', Z)
+PY
+python analyze_pb.py"

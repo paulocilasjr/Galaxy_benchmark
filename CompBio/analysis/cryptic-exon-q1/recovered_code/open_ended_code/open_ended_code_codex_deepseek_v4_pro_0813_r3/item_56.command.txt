@@ -1,0 +1,84 @@
+/bin/bash -lc "cat > analyze_junctions.py <<'PY'
+import pysam, collections, sys, os
+# load gene intervals BED
+gene_bed=[]
+for line in open('gene_intervals.bed'):
+    parts=line.rstrip().split('\\t')
+    chrom,start,end,name,score,strand=parts
+    gene_bed.append((chrom,int(start),int(end),name,strand))
+# load known sites in HISAT2 format and convert to actual intron intervals
+known=set()
+for line in open('ref/splicesites.txt'):
+    p=line.rstrip().split('\\t')
+    if len(p)<4: continue
+    chrom,left,right,strand=p
+    left=int(left); right=int(right)
+    start=left+2
+    end=right
+    if start<=end:
+        known.add((chrom,start,end,strand))
+# parse BAM
+bam=pysam.AlignmentFile('aligned.bam','rb')
+junc_counts=collections.Counter()
+read_juncs=collections.defaultdict(set)
+for r in bam.fetch():
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    chrom=r.reference_name
+    try: xs=r.get_tag('XS')
+    except KeyError: xs=('-' if r.is_reverse else '+')
+    ref=r.reference_start
+    for op,l in r.cigartuples:
+        if op==0: ref += l
+        elif op==1: pass
+        elif op==2: ref += l
+        elif op==3:
+            start=ref+1
+            end=ref+l
+            if start<end:
+                j=(chrom,start,end,xs)
+                junc_counts[j]+=1
+                read_juncs[r.query_name].add(j)
+            ref += l
+        elif op==4: pass
+        elif op==5: pass
+        else: pass
+bam.close()
+# novel junctions = observed not known
+novel=[]
+for j,c in junc_counts.items():
+    if j not in known:
+        novel.append((j,c))
+print('total observed junctions',len(junc_counts),'sum counts',sum(junc_counts.values()))
+print('novel junctions',len(novel))
+# map to genes by overlapping interval (junction intron BED 0-based start=start-1, end=end)
+def overlaps(j, gene):
+    chrom,start,end,strand=j
+    gchrom,gs,ge,gname,gstrand=gene
+    if chrom"'!=gchrom: return False
+    return start-1 < ge and end > gs
+gene_juncs=collections.defaultdict(list)
+for j,c in novel:
+    for g in gene_bed:
+        if overlaps(j,g):
+            gene_juncs[g[3]].append((j,c,g[4]))
+# filter genes with >=2 distinct junctions, sort by total novel support
+rows=[]
+for g,lst in gene_juncs.items():
+    uniq=set(j for j,c,strand in lst)
+    if len(uniq)>=2:
+        total=sum(c for j,c,strand in lst)
+        # aggregate counts per unique junction
+        cnt=collections.Counter()
+        strand_by_j={}
+        for j,c,strand in lst:
+            cnt[j]+=c; strand_by_j[j]=strand
+        rows.append((total,g,len(uniq),cnt,strand_by_j))
+rows.sort(reverse=True, key=lambda x:x[0])
+print('"'\\nGenes with >=2 novel junctions (top 60 by support):')
+for total,g,n,cnt,strands in rows[:60]:
+    print(g,'total_support',total,'unique',n)
+    for j,c in sorted(cnt.items(), key=lambda kv:-kv[1]):
+        print('   ',j,'support',c,'gene_strand',strands[j])
+PY
+python3 analyze_junctions.py > junction_analysis.txt
+head -n 200 junction_analysis.txt"

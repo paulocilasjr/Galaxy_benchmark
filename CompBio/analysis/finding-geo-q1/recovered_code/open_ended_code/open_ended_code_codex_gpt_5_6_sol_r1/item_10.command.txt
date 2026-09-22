@@ -1,0 +1,19 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 python -u - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import MiniBatchKMeans
+with h5py.File('finding.geo.q1.h5ad','r') as f:
+ X=csr_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]),shape=tuple(f['X'].attrs['shape']))
+ cats=np.array([x.decode() for x in f['var/gene_symbols/categories'][:]]); syms=cats[f['var/gene_symbols/codes'][:]]
+ c=np.asarray(X.sum(1)).ravel(); X=X[c>3000]; print('n',X.shape,flush=True)
+ X=X.multiply(1e4/np.asarray(X.sum(1)).ravel()[:,None]).tocsr(); X.data=np.log1p(X.data)
+ mean=np.asarray(X.mean(0)).ravel(); mean2=np.asarray(X.power(2).mean(0)).ravel(); var=mean2-mean**2
+ score=var/(mean+.05); ok=np.array([not s.startswith(('mt-','Rpl','Rps')) for s in syms]); inds=np.where(ok)[0][np.argsort(score[ok])[-2000:]]
+ Z=TruncatedSVD(20,random_state=1).fit_transform(X[:,inds]); print('svd',flush=True)
+ k=8; lab=MiniBatchKMeans(k,random_state=1,n_init=10).fit_predict(Z[:,1:]); print(np.bincount(lab),flush=True)
+ for cl in range(k):
+   a=np.asarray(X[lab==cl].mean(0)).ravel(); b=np.asarray(X[lab"'!=cl].mean(0)).ravel(); fc=(a+.02)/(b+.02)
+   ids=np.argsort(fc)[-25:][::-1]
+   print(cl, '"' '.join(f'{syms[i]}:{fc[i]:.1f}' for i in ids),flush=True)
+PY"

@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, glob, time
+from collections import Counter,defaultdict
+# load taxonomy
+parent={}; rank={}
+with open('nodes.dmp') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t|\\t'); tid=int(p[0]); parent[tid]=int(p[1]); rank[tid]=p[2]
+names={}
+with open('names.dmp') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t|\\t');
+        if len(p)>=4 and p[3].split('\\t|')[0]=='scientific name': names[int(p[0])]=p[1]
+# merged map maybe
+merged={}
+with open('merged.dmp') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t|\\t'); merged[int(p[0])]=int(p[1])
+
+def lca_pair(a,b):
+    if a==b: return a
+    sa=set()
+    x=a
+    while x:
+        sa.add(x)
+        x=parent.get(x,0)
+    y=b
+    while y:
+        if y in sa: return y
+        y=parent.get(y,0)
+    return 1
+def lca_multi(ts):
+    ts=[t for t in ts if t]
+    if not ts: return None
+    cur=ts[0]
+    for t in ts[1:]: cur=lca_pair(cur,t)
+    return cur
+
+cnt=Counter(); rankcnt=Counter(); total=0; nohits=0
+records=[]
+for path in sorted(glob.glob('blast_out/chunk_*.json')):
+    data=json.load(open(path))
+    for rep in data['BlastOutput2']:
+        search=rep['report']['results']['search']; hits=search.get('hits',[]); total+=1
+        if not hits: nohits+=1; continue
+        taxids=[]
+        for h in hits:
+            desc=h.get('description',[{}])[0]; tid=desc.get('taxid')
+            if tid:
+                # merge
+                if isinstance(tid,str): tid=int(tid)
+                tid=merged.get(tid,tid)
+                taxids.append(tid)
+        lca=lca_multi(taxids)
+        if lca is None: continue
+        name=names.get(lca,f'taxid_{lca}'); r=rank.get(lca,'no rank')
+        cnt[lca]+=1; rankcnt[r]+=1
+        records.append((search.get('query_title'),lca,name,r,taxids[:5]))
+print('total',total,'nohits',nohits,'lca records',len(records))
+print('LCA rank counts:',rankcnt)
+print('\\nTop 80 LCA taxa:')
+for tid,n in cnt.most_common(80):
+    print(n, names.get(tid,f'taxid_{tid}'), rank.get(tid,''), 'taxid',tid)
+PY"

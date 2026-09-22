@@ -1,0 +1,23 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy import sparse
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def get(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  g=h['X']; x=sparse.csc_matrix((g['data'][()],g['indices'][()],g['indptr'][()]),shape=tuple(g.attrs['shape']))
+  cats=[z.decode() if isinstance(z,bytes) else str(z) for z in h['obs/guide/categories'][()]]; guide=np.array([cats[z] for z in h['obs/guide/codes'][()]])
+  genes=np.array([z.decode() if isinstance(z,bytes) else str(z) for z in h['var/_index'][()]],object)
+ lib=np.asarray(x.sum(1)).ravel(); det=np.diff(x.tocsr().indptr)
+ mt=np.array([str(z).startswith('MT-') for z in genes]); rib=np.array([str(z).startswith(('RPS','RPL')) for z in genes])
+ fs=np.array([lib,det,np.asarray(x[:,mt].sum(1)).ravel()/lib,np.asarray(x[:,rib].sum(1)).ravel()/lib]).T
+ ctrl=fs[np.char.startswith(guide,'NT-')].mean(0)
+ rows=[]
+ for g in np.unique(guide):
+  if not g.startswith('NT-'): rows.append((g,(guide==g).sum(),*(fs[guide==g].mean(0)-ctrl)))
+ return rows
+r=get('perturb.seq.align.q1.ref.h5ad'); q=get('perturb.seq.align.q1.query.h5ad')
+print('REF')
+for z in r: print(z[0],z[1],*[round(x,4) for x in z[2:]])
+print('\\nQUERY')
+for z in q: print(z[0],z[1],*[round(x,4) for x in z[2:]])
+PY"

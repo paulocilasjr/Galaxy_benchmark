@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+from scipy import stats
+from collections import defaultdict
+# parse
+hic=list(csv.DictReader(open('ep.interactions.q1.hic.csv')))
+expr=list(csv.DictReader(open('ep.interactions.q1.expr.csv')))
+bg=[];cand=[]
+for r in hic:
+ c=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+ (bg if r['set']=='background' else cand).append((r['pair_id'],int(r['distance_bp']),c))
+logd=[math.log(d) for _,d,c in bg]; totals=[sum(c) for _,d,c in bg]
+def lam(d,fold=1):
+ ld=math.log(d); ws=[math.exp(-.5*((ld-l)/.3)**2) for l in logd]; rate=sum(w*t for w,t in zip(ws,totals))/sum(ws); return rate*fold
+pairs=defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+for r in expr: pairs[r['pair_id']][r['guide_id']][r['condition']].append(int(r['rna_count']))
+# Model true contact fold ~ 2.5; false fold 1
+for pid,d,c in cand:
+ k=sum(c); l0=lam(d,1); l1=lam(d,2.5)
+ lr_hi=stats.poisson.pmf(k,l1)/stats.poisson.pmf(k,l0)
+ ctrl=[];pert=[]
+ for g,dic in pairs[pid].items(): ctrl+=dic['control']; pert+=dic['perturbed']
+ # expression LR true effect -1 log2 (~50% down) vs no effect, using normal approx for log counts
+ # sample means and se of log2? simpler use t-test likelihood with effect sizes.
+ logfc=math.log2((statistics.mean(pert)+1)/(statistics.mean(ctrl)+1))
+ # pooled SE approximate in log2 via delta: sd_log2 = sd(count)/(mean*ln2), sqrt n
+ mc=statistics.mean(ctrl); mp=statistics.mean(pert); n=len(ctrl)
+ sd=math.sqrt((statistics.variance(ctrl)+statistics.variance(pert))/2)
+ se_logfc=(sd/(mc*math.log(2)))*math.sqrt(2/n) # crude pooled SD / (mc ln2)*sqrt(2/n)
+ # true expected -1, false 0
+ lr_expr=stats.norm.pdf(logfc,loc=-1,scale=se_logfc)/stats.norm.pdf(logfc,loc=0,scale=se_logfc)
+ print(pid,'logfc',round(logfc,3),'se',round(se_logfc,3),'LR_hi',lr_hi,'LR_expr',lr_expr,'posterior odds',lr_hi*lr_expr)
+PY"

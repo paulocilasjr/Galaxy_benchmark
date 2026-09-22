@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict
+# parse headers
+info={}
+with open('gencode.v47.transcripts.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            parts=line[1:].rstrip().split('|')
+            tid=parts[0]
+            gid=parts[1]
+            gene=parts[5] if len(parts)>5 else ''
+            ttype=parts[7] if len(parts)>7 else ''
+            info[tid]=(gid,gene,ttype)
+print('transcripts',len(info))
+
+for sample in ['A','B']:
+    counts=defaultdict(int)
+    with open(f'sample{sample}.transcript_counts.tsv') as f:
+        for line in f:
+            p=line.rstrip().split('\\t')
+            # tid may include |; first field before |
+            tid=p[0].split('|')[0]
+            counts[tid]+=int(p[1])
+    # aggregate gene
+    gene_counts=defaultdict(int)
+    transcript_counts=defaultdict(lambda: defaultdict(int))
+    for tid,c in counts.items():
+        if tid not in info: continue
+        gid,gene,ttype=info[tid]
+        gene_counts[gid]+=c
+        transcript_counts[gid][tid]=c
+    print('sample',sample,'mapped counted',sum(counts.values()),'genes',len(gene_counts))
+    # top genes by count
+    top=sorted(gene_counts.items(), key=lambda kv:-kv[1])[:30]
+    for gid,c in top:
+        gene=info[next(iter(transcript_counts[gid]))][1] if transcript_counts[gid] else ''
+        print(gid,gene,c)
+    # save
+    with open(f'sample{sample}.gene_counts.tsv','w') as f:
+        for gid,c in sorted(gene_counts.items(), key=lambda kv:-kv[1]):
+            # get gene symbol
+            t0=next(iter(transcript_counts[gid]),None)
+            gene=info[t0][1] if t0 else ''
+            f.write(f'{gid}\\t{gene}\\t{c}\\n')
+PY"

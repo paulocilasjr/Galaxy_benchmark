@@ -1,0 +1,47 @@
+/bin/bash -lc "cat > infer_donors.py <<'PY'
+import os,time,json,concurrent.futures
+import numpy as np
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+from vireoSNP import Vireo
+
+def fit_job(args):
+ k,seed=args;t=time.time()
+ ad=sparse.load_npz('model.AD.npz').tocsc();dp=sparse.load_npz('model.DP.npz').tocsc()
+ np.random.seed(seed)
+ init=None
+ if seed==0 and k>1:
+  z=np.load('svd.npy')[:,:max(k,8)]
+  lab=KMeans(n_clusters=k,n_init=15,random_state=42).fit_predict(z)
+  init=np.full((dp.shape[1],k),.01);init[np.arange(dp.shape[1]),lab]=.99
+ model=Vireo(n_cell=dp.shape[1],n_var=dp.shape[0],n_donor=k,ID_prob_init=init)
+ model.fit(ad,dp,max_iter=250,delay_fit_theta=5,verbose=False)
+ prob=model.ID_prob;labels=prob.argmax(axis=1)
+ result={'k':k,'seed':seed,'elbo':float(model.ELBO_[-1]),'iterations':len(model.ELBO_),'sizes':np.bincount(labels,minlength=k).tolist(),'confident':np.bincount(labels[prob.max(axis=1)>.95],minlength=k).tolist(),'theta':model.beta_mu.tolist(),'seconds':round(time.time()-t)}
+ np.savez_compressed(f'models/k{k}.s{seed}.npz',ID=prob,GT=model.GT_prob,theta=model.beta_mu,theta_sum=model.beta_sum,ELBO=model.ELBO_)
+ with open(f'models/k{k}.s{seed}.json','w') as f:json.dump(result,f)
+ return result
+
+if __name__=='__main__':
+ os.makedirs('models',exist_ok=True)
+ ad=sparse.load_npz('AD.npz');dp=sparse.load_npz('DP.npz')
+ covered=np.asarray((dp>0).sum(axis=1)).ravel();ref=np.asarray((dp-ad).sum(axis=1)).ravel();alt=np.asarray(ad.sum(axis=1)).ravel()
+ keep=(covered>=40)&(np.minimum(ref,alt)>=(ref+alt)*.05)
+ ad=ad[keep].tocsc();dp=dp[keep].tocsc()
+ sparse.save_npz('model.AD.npz',ad);sparse.save_npz('model.DP.npz',dp);np.save('model.keep.npy',keep)
+ print('matrix',dp.shape,'nonzero',dp.nnz,'per cell count quantiles',np.quantile(np.asarray(dp.sum(axis=0)).ravel(),[0,.1,.5,.9,1]),flush=True)
+ p=np.asarray(ad.sum(axis=1)).ravel()/np.asarray(dp.sum(axis=1)).ravel()
+ # Count each covered locus equally for an initial genetic embedding.
+ inv=dp.copy();inv.data=1/inv.data
+ af=ad.multiply(inv);mask=dp.copy();mask.data[:]=1
+ x=(af-mask.multiply(p[:,None])).multiply(1/np.sqrt(p*(1-p))[:,None]).T.tocsr()
+ coverage=np.asarray(mask.sum(axis=0)).ravel()
+ x=x.multiply((1/np.sqrt(np.maximum(coverage,1)))[:,None]).tocsr()
+ svd=TruncatedSVD(n_components=24,random_state=42);z=svd.fit_transform(x)
+ np.save('svd.npy',z);print('SVD',svd.singular_values_,flush=True)
+ jobs=[(k,s) for s in range(3) for k in range(1,13) if k>1 or s==0]
+ with concurrent.futures.ProcessPoolExecutor(max_workers=4) as pool:
+  for r in pool.map(fit_job,jobs):print(json.dumps(r),flush=True)
+PY
+cat extract.log; ls snp_counts | wc -l"

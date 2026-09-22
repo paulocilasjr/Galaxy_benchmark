@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, json, re, csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+uid='135528001'
+libs=[l.strip() for l in open('enrichr_selected_libraries.txt') if l.strip()]
+keywords=['LPS','lipopolysaccharide','exhaust','LIF','IL-39','IL39','COVID','SARS-CoV','SARS2','sepsis','septic','Med12','MED12','lupus','SLE','BMS','aldesleukin','IL-2','aging','age','rheumatoid','arthritis']
+def fetch(lib):
+    try:
+        r=requests.get(f'https://maayanlab.cloud/Enrichr/enrich?userListId={uid}&backgroundType={lib}',timeout=120)
+        data=r.json(); terms=data.get(lib,[])
+        out=[]
+        for t in terms:
+            name=t[1]; ov=t[5]
+            if any(k.lower() in name.lower() for k in keywords):
+                out.append((float(t[2]),float(t[3]),len(ov),lib,name,','.join(ov)))
+        return out
+    except Exception as e:
+        return []
+rows=[]
+with ThreadPoolExecutor(max_workers=8) as ex:
+    for f in as_completed([ex.submit(fetch,l) for l in libs]):
+        rows += f.result()
+rows.sort(key=lambda x:(x[0], -x[2])) # by p then overlap
+print('hits',len(rows))
+for p,z,n,lib,name,ov in rows[:250]:
+    print(f'{n:2} p={p:.1e} z={z:.2f} {lib}\\t{name}\\t{ov[:120]}')
+PY"

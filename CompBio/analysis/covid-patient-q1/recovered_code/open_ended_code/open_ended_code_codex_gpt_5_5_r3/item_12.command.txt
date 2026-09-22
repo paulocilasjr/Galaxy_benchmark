@@ -1,0 +1,65 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad
+import numpy as np, pandas as pd
+from scipy import sparse
+
+fn='covid.patients.q1.h5ad'
+adata=ad.read_h5ad(fn, backed='r')
+obs=adata.obs.copy()
+# numeric donor order
+donors=sorted(obs['donor_id'].astype(str).unique(), key=lambda s:int(s.replace('donor','')))
+donor_to_i={d:i for i,d in enumerate(donors)}
+codes=np.array([donor_to_i[x] for x in obs['donor_id'].astype(str)], dtype=np.int32)
+ng=adata.n_vars; nd=len(donors)
+sums=np.zeros((nd,ng), dtype=np.float64)
+cell_counts=np.bincount(codes, minlength=nd)
+# per donor number of detected cells for selected genes later: aggregate full binary maybe too big; use expr count for all genes uint32 ok 33*13k
+detected=np.zeros((nd,ng), dtype=np.uint32)
+block=2500
+for start in range(0, adata.n_obs, block):
+    end=min(start+block, adata.n_obs)
+    X=adata.X[start:end]
+    if hasattr(X,'to_memory'):
+        X=X.to_memory()
+    X=X.tocsr()
+    c=codes[start:end]
+    G=sparse.csr_matrix((np.ones(end-start, dtype=np.float64),(np.arange(end-start), c)), shape=(end-start, nd))
+    sums += (G.T @ X).toarray()
+    B=X.copy(); B.data=np.ones_like(B.data, dtype=np.uint8)
+    detected += (G.T @ B).toarray().astype(np.uint32)
+    if start%(25000)==0: print('processed', end, flush=True)
+
+names=np.array(adata.var['feature_name'].astype(str).values)
+idx={g:i for i,g in enumerate(names)}
+lib=sums.sum(axis=1)
+cpm=sums/lib[:,None]*1e6
+logcpm=np.log1p(cpm)
+# save compact outputs for reuse
+np.savez('donor_pseudobulk.npz', sums=sums, detected=detected, cell_counts=cell_counts, names=names, donors=np.array(donors), lib=lib)
+
+gene_sets={
+ 'ISG_core':['IFI27','IFI6','ISG15','MX1','OAS1','OAS2','OAS3','IFIT1','IFIT2','IFIT3','RSAD2','SIGLEC1','LY6E','STAT1','IRF7','XAF1','USP18','IFI44L','IFI44'],
+ 'COVID_inflam':['IL1B','S100A8','S100A9','LST1','FCGR3A','FCN1','LGALS3','TYROBP','CTSS','CST3','CXCL10','CCL2','CCL3','CCL4','CCL7','TNF'],
+ 'Tcell':['CD3D','CD3E','TRAC','IL7R','CCR7','LTB'],
+ 'Bcell':['MS4A1','CD79A','CD79B','BANK1'],
+ 'Mono':['LYZ','S100A8','S100A9','FCN1','LST1','CTSS'],
+ 'Platelet':['PPBP','PF4','NRGN'],
+ 'RBC':['HBB','HBA1','HBA2'],
+ 'NK':['NKG7','GNLY','PRF1','KLRD1'],
+}
+rows=[]
+for d_i,d in enumerate(donors):
+    row={'donor':d, 'id':int(d.replace('donor','')), 'cells':int(cell_counts[d_i]), 'lib':lib[d_i]}
+    for setname, genes in gene_sets.items():
+        present=[idx[g] for g in genes if g in idx]
+        row[setname]=float(logcpm[d_i,present].mean()) if present else np.nan
+        # fraction of cells expressing at least each gene avg
+        row[setname+'_pct']=float((detected[d_i,present]/cell_counts[d_i]).mean()) if present else np.nan
+    rows.append(row)
+df=pd.DataFrame(rows).sort_values('id')
+for col in ['ISG_core','ISG_core_pct','COVID_inflam','COVID_inflam_pct','Mono','Tcell','Bcell','NK']:
+    df[col+'_z']=(df[col]-df[col].mean())/df[col].std(ddof=0)
+print(df[['id','donor','cells','ISG_core','ISG_core_pct','COVID_inflam','COVID_inflam_pct','Mono','Tcell','Bcell','NK']].to_string(index=False))
+print('\\nSorted by ISG_core:')
+print(df.sort_values('ISG_core')[['id','ISG_core','ISG_core_pct','COVID_inflam','COVID_inflam_pct','Mono','Tcell','Bcell','NK']].to_string(index=False))
+PY"

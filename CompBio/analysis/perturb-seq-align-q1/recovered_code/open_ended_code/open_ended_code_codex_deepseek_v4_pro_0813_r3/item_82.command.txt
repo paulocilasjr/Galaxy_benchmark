@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import re, subprocess, itertools, numpy as np
+from collections import Counter, defaultdict
+lines=[x.strip() for x in subprocess.check_output(['strings','-n','4','k562_hto_guide_segment.bin'], text=True).splitlines()]
+pat=re.compile(r'"'^(?:[A-Z0-9]+-I'"\\d+|NT-I\\d+)"'$'"')
+start=next(i for i,x in enumerate(lines) if pat.match(x))
+hto_before=[x for x in lines[:start] if x.startswith('HTO-')]
+guides=[x for x in lines if pat.match(x)]
+hto=hto_before[-len(guides):]
+selected=set(['CDC73-I2','CPSF1-I3','CPSF2-I1','CPSF3-I3','CPSF3L-I8','CPSF4-I8','CPSF6-I5','CPSF7-I1','CSTF1-I5','CSTF2-I4','CSTF3-I5','CTR9-I7','FIP1L1-I1','LEO1-I2','NUDT21-I3','PABPC1-I1','PABPN1-I2','PAF1-I6','PAPOLA-I3','PCF11-I5','PHF3-I5','RBBP6-I4','RPAP2-I2','RPRD1A-I5','RPRD1B-I1','SCAF1-I2','SCAF4-I4','SCAF8-I3','SCAF11-I3','SF3A1-I5','SRSF3-I1','SYMPK-I3','THOC5-I1']+[f'NT-I{i}' for i in range(1,11)])
+by=defaultdict(Counter)
+for h,g in zip(hto,guides):
+    if g in selected: by[h][g]+=1
+htos=list(by.keys())
+print('htos',htos)
+# exact total search
+for r in range(1,len(htos)+1):
+    for comb in itertools.combinations(htos,r):
+        c=Counter()
+        for h in comb: c.update(by[h])
+        if sum(c.values())==3516:
+            print('exact total comb',comb)
+            print('NT', [c[f'NT-I{i}'] for i in range(1,11)])
+            print('nonNT', sum(v for k,v in c.items() if not k.startswith('NT-')))
+print('exact total search done')
+# search by NT squared error after scaling, but print any with total within 100
+qnt={'NT-I1':119,'NT-I2':175,'NT-I3':152,'NT-I4':90,'NT-I5':117,'NT-I6':158,'NT-I7':150,'NT-I8':82,'NT-I9':104,'NT-I10':277}
+best=[]
+for r in range(1,len(htos)+1):
+    for comb in itertools.combinations(htos,r):
+        c=Counter()
+        for h in comb: c.update(by[h])
+        total=sum(c.values())
+        nt=np.array([c[f'NT-I{i}'] for i in range(1,11)],float)
+        q=np.array([qnt[f'NT-I{i}'] for i in range(1,11)],float)
+        if nt.sum()>0:
+            scale=(q@nt)/(nt@nt)
+            err=np.sqrt(np.mean((scale*nt-q)**2))
+        else: scale=0; err=999
+        best.append((err, abs(total-3516), total, scale, comb))
+best=sorted(best,key=lambda x:(x[0],x[1]))[:20]
+for b in best: print(b)
+PY"

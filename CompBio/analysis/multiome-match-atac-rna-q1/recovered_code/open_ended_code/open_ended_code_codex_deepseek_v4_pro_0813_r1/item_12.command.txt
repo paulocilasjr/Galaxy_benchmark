@@ -1,0 +1,61 @@
+/bin/bash -lc "cat > match_ga2.py <<'PY'
+import gzip, re, bisect, numpy as np, pandas as pd
+from scipy.stats import spearmanr
+from scipy.optimize import linear_sum_assignment
+
+rna = pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz', sep='\\t', index_col=0, compression='gzip')
+atac = pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz', sep='\\t', index_col=0, compression='gzip')
+gi=pd.read_csv('gene_info.tsv',sep='\\t',names=['gene','chrom','start','end','strand'])
+gi=gi[gi.gene.isin(rna.index)].copy(); gi['tss']=np.where(gi.strand=='-', gi.end, gi.start)
+names=atac.index.to_numpy(); parts=np.array([x.split('_') for x in names]); chroms=parts[:,0]; starts=parts[:,1].astype(int); ends=parts[:,2].astype(int)
+chrom_idx={}
+for c in np.unique(chroms):
+    mask=chroms==c; idx=np.where(mask)[0]; order=idx[np.argsort(starts[idx])]; chrom_idx[c]=(starts[order],ends[order],order)
+
+def gene_activity(window):
+    av=np.log1p(atac.to_numpy())
+    rows=[]; genes=[]
+    for row in gi.itertuples(index=False):
+        c=row.chrom
+        if c not in chrom_idx: genes.append(row.gene); rows.append(np.zeros(8)); continue
+        st_arr,en_arr,order=chrom_idx[c]; tss=row.tss
+        lo=bisect.bisect_left(st_arr,tss-window); lo=max(0,lo-1); hi=bisect.bisect_right(st_arr,tss+window); hi=min(len(st_arr),hi)
+        if hi<=lo: vals=np.zeros(8)
+        else: vals=av[order[lo:hi]].sum(axis=0)
+        rows.append(vals); genes.append(row.gene)
+    return pd.DataFrame(np.vstack(rows),index=genes)
+
+def zscore_rows(M):
+    # axis=1, avoid zero var rows, fill 0
+    mu=M.mean(axis=1,keepdims=True); sd=M.std(axis=1,keepdims=True); sd[sd==0]=1
+    return (M-mu)/sd
+
+def rank_rows(M):
+    return pd.DataFrame(M).rank(axis=1).to_numpy()
+
+for window in [20000,50000,100000]:
+    G=gene_activity(window)
+    common=G.index.intersection(rna.index)
+    R=rna.loc[common].to_numpy(); Gc=G.loc[common].to_numpy()
+    # filter all-zero and low expression
+    expr_nz=(R>0).sum(axis=1); atac_nz=(Gc>0).sum(axis=1)
+    mask=(expr_nz>=3)&(atac_nz>=3)
+    Rm=R[mask]; Gm=Gc[mask]
+    print('\\nwindow',window,'used',mask.sum())
+    for name, RM, GM in [
+        ('log+pearson_zrows', np.log1p(Rm), Gm),
+        ('raw+pearson_zrows', Rm, Gm),
+        ('log+spearman_zrows', np.log1p(Rm), Gm),
+    ]:
+        if 'spearman' in name:
+            # rank across samples per gene
+            Rr=rank_rows(RM); Gr=rank_rows(GM)
+            Rz=zscore_rows(Rr); Gz=zscore_rows(Gr)
+        else:
+            Rz=zscore_rows(RM); Gz=zscore_rows(GM)
+        C=np.corrcoef(Rz.T,Gz.T)[:8,8:]
+        print(name)
+        print(C.round(3))
+        print('hung',linear_sum_assignment(-C)[1], 'argrows',np.argmax(C,axis=1), 'argcols',np.argmax(C,axis=0))
+PY
+python3 match_ga2.py"

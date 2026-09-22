@@ -1,0 +1,64 @@
+/bin/bash -c "python3 - <<'PY'
+import pgenlib, pandas as pd, numpy as np, itertools
+
+def read_pvar(pre):
+    p=pd.read_csv(pre+'.pvar', sep='\\t', comment='#', names=['CHROM','POS','ID','REF','ALT'], dtype={'CHROM':str,'POS':int})
+    return p
+
+def read_genos(pre, variant_subset):
+    r=pgenlib.PgenReader(pre.encode()+b'.pgen')
+    ids=[]
+    with open(pre+'.psam') as f:
+        for line in f:
+            line=line.strip()
+            if line.startswith('#') or not line: continue
+            ids.append(line)
+    ns=r.get_raw_sample_ct()
+    idx=np.array(variant_subset,dtype=np.uint32)
+    buf=np.empty([idx.size, ns], dtype=np.int32)
+    r.read_list(idx, buf)
+    return ids,buf
+
+p1=read_pvar('match.genotypes.1.1')
+p3=read_pvar('match.genotypes.1.3')
+lo,hi=133250000,133262000
+idx3=p3.index[(p3.POS>=lo)&(p3.POS<=hi)].to_numpy()
+ids3,g3=read_genos('match.genotypes.1.3',idx3)
+sub3=p3.iloc[idx3].reset_index(drop=True)
+idx1=p1.index[(p1.POS>=lo)&(p1.POS<=hi)].to_numpy()
+ids1,g1=read_genos('match.genotypes.1.1',idx1)
+sub1=p1.iloc[idx1].reset_index(drop=True)
+print('reference',g3.shape,'target',g1.shape)
+# map target variants to reference by pos/ref/alt
+ref_keys={'pos':sub3.POS.to_numpy(),'ref':sub3.REF.to_numpy(),'alt':sub3.ALT.to_numpy()}
+# print key variants
+for kpos in [133255928,133255935,133257521]:
+    i=np.where(sub3.POS.to_numpy()==kpos)[0]
+    print('KEY',kpos, sub3.iloc[i].to_dict('records'), g3[i[0]])
+# check shared count
+matched=[]
+for j,row in sub1.iterrows():
+    m=np.where((sub3.POS==row.POS)&(sub3.REF==row.REF)&(sub3.ALT==row.ALT))[0]
+    if len(m)==1:
+        matched.append((j,int(m[0]),row.POS))
+print('matched shared',len(matched),'of',len(sub1))
+# correlations for each key vs all shared
+key_positions=[133255928,133255935,133257521]
+for kp in key_positions:
+    ki=np.where(sub3.POS.to_numpy()==kp)[0][0]
+    x=g3[ki].astype(float)
+    print('\\nKEY',kp,'mean',x.mean(),'genos',dict(zip(ids3,x)))
+    corrs=[]
+    for j in range(len(sub3)):
+        if sub3.POS[j]==kp: continue
+        # only shared with target and same alleles? Actually compute all ref
+        y=g3[j].astype(float)
+        if y.std()==0: continue
+        r=np.corrcoef(x,y)[0,1]
+        # also r2 via dosage correlation and signed r
+        corrs.append((abs(r),r,sub3.POS[j],sub3.ID[j],sub3.REF[j],sub3.ALT[j],y.std(),y.mean()))
+    corrs.sort(reverse=True)
+    print('top abs corr')
+    for c in corrs[:20]:
+        print(c)
+PY"

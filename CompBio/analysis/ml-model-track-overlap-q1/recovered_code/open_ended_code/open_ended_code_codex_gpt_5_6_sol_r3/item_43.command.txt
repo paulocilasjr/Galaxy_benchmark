@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import json,re,csv,collections
+samples={a['id']:a for a in json.load(open('cistrome_all.json'))['samples']}
+sei=[]
+for idx,s in enumerate(open('sei-framework/model/target.names')):
+ if m:=re.search(r'ID:(\\d+)\\s*"'$'"',s):
+  a=samples[int(m.group(1))]; ext=a['external_id']; base=(re.match(r'(ENCSR[A-Z0-9]+)',ext).group(1) if ext.startswith('ENCSR') else ext)
+  sei.append((idx,s.strip(),a,base))
+bor=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+bor_gsm=set(re.findall(r'GSM\\d+','\\n'.join(r['identifier']+' '+r['file'] for r in bor)))
+bor_encsr=set(re.findall(r'ENCSR[A-Z0-9]+','\\n'.join(r['identifier']+' '+r['file'] for r in bor)))
+enc_gsm={}
+for r in csv.reader(open('encode_report.tsv',errors='ignore'),delimiter='\\t'):
+ if r and r[0]"'!='"'Accession': enc_gsm[r[0]]=set(re.findall(r'GSM\\d+',r[1] if len(r)>1 else ''))
+# direct and Borzoi ENCSR->GSM dbxref
+bor_prov_gsm=bor_gsm | set().union(*(enc_gsm.get(e,set()) for e in bor_encsr))
+# Include reverse case: Cistrome ENCSR linked to one of Borzoi direct GSM
+matched=[]
+for z in sei:
+ base=z[3]
+ hit=(base in bor_encsr) or (base.startswith('GSM') and base in bor_prov_gsm) or (base.startswith('ENCSR') and bool(enc_gsm.get(base,set())&bor_gsm))
+ if hit: matched.append(z)
+print('sei tracks',len(sei),'matched',len(matched),'round',round(len(matched)/100)*100)
+print('by source',collections.Counter(z[2]['external_id_type'] for z in matched))
+print('match types')
+types=collections.Counter()
+for z in matched:
+ b=z[3]
+ if b in bor_encsr: types['direct ENCSR']+=1
+ elif b in bor_gsm: types['direct GSM']+=1
+ elif b.startswith('GSM') and b in bor_prov_gsm: types['crosswalk ENCSR->GSM']+=1
+ elif b.startswith('ENCSR') and enc_gsm.get(b,set())&bor_gsm: types['reverse crosswalk']+=1
+print(types)
+print('unique ext',len(set(z[3] for z in matched)))
+# counts including only chromatin borzoi ENCSR
+for assays in [('chip+dnase+atac',{'chip','dnase','atac'}),('chip+dnase',{'chip','dnase'})]:
+ name,aset=assays
+ br=[r for r in bor if r['file'].split('/')[6] in aset]
+ be=set(re.findall(r'ENCSR[A-Z0-9]+','\\n'.join(r['file'] for r in br)))
+ bg=set(re.findall(r'GSM\\d+','\\n'.join(r['file'] for r in br)))
+ pg=bg|set().union(*(enc_gsm.get(e,set()) for e in be))
+ mm=[z for z in sei if z[3] in be or (z[3].startswith('GSM') and z[3] in pg) or (z[3].startswith('ENCSR') and enc_gsm.get(z[3],set())&bg)]
+ print(name,len(br),len(be),len(bg),'matches',len(mm),'round',round(len(mm)/100)*100)
+PY"

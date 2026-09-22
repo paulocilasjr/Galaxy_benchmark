@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests,time,re,json
+genes=['Wfdc17','Scimp','Mcemp1','Clec4n','Ms4a6d','Cd180','C1qc','Lgmn','Mafb','Tspo']
+acc_sets={}
+for gene in genes:
+ ids=[];retstart=0
+ while True:
+  r=requests.get('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',params={'db':'geoprofiles','term':f'{gene}[Gene Symbol]','retstart':retstart,'retmax':5000,'retmode':'json'},timeout=60)
+  j=r.json().get('esearchresult',{});batch=j.get('idlist',[]);ids+=batch;count=int(j.get('count','0'))
+  if len(batch)<5000 or retstart+len(batch)>=count:break
+  retstart+=len(batch);time.sleep(.05)
+ acc=set()
+ for i in range(0,len(ids),500):
+  batch=ids[i:i+500];r=requests.post('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi',data={'db':'geoprofiles','id':','.join(batch),'retmode':'json'},timeout=60)
+  res=r.json().get('result',{})
+  for uid in batch:
+   val=res.get(uid,{})
+   if val.get('gds'):acc.add('GDS'+val['gds'])
+  time.sleep(.05)
+ acc_sets[gene]=acc
+ print(gene,len(ids),len(acc))
+# candidate GDS present in at least 5 genes
+counts={}
+for gds in set().union(*acc_sets.values()):
+ c=sum(gds in s for s in acc_sets.values())
+ if c>=5:counts[gds]=c
+print('candidates',len(counts))
+# summarize titles for top 200 by coverage
+for gds,c in sorted(counts.items(),key=lambda x:-x[1])[:300]:
+ uid=gds[3:]
+ try:
+  r=requests.post('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi',data={'db':'gds','id':uid,'retmode':'json'},timeout=30)
+  v=r.json()['result'].get(uid,{})
+  title=v.get('title','')
+  if re.search(r'LPS|lipopolysaccharide|monocyte|macrophage|dendritic|sepsis|lupus|SLE|rheumatoid|B cell|CD4|CD8|NK|neutrophil',title,re.I):
+   print(gds,c,title)
+ except Exception as e: pass
+ time.sleep(.02)
+PY"

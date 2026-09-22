@@ -1,0 +1,48 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import chi2
+p='single_cell_dynamics_question.csv'
+df=pd.read_csv(p)
+D=np.sqrt(((df[['enh_x','enh_y','enh_z']].values-df[['prom_x','prom_y','prom_z']].values)**2).sum(1))
+C=(D<=260).astype(np.int8); T=df['transcription'].values.astype(np.int8)
+C=C.reshape(600,250); T=T.reshape(600,250)
+
+# transition probabilities for contacts/trans states at lag 1
+# P(T_t=1 | C_{t-1}=0/1, T_{t-1}=0/1)
+for prevT in [0,1]:
+    for prevC in [0,1]:
+        mask=(C[:,:249]==prevC)&(T[:,:249]==prevT)
+        n=mask.sum()
+        pt=T[:,1:][mask].mean() if n else np.nan
+        print('T_t | prevC=%d prevT=%d: n=%d P=%g'%(prevC,prevT,n,pt))
+print()
+# P(C_t=1 | T_{t-1}=0/1, C_{t-1}=0/1)
+for prevC in [0,1]:
+    for prevT in [0,1]:
+        mask=(C[:,:249]==prevC)&(T[:,:249]==prevT)
+        n=mask.sum()
+        pc=C[:,1:][mask].mean() if n else np.nan
+        print('C_t | prevC=%d prevT=%d: n=%d P=%g'%(prevC,prevT,n,pc))
+
+# raw cross-correlation coefficient centered
+cc=[]; ac_C=[]; ac_T=[]
+for lag in range(-20,21):
+    if lag>=0:
+        x=C[:,:250-lag].astype(float); y=T[:,lag:].astype(float)
+    else:
+        x=C[:,-lag:].astype(float); y=T[:,:250+lag].astype(float)
+    x=x-x.mean(); y=y-y.mean()
+    denom=np.sqrt((x*x).sum()*(y*y).sum())
+    cc.append((x*y).sum()/denom if denom else np.nan)
+    if lag>=0:
+        x1=C[:,:250-lag].astype(float); x2=C[:,lag:].astype(float)
+        x1=x1-x1.mean(); x2=x2-x2.mean()
+        ac_C.append((x1*x2).sum()/np.sqrt((x1*x1).sum()*(x2*x2).sum()))
+        y1=T[:,:250-lag].astype(float); y2=T[:,lag:].astype(float)
+        y1=y1-y1.mean(); y2=y2-y2.mean()
+        ac_T.append((y1*y2).sum()/np.sqrt((y1*y1).sum()*(y2*y2).sum()))
+print('\\nlag crosscorr')
+for lag in range(-20,21): print(lag, cc[lag+20])
+print('\\nauto C', [round(x,3) for x in ac_C[:10]])
+print('auto T', [round(x,3) for x in ac_T[:10]])
+PY"

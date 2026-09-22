@@ -1,0 +1,46 @@
+/bin/bash -lc "cat > predict.py <<'PY'
+import os
+from pathlib import Path
+os.environ['KERAS_HOME']=str(Path('keras-cache').resolve())
+os.environ['TMPDIR']=str(Path('tmp').resolve())
+os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+import time,json
+import numpy as np
+import h5py
+import tensorflow as tf
+print('tensorflow',tf.__version__,flush=True)
+tf.config.threading.set_intra_op_parallelism_threads(8)
+tf.config.threading.set_inter_op_parallelism_threads(2)
+from baskerville import seqnn
+params=json.load(open('params_pred.json'))['model']
+# Match the requested central 196,608 bp (6,144 bins).
+for block in params['trunk']:
+ if block['name']=='Cropping1D': block['cropping']=5120
+params.pop('head_mouse')
+params['augment_rc']=False
+params['augment_shift']=[0]
+print('building model',flush=True)
+m=seqnn.SeqNN(params)
+print('loading weights',flush=True)
+m.restore('model0_best.h5',0)
+# Select only the requested output track's final kernel.
+final=m.model.layers[-1]
+print('last layers',[(l.name,l.__class__.__name__) for l in m.model.layers[-5:]],flush=True)
+m.build_slice([6068])
+s=json.load(open('sequence.json'))['dna'].upper()
+x=np.zeros((1,len(s),4),dtype=np.float32)
+b=np.frombuffer(s.encode(),dtype='S1')
+for i,base in enumerate('ACGT'): x[0,:,i]=(b==base.encode())
+print('predicting',time.ctime(),flush=True)
+y=m.model(x,training=False).numpy()[0,:,0]
+np.save('prediction_raw.npy',y)
+print('predicted',time.ctime(),y.shape,float(y.min()),float(y.max()),float(y.sum()),flush=True)
+z=y.astype(np.float64)/0.3
+z=np.where(z>384,384+(z-384)**2,z)
+z=z**(4/3)
+np.save('prediction_coverage.npy',z)
+result={'raw_sum':float(y.sum()),'total_coverage':float(z.sum()),'rounded':int(round(z.sum()/10)*10),'bins':len(z),'max_untransformed':float(z.max())}
+Path('result.json').write_text(json.dumps(result,indent=2))
+print(result,flush=True)
+PY
+PYTHONPATH=\""'$PWD/baskerville/src" native/python/bin/python3 -u predict.py > predict.log 2>&1'

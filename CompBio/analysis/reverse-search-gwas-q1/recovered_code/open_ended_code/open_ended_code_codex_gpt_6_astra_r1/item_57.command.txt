@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > screen_total.py <<'PY'
+import requests,json,concurrent.futures,math,os
+ss=json.load(open('studies_total.json'))['_embedded']['studies']
+sig={(a[0],int(a[1])):float(a[-1]) for a in json.load(open('significant.json'))}
+ss=[s for s in ss if not any(w in s['diseaseTrait']['trait'].lower() for w in ['interaction','burden','gene-based','kernel-based','short tandem','pregnancy'])]
+print('Studies',len(ss),flush=True)
+def f(s):
+ i=s['accessionId']
+ try:
+  fn=i+'_assoc.json'
+  if os.path.exists(fn):j=json.load(open(fn))
+  else:
+   r=requests.get('https://www.ebi.ac.uk/gwas/rest/api/studies/'+i+'/associations',params={'projection':'associationBySnp','size':1000},timeout=45)
+   if not r.ok:return
+   j=r.json();open(fn,'w').write(r.text)
+  aa=j.get('_embedded',{}).get('associations',[]);hits=[];miss=0
+  for a in aa:
+   pp=a.get('pvalue',0)
+   found=False
+   for sn in a.get('snps',[]):
+    for l in sn.get('locations',[]):
+     key=(l['chromosomeName'],l['chromosomePosition']);p=sig.get(key)
+     if p:
+      hits.append((sn['rsId'],key,p,pp));found=True
+   if not found:miss+=1
+  print(i,s['publicationInfo']['pubmedId'],s.get('initialSampleSize'),'hits',len(hits),'miss',miss,hits,flush=True)
+ except Exception as e:print(i,str(e),flush=True)
+with concurrent.futures.ThreadPoolExecutor(max_workers=5) as e:list(e.map(f,ss))
+PY
+python -u screen_total.py > total_matches.txt"

@@ -1,0 +1,100 @@
+/bin/bash -c "cat > full_match.py <<'PY'
+import numpy as np, time
+from PIL import Image, ImageDraw, ImageFont
+from scipy.ndimage import rotate as ndrotate
+
+coords=np.load('ca_coords.npy'); chains=np.load('ca_chains.npy')
+coords=coords-coords.mean(0)
+paths=[coords[chains==ch] for ch in np.unique(chains)]
+letters=list('BDFHJLNPRTVXZ')
+N=48
+# letter masks
+import glob
+cands=glob.glob('/System/Library/Fonts/**/Helvetica.ttc', recursive=True)+glob.glob('/System/Library/Fonts/**/*.ttf', recursive=True)
+fontpath=cands[0] if cands else None
+
+def make_letter(ch):
+    font=ImageFont.truetype(fontpath, N*5)
+    M=N*2
+    im=Image.new('L',(M,M),0); d=ImageDraw.Draw(im)
+    d.text((M//4,M//4),ch,fill=255,font=font)
+    a=np.array(im)>127
+    ys,xs=np.where(a)
+    crop=Image.fromarray((a[ys.min():ys.max()+1,xs.min():xs.max()+1]*255).astype(np.uint8))
+    span=max(xs.max()-xs.min()+1,ys.max()-ys.min()+1)
+    scale=(N-2)/span
+    w=max(1,int(round((xs.max()-xs.min()+1)*scale))); h=max(1,int(round((ys.max()-ys.min()+1)*scale)))
+    crop=crop.resize((w,h),Image.Resampling.LANCZOS)
+    out=np.zeros((N,N),dtype=np.uint8); y=(N-h)//2; x=(N-w)//2
+    out[y:y+h,x:x+w]=(np.array(crop)>127).astype(np.uint8)
+    return out
+letter_masks={ch:make_letter(ch) for ch in letters}
+# precompute rotations
+rot_step=15
+rot_angles=list(range(0,180,rot_step))  # rotate all but mirrors can be included? use 0-345
+rot_angles=list(range(0,360,rot_step))
+rot_masks={ch:[] for ch in letters}
+for ch,lm in letter_masks.items():
+    for ang in rot_angles:
+        r=ndrotate(lm.astype(np.uint8),ang,reshape=False,order=0)>0.5
+        rot_masks[ch].append(r)
+
+def basis_from_n(n):
+    n=n/np.linalg.norm(n)
+    if abs(n[0])<0.9:
+        e1=np.cross(n,[1,0,0]); e1=e1/np.linalg.norm(e1)
+    else:
+        e1=np.cross(n,[0,1,0]); e1=e1/np.linalg.norm(e1)
+    e2=np.cross(n,e1)
+    return np.vstack([e1,e2])
+
+def project_img(n):
+    basis=basis_from_n(n)
+    uv=coords@basis.T
+    umin,umax=uv[:,0].min(),uv[:,0].max(); vmin,vmax=uv[:,1].min(),uv[:,1].max()
+    span=max(umax-umin, vmax-vmin, 1e-6)
+    scale=(N-1)/span
+    img=np.zeros((N,N),dtype=np.uint8)
+    # line draw for each path
+    for p in paths:
+        u=(p[:,0]-(umin+umax)/2)*scale + (N-1)/2
+        v=(p[:,1]-(vmin+vmax)/2)*scale + (N-1)/2
+        # mark segment
+        for k in range(len(u)-1):
+            steps=max(1,int(np.hypot(u[k+1]-u[k],v[k+1]-v[k])*1.5)+1)
+            tt=np.linspace(0,1,steps)
+            xs=np.rint(u[k]+tt*(u[k+1]-u[k])).astype(int)
+            ys=np.rint(v[k]+tt*(v[k+1]-v[k])).astype(int)
+            valid=(xs>=0)&(xs<N)&(ys>=0)&(ys<N)
+            img[ys[valid],xs[valid]]=1
+        xs=np.clip(np.rint(u).astype(int),0,N-1); ys=np.clip(np.rint(v).astype(int),0,N-1)
+        img[ys,xs]=1
+    return img
+
+def fib_sphere(n):
+    i=np.arange(n); phi=np.arccos(1-2*(i+0.5)/n); theta=np.pi*(1+5**0.5)*i
+    return np.stack([np.sin(phi)*np.cos(theta), np.sin(phi)*np.sin(theta), np.cos(phi)],axis=1)
+
+dirs=fib_sphere(600)
+best={ch:(0,None) for ch in letters}
+start=time.time()
+for di,n in enumerate(dirs):
+    img=project_img(n)
+    area=img.sum()
+    for ch,rm_list in rot_masks.items():
+        best_s=0
+        for rm in rm_list:
+            inter=np.logical_and(img,rm).sum(); denom=area+rm.sum()
+            s=(2*inter)/denom if denom else 0
+            if s>best_s: best_s=s
+        if best_s>best[ch][0]: best[ch]=(best_s, img.copy())
+    if (di+1)%100==0:
+        print('dir',di+1,'elapsed',round(time.time()-start,1), 'best', {ch:round(v[0],3) for ch,v in best.items()}, flush=True)
+print('FINAL best', {ch:round(v[0],3) for ch,v in best.items()})
+# save best projections and top letter
+rank=sorted(best.items(), key=lambda kv:-kv[1][0])
+for ch,(s,img) in best.items():
+    Image.fromarray((img*255).astype(np.uint8)).save(f'fullbest_{ch}.png')
+print('rank', [(ch,round(s,3)) for ch,s in [(ch,val[0]) for ch,val in rank]])
+PY
+python full_match.py"

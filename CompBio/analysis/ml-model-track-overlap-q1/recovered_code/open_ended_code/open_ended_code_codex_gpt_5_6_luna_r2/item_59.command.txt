@@ -1,0 +1,25 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4f28973e7799493c47bfc76c/workspace && python - <<'PY'
+import csv,re,json,collections
+from openpyxl import load_workbook
+wb=load_workbook('sei_supp_tables.xlsx',read_only=True,data_only=True)
+profiles=[]
+for row in wb['Supp Table 1'].iter_rows(min_row=3,max_col=1,values_only=True):
+ s=row[0]
+ if s and 'ID:' in s: profiles.append((int(re.search(r'ID:(\\d+)"'$'"',s).group(1)),s))
+samples={s['id']:s for fn in ['cistrome_all_samples.json','cistrome_all_samples_2.json'] for s in json.load(open(fn))['samples']}
+def accessions(files):
+ txt='\\n'.join('\\t'.join(x.values()) for fn in files for x in csv.DictReader(open(fn),delimiter='\\t'))
+ return set(re.findall(r'GSM\\d+',txt)), set(re.findall(r'ENCSR[A-Z0-9]+',txt))
+gsm_h,enc_h=accessions(['borzoi_targets_human.txt']); gsm_m,enc_m=accessions(['borzoi_targets_mouse.txt'])
+base=lambda e: re.match(r'(ENCSR[A-Z0-9]+)',e).group(1) if e.startswith('ENCSR') else e
+for label,gsm,enc in [('human',gsm_h,enc_h),('mouse',gsm_m,enc_m),('both',gsm_h|gsm_m,enc_h|enc_m)]:
+ matched=[]
+ for i,s in profiles:
+  e=samples[i]['external_id']
+  if e in gsm or base(e) in enc: matched.append((i,s,e))
+ print(label,'GSM',len(gsm),'ENC',len(enc),'matches',len(matched),'distinct source',len(set(e if not e.startswith('ENCSR') else base(e) for _,_,e in matched)))
+ print('by species',collections.Counter(samples[i]['species'] for i,_,_ in matched))
+ print('new vs human',len(set(i for i,_,_ in matched)-set(i for i,s,e in [(i,s,samples[i]['external_id']) for i,s in profiles if samples[i]['external_id'] in gsm_h or base(samples[i]['external_id']) in enc_h])))
+# list mouse-only matching
+hset={e for i,s in [x[:2] for x in profiles] for e in []}
+PY"

@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv, numpy as np
+from scipy.io import mmread
+from scipy import stats
+
+with gzip.open('filtered_feature_bc_matrix/matrix.mtx.gz','rb') as f: X=mmread(f)
+X=X.tocsc()
+feat=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: feat.append(line.rstrip('\\n').split('\\t')[0])
+bc=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    for line in f: bc.append(line.rstrip('\\n'))
+calls={}
+with open('protospacer_calls_per_cell.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: calls[row[0]]=row[2]
+ref={}
+with open('feature_reference.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: ref[row[0]]=row[7]
+guides=np.array([ref[calls[b]] for b in bc])
+lib=np.asarray(X.sum(axis=0)).ravel().astype(float)
+X=X.toarray().astype(float)
+logcpm=np.log1p(X*10000/lib[None,:])
+path_idx=np.arange(20)
+non_idx=np.arange(20,1000)
+controls=guides=='Non-Targeting'
+cm_path=logcpm[path_idx,:][:,controls].mean(axis=1)
+cm_non=logcpm[non_idx,:][:,controls].mean(axis=1)
+# For each target, mean diff path and non
+for t in np.unique(guides):
+ if t=='Non-Targeting': continue
+ m=guides==t
+ dp=(logcpm[path_idx,:][:,m].mean(axis=1)-cm_path)
+ dn=(logcpm[non_idx,:][:,m].mean(axis=1)-cm_non)
+ # percentile of path diff distribution
+ print(f'{t:12s} n={m.sum():3d} path_mean={dp.mean(): .4f} path_med={np.median(dp): .4f} non_mean={dn.mean(): .5f} non_med={np.median(dn): .5f} non_sd={dn.std():.5f}')
+PY"

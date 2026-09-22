@@ -1,0 +1,85 @@
+/bin/bash -lc "cat > map_markers.py <<'PY'
+import json, time, re, os, sys
+from Bio import Entrez, SeqIO
+Entrez.email = 'codex@example.com'
+Entrez.tool = 'sample-swap-mapping'
+cache_path='id_gene_cache.json'
+if os.path.exists(cache_path):
+    cache=json.load(open(cache_path))
+else:
+    cache={}
+markers=json.load(open('top_markers.json'))
+ids=[]
+for col, arr in markers.items():
+    for item in arr:
+        gid=item[0]
+        if gid not in ids:
+            ids.append(gid)
+print('unique ids', len(ids))
+
+def get_gene(gid):
+    if gid in cache and cache[gid] is not None:
+        return cache[gid]
+    for attempt in range(5):
+        try:
+            time.sleep(0.35)
+            handle=Entrez.esearch(db='nuccore', term=f'{gid}[All Fields]', retmax=5)
+            rec=Entrez.read(handle); handle.close()
+            idlist=rec.get('IdList', [])
+            if not idlist:
+                cache[gid]={'gene':None,'error':'notfound','uids':[]}
+                return cache[gid]
+            uid=idlist[0]
+            time.sleep(0.35)
+            handle=Entrez.efetch(db='nuccore', id=uid, rettype='gb', retmode='text')
+            raw=handle.read().decode('utf-8','ignore'); handle.close()
+            lines=raw.splitlines()
+            genes=[]; locus=[]
+            for i,l in enumerate(lines):
+                if f'ID:{gid}_' in l or f'ID:{gid};' in l or f'ID:{gid}' in l:
+                    # nearest previous gene qualifier
+                    for j in range(i-1, max(-1,i-30), -1):
+                        m=re.search(r'/gene=\"(["'^"]+)"'"', lines[j])
+                        if m:
+                            genes.append(m.group(1)); break
+                        m=re.search(r'/locus_tag=\"(["'^"]+)"'"', lines[j])
+                        if m:
+                            locus.append(m.group(1)); break
+            if not genes and not locus:
+                # fallback parse first gene maybe same contig? try location of ID line then nearest gene in record regardless
+                for i,l in enumerate(lines):
+                    if gid in l:
+                        for j in range(i-1, max(-1,i-80), -1):
+                            m=re.search(r'/gene=\"(["'^"]+)"'"', lines[j])
+                            if m:
+                                genes.append(m.group(1)); break
+                            m=re.search(r'/locus_tag=\"(["'^"]+)"'"', lines[j])
+                            if m:
+                                locus.append(m.group(1)); break
+            uniq=list(dict.fromkeys(genes))
+            uniq_loc=list(dict.fromkeys(locus))
+            result={'gene': uniq[0] if uniq else None, 'all_genes':uniq, 'locus':uniq_loc[0] if uniq_loc else None, 'uid':uid}
+            cache[gid]=result
+            return result
+        except Exception as e:
+            err=str(e)
+            if 'API rate limit exceeded' in err or 'HTTP Error 429' in err or '429' in err:
+                time.sleep(2+attempt*2)
+                continue
+            # retry once? 
+            print('ERR', gid, err, file=sys.stderr)
+            time.sleep(1)
+    cache[gid]={'gene':None,'error':'fail'}
+    return cache[gid]
+
+try:
+    for n,gid in enumerate(ids):
+        res=get_gene(gid)
+        if (n+1)%20==0:
+            print('mapped', n+1, '/', len(ids), flush=True)
+            json.dump(cache, open(cache_path,'w'), indent=2)
+finally:
+    json.dump(cache, open(cache_path,'w'), indent=2)
+    print('saved cache', len(cache))
+PY
+python3 map_markers.py > map_run.log 2>&1 && tail -20 map_run.log"

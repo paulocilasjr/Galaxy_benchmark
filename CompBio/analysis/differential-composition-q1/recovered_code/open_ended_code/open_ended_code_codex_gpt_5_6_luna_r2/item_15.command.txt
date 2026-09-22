@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip, scipy.io, numpy as np, pandas as pd, re, time
+from scipy.sparse import vstack
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+base='differential.composition.q1'
+with gzip.open(base+'.genes.txt.gz','rt') as f:
+ f.readline(); genes=np.array([line.rstrip('\\n').split('\\t')[1] for line in f])
+Ms=[]; batches=[]
+for j in [1,2]:
+ t=time.time(); print('read',j,flush=True)
+ m=scipy.io.mmread(base+f'.{j}.mtx.gz').tocsr().astype(np.float32)
+ lib=np.asarray(m.sum(axis=0)).ravel()
+ x=m.multiply(1e4/(lib+1e-9)).tocsr(); x.data=np.log1p(x.data)
+ Ms.append(x.T.tocsr()); batches.extend([j]*m.shape[1]); print('done',x.shape,x.nnz,'time',time.time()-t,flush=True)
+X=vstack(Ms).tocsr(); batches=np.array(batches)
+print('combined',X.shape,X.nnz,flush=True)
+# hvg, sparse moments
+mu=np.asarray(X.mean(axis=0)).ravel(); mu2=np.asarray(X.multiply(X).mean(axis=0)).ravel(); var=mu2-mu*mu
+valid=(mu>0.02)&(mu<8)&~np.array([bool(re.match(r'"'^(MT-|RPS|RPL|MALAT1$)'"',g)) for g in genes])
+ord=np.argsort(np.where(valid,var,-np.inf))[::-1]
+hvg=ord[:3000]
+print('hvg top',genes[hvg[:30]].tolist(),flush=True)
+Y=X[:,hvg]
+print('SVD',flush=True); t=time.time()
+svd=TruncatedSVD(n_components=40,random_state=1,n_iter=5)
+pc=svd.fit_transform(Y)
+print('svd done',pc.shape,'time',time.time()-t,'var',svd.explained_variance_ratio_[:10].sum(),flush=True)
+# normalize PCs and kmeans
+pc=pc/np.std(pc,axis=0)
+# marker genes
+markers={
+'astrocyte':['GFAP','AQP4','SLC1A3','CLDN11','VIM','GJA1','ALDOC','S100B'],
+'microglial cell':['AIF1','C1QA','C1QB','C1QC','TYROBP','P2RY12','TMEM119','CX3CR1','CSF1R','C3'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MERTK','LRAT','MITF','SERPINF1','TTR'],
+'cone cell':['ARR3','OPN1SW','OPN1MW','OPN1LW','GNGT2','PDE6H','GUCA1C','CNGB3','GNAT2','RXRG'],
+'rod cell':['RHO','SAG','GNAT1','PDE6A','PDE6B','NRL','NR2E3','ROM1','GPR37L1','GUCA1B'],
+'horizontal cell':['LHX1','ONECUT1','ONECUT2','CALB1','VSX1','GAD1','GAD2','SLC32A1'],
+'bipolar cell':['VSX2','GRM6','CABP5','PRKCA','PCP4','TRPM1','GNG13','ISL1','SLC24A2'],
+'RGC':['RBPMS','SNCG','POU4F1','POU4F2','THY1','NEFL','NEFM','ISL1','BRN3A','OPN4'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','CD2','IL7R','CCL5','LTB'],
+'macrophage':['LYZ','CTSD','FCER1G','TYROBP','CD68','C1QC','LST1','MS4A7','AIF1','LGALS3'],
+'Schwann cell':['S100B','SOX10','MPZ','PLP1','GFAP','NCAM1','FABP7','CLDN11'],
+'Pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ACTA2','COL4A1','COL4A2','NOTCH3','ABCC9','KCNJ8'],
+'B cell':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD83','CD22','CD69','CD48'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','COL6A2','PDGFRA','FBLN1'],
+'endothelial cell':['EMCN','KDR','ESAM','PECAM1','VWF','CLDN5','RAMP2','ENG','PLVAP'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','SOX9','AQP4','VIM','KCNJ10','SLC1A6','FABP7']}
+mi={g:i for i,g in enumerate(genes)}
+# scores from X, avg log marker scores
+scores=np.zeros((X.shape[0],len(markers)),np.float32); typenames=list(markers)
+for k,(typ,gs) in enumerate(markers.items()):
+ ids=[mi[g] for g in gs if g in mi]
+ scores[:,k]=X[:,ids].toarray().mean(axis=1)
+# cluster and report marker means and sample composition
+for K in [25,40,60]:
+ print('\\nKMEANS K',K,flush=True); km=KMeans(n_clusters=K,n_init=5,random_state=1,max_iter=100).fit(pc[:,:30]); lab=km.labels_
+ counts=np.zeros((K,2),int)
+ for b in [1,2]: counts[:,b-1]=np.bincount(lab[batches==b],minlength=K)
+ # type max marker score cluster average
+ cscore=np.zeros((K,len(markers)))
+ for z in range(K): cscore[z]=scores[lab==z].mean(axis=0)
+ # rank by largest marker score; output clusters sorted size
+ for z in np.argsort(-counts.sum(axis=1)):
+  best=np.argsort(-cscore[z])[:4]
+  print(f'{z:2d} n={counts[z].sum():4d} s1={counts[z,0]:4d} s2={counts[z,1]:4d} best='+','.join(f'{typenames[q]}:{cscore[z,q]:.2f}' for q in best),flush=True)
+PY"

@@ -1,0 +1,52 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np, cv2, math, time
+from PIL import Image, ImageDraw, ImageFont
+from scipy.ndimage import binary_dilation
+# parse CA chains
+ca=[]
+for line in open('protein.shape.q1.pdb'):
+ if line.startswith('ATOM') and line[12:16].strip()=='CA':
+  chain=line[21]; resi=int(line[22:26]); x=float(line[30:38]); y=float(line[38:46]); z=float(line[46:54]); ca.append((chain,resi,np.array([x,y,z])))
+chains={}
+for ch,ri,p in ca: chains.setdefault(ch,[]).append((ri,p))
+for ch in chains: chains[ch].sort()
+N=128; letters='BDFHJLNPRTVXZ'; fp='/System/Library/Fonts/Supplemental/Arial Bold.ttf'
+def temp(ch):
+ im=Image.new('L',(N,N),0); d=ImageDraw.Draw(im); fs=100; f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; scale=.82*N/max(w,h); fs=max(1,int(fs*scale)); f=ImageFont.truetype(fp,fs); bb=d.textbbox((0,0),ch,font=f); w=bb[2]-bb[0]; h=bb[3]-bb[1]; d.text(((N-w)/2-bb[0],(N-h)/2-bb[1]),ch,font=f,fill=255); a=(np.array(im)>40).astype(np.uint8)*255; c,_=cv2.findContours(a,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE); return max(c,key=cv2.contourArea)
+temps={ch:temp(ch) for ch in letters}
+def fib(k):
+ i=np.arange(k); z=1-(2*i+1)/k; phi=np.arccos(np.clip(z,-1,1)); theta=math.pi*(1+5**.5)*i
+ return np.stack([np.sin(phi)*np.cos(theta),np.sin(phi)*np.sin(theta),z],axis=1)
+def proj_trace(n,dil=2):
+ n=np.asarray(n,float); n/=np.linalg.norm(n); a=np.array([0.,0.,1.]) if abs(n[2])<.9 else np.array([1.,0.,0.]); u=np.cross(n,a); u/=np.linalg.norm(u); v=np.cross(n,u); v/=np.linalg.norm(v)
+ lines=[]
+ for ch,res in chains.items():
+  pts=[p for ri,p in res]
+  for p,q in zip(pts,pts[1:]): lines.append((p@u,p@v,q@u,q@v))
+ xs=[];ys=[]
+ for x1,y1,x2,y2 in lines: xs += [x1,x2]; ys += [y1,y2]
+ xmin=min(xs); xmax=max(xs); ymin=min(ys); ymax=max(ys); margin=8; span=max(xmax-xmin,ymax-ymin); scale=(N-2*margin)/span
+ img=np.zeros((N,N),np.uint8)
+ def draw(x1,y1,x2,y2):
+  ix1=int(round((x1-xmin)*scale+margin)); iy1=int(round((y1-ymin)*scale+margin)); ix2=int(round((x2-xmin)*scale+margin)); iy2=int(round((y2-ymin)*scale+margin))
+  cv2.line(img,(ix1,iy1),(ix2,iy2),255,1,cv2.LINE_8)
+ for x1,y1,x2,y2 in lines: draw(x1,y1,x2,y2)
+ if dil>0: img=binary_dilation(img,iterations=dil).astype(np.uint8)*255
+ c,_=cv2.findContours(img,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+ if not c: return None
+ # use largest contour; but line drawing may have many small contours; RETR_EXTERNAL gives outer boundary of whole if connected enough
+ return max(c,key=cv2.contourArea)
+for dil in [1,2,3,4]:
+ print('\\nDIL',dil)
+ dirs=fib(700); best={ch:[1e9,None,None] for ch in letters}; t0=time.time()
+ for k,n in enumerate(dirs):
+  cnt=proj_trace(n,dil)
+  if cnt is None: continue
+  for ch,tc in temps.items():
+   d=cv2.matchShapes(cnt,tc,cv2.CONTOURS_MATCH_I2,0)
+   if d<best[ch][0]: best[ch]=[d,k,n.copy()]
+ print('best by letter')
+ for ch,(d,k,n) in sorted(best.items(),key=lambda kv:kv[1][0]): print(ch,round(d,4),'dir',k,'n',np.round(n,3))
+ print('winner',min(best.items(),key=lambda kv:kv[1][0])[0])
+PY
+python3 [REDACTED LOCAL PATH]"

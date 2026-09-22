@@ -1,0 +1,29 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,time,numpy as np
+from scipy.io import mmread
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import svds
+from scipy.cluster.vq import kmeans2
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ next(f); genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+for si,fn in enumerate(['differential.composition.q1.1.mtx.gz','differential.composition.q1.2.mtx.gz'],1):
+ with gzip.open(fn,'rb') as f: M=csc_matrix(mmread(f))
+ lib=np.asarray(M.sum(axis=0)).ravel()
+ X=M.multiply(1e4/lib).tocsr().astype(np.float32); X.data=np.log1p(X.data); X=X.T.tocsr()
+ mu=np.asarray(X.mean(axis=0)).ravel(); mu2=np.asarray(X.multiply(X).mean(axis=0)).ravel(); var=mu2-mu*mu
+ n=2500; ind=np.argsort(var)[-n:]; Xn=X[:,ind]
+ u,s,vt=svds(Xn,k=30,which='LM',tol=1e-3,maxiter=500); order=np.argsort(s)[::-1]; Z=u[:,order]*s[order]
+ A=Z[:,1:25]; A/=A.std(axis=0,keepdims=True)+1e-8
+ cen,lab=kmeans2(A,30,minit='++',iter=100,seed=3)
+ print('\\n==== SAMPLE',si,'cells',M.shape[1],'====',flush=True)
+ # top genes by cluster mean - weighted global mean, with prevalence requirement
+ Xsel=X[:,ind]
+ gmean=np.asarray(Xsel.mean(axis=0)).ravel()
+ for cl in np.argsort(np.bincount(lab,minlength=30))[::-1]:
+  ix=np.where(lab==cl)[0]
+  cm=np.asarray(Xsel[ix].mean(axis=0)).ravel()
+  # log fold enrichment of mean + .05; favor specificity; top by difference and fold
+  sc=cm-gmean
+  top=np.argsort(sc)[-12:][::-1]
+  print('CL',cl,'n',len(ix),'top',', '.join(f'{genes[ind[i]]}({cm[i]:.1f}/{gmean[i]:.1f})' for i in top),flush=True)
+PY"

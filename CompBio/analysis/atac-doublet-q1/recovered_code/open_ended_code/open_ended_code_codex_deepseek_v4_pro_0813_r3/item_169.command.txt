@@ -1,0 +1,37 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, pandas as pd, snapatac2 as snap
+# load all scores for 1000 cells (barcode order from snap atac)
+adata=snap.read('atac.snap.h5ad'); names=np.array(adata.obs_names)
+p=np.loadtxt('scrublet_peaks_scores.txt',dtype=str); ps={b:float(s) for b,s in zip(p[:,0],p[:,1])}
+t=np.loadtxt('scrublet_tile_scores.txt',dtype=str); ts={b:float(s) for b,s in zip(t[:,0],t[:,1])}
+sp=pd.read_csv('scDblFinder_results.tsv',sep='\\t'); sps={b:s for b,s in zip(sp.barcode,sp['scDblFinder.score'])}
+st=pd.read_csv('scDblFinder_tile_results.tsv',sep='\\t'); sts={b:s for b,s in zip(st.barcode,st['scDblFinder.score'])}
+# SnapATAC2 average rank (lower better) across 500,1000,5000,10000,peak
+snap_ranks=[]
+for b in [500,1000,5000,10000]:
+    if b==500:
+        a=snap.read('atac.snap.h5ad')
+    else:
+        a=snap.read(f'atac.snap.bin{b}.h5ad')
+    nm=np.array(a.obs_names); sc=np.array(a.obs['doublet_score']); order=np.argsort(-sc); rank={name:i+1 for i,name in enumerate(nm[order])}; snap_ranks.append(rank)
+ap=snap.read('atac_peaks_scrub.h5ad'); nm=np.array(ap.obs_names); sc=np.array(ap.obs['doublet_score']); order=np.argsort(-sc); snap_ranks.append({name:i+1 for i,name in enumerate(nm[order])})
+def rank_metric(vals, reverse=True):
+    arr=np.array([vals.get(b,np.nan) for b in names])
+    r=pd.Series(arr).rank(ascending=not reverse, pct=True).values
+    return r
+r_ps=rank_metric(ps); r_ts=rank_metric(ts); r_sps=rank_metric(sps); r_sts=rank_metric(sts)
+# Snap rank: average rank across configs, lower better -> percentile reversed
+snap_avg=np.array([np.mean([r[b] for r in snap_ranks]) for b in names])
+r_snap=1-pd.Series(snap_avg).rank(ascending=False, pct=True).values # higher better
+comb=(r_ps+r_ts+r_sps+r_sts+r_snap)/5
+order=np.argsort(-comb)
+print('top 60 consensus ranks')
+for i in order[:60]:
+    b=names[i]
+    print(b,'comb',round(comb[i],3),'ps',round(ps.get(b,0),3),'ts',round(ts.get(b,0),3),'sps',round(sps.get(b,0),3),'sts',round(sts.get(b,0),3),'snap_avg_rank',round(snap_avg[i],1))
+# candidates
+print('\\ncandidate combined')
+for b in ['GCGACACGCCGGGCAC-1','GGCGACCTCTACGTAG-1','CCATGGGCAGGCTCAT-1','CGCACGCGTACTGCAG-1','CGAGCAATAGAGGTGG-1','GACTATAATGATTTTT-1','TGAGCCTCACGCTTCG-1','CGTGTGGATCTGGCAG-1','TTCGAGACGTAGAAAA-1','CACGGTTTTCATACAA-1']:
+ i=np.where(names==b)[0][0]
+ print(b,'comb',round(comb[i],3),'rank',int(np.where(order==i)[0][0])+1,'ps',round(ps.get(b,0),3),'ts',round(ts.get(b,0),3),'sps',round(sps.get(b,0),3),'sts',round(sts.get(b,0),3),'snap_avg',round(snap_avg[i],1))
+PY"

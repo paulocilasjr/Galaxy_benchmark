@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import cyvcf2, time
+from collections import defaultdict
+pan=cyvcf2.VCF('panel_region.vcf.gz')
+q=cyvcf2.VCF('calls_min.vcf.gz')
+# query calls dict: pos -> (ref, alt, gt set, gt string, dp)
+qcalls={}
+for v in q:
+    gt=v.genotypes[0][:2]
+    if -1 in gt: continue
+    qcalls[(v.CHROM,v.POS,v.REF,v.ALT[0])]=gt
+print('query calls',len(qcalls))
+samples=pan.samples
+counts=defaultdict(lambda:[0,0,0]) # match,mismatch,missing or skipped
+comp=0
+t0=time.time()
+for v in pan:
+    key=(v.CHROM,v.POS,v.REF,v.ALT[0])
+    qgt=qcalls.get(key)
+    if qgt is None:
+        continue
+    comp+=1
+    # Convert query GT to allele set ignoring phase
+    qset=set(qgt)
+    for si,s in enumerate(samples):
+        g=v.genotypes[si][:2]
+        if -1 in g:
+            counts[s][2]+=1
+        else:
+            gset=set(g)
+            if qset==gset:
+                counts[s][0]+=1
+            else:
+                counts[s][1]+=1
+print('overlap compared sites',comp,'time',time.time()-t0)
+rows=[]
+for s,c in counts.items():
+    m,mm,miss=c
+    total=m+mm
+    score=mm
+    # also frac mismatch among called nonmissing
+    rows.append((score, -m, mm/total if total else 1, total, m, s))
+rows.sort()
+for r in rows[:15]:
+    print(r)
+print('last few')
+for r in rows[-3:]:
+    print(r)
+PY"

@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, time, os, csv
+seq='/opt/miniconda3/envs/benchmark_codex_a75c7e44e7bb415d9720/lib/python3.11/site-packages/bioframe/io/data/hg38.seqinfo.tsv'
+chroms=[]
+with open(seq) as fh:
+    r=csv.DictReader(fh, delimiter='\\t')
+    for row in r:
+        if row['name'] in [f'chr{i}' for i in range(1,23)]+['chrX','chrY']:
+            chroms.append((row['name'],int(row['length'])))
+f='odd/odd.one.out.q1/1.tagAlign.gz'
+t=time.time()
+chunks=[]
+reader=pd.read_csv(f, sep='\\t', header=None, usecols=[0,1,5], names=['chrom','start','strand'], chunksize=1000000, dtype={'chrom':'category','start':np.int32,'strand':'category'})
+for ch in reader:
+    ch['bin']=(ch['start']//10).astype(np.int32)
+    g=ch.groupby(['chrom','strand','bin'], observed=True).size().reset_index(name='count')
+    chunks.append(g)
+df=pd.concat(chunks, ignore_index=True)
+print('read',time.time()-t)
+maxlag=100
+corr=np.zeros(maxlag+1, dtype=np.float64)
+for chrom,L in chroms:
+    sub=df[df.chrom==chrom]
+    if sub.empty: continue
+    n=L//10+maxlag+1
+    P=np.zeros(n,dtype=np.float32); M=np.zeros(n,dtype=np.float32)
+    for strand, arr in [('+',P),('-',M)]:
+        s=sub[sub.strand==strand]
+        if len(s):
+            bins=s['bin'].to_numpy(); counts=s['count'].to_numpy()
+            arr[bins]+=counts
+    # compute cross-corr for lags 0..maxlag using FFT, trim cyclic wrap by zero padding maxlag? length n with L bins + maxlag zeros; cyclic wrap for lag<=maxlag okay if bins near end only wrap into first maxlag, but we add maxlag zeros, so no wrap into valid? Actually correlation cyclic lag s sums x[i]*y[i+s mod n], for i near end wraps; we have maxlag zeros after L, but y i+s up to L+maxlag; no wrap except i+s beyond n-1 for i>n-1-s, which is only last maxlag bins; x there zeros so no contribution. Good.
+    F=np.fft.rfft(P); G=np.fft.rfft(M)
+    C=np.fft.irfft(F*np.conj(G), n=n)
+    corr[:maxlag+1]+=C[:maxlag+1]
+    print(chrom, time.time()-t)
+print('total', time.time()-t)
+np.save('cc_file1.npy',corr)
+print(corr[:101])
+# print peak lag and some
+print('max', corr.argmax(), corr.max())
+PY"

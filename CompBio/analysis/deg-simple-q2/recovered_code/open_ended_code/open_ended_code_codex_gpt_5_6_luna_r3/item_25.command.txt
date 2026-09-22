@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv,gzip,re,collections
+m={}
+with gzip.open('refs/gencode.v47.annotation.gtf.gz','rt') as f:
+ for l in f:
+  if l.startswith('#'): continue
+  a=l.rstrip().split('\\t')
+  if a[2]=='transcript':
+   d=dict(re.findall(r'(\\w+) \"(["'^"]*)"'"',a[8])); m[d.get('transcript_id','').split('.')[0]]=d
+for s in 'AB':
+ print('\\nSAMPLE',s)
+ with open(f'results/salmon_{s}/quant.sf') as f:
+  for r in csv.DictReader(f,delimiter='\\t'):
+   if m.get(r['Name'].split('.')[0],{}).get('gene_name')=='DEFB110': print(r, m[r['Name'].split('.')[0]])
+PY
+python3 - <<'PY'
+# Show gene-level totals and isoform fractions for genes with large transcript-level changes.
+import csv,gzip,re,collections,math
+m={}
+with gzip.open('refs/gencode.v47.annotation.gtf.gz','rt') as f:
+ for l in f:
+  if l.startswith('#'): continue
+  a=l.rstrip().split('\\t')
+  if a[2]"'!='"'transcript': continue
+  d=dict(re.findall(r'(\\w+) \"(["'^"]*)"'"',a[8])); m[d.get('transcript_id','').split('.')[0]]=d
+q={}
+for s in 'AB':
+ q[s]={}
+ with open(f'results/salmon_{s}/quant.sf') as f:
+  for r in csv.DictReader(f,delimiter='\\t'):
+   tid=r['Name'].split('.')[0]; q[s][tid]=float(r['NumReads'])
+g=collections.defaultdict(lambda:[0.,0.,collections.defaultdict(lambda:[0.,0.])])
+for tid in q['A']:
+ gid=m.get(tid,{}).get('gene_id','?').split('.')[0]; name=m.get(tid,{}).get('gene_name','?')
+ g[(gid,name)][0]+=q['A'][tid];g[(gid,name)][1]+=q['B'][tid];g[(gid,name)][2][tid]=[q['A'][tid],q['B'][tid]]
+# rank by Jensen-Shannon-ish difference in transcript fractions for genes with total >=20 and >=2 isoforms nonzero
+out=[]
+for (gid,name),(a,b,ts) in g.items():
+ if a+b<20 or len(ts)<2: continue
+ if a+b==0: continue
+ dena=a or 1; denb=b or 1
+ # L1 diff fraction, and max/min
+ dif=sum(abs(x/dena-y/denb) for x,y in ts.values())/2
+ out.append((dif,a+b,a,b,gid,name,len(ts), sorted(ts.items(),key=lambda z:sum(z[1]),reverse=True)))
+for x in sorted(out,reverse=True)[:30]:
+ dif,total,a,b,gid,name,n,ts=x
+ print(f'{dif:.4f}\\ttotal {total:.1f}\\tA {a:.1f}\\tB {b:.1f}\\t{gid}\\t{name}\\t{n}')
+ print('  '+' '.join(f'{tid}:{v[0]:.1f}/{v[1]:.1f}' for tid,v in ts if sum(v)>1))
+PY"

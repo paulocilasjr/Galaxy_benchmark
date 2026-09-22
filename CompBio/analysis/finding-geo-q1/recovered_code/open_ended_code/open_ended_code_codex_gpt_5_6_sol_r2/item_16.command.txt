@@ -1,0 +1,27 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, anndata as ad, hashlib
+p='GSM3578982_raw_gene_bc_matrices_h5.h5'
+with h5py.File(p,'r') as f:
+ g=f['output_genome2']; print('shape field',g['shape'][:]);
+ X=sp.csc_matrix((g['data'][:],g['indices'][:],g['indptr'][:]),shape=tuple(g['shape'][:]))
+ genes=np.array([x.decode() for x in g['genes'][:]]); names=np.array([x.decode() for x in g['gene_names'][:]]); bars=np.array([x.decode() for x in g['barcodes'][:]])
+cs=np.asarray(X.sum(0)).ravel(); print('nnz',X.nnz,'cs positive',sum(cs>0),'max',cs.max())
+u,c=np.unique(cs,return_counts=True)
+# thresholds with exact cells
+for t in range(0,1000):
+ if (cs>=t).sum()==20072: print('threshold >=',t)
+ if (cs>t).sum()==20072: print('threshold >',t)
+A=ad.read_h5ad('finding.geo.q1.h5ad')
+print('barcodes all exact ordered',np.array_equal(A.obs_names.values,bars[cs>=274]))
+print('barcodes sets',len(set(A.obs_names)&set(bars)),len(A.obs_names))
+print('source genes',len(genes),'target genes',A.n_vars,'intersect',len(set(genes)&set(A.var_names)))
+print('missing source genes',[(genes[i],names[i],int(X[i].sum())) for i in range(len(genes)) if genes[i] not in set(A.var_names)])
+# source subset aligned target, compare
+bi=np.array([np.where(bars==b)[0][0] for b in A.obs_names])
+gi=np.array([np.where(genes==z)[0][0] for z in A.var_names])
+Y=X[gi][:,bi].T.tocsr()
+print('same shape/nnz',Y.shape,Y.nnz,A.X.nnz)
+D=Y-A.X
+print('difference nnz',D.nnz,'abs sum',abs(D).sum())
+print('source selected counts q',np.quantile(cs[bi],[0,.5,1]))
+PY"

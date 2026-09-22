@@ -1,0 +1,122 @@
+/bin/bash -lc "cat > build_atac_gene2.py <<'PY'
+import gzip, re, csv, collections, sys, numpy as np, bisect
+# parse chrom.sizes chunks group by standard chrom
+sizes=[]
+for line in open('sample.swap.atac.q1.chrom.sizes'):
+    c,s=line.split(); sizes.append((c,int(s)))
+def std_name(c):
+    return re.sub(r'_\\d+"'$'"','',c)
+def suffix(c):
+    m=re.search(r'_(\\d+)"'$'"',c)
+    return int(m.group(1)) if m else 0
+# group preserving natural order
+chunks_by_std=collections.defaultdict(list)
+for c,s in sizes:
+    std=std_name(c)
+    chunks_by_std[std].append((suffix(c),c,s))
+for std in chunks_by_std:
+    chunks_by_std[std].sort()
+# cumulative per std
+std_cum={std:[] for std in chunks_by_std}
+std_names={std:[] for std in chunks_by_std}
+std_sizes={std:[] for std in chunks_by_std}
+for std,arr in chunks_by_std.items():
+    cum=0
+    for suf,c,s in arr:
+        std_cum[std].append(cum); std_names[std].append(c); std_sizes[std].append(s); cum+=s
+# parse v6 gene entries, map promoters to chunk intervals
+genes=[]
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        chrom=p[0]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+        m=re.search(r'gene_id \"(["'^"]+)"'"',attrs)
+        if not m: continue
+        gid=m.group(1)
+        mn=re.search(r'gene_name \"(["'^"]+)"'"',attrs)
+        if not mn: continue
+        gn=mn.group(1)
+        parts=[x.strip() for x in gn.split('|')]
+        sym=None
+        for part in parts:
+            if re.match(r'"'^AMEX60DD'"\\d',part): continue
+            base=re.sub(r'\\s*\\[(?:hs|nr|mm|dr|xt|zf|gg|xl|sc)\\]"'$'"','',part).strip()
+            if base and not re.match(r'"'^LOC'"\\d+', base):
+                sym=base; break
+        if sym is None:
+            for part in parts:
+                base=re.sub(r'\\s*\\[(?:hs|nr|mm|dr|xt|zf|gg|xl|sc)\\]"'$'"','',part).strip()
+                if base and base.startswith('LOC'):
+                    sym=base; break
+        if sym is None: continue
+        tss=start if strand=='+' else end
+        prom_start=max(0,tss-2000); prom_end=tss+2000
+        # map standard interval to chunks
+        arr=chunks_by_std.get(chrom)
+        if arr is None:
+            # maybe unplaced; skip
+            continue
+        cums=std_cum[chrom]; names=std_names[chrom]; szs=std_sizes[chrom]
+        total=sum(szs)
+        prom_start=min(prom_start,total); prom_end=min(prom_end,total)
+        # find first chunk where chunk_end > prom_start
+        i=bisect.bisect_right([c+s for c,s in zip(cums,szs)], prom_start)
+        if i<0: i=0
+        while i<len(names):
+            cstart=cums[i]; cend=cstart+szs[i]
+            if cstart >= prom_end: break
+            s=max(prom_start,cstart); e=min(prom_end,cend)
+            if s<e:
+                genes.append((names[i], s-cstart, e-cstart, gid, sym))
+            i+=1
+# dedup gene_id? Now gene can split into multiple chunks; keep all pieces same gid, later aggregate by gid.
+# sort intervals per chunk by start
+genes_by_chrom=collections.defaultdict(list)
+for g in genes: genes_by_chrom[g[0]].append(g)
+for c in genes_by_chrom:
+    genes_by_chrom[c].sort(key=lambda x:x[1])
+print('gene pieces',len(genes), 'chunks',len(genes_by_chrom), file=sys.stderr)
+# read header
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); header=next(r); cols=header[3:]
+# map each gene piece back to gid for output
+gid_to_idx={}; gid_list=[]; sym_list=[]; rows_info=[]
+# We'll aggregate per gene_id to one row, summing across pieces. Need initialize sums by unique gid in order.
+for g in genes:
+    gid=g[3]; sym=g[4]
+    if gid not in gid_to_idx:
+        gid_to_idx[gid]=len(gid_list); gid_list.append(gid); sym_list.append(sym)
+ng=len(gid_list)
+sums=np.zeros((ng,len(cols)),dtype=np.int64)
+# store idx for each interval in genes_by_chrom to add faster: append idx
+for c,arr in genes_by_chrom.items():
+    arr2=[]
+    for g in arr:
+        idx=gid_to_idx[g[3]]; arr2.append((g[1],g[2],idx))
+    genes_by_chrom[c]=arr2
+ptr={c:0 for c in genes_by_chrom}
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        chrom=row[0]; start=int(row[1]); end=int(row[2])
+        arr=genes_by_chrom.get(chrom)
+        if not arr: continue
+        p=ptr[chrom]
+        while p<len(arr) and arr[p][1] < start:
+            p+=1
+        ptr[chrom]=p
+        vals=np.array(list(map(int,row[3:])),dtype=np.int64)
+        j=p
+        while j<len(arr) and arr[j][0] <= end:
+            sums[arr[j][2],:]+=vals
+            j+=1
+out=open('atac_gene_promoter_counts.tsv','w')
+out.write('gene_id\\tsymbol\\t'+'\\t'.join(cols)+'\\n')
+for i,(gid,sym) in enumerate(zip(gid_list,sym_list)):
+    out.write(gid+'\\t'+sym+'\\t'+'\\t'.join(map(str,sums[i]))+'\\n')
+out.close()
+print('genes out',ng, file=sys.stderr)
+PY
+python3 build_atac_gene2.py"

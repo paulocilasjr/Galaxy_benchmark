@@ -1,0 +1,24 @@
+/bin/bash -lc "python -u - <<'PY'
+import urllib.request, io, pandas as pd, anndata as ad, numpy as np
+url='https://lungcancer.chenlulab.com/api/download/?name=meta.csv'
+b=urllib.request.urlopen(url,timeout=120).read(); print('meta bytes',len(b))
+m=pd.read_csv(io.BytesIO(b)); print('meta shape',m.shape); print(m.columns.tolist()); print(m.head().to_string(index=False));
+for c in ['SampleID','Batch','Tissue','PatientID','Disease','Stage','CellName']:
+ print('\\n',c,'nunique',m[c].nunique()); print(m[c].value_counts().head(100).to_string())
+# task
+A=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r')
+obs=A.obs.copy(); obs['taskid']=obs.index.astype(str); obs['barcode']=obs['taskid'].str.rsplit('_',n=1).str[-1] # not right: barcode includes hyphen but yes
+obs['sample']=obs['sampleID'].astype(str)
+print('\\ntask shape',obs.shape); print(obs.groupby('sample').size().head().to_string())
+print('task barcode example',obs[['taskid','barcode','sample']].head().to_string(index=False))
+# candidate mapping based on exact suffix count, compare for task samples
+m['barcode']=m['Cells'].astype(str).str.rsplit('_',n=1).str[-1]
+# count barcode overlap per task sample vs original sample
+for s,g in obs.groupby('sample',sort=True):
+ ts=set(g.barcode)
+ scores=[]
+ for os,og in m.groupby('SampleID'):
+  ov=len(ts & set(og.barcode))
+  if ov: scores.append((ov,os,len(og)))
+ print(s,len(ts),sorted(scores,reverse=True)[:5])
+PY"

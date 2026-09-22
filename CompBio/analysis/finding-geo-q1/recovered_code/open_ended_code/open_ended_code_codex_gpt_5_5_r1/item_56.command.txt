@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+with h5py.File('finding.geo.q1.h5ad','r') as lf, h5py.File('GSM3578982_raw_gene_bc_matrices_h5.h5','r') as rf:
+    local_obs=np.array([x.decode() for x in lf['obs/_index'][:]])
+    local_var=np.array([x.decode() for x in lf['var/_index'][:]])
+    rg=rf['output_genome2']
+    raw_barcodes=np.array([x.decode() for x in rg['barcodes'][:]])
+    raw_genes=np.array([x.decode() for x in rg['genes'][:]])
+    raw_gene_names=np.array([x.decode() for x in rg['gene_names'][:]])
+    indptr=rg['indptr'][:]; data=rg['data'][:]
+    sums=np.add.reduceat(data, indptr[:-1])
+    # for empty columns where indptr equal maybe reduceat fails? check values for indptr diff zero; reduceat at same positions? compute robust loop via bincount using repeated? use diff data sums by cumsum
+    cs=np.concatenate([[0],np.cumsum(data,dtype=np.int64)])
+    sums=cs[indptr[1:]]-cs[indptr[:-1]]
+    local_set=set(local_obs)
+    for op,mask in [('>200',sums>200),('>250',sums>250),('>273',sums>273),('>=274',sums>=274),('>300',sums>300),('>500',sums>500)]:
+        arr=raw_barcodes[mask]
+        print(op, len(arr), 'equals local', np.array_equal(arr, local_obs), 'intersect', len(set(arr)&local_set))
+    print('local equals >=274?', np.array_equal(raw_barcodes[sums>=274],local_obs))
+    print('local min raw sum', sums[np.searchsorted(raw_barcodes, local_obs)].min(), 'max nonlocal', max(sums[~np.isin(raw_barcodes,local_obs)]))
+    missing=[(g,n) for g,n in zip(raw_genes,raw_gene_names) if g not in set(local_var)]
+    extra=[g for g in local_var if g not in set(raw_genes)]
+    print('missing raw genes in local', len(missing), missing[:20])
+    print('extra local genes', len(extra), extra[:20])
+PY"

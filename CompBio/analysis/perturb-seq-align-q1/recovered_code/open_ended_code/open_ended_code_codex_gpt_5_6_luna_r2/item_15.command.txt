@@ -1,0 +1,60 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+from scipy.stats import pearsonr, spearmanr
+
+def load(fn):
+ with h5py.File(fn,'r') as f:
+  nobs,nvar=len(f['obs/_index']),len(f['var/_index'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=(nobs,nvar)).tocsr()
+  genes=f['var/_index'][...].astype(str)
+  gc=f['obs/guide/categories'][...].astype(str)
+  codes=f['obs/guide/codes'][...]
+  return X,genes,gc,codes
+
+def normlog(X):
+ lib=np.asarray(X.sum(axis=1)).ravel().astype(float)
+ Y=X.multiply(1e4/np.maximum(lib,1)[:,None]).tocsr()
+ Y.data=np.log1p(Y.data)
+ return Y,lib
+
+def group_means(Y,gc,codes):
+ out=[]
+ for i,g in enumerate(gc):
+  out.append(np.asarray(Y[codes==i].mean(axis=0)).ravel())
+ return np.array(out)
+R,gr,rg,rc=load('perturb.seq.align.q1.ref.h5ad')
+Q,gq,qg,qc=load('perturb.seq.align.q1.query.h5ad')
+R,lr=normlog(R); Q,lq=normlog(Q)
+MR=group_means(R,rg,rc); MQ=group_means(Q,qg,qc)
+# control combined delta (means weighted? mean of NT cells)
+cr=np.isin(rc,[i for i,g in enumerate(rg) if g.startswith('NT-')])
+cq=np.isin(qc,[i for i,g in enumerate(qg) if g.startswith('NT-')])
+BR=R[cr].mean(axis=0).A1; BQ=Q[cq].mean(axis=0).A1
+DR=MR-BR; DQ=MQ-BQ
+# common genes
+idxr={g:i for i,g in enumerate(gr)}; common=[g for g in gq if g in idxr]
+ir=np.array([idxr[g] for g in common]); iq=np.array([i for i,g in enumerate(gq) if g in idxr])
+print('common',len(common),'ref',len(gr),'query',len(gq))
+# filters common genes variable/effect. Calculate ref/query baseline variances? 
+# pair similarities
+for metric in ['pearson','cosine','spearman']:
+ print('\\n',metric)
+ sims=np.zeros((len(rg),len(qg)))
+ A=DR[:,ir]; B=DQ[:,iq]
+ # only actual target ref, query generic
+ for i in range(len(rg)):
+  for j in range(len(qg)):
+   if metric=='pearson': sims[i,j]=np.corrcoef(A[i],B[j])[0,1]
+   elif metric=='cosine': sims[i,j]=A[i].dot(B[j])/(np.linalg.norm(A[i])*np.linalg.norm(B[j]))
+   else: sims[i,j]=spearmanr(A[i],B[j]).statistic
+ for i,g in enumerate(rg):
+  if g.startswith('NT-'):continue
+  order=np.argsort(sims[i])[::-1][:5]
+  print(g, ' | '.join(f'{qg[j]}={sims[i,j]:.3f}' for j in order))
+ print('query top reverse')
+ for j,g in enumerate(qg):
+  if g.startswith('NT-'): continue
+  order=np.argsort(sims[:,j])[::-1][:3]
+  print(g, ' | '.join(f'{rg[i]}={sims[i,j]:.3f}' for i in order))
+PY"

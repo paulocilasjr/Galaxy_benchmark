@@ -1,0 +1,48 @@
+/bin/bash -lc "cat > build_ref.py <<'PY'
+import gzip, csv, numpy as np, time
+# Load input bin keys and counts
+fn='sample.swap.atac.q1.tsv.gz'
+keys=[]; X=[]
+with gzip.open(fn,'rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r); names=header[3:]
+    for row in r:
+        chrom,start,end=row[0],int(row[1]),int(row[2])
+        keys.append((chrom,start))
+        X.append([int(v) for v in row[3:]])
+X=np.array(X,dtype=np.float64)
+print('X shape',X.shape)
+# build key -> row
+key_to_idx={k:i for i,k in enumerate(keys)}
+print('num keys',len(key_to_idx))
+tissues=names
+ref=np.zeros((X.shape[0],len(tissues)),dtype=np.float64)
+ti={t:i for i,t in enumerate(tissues)}
+# Process peakSet
+count=0; matched=0
+with gzip.open('peakSet.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r)
+    for row in r:
+        chrom=row[0]; start=int(row[1]); end=int(row[2]); group=row[3]; score=float(row[4])
+        suf=group.split('._.')[-1]
+        idx=ti.get(suf)
+        if idx is None:
+            continue
+        bin_start=(start//10000)*10000
+        # peaks may start at 0? input bins starts 10000; handle k=0 separately maybe no bin for 0?
+        # Find matching key; try direct then floor for bins starting at 10000.
+        ridx=key_to_idx.get((chrom,bin_start))
+        if ridx is None and bin_start==0:
+            ridx=key_to_idx.get((chrom,10000))
+        if ridx is not None:
+            ref[ridx,idx]+=score
+            matched+=1
+        count+=1
+        if count%2000000==0:
+            print('processed peaks',count,'matched',matched,flush=True)
+print('processed',count,'matched exact tissue peaks',matched)
+np.savez_compressed('matrix_data.npz', X=X, ref=ref, names=np.array(names,dtype=str))
+print('saved')
+PY
+python3 build_ref.py"

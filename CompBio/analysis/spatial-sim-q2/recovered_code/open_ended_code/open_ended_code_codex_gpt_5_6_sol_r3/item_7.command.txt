@@ -1,0 +1,26 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.stats import spearmanr, pearsonr
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+cts=sorted(md.cell_type.unique())
+prof=np.stack([sc.loc[md.cell_type==t].mean().values for t in cts],axis=1)
+Y=mmread('matrix.mtx.gz').tocsr().T.toarray() # spots x genes
+print('types',cts,'Y',Y.shape,'libs',np.percentile(Y.sum(1),[0,25,50,75,100]))
+# raw nnls all genes
+coef=np.array([nnls(prof,y)[0] for y in Y])
+res=np.array([np.linalg.norm(prof@c-y)/np.linalg.norm(y) for c,y in zip(coef,Y)])
+print('coef percentiles and positive rate')
+for i,t in enumerate(cts): print(t,np.percentile(coef[:,i],[0,10,25,50,75,90,100]),(coef[:,i]>.25).mean(),(coef[:,i]>.5).mean())
+print('sumcoef',np.percentile(coef.sum(1),[0,25,50,75,100]),'res',np.percentile(res,[0,50,100]))
+# marker block sums
+for i,t in enumerate(['Tumor_Core','Fibroblast_Stroma','T_Cell','B_Cell','Macrophage','Endothelial']):
+    b=Y[:,i*50:(i+1)*50].sum(1)
+    print(t,'block',np.percentile(b,[0,25,50,75,100]),'corr',spearmanr(b,coef[:,cts.index(t)]).statistic)
+# integer-round coef frequency vectors
+rounded=np.rint(coef).astype(int)
+print('rounded mismatch',np.abs(coef-rounded).mean(), 'patterns',len(np.unique(rounded,axis=0)))
+print(pd.Series(map(tuple,rounded)).value_counts().head(20))
+PY"

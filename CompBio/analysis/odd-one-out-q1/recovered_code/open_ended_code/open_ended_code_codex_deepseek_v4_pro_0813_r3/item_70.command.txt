@@ -1,0 +1,45 @@
+/bin/bash -lc "cat > crosscorr_100bp.py <<'PY'
+import pandas as pd, numpy as np, time, glob, os, csv, json
+seq='/opt/miniconda3/envs/benchmark_codex_a75c7e44e7bb415d9720/lib/python3.11/site-packages/bioframe/io/data/hg38.seqinfo.tsv'
+chroms=[]
+with open(seq) as fh:
+    r=csv.DictReader(fh, delimiter='\\t')
+    for row in r:
+        if row['name'] in [f'chr{i}' for i in range(1,23)]+['chrX','chrY']:
+            chroms.append((row['name'],int(row['length'])))
+files=sorted(glob.glob('odd/odd.one.out.q1/*.tagAlign.gz'), key=lambda x:int(os.path.basename(x).split('.')[0]))
+maxlag=30  # bins of 100bp => 3kb
+profiles={}
+for f in files:
+    name=os.path.basename(f).split('.')[0]
+    t=time.time()
+    chunks=[]
+    reader=pd.read_csv(f, sep='\\t', header=None, usecols=[0,1,5], names=['chrom','start','strand'], chunksize=2000000, dtype={'chrom':'category','start':np.int32,'strand':'category'})
+    for ch in reader:
+        ch['bin']=(ch['start']//100).astype(np.int32)
+        g=ch.groupby(['chrom','strand','bin'], observed=True).size().reset_index(name='count')
+        chunks.append(g)
+    df=pd.concat(chunks, ignore_index=True)
+    print(name,'read',round(time.time()-t,1),flush=True)
+    corr=np.zeros(maxlag+1, dtype=np.float64)
+    for chrom,L in chroms:
+        sub=df[df.chrom==chrom]
+        if sub.empty: continue
+        n=L//100+maxlag+1
+        P=np.zeros(n,dtype=np.float32); M=np.zeros(n,dtype=np.float32)
+        sp=sub[sub.strand=='+']
+        if len(sp):
+            b=sp['bin'].to_numpy(); c=sp['count'].to_numpy(); P[b]+=c
+        sm=sub[sub.strand=='-']
+        if len(sm):
+            b=sm['bin'].to_numpy(); c=sm['count'].to_numpy(); M[b]+=c
+        # use rfft
+        F=np.fft.rfft(P); G=np.fft.rfft(M)
+        C=np.fft.irfft(F*np.conj(G), n=n)
+        corr[:maxlag+1]+=C[:maxlag+1]
+    profiles[name]=corr
+    print(name,'done',round(time.time()-t,1),flush=True)
+np.savez('crosscorr_100bp.npz', **profiles)
+print('saved')
+PY
+python3 crosscorr_100bp.py"

@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+# Quick mutual nearest summary using common genes raw lognorm effects K=1000/2000/5000
+import h5py, numpy as np, collections
+from scipy import sparse
+
+def dec(a): return np.array([x.decode() if isinstance(x,(bytes,bytearray)) else str(x) for x in a])
+def read(fn):
+    with h5py.File(fn,'r') as f:
+        X=sparse.csc_matrix((f['X/data'][()].astype(np.float32), f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape']))
+        var=dec(f['var/_index'][()]); gc=dec(f['obs/guide/categories'][()]); labels=gc[f['obs/guide/codes'][()]]
+        target=None
+        if 'target_gene' in f['obs']:
+            tc=dec(f['obs/target_gene/categories'][()]); target=tc[f['obs/target_gene/codes'][()]]
+        return X,var,gc,labels,target
+def lognorm(X):
+    totals=np.asarray(X.sum(1)).ravel().astype(np.float32); totals[totals==0]=1
+    C=X.tocoo(copy=True); C.data=np.log1p(C.data/totals[C.row]*1e4).astype(np.float32); return C.tocsr()
+def means(X, lab, groups):
+    return np.vstack([np.asarray(X[lab==g].mean(0)).ravel() for g in groups]).astype(np.float32)
+def corr(A,B):
+    A=A.astype(float); B=B.astype(float); A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True)
+    return A@B.T/(np.linalg.norm(A,axis=1)[:,None]*np.linalg.norm(B,axis=1)[None,:]+1e-12)
+Xr,vr,grc,gr,tr=read('perturb.seq.align.q1.ref.h5ad'); Xq,vq,gqc,gq,_=read('perturb.seq.align.q1.query.h5ad')
+refmap={g:collections.Counter(tr[gr==g]).most_common(1)[0][0] for g in grc}
+qpos={g:i for i,g in enumerate(vq)}; ridx=[]; qidx=[]
+for i,g in enumerate(vr):
+    if g in qpos: ridx.append(i); qidx.append(qpos[g])
+Mr=means(lognorm(Xr)[:,ridx],gr,grc); Mq=means(lognorm(Xq)[:,qidx],gq,gqc)
+ref_non=[i for i,g in enumerate(grc) if not g.startswith('NT-')]; q_non=[i for i,g in enumerate(gqc) if not g.startswith('NT-')]
+ref_nt=[i for i,g in enumerate(grc) if g.startswith('NT-')]; q_nt=[i for i,g in enumerate(gqc) if g.startswith('NT-')]
+Er=Mr[ref_non]-Mr[ref_nt].mean(0); Eq=Mq[q_non]-Mq[q_nt].mean(0)
+refnames=[grc[i] for i in ref_non]; qnames=[gqc[i] for i in q_non]
+score=np.maximum(np.max(np.abs(Er),0),np.max(np.abs(Eq),0))
+for k in [500,1000,2000,5000,11858]:
+    idx=np.argsort(score)[-k:] if k<score.size else np.arange(score.size)
+    C=corr(Er[:,idx],Eq[:,idx])
+    print('\\nK',k)
+    for gene in ['PABPC1','NUDT21','LEO1']:
+        rg=[g for g,t in refmap.items() if t==gene][0]; ri=refnames.index(rg)
+        bj=C[ri].argmax(); back=C[:,bj].argmax();
+        print(gene, 'ref',rg,'best query',qnames[bj],C[ri,bj],'query best ref',refnames[back],refmap[refnames[back]],C[back,bj])
+PY"

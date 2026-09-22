@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+# load candidate calls
+cands=[]
+with gzip.open('q1.hg38.variants.vcf.gz','rt') as f:
+  for line in f:
+    if line.startswith('#'): continue
+    a=line.rstrip().split('\\t')
+    chrom,pos,ref,alt=a[0],int(a[1]),a[3],a[4]
+    if chrom"'!='"'chr9' or len(ref)"'!=1 or len(alt)!=1: continue
+    fmt=a[8].split('"':'); vals=a[9].split(':'); d=dict(zip(fmt,vals))
+    dp=int(d.get('DP','0') or 0)
+    ad=[int(x) for x in d.get('AD','0,0').split(',') if x"'!='"'.']
+    af=(ad[1]/dp if len(ad)>1 and dp else 0)
+    if dp>=20 and af>=0.9:
+      cands.append((pos,ref,alt,float(a[5]),dp,ad))
+print('candidates',len(cands))
+# parse refseq records
+trs=[]
+with gzip.open('ncbiRefSeq.hg38.txt.gz','rt') as f:
+  for line in f:
+    a=line.rstrip('\\n').split('\\t')
+    if len(a)<16 or a[2]"'!='"'chr9': continue
+    # UCSC schema: bin name chrom strand txStart txEnd cdsStart cdsEnd exonCount exonStarts exonEnds score geneName geneName2 ... exonFrames
+    tr={'name':a[1],'strand':a[3],'tx0':int(a[4]),'tx1':int(a[5]),'cds0':int(a[6]),'cds1':int(a[7]),'n':int(a[8]),'starts':[int(x) for x in a[9].rstrip(',').split(',') if x],'ends':[int(x) for x in a[10].rstrip(',').split(',') if x],'gene':a[12], 'gene2':a[13]}
+    trs.append(tr)
+# overlap candidates with exons / coding
+for pos,ref,alt,q,dp,ad in cands:
+  p=pos-1
+  hits=[]
+  for t in trs:
+    for i,(s,e) in enumerate(zip(t['starts'],t['ends'])):
+      if s<=p<e:
+        coding=(t['cds0']<=p<t['cds1'])
+        hits.append((t['gene'],t['gene2'],t['name'],t['strand'],i+1,t['cds0'],t['cds1'],coding))
+  print(f'{pos}\\t{ref}>{alt}\\tDP={dp}\\tAD={ad}\\t' + ('; '.join(map(str,hits)) if hits else '-'))
+PY"

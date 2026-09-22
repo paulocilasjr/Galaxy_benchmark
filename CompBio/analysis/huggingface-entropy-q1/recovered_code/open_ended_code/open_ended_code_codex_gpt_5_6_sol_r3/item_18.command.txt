@@ -1,0 +1,11 @@
+/bin/bash -lc 'HF_HOME="$PWD/hf_home" PYTHONPATH="$PWD" arch -arm64 runtime_arm64/bin/python - <<'"'PY'
+import json,torch
+from transformers import AutoModelForMaskedLM,AutoTokenizer
+p='downloads/model'; t=AutoTokenizer.from_pretrained(p,trust_remote_code=True); m=AutoModelForMaskedLM.from_pretrained(p,trust_remote_code=True).to('mps').eval()
+x=t(json.load(open('downloads/ucsc_sequence.json'))['dna'][:32],return_tensors='pt')['input_ids'].to('mps')
+layer=m.caduceus.backbone.layers[0]; h=m.caduceus.backbone.embeddings(x); h=layer.norm(h)
+for name,mm,hh in [('fwd',layer.mixer.mamba_fwd,h),('rev',layer.mixer.mamba_rev,h.flip(1))]:
+ xz=torch.nn.functional.linear(hh,mm.in_proj.weight).transpose(1,2); xx=xz.chunk(2,dim=1)[0]; xx=torch.nn.functional.silu(mm.conv1d(xx)[...,:hh.shape[1]])
+ q=torch.nn.functional.linear(xx.transpose(1,2),mm.x_proj.weight); dt=q[...,:mm.dt_rank]; dt=torch.nn.functional.softplus(torch.nn.functional.linear(dt,mm.dt_proj.weight,mm.dt_proj.bias))
+ print(name, float(dt.min().cpu()),float(dt.max().cpu()),float(dt.mean().cpu()))
+PY"

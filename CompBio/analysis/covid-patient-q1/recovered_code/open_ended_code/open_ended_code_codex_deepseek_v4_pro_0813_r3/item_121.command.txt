@@ -1,0 +1,45 @@
+/bin/bash -c "cat > summarize_GSE180578_GEX.py <<'PY'
+import tarfile, gzip, json, time
+outer=tarfile.open('GSE180578_RAW.tar','r')
+members=outer.getmembers()
+names=[m.name for m in members if m.name.endswith('_PBMC_GEX.tar.gz') or m.name.endswith('_PBMC_ETA_GEX.tar.gz') or m.name.endswith('_ETA_GEX.tar.gz') or m.name.endswith('_GEX.tar.gz')]
+# specifically GEX files from GSM5465121 onwards
+gex=[]
+for n in names:
+    # exclude CITEseq
+    if 'CITEseq' not in n and n.endswith('GEX.tar.gz'):
+        gex.append(n)
+print('n gex',len(gex), flush=True)
+summ=[]
+for name in gex:
+    t=time.time(); f=outer.extractfile(name); inner=tarfile.open(fileobj=f,mode='r:gz')
+    mm=bb=None; ff=None
+    for x in inner.getmembers():
+        if x.name.endswith('/matrix.mtx'): mm=x
+        if x.name.endswith('/barcodes.tsv'): bb=x
+        if x.name.endswith('/features.tsv'): ff=x
+    nb=0; nf=0
+    if bb:
+        bf=inner.extractfile(bb); gz=gzip.GzipFile(fileobj=bf); nb=sum(1 for _ in gz); gz.close(); bf.close()
+    if ff:
+        bf=inner.extractfile(ff); gz=gzip.GzipFile(fileobj=bf); nf=sum(1 for _ in gz); gz.close(); bf.close()
+    mf=inner.extractfile(mm); gz=gzip.GzipFile(fileobj=mf)
+    header=[]
+    while len(header)<1:
+        line=gz.readline()
+        if not line: break
+        if line.startswith(b'%'): continue
+        header.append(line.strip())
+    parts=header[0].split(); genes=int(parts[0]); cells=int(parts[1]); nnz_header=int(parts[2])
+    total=0; nnz=0
+    for line in gz:
+        p=line.split()
+        if len(p)>=3: total+=float(p[2]); nnz+=1
+    gz.close(); mf.close(); inner.close(); f.close()
+    summ.append({'name':name,'nbarcodes':nb,'nfeatures':nf,'genes':genes,'cells':cells,'nnz':nnz,'total_umi':total})
+    print(name, 'barcodes',nb,'cells',cells,'nnz',nnz,'total',total, 'time',round(time.time()-t,1), flush=True)
+outer.close()
+json.dump(summ,open('GSE180578_GEX_summary.json','w'))
+print('saved')
+PY
+python summarize_GSE180578_GEX.py"

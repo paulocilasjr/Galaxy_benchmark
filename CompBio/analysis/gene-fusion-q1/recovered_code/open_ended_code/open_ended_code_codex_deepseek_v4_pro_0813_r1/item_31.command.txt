@@ -1,0 +1,32 @@
+/bin/bash -c "python3 - <<'PY'
+import pysam, json, re
+sym=json.load(open('sym.json'))
+def g(ref): return sym.get(ref, ref)
+# parse CIGAR leading/trailing clips
+def clips(c):
+    left=right=0
+    m=re.match(r'"'^('"\\d+)S', c)
+    if m: left=int(m.group(1))
+    m=re.search(r'(\\d+)S"'$'"', c)
+    if m: right=int(m.group(1))
+    return left,right
+# from SA parse first entry only; output primary ref/gene, clip, SA ref/gene, SA strand
+rows=[]
+infile=pysam.AlignmentFile('aln.sam','r')
+for rec in infile:
+    if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+    rg=g(rec.reference_name)
+    if rg not in ('GAPDH','SOX2'): continue
+    if not rec.has_tag('SA'): continue
+    entries=[e for e in rec.get_tag('SA').split(';') if e]
+    for e in entries:
+        p=e.split(',')
+        rg2=g(p[0])
+        if rg2 not in ('GAPDH','SOX2') or rg2==rg: continue
+        l,r=clips(rec.cigarstring)
+        row=(rec.query_name, rec.flag, rg, rec.cigarstring, l,r, rg2, p[2], p[3], rec.reference_start, rec.query_sequence)
+        rows.append(row)
+for row in rows:
+    print(row)
+print('count',len(rows))
+PY"

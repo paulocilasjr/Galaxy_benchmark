@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse,pandas as pd,re,collections
+q=[g.upper() for g in open('characterize.response.q1.txt').read().split()];qc=collections.Counter(q)
+f='geo2/GSE19492_family.soft.gz';g=GEOparse.get_GEO(filepath=f,silent=True)
+for plat in ['GPL4055','GPL9802']:
+ gpl=g.gpls[plat];cols=gpl.table.columns; print(plat,cols[:20]);
+ sc=[c for c in cols if c.upper() in ['GENE_SYMBOL','SYMBOL','GENE SYMBOL'] or c.upper().startswith('GENE_SYMBOL')]
+ print('sym col',sc)
+ if not sc: continue
+ sym=gpl.table.set_index('ID')[sc[0]].to_dict()
+ sel=[n for n,gsm in g.gsms.items() if gsm.metadata.get('platform_id',[''])[0]==plat and gsm.metadata.get('title',[''])[0].startswith('BMM')]
+ mats={n:g.gsms[n].table.set_index('ID_REF')['VALUE'] for n in sel};mat=pd.DataFrame(mats)
+ ctrl=[n for n in sel if '-0h' in n];tr=[n for n in sel if '-24h' in n]
+ print('sel',len(sel),'ctrl',ctrl,'tr',tr)
+ lfc=mat[tr].mean(axis=1)-mat[ctrl].mean(axis=1)
+ rows=[]
+ for pid,x in lfc.items():
+  s=sym.get(pid)
+  if not isinstance(s,str):continue
+  s=re.split(r'///|\\|',s)[0].strip()
+  if not s or s.lower()=='nan':continue
+  rows.append((s.upper(),x))
+ df=pd.DataFrame(rows,columns=['g','x']).sort_values('x',ascending=False)
+ for dir,dd in [('up',df.head(112)),('down',df.tail(112))]:
+  cc=collections.Counter(dd.g);ov=sum(min(v,qc.get(k,0)) for k,v in cc.items());print(plat,dir,ov,[(k,v) for k,v in cc.items() if qc.get(k,0)>0][:20]);print('first',' '.join(dd.g.tolist()[:30]))
+PY"

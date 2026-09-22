@@ -1,0 +1,56 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math
+from collections import defaultdict
+path='single_cell_dynamics_question.csv'
+rows=[]
+with open(path, newline='') as f:
+    r=csv.DictReader(f)
+    for row in r:
+        dx=float(row['enh_x'])-float(row['prom_x'])
+        dy=float(row['enh_y'])-float(row['prom_y'])
+        dz=float(row['enh_z'])-float(row['prom_z'])
+        dist=math.sqrt(dx*dx+dy*dy+dz*dz)
+        rows.append((int(row['cell_id']), int(row['time']), dist<=260.0, int(row['transcription']), dist))
+print('n', len(rows), 'cells', len(set(x[0] for x in rows)))
+print('contact rate', sum(c for _,_,c,_,__ in rows)/len(rows), 'tx rate', sum(tx for *_,tx,__ in rows)/len(rows))
+# contingency same time
+counts={(c,tx):0 for c in (False,True) for tx in (0,1)}
+for _,_,c,tx,_ in rows: counts[(c,tx)]+=1
+print('contingency', counts)
+for c in (False, True):
+    denom=sum(counts[(c,tx)] for tx in (0,1))
+    print('P(tx|contact=%s)'%c, counts[(c,1)]/denom, 'n', denom)
+for tx in (0,1):
+    denom=sum(counts[(c,tx)] for c in (False,True))
+    print('P(contact|tx=%s)'%tx, counts[(True,tx)]/denom, 'n', denom)
+# organize
+cells=defaultdict(list)
+for cid,t,c,tx,d in rows: cells[cid].append((t,c,tx,d))
+for cid in cells: cells[cid].sort()
+# lag probabilities: contact at t predicts tx at t+lag; tx at t predicts contact at t+lag
+print('\\nLag: P(tx[t+lag]=1 | contact[t]) vs no contact[t]')
+for lag in range(-10, 11):
+    # contact at t predicts tx at t+lag. negative lag means tx before contact
+    c1=n1=c0=n0=0
+    for arr in cells.values():
+        T=len(arr)
+        for i,(t,c,tx,d) in enumerate(arr):
+            j=i+lag
+            if 0<=j<T:
+                txj=arr[j][2]
+                if c: c1+=txj; n1+=1
+                else: c0+=txj; n0+=1
+    print(lag, c1/n1 if n1 else None, c0/n0 if n0 else None, 'diff', (c1/n1)-(c0/n0))
+print('\\nLag: P(contact[t+lag]=1 | tx[t]) vs no tx[t]')
+for lag in range(-10, 11):
+    c1=n1=c0=n0=0
+    for arr in cells.values():
+        T=len(arr)
+        for i,(t,c,tx,d) in enumerate(arr):
+            j=i+lag
+            if 0<=j<T:
+                cj=arr[j][1]
+                if tx: c1+=cj; n1+=1
+                else: c0+=cj; n0+=1
+    print(lag, c1/n1 if n1 else None, c0/n0 if n0 else None, 'diff', (c1/n1)-(c0/n0))
+PY"

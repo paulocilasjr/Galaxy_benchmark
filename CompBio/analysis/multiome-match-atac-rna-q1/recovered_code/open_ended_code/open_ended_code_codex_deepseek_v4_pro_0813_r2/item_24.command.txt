@@ -1,0 +1,135 @@
+/bin/bash -lc "cat > compute_match.py <<'PY'
+import gzip, json, bisect, numpy as np, pandas as pd
+from scipy.stats import spearmanr, pearsonr
+import time
+
+# Load RNA
+t=time.time()
+genes=[]; rna=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    header=f.readline().rstrip().split('\\t')[1:]
+    for line in f:
+        p=line.rstrip().split('\\t')
+        genes.append(p[0]); rna.append([float(x) for x in p[1:9]])
+R=pd.DataFrame(rna,index=genes,columns=header)
+print('rna',R.shape,time.time()-t)
+
+# Load ATAC
+t=time.time()
+bin_names=[]; atac=[]
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    aheader=f.readline().rstrip().split('\\t')[1:]
+    for line in f:
+        p=line.rstrip().split('\\t')
+        bin_names.append(p[0]); atac.append([float(x) for x in p[1:9]])
+A=pd.DataFrame(atac,index=bin_names,columns=aheader)
+print('atac',A.shape,time.time()-t)
+
+# Parse bin coordinates
+bins_by_chr={}
+for name,row in A.iterrows():
+    c,s,e=name.rsplit('_',2)
+    s=int(s); e=int(e)
+    bins_by_chr.setdefault(c,[]).append((s,e,name))
+for c in bins_by_chr:
+    bins_by_chr[c].sort()
+chr_starts={c:np.array([b[0] for b in arr]) for c,arr in bins_by_chr.items()}
+chr_ends={c:np.array([b[1] for b in arr]) for c,arr in bins_by_chr.items()}
+chr_names={c:[b[2] for b in arr] for c,arr in bins_by_chr.items()}
+
+# Load gene pos
+pos=json.load(open('gene_positions_gtf.json'))
+# Also maybe use mygene positions for missing? load if exists
+try:
+    pos_my=json.load(open('gene_positions.json'))
+    for k,v in pos_my.items():
+        sym,gp=v
+        if gp and k not in pos:
+            pos[k]={'chr':('chr'+gp['chr'] if not gp['chr'].startswith('chr') else gp['chr']),'start':gp['start'],'end':gp['end'],'strand':gp['strand']}
+except Exception as e: pass
+print('pos',len(pos))
+
+# Build gene activity for windows
+windows={
+ 'tss':(-5000,5000),
+ 'prom10':(-10000,10000),
+ 'genebody':(0,0),
+ 'gene_ext10':(-10000,10000),
+}
+
+def activity(window, use_body):
+    # returns DataFrame genes x 8, rows for genes in pos and in R
+    rows=[]; idx=[]
+    for g in genes:
+        p=pos.get(g)
+        if not p: continue
+        c=p['chr']; st=p['start']; en=p['end']
+        if c not in chr_starts: continue
+        if use_body:
+            reg_start=st+window[0]
+            reg_end=en+window[1]
+        else:
+            if p['strand']=='+':
+                tss=st
+            elif p['strand']=='-':
+                tss=en
+            else:
+                tss=(st+en)//2
+            reg_start=tss+window[0]
+            reg_end=tss+window[1]
+        starts=chr_starts[c]; ends=chr_ends[c]
+        # find bins overlapping [reg_start, reg_end)
+        # start index where ends > reg_start; bisect on starts? bins sorted.
+        # first bin with end > reg_start
+        li=bisect.bisect_right(ends, reg_start) # ends <= reg_start are before; first possible index
+        # include any bin with start < reg_end and end > reg_start
+        # use bisect_left(starts, reg_end) to get count
+        hi=bisect.bisect_left(starts, reg_end)
+        if li<0: li=0
+        if li>=hi: continue
+        names=chr_names[c][li:hi]
+        vals=A.loc[names].values.sum(axis=0)
+        idx.append(g); rows.append(vals)
+    return pd.DataFrame(rows,index=idx,columns=A.columns)
+
+def corr_perm(act, method='pearson', log=True, top=None):
+    # align common genes
+    common=act.index.intersection(R.index)
+    X=R.loc[common].values
+    Y=act.loc[common].values
+    if log:
+        X=np.log1p(X); Y=np.log1p(Y)
+    # select top variable genes across RNA? maybe keep all with sum expr >0.1
+    keep=(R.loc[common].values.sum(axis=1)>0.1) & (act.loc[common].values.sum(axis=1)>0)
+    X=X[keep]; Y=Y[keep]
+    if top and X.shape[0]>top:
+        var=np.var(np.log1p(R.loc[common].values[keep]),axis=1)+np.var(np.log1p(act.loc[common].values[keep]),axis=1)
+        idx=np.argsort(-var)[:top]
+        X=X[idx]; Y=Y[idx]
+    perm=[]
+    mat=np.empty((8,8))
+    for i in range(8):
+        scores=[]
+        for j in range(8):
+            if method=='spearman':
+                r,p=spearmanr(X[:,i],Y[:,j])
+            else:
+                r,p=pearsonr(X[:,i],Y[:,j])
+            scores.append(r)
+            mat[i,j]=r
+        perm.append(int(np.argmax(scores)))
+    print(method,'log',log,'top',top,'shape',X.shape,'perm',perm)
+    print(mat)
+    return perm
+
+for name,(a,b) in windows.items():
+    for use_body in ([False] if name in ['tss','prom10'] else [True]):
+        act=activity((a,b),use_body)
+        print('\\nWINDOW',name,(a,b),'body',use_body,'genes',act.shape)
+        for method in ['pearson','spearman']:
+            corr_perm(act, method=method, log=True, top=None)
+            corr_perm(act, method=method, log=True, top=5000)
+            corr_perm(act, method=method, log=True, top=2000)
+        act.to_pickle(f'act_{name}.pkl')
+PY
+python3 compute_match.py"

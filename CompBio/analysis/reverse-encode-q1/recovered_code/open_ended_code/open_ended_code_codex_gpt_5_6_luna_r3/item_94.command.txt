@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,pyBigWig,numpy as np,time,collections,multiprocessing as mp
+N=76275859;T={}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.split()
+ if c=='chr1':T[int(s)]=round(float(v)*N/1e6)
+target=np.array([T[i*10000] for i in range(24896)],float)
+p=json.load(open('encode_alpha_bams.json'))['@graph']
+def m(x):
+ vals=[]
+ for q in x.get('quality_metrics',[]):
+  if 'reads mapped' in q:vals.append(q['reads mapped'])
+  if 'mapped' in q and isinstance(q['mapped'],int):vals.append(q['mapped'])
+ return max(vals)
+by=collections.defaultdict(list)
+for x in p:by[x['dataset']].append(x)
+b=json.load(open('encode_alpha_bw_urls.json'))['@graph'];bwby=collections.defaultdict(list)
+for x in b:
+ if x.get('status')=='released':bwby[x['dataset']].append((x['accession'],x['cloud_metadata']['url']))
+items=[]
+for d,xs in by.items():
+ s=sum(m(x) for x in xs)
+ if 76e6<=s<=80e6:items.append((d,s,bwby[d]))
+print('items',len(items),flush=True)
+def worker(item):
+ d,s,urls=item;out=[]
+ for acc,u in urls:
+  try:
+   t=time.time();bw=pyBigWig.open(u);z=np.nan_to_num(np.array(bw.stats('chr1',0,248956422,nBins=24896,type='sum'),dtype=float));bw.close()
+   out.append((acc,float(np.corrcoef(target,z)[0,1]),float(np.corrcoef(np.log1p(target),np.log1p(z))[0,1]),round(time.time()-t,1)))
+  except BaseException as e:out.append((acc,'ERR:'+repr(e),None,0))
+ return (d,s,out)
+with mp.get_context('fork').Pool(4) as pool:
+ for r in pool.imap_unordered(worker,items): print(r,flush=True)
+PY"

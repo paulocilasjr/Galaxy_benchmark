@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv
+import numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+
+# Load feature and barcode names
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    features=[line.rstrip('\\n').split('\\t')[1] for line in f]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float) # genes x cells
+# log-normalize per cell
+lib=np.asarray(X.sum(axis=0)).ravel()
+Xnorm=X @ sparse.diags(1/np.maximum(lib,1)*1e4)
+Xlog=Xnorm.copy(); Xlog.data=np.log1p(Xlog.data)
+# cells x genes dense for selected only as needed
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+refmap=ref.set_index('id')['target_gene_name'].to_dict()
+# align call rows to matrix barcode order
+call_by_bc=calls.set_index('cell_barcode').loc[barcodes]
+guides=call_by_bc['feature_call'].values
+targets=np.array([refmap[g] for g in guides])
+
+# canonical IFN-gamma response genes in this matrix: obvious first block + hallmark intersection list
+hallmark = set('''ADAR APOL6 ARID5B ARL4A AUTS2 B2M BANK1 BATF2 BPGM BST2 BTG1 C1R C1S CASP1 CASP3 CASP4 CASP7 CASP8 CCL2 CCL5 CCL7 CD274 CD38 CD40 CD69 CD74 CD86 CDKN1A CIITA CMKLR1 CMPK2 CMTR1 CSF2RB CXCL10 CXCL11 CXCL9 DDX58 DDX60 DHX58 EIF2AK2 EPSTI1 FAS FCGR1A FGL2 GBP4 GBP6 GCH1 HERC6 HIF1A HLA-A HLA-B HLA-DMA HLA-DQA1 HLA-DRB1 HLA-G ICAM1 IDO1 IFI27 IFI30 IFI35 IFI44 IFI44L IFIH1 IFIT1 IFIT2 IFIT3 IFITM2 IFITM3 IFNAR2 IL10RA IL15 IL15RA IL18BP IL2RB IL4R IL6 IL7 IRF1 IRF2 IRF4 IRF5 IRF7 IRF8 IRF9 ISG15 ISG20 ISOC1 ITGB7 JAK2 KLRK1 LAP3 LATS2 LCP2 LGALS3BP LY6E MARCHF1 METTL7B MT2A MVP MX1 MX2 MYD88 NAMPT NCOA3 NFKB1 NFKBIA NLRC5 NMI NOD1 OAS2 OAS3 OASL OGFR P2RY14 PARP12 PARP14 PARP9 PELI1 PFKP PIM1 PLA2G4A PML PNP PSMB10 PSMB2 PSMB8 PSMB9 PSME1 PSME2 RIPK1 RIPK2 RNF213 RTP4 SAMD9L SAMHD1 SECTM1 SELP SERPING1 SLAMF7 SOCS1 SOCS3 SOD2 SP110 STAT1 STAT2 TAP1 TAPBP TNFAIP2 TNFAIP3 TNFAIP6 TNFSF10 TOR1B TRIM14 TRIM21 TRIM25 TRIM26 TXNIP UBE2L6 UPF1 USP18 VAMP5 VAMP8 VCAM1 WARS1 XAF1 XCL1 ZBP1'''.split())
+idx_h=[i for i,g in enumerate(features) if g in hallmark]
+idx_first20=list(range(20))
+print('hallmark intersect', len(idx_h), [features[i] for i in idx_h])
+# also first 20
+for label, idx in [('first20', idx_first20), ('hallmark', idx_h), ('first18_no_STAT_ISG15', [i for i in idx_first20 if features[i] not in {'STAT1','ISG15'}])]:
+    S=np.asarray(Xlog[idx,:].mean(axis=0)).ravel()
+    nt=(targets=='Non-Targeting')
+    nt_mean=S[nt].mean(); nt_sd=S[nt].std(ddof=1)
+    rows=[]
+    for guide in sorted(set(guides)):
+        m=(guides==guide)
+        targ=refmap[guide]
+        rows.append((guide,targ,m.sum(),S[m].mean(),S[m].mean()-nt_mean,(S[m].mean()-nt_mean)/nt_sd))
+    df=pd.DataFrame(rows,columns='guide target n mean delta z_vs_ntsd'.split()).sort_values('delta')
+    print('\\n',label,'nt_mean',nt_mean,'nt_sd',nt_sd)
+    print(df.head(15).to_string(index=False))
+PY"

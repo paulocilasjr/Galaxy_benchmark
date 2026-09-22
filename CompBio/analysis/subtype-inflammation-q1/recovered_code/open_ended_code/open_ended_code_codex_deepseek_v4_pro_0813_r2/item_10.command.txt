@@ -1,0 +1,37 @@
+/bin/bash -c "cat > pipeline.py <<'PY'
+import gzip, scipy.io, scipy.sparse as sp, numpy as np, pandas as pd, anndata as ad, scanpy as sc
+sc.settings.verbosity=1
+genes=pd.read_csv('subtype.inflammation.q1.genes.txt.gz',sep='\\t')
+Xs=[]
+for f in ['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz']:
+    with gzip.open(f,'rb') as fh:
+        X=scipy.io.mmread(fh).tocsr()
+    Xs.append(X)
+X=sp.hstack(Xs,format='csr').T.tocsr()
+# X cells x genes
+batch=np.array(['eye1']*Xs[0].shape[1]+['eye2']*Xs[1].shape[1])
+adata=ad.AnnData(X)
+adata.var_names=genes['gene_symbols'].values
+adata.var['gene_ids']=genes['gene_ids'].values
+adata.obs['batch']=batch
+adata.obs['sample']=batch
+print('before filter', adata.shape)
+sc.pp.filter_cells(adata, min_genes=200)
+sc.pp.filter_cells(adata, max_genes=6000)
+sc.pp.filter_genes(adata, min_cells=3)
+print('after filter', adata.shape)
+adata.layers['counts']=adata.X.copy()
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+adata.raw=adata
+sc.pp.highly_variable_genes(adata, n_top_genes=3000, flavor='seurat_v3', batch_key='batch')
+print('HVGs', adata.var.highly_variable.sum())
+sc.tl.pca(adata, svd_solver='arpack', n_comps=50)
+sc.pp.neighbors(adata, n_neighbors=15, n_pcs=40)
+sc.tl.umap(adata)
+sc.tl.leiden(adata, resolution=1.0)
+print(adata.obs['leiden'].value_counts())
+adata.write('retina_combined.h5ad', compression='gzip')
+print('saved')
+PY
+python3 pipeline.py"

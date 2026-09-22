@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5d74f51845b06f64c",
+  "history_id": "bbd44e69cb8906b5c6868798a2ebc944",
+  "tool_id": "reconstruct_and_match_amphioxus_pseudobulk",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-10T06:52:55.995851",
+  "update_time": "2026-08-10T07:47:31.532307",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "cat > main.cpp <<'CPP'\n\n#include <algorithm>\n#include <cmath>\n#include <fstream>\n#include <iomanip>\n#include <iostream>\n#include <sstream>\n#include <string>\n#include <unordered_map>\n#include <vector>\nusing namespace std;\nvector<string> split_tab(const string& s){\n vector<string> v; size_t a=0;\n while(true){size_t b=s.find('\\t',a); if(b==string::npos){v.push_back(s.substr(a));break;} v.push_back(s.substr(a,b-a));a=b+1;}\n return v;\n}\nstring collapse(string x){\n if(x==\"epidermal_neural1\"||x==\"epidermal_neural2\") return \"epidermal_neural\";\n if(x==\"epidermis_1\"||x==\"epidermis_2\") return \"epidermis\";\n if(x==\"neural_like1\"||x==\"neural_like2\") return \"neural_like\";\n return x;\n}\ndouble cor(const vector<double>& a,const vector<double>& b){\n double ma=0,mb=0; int n=a.size(); for(int i=0;i<n;i++){ma+=a[i];mb+=b[i];}ma/=n;mb/=n;\n double va=0,vb=0,co=0;for(int i=0;i<n;i++){double x=a[i]-ma,y=b[i]-mb;va+=x*x;vb+=y*y;co+=x*y;}\n return (va>0&&vb>0)?co/sqrt(va*vb):0;\n}\nint main(int argc,char**argv){\n string qpath=argv[1],cpath=argv[2],apath=argv[3],opath=argv[4],line;\n vector<string> labels; unordered_map<string,vector<double>> query;\n ifstream qf(qpath); getline(qf,line); auto qh=split_tab(line); for(size_t i=1;i<qh.size();i++) labels.push_back(qh[i]);\n while(getline(qf,line)){auto t=split_tab(line);if(t.size()<labels.size()+1)continue;vector<double>x(labels.size());for(size_t i=0;i<labels.size();i++)x[i]=stod(t[i+1]);query[t[0]]=move(x);}\n unordered_map<string,string> ctype; ifstream af(apath); getline(af,line);\n while(getline(af,line)){auto t=split_tab(line);if(t.size()>=2)ctype[t[0]]=t[1];}\n unordered_map<string,int> li;for(size_t i=0;i<labels.size();i++)li[labels[i]]=i;\n ifstream cf(cpath);getline(cf,line);auto hh=split_tab(line);\n vector<int> g_ex(hh.size(),-1),g_in(hh.size(),-1); vector<long long> nc_ex(labels.size()),nc_in(labels.size());\n for(size_t i=1;i<hh.size();i++){\n   auto it=ctype.find(hh[i]); if(it==ctype.end())continue; string x=collapse(it->second);\n   if(x==\"DiMes\"||x==\"HyTh\"){auto z=li.find(\"neural\");if(z!=li.end()){g_in[i]=z->second;nc_in[z->second]++;}continue;}\n   auto z=li.find(x);if(z!=li.end()){g_ex[i]=g_in[i]=z->second;nc_ex[z->second]++;nc_in[z->second]++;}\n }\n vector<long long> tot_ex(labels.size()),tot_in(labels.size());\n struct Sums{vector<long long> ex,in;};unordered_map<string,Sums> sums;sums.reserve(query.size()*2);\n long long rows=0,matched=0;\n while(getline(cf,line)){\n   size_t p=line.find('\\t');if(p==string::npos)continue;string gene=line.substr(0,p); bool keep=query.find(gene)!=query.end();\n   vector<long long> sx(labels.size()),si(labels.size()); size_t idx=1,start=p+1; long long val=0; bool any=false;\n   for(size_t k=start;k<=line.size();k++){\n     char ch=(k<line.size()?line[k]:'\\t');\n     if(ch>='0'&&ch<='9'){val=val*10+(ch-'0');any=true;}\n     else if(ch=='\\t'){\n       if(idx<g_ex.size()&&any){\n         int a=g_ex[idx],b=g_in[idx];if(a>=0){tot_ex[a]+=val;if(keep)sx[a]+=val;}if(b>=0){tot_in[b]+=val;if(keep)si[b]+=val;}\n       }\n       idx++;val=0;any=false;\n     }\n   }\n   if(keep){sums[gene]={move(sx),move(si)};matched++;}rows++;\n }\n ofstream out(opath);out<<\"section\\tvariant\\tobserved\\treference\\tvalue\\tdetail\\n\";\n out<<\"qc\\tboth\\tgenes\\tmatched\\t\"<<matched<<\"\\tcount_rows=\"<<rows<<\";query_genes=\"<<query.size()<<\"\\n\";\n for(int j=0;j<(int)labels.size();j++)out<<\"qc\\texclude_DiMes_HyTh\\t\"<<labels[j]<<\"\\tcell_count\\t\"<<nc_ex[j]<<\"\\ttotal_umi=\"<<tot_ex[j]<<\"\\n\";\n for(int j=0;j<(int)labels.size();j++)out<<\"qc\\tmerge_DiMes_HyTh_into_neural\\t\"<<labels[j]<<\"\\tcell_count\\t\"<<nc_in[j]<<\"\\ttotal_umi=\"<<tot_in[j]<<\"\\n\";\n vector<string> genes;for(auto &kv:query)if(sums.find(kv.first)!=sums.end())genes.push_back(kv.first);sort(genes.begin(),genes.end());\n for(int variant=0;variant<2;variant++){\n   string vn=variant?\"merge_DiMes_HyTh_into_neural\":\"exclude_DiMes_HyTh\";\n   for(int oi=0;oi<(int)labels.size();oi++){\n     vector<pair<double,int>> ranking;\n     for(int rj=0;rj<(int)labels.size();rj++){\n       vector<double>a,b,al,bl;a.reserve(genes.size());b.reserve(genes.size());al.reserve(genes.size());bl.reserve(genes.size());\n       double mae=0,maxerr=0;long long den=variant?tot_in[rj]:tot_ex[rj];\n       for(auto &g:genes){\n         double x=query[g][oi];long long s=variant?sums[g].in[rj]:sums[g].ex[rj];double y=den?100000.0*s/den:0;\n         a.push_back(x);b.push_back(y);al.push_back(log1p(x));bl.push_back(log1p(y));double e=abs(x-y);mae+=e;maxerr=max(maxerr,e);\n       }\n       double cr=cor(a,b),cl=cor(al,bl);mae/=genes.size();ranking.push_back({cl,rj});\n       out<<\"correlation_log1p\\t\"<<vn<<\"\\t\"<<labels[oi]<<\"\\t\"<<labels[rj]<<\"\\t\"<<setprecision(10)<<cl<<\"\\traw_cor=\"<<cr<<\";mae_cpm=\"<<mae<<\";maxerr=\"<<maxerr<<\"\\n\";\n     }\n     sort(ranking.rbegin(),ranking.rend());\n     out<<\"best_match\\t\"<<vn<<\"\\t\"<<labels[oi]<<\"\\t\"<<labels[ranking[0].second]<<\"\\t\"<<ranking[0].first<<\"\\tsecond=\"<<labels[ranking[1].second]<<\":\"<<ranking[1].first<<\"\\n\";\n   }\n }\n}\n\nCPP\ng++ -O3 -std=c++17 main.cpp -o match\n./match \"/jetstream2/scratch/main/jobs/79036335/inputs/dataset_385004ed-55ab-4e45-b6ba-d027e4e3a891.dat\" \"/jetstream2/scratch/main/jobs/79036335/inputs/dataset_b9c36bfd-4081-4eac-ab6c-9066c96f6868.dat\" \"/jetstream2/scratch/main/jobs/79036335/inputs/dataset_ecd68475-a0b6-4624-bceb-233419056a15.dat\" results.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "query": {
+      "id": "f9cad7b01a4721358ebe00bb7cd5edbf",
+      "src": "hda",
+      "uuid": "385004ed-55ab-4e45-b6ba-d027e4e3a891"
+    },
+    "counts": {
+      "id": "f9cad7b01a47213552cab54658adaaca",
+      "src": "hda",
+      "uuid": "b9c36bfd-4081-4eac-ab6c-9066c96f6868"
+    },
+    "annotations": {
+      "id": "f9cad7b01a472135dadd6c783292a767",
+      "src": "hda",
+      "uuid": "ecd68475-a0b6-4624-bceb-233419056a15"
+    }
+  },
+  "outputs": {
+    "results": {
+      "id": "f9cad7b01a4721357f7fc627a58d956f",
+      "src": "hda",
+      "uuid": "9555203d-0621-48c3-94d8-20e2ed3f373d"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+# compute detailed rankings for ambiguous guides across methods
+import h5py,numpy as np,scipy.sparse as sp
+
+def load(f):
+ with h5py.File(f,'r') as h:
+  X=sp.csr_matrix((h['X/data'][:],h['X/indices'][:],h['X/indptr'][:]),shape=(len(h['var/_index']),len(h['obs/_index']))).T.tocsr()
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+  targets=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/target_gene/categories'][:]]) if 'obs/target_gene/categories' in h else None
+  tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+ return X,guides,codes,genes,targets,tcodes
+Xr,gr,cr,gr_genes,tr,tcr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,gq_genes,tq,tcq=load('perturb.seq.align.q1.query.h5ad')
+common,ri,qi=np.intersect1d(gr_genes,gq_genes,return_indices=True)
+Xr=Xr[:,ri];Xq=Xq[:,qi]
+def norm_log(X):
+ s=np.asarray(X.sum(1)).ravel().astype(float);s[s==0]=1
+ return np.log1p(X.multiply(1/s[:,None]*1e6).tocsr()).toarray()
+Lr=norm_log(Xr);Lq=norm_log(Xq)
+ur=np.array([Lr[cr==i].mean(0) for i in range(len(gr))]);uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntr=[i for i,g in enumerate(gr) if g.startswith('NT-')];ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]
+Er=ur-ur[ntr].mean(0);Eq=uq-uq[ntq].mean(0)
+guide2target={}
+for i,g in enumerate(gr):
+ if g.startswith('NT-'): continue
+ vals,counts=np.unique(tr[tcr[cr==i]],return_counts=True);guide2target[g]=vals[np.argmax(counts)]
+pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')];pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+for method in ['mean500','mean1000','effectvar1000','all']:
+ if method.startswith('mean'):
+  n=int(method[4:]); top=np.argsort((ur.mean(0)+uq.mean(0))/2)[::-1][:n]
+ elif method.startswith('effect'):
+  n=int(method.replace('effectvar','')); top=np.argsort(Er[pr].var(0)+Eq[pq].var(0))[::-1][:n]
+ else: top=np.arange(len(common))
+ A=Eq[pq][:,top];B=Er[pr][:,top]
+ for metric in ['corr','cos']:
+  if metric=='corr':
+   Ac=A-A.mean(1,keepdims=True);Bc=B-B.mean(1,keepdims=True)
+   denom=np.sqrt((Ac*Ac).sum(1,keepdims=True))@np.sqrt((Bc*Bc).sum(1,keepdims=True)).T+1e-12
+   C=Ac@Bc.T/denom
+  else:
+   C=(A/np.sqrt((A*A).sum(1,keepdims=True)+1e-12))@(B/np.sqrt((B*B).sum(1,keepdims=True)+1e-12)).T
+  print('\\n',method,metric)
+  for qi_idx,qidx in enumerate(pq):
+   if gq[qidx] in ['guide14','guide10','guide1','guide11','guide20','guide18','guide13']:
+    order=np.argsort(C[qi_idx])[::-1]
+    print(gq[qidx], 'top', [(gr[pr[j]],guide2target[gr[pr[j]]],round(C[qi_idx,j],3)) for j in order[:5]])
+PY"

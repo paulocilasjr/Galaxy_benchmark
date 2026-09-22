@@ -1,0 +1,38 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -u - <<'PY'
+import numpy as np
+z=np.load('donor_aggregates.npz');D=z['donor_names'];G=z['gene_names'];C=z['count_sum'];Det=z['detected_cells'];dc=z['donor_code'];n=np.array([int(x[5:]) for x in D]);nc=np.bincount(dc,minlength=33)
+# Detection fraction: equal cell weighting, robust arcsine transform, genes detected in 1-95% overall
+F=Det/nc[:,None]
+mu=F.mean(0); keep=(mu>.001)&(mu<.95)
+X=np.arcsin(np.sqrt(F[:,keep])); X-=X.mean(0)
+u,s,vt=np.linalg.svd(X,full_matrices=False); P=u*s
+# orient so S100A8 is positive
+j=np.flatnonzero(G[keep]=='S100A8')[0]
+if vt[0,j]<0:P[:,0]*=-1;vt[0]*=-1
+print('Detection PCA1, ordered')
+for i in np.argsort(n):print(f'{n[i]:2d} {P[i,0]:9.4f} {P[i,1]:9.4f}')
+print('largest PC1 gap')
+ss=np.sort(P[:,0]); print(np.diff(ss));print('split',sorted(n[P[:,0]<(ss[np.argmax(np.diff(ss))]+ss[np.argmax(np.diff(ss))+1])/2].tolist()))
+print('top positive loadings')
+GG=G[keep]
+for j in np.argsort(vt[0])[-50:][::-1]:print(GG[j],round(vt[0,j],4))
+print('top negative loadings')
+for j in np.argsort(vt[0])[:40]:print(GG[j],round(vt[0,j],4))
+# fixed biological modules using log CPM values, median z-score across genes
+cpm=C/C.sum(1)[:,None]*1e6; L=np.log2(1+cpm)
+mods={
+ 'ISG':['ISG15','IFI6','IFIT1','IFIT2','IFIT3','MX1','OAS1','OAS2','IFI27','IFI44L','RSAD2','USP18','SIGLEC1'],
+ 'inflam':['S100A8','S100A9','S100A12','FCN1','CTSD','FCGR1A','CTSS','MCEMP1','APOBEC3A','SOCS3'],
+ 'cycling':['MKI67','TOP2A','UBE2C','TYMS','RRM2','BIRC5','CCNA2','CCNB2'],
+ 'healthyDC':['FCER1A','CD1C','CLEC10A','CLEC4C','LILRA4'],
+ 'Tcell':['CD3D','CD3E','TRBC1','IL7R','CCR7','LTB','MALAT1'],
+}
+print('module scores (median centered gene z)')
+score={}
+for name,gs in mods.items():
+ ix=np.array([np.flatnonzero(G==g)[0] for g in gs if np.any(G==g)])
+ Z=(L[:,ix]-L[:,ix].mean(0))/(L[:,ix].std(0)+1e-9)
+ score[name]=np.median(Z,1)
+print('id '+' '.join(f'{x:>9s}' for x in mods))
+for i in np.argsort(n):print(f'{n[i]:2d} '+' '.join(f'{score[x][i]:9.3f}' for x in mods))
+PY"

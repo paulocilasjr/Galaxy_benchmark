@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+import gzip
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rt') as f:
+ X=mmread(f).toarray().T
+y=X[710]
+# for each type compute best single cell residual, best 2 combination? Determine nearest cell profile to y by type.
+for t in sorted(meta.cell_type.unique()):
+ idx=np.where(meta.cell_type==t)[0]
+ resid=np.sum((sc.values[idx]-y)**2,axis=1)
+ best=idx[np.argmin(resid)]
+ print(t,'best',best,'ss',resid.min(),'corr',np.corrcoef(y,sc.values[best])[0,1], 'sum',sc.values[best].sum())
+# find best combo of exactly one B, one Endo, one Macro by minimizing SSE.
+B=np.where(meta.cell_type=='B_Cell')[0]; E=np.where(meta.cell_type=='Endothelial')[0]; M=np.where(meta.cell_type=='Macrophage')[0]
+# vectorize: residual = sum((y - B_i - E_j - M_k)"'^2). 8e6*1000 huge ~8b, use approximations with subset or optimize sequentially.
+# First optimize B then E then M iteratively, maybe enough.
+b=0;e=0;m=0
+# choose b as cell minimizing SSE with y? We'"'ll do greedy iterative until stable.
+b_sel=sc.values[B[0]].copy(); e_sel=sc.values[E[0]].copy(); m_sel=sc.values[M[0]].copy()
+for _ in range(3):
+    # update b minimizing SSE holding e,m
+    resid_B=np.sum((y[None,:] - (e_sel+m_sel)[None,:] - sc.values[B])**2,axis=1); b_sel=sc.values[B[np.argmin(resid_B)]]
+    resid_E=np.sum((y[None,:] - (b_sel+m_sel)[None,:] - sc.values[E])**2,axis=1); e_sel=sc.values[E[np.argmin(resid_E)]]
+    resid_M=np.sum((y[None,:] - (b_sel+e_sel)[None,:] - sc.values[M])**2,axis=1); m_sel=sc.values[M[np.argmin(resid_M)]]
+print('greedy triplet SSE',np.sum((y-(b_sel+e_sel+m_sel))**2),'sum',(b_sel+e_sel+m_sel).sum())
+print('cells B E M', B[np.argmin(resid_B)], E[np.argmin(resid_E)], M[np.argmin(resid_M)])
+# exhaustive optimize using only subset? Actually 8e6*1000 = 8 billion too much but can use math and maybe vectorization in chunks.
+PY"

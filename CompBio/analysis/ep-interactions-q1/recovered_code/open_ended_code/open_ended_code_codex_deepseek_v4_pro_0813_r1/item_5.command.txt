@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+try:
+ from scipy import stats
+ print('scipy ok')
+except Exception as e:
+ print('scipy fail',e); raise
+# data parse
+hic=list(csv.DictReader(open('ep.interactions.q1.hic.csv')))
+expr=list(csv.DictReader(open('ep.interactions.q1.expr.csv')))
+bg=[]; cand=[]
+for r in hic:
+ c=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+ (bg if r['set']=='background' else cand).append((r['pair_id'], int(r['distance_bp']), c))
+# background local bin rates via loess-ish: distance weights gaussian, rate = weighted mean totals
+from collections import defaultdict
+pairs=defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+for r in expr: pairs[r['pair_id']][r['guide_id']][r['condition']].append(int(r['rna_count']))
+# bins expected rate from background based on distance: fit negative binomial? Use weighted mean with kernel sd=0.3 in log
+logd=[math.log(d) for _,d,c in bg]; totals=[sum(c) for _,d,c in bg]
+def expected(d):
+ ld=math.log(d); weights=[]; vals=[]
+ for l,t in zip(logd,totals):
+  w=math.exp(-0.5*((ld-l)/0.3)**2); weights.append(w); vals.append(t)
+ return sum(w*v for w,v in zip(weights,vals))/sum(weights)
+print('candidate Hi-C p upper using weighted rate')
+for pid,d,c in cand:
+ k=sum(c); lam=expected(d); p_upper=stats.poisson.sf(k-1, lam) # P(X>=k)
+ z=(k-lam)/math.sqrt(lam)
+ print(pid,'lambda',round(lam,2),'p_hi',p_upper,'z',round(z,2))
+print('\\nExpr p-values')
+for pid in sorted(pairs):
+ ctrl=[]; pert=[]
+ for g,dic in pairs[pid].items():
+  ctrl+=dic['control']; pert+=dic['perturbed']
+ # t-test two-sided on raw counts
+ t,p=stats.ttest_ind(pert,ctrl,equal_var=False)
+ logfc=math.log2((statistics.mean(pert)+1)/(statistics.mean(ctrl)+1))
+ # one-guide consistency: t per guide
+ guide_ps=[]
+ for g,dic in pairs[pid].items():
+  tt,pp=stats.ttest_ind(dic['perturbed'],dic['control'],equal_var=False)
+  guide_ps.append(pp)
+ print(pid,'log2FC',round(logfc,3),'p',p,'guide ps',[round(x,4) for x in guide_ps])
+PY"

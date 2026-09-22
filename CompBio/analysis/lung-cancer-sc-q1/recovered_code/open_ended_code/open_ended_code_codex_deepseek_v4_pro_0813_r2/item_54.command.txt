@@ -1,0 +1,63 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, anndata as ad, numpy as np
+meta=pd.read_csv('meta_website.csv',low_memory=False)
+A=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+obs=A.obs.copy()
+obs['barcode']=obs.index.to_series().str.extract(r'"'^Patient_'"\\d+_(.*)"'$'"')[0]
+# mapping from our sampleID to original based on jaccard, or just compute with cell barcode matching? We know mapping but build automatically.
+meta['barcode']=meta['Cells'].str.split('_',n=1).str[1]
+# Build mapping using first jaccard top per sample, or exact set subset. Since exact, for each sample find original where all our barcodes exist and counts equal.
+mapping={}
+for s,g in obs.groupby('sampleID'):
+    ours=set(g['barcode'])
+    cands=[]
+    for ms, mg in meta.groupby('SampleID'):
+        if set(mg['barcode'])==ours:
+            cands.append(ms)
+    if len(cands)"'!=1:
+        print('"'not unique',s,len(ours),cands)
+    mapping[s]=cands[0] if cands else None
+print(mapping)
+obs['orig']=obs['sampleID'].map(mapping)
+# join
+m=meta[['SampleID','barcode','PatientID','Disease','Stage','Tissue','CellName']].rename(columns={'SampleID':'orig'})
+# Need handle duplicate barcodes across samples in meta; join on orig+barcode
+j=obs.merge(m,on=['orig','barcode'],how='left',validate='one_to_one')
+print('joined missing',j['CellName'].isna().sum())
+# save
+j.to_parquet('joined_meta.parquet')
+print(j[['sampleID','orig','Disease','CellName']].head())
+print('\\nRelevant samples diseases and DC counts:')
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    sub=j[j.sampleID==s]
+    print('\\n',s,'orig',mapping[s],'n',len(sub))
+    print(sub.Disease.value_counts(dropna=False).to_string())
+    print(sub.CellName.value_counts(dropna=False).to_string())
+    dc=sub[sub.CellName=='DC']
+    print('DC count',len(dc),'prop',len(dc)/len(sub))
+print('\\nAll disease counts:')
+print(j.Disease.value_counts(dropna=False).to_string())
+print('\\nAll CellName counts:')
+print(j.CellName.value_counts(dropna=False).to_string())
+# immune classification based on website categories
+immune_cells={'B','CD4','CD8','DC','Gran','Mast','Mo','NK','Tregs'}
+# Non-immune cells are complement; what about Epi? The website cell categories not include Epi in /api/cells, but meta has Epi. Need list nonimmune categories.
+nonimmune_cells=set(j.CellName.unique())-immune_cells
+print('\\nNon-immune categories by this simple:', nonimmune_cells)
+for ct in sorted(j.CellName.unique()):
+    print(ct, 'immune?' , ct in immune_cells, 'count',(j.CellName==ct).sum())
+# counts for malignant basal LUSC
+base=j[(j.CellName=='Basal') & (j.Disease=='LUSC')]
+print('\\nBasal LUSC',len(base))
+nonimmune=j[~j.CellName.isin(immune_cells)]
+print('nonimmune count',len(nonimmune))
+print('ratio',len(base)/len(nonimmune))
+# alternative denominator using website API nonimmune categories only (exclude Epi?)
+website_nonimmune={'AT1','ATII','Basal','Cilia','Club','EC','Fib','NE'}
+ni2=j[j.CellName.isin(website_nonimmune)]
+print('website nonimmune count',len(ni2),'ratio',len(base)/len(ni2))
+# disease counts for basal cells
+print('\\nBasal disease counts:')
+print(j[j.CellName=='Basal'].Disease.value_counts(dropna=False).to_string())
+# DC proportions relevant
+PY"

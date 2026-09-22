@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp
+a=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+obs=a.obs
+samples=obs['sampleID'].to_numpy()
+# selected gene indices
+selected = {'NKX2-1':10321,'NAPSA':10027,'KRT7':8322,'MUC1':9867,'TMPRSS2':15351,'SFTPB':13497,'SFTPC':13498,'SFTPD':13499,'AGR2':1408,'KRT5':8318,'KRT6A':8319,'KRT14':8302,'TP63':15491,'SOX2':14182,'DSG3':5233,'SERPINB3':13427,'SERPINB4':13428,'PKP1':11318,'DSC3':5227}
+idx=np.array(list(selected.values()))
+# use X chunked read, compute log1p(CPM? or raw) per gene per sample
+# We'll compute sums per gene, total per sample. For each chunk of rows.
+n=a.n_obs
+chunk=5000
+sums={g:np.zeros(67) for g in selected}
+totals=np.zeros(67)
+all_samples=pd.Categorical(samples).categories
+sample_codes=pd.Categorical(samples).codes
+for start in range(0,n,chunk):
+    end=min(start+chunk,n)
+    X=a.X[start:end,:][:,idx]
+    if sp.issparse(X): X=X.toarray()
+    X=np.log1p(X)
+    codes=sample_codes[start:end]
+    for i,g in enumerate(selected):
+        sums[g]+=np.bincount(codes, weights=X[:,i], minlength=67)
+    totals += np.bincount(codes, minlength=67)
+    if start%30000==0: print(start)
+res=pd.DataFrame({'sample':all_samples})
+for g in selected:
+    res[g]=sums[g]/totals
+# LUSC score mean standardized markers minus LUAD
+luad=['NKX2-1','NAPSA','KRT7','MUC1','TMPRSS2','SFTPB','SFTPC','SFTPD','AGR2']
+lusc=['KRT5','KRT6A','KRT14','TP63','SOX2','DSG3','SERPINB3','SERPINB4','PKP1','DSC3']
+res['LUADscore']=res[luad].mean(axis=1)
+res['LUSCscore']=res[lusc].mean(axis=1)
+res['diff']=res['LUSCscore']-res['LUADscore']
+sel=res[res.sample.isin(['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040'])]
+print(sel.to_string(index=False))
+# Save full
+res.to_csv('marker_sample_scores_verify.csv',index=False)
+PY"

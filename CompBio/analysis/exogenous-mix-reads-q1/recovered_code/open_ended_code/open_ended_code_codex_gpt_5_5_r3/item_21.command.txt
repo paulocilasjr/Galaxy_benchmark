@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter,defaultdict
+
+def read_fasta(path):
+    s=[]
+    for line in open(path):
+        if not line.startswith('>'): s.append(line.strip())
+    return ''.join(s).upper()
+def rc(s):
+    return s.translate(str.maketrans('ACGTN','TGCAN'))[::-1]
+def reads(path):
+    with open(path) as f:
+        for i,line in enumerate(f):
+            if i%4==1: yield line.strip()
+ref=read_fasta('KLF4_NM_004235.6.fa')
+print('ref len',len(ref))
+# find CDS? from NCBI known ORF starts first ATG maybe; ORF length 1413? search long ORF ending TAA/TAG/TGA
+for frame in range(3):
+    pass
+# exact match positions
+for name in ['exo','endo','mix']:
+    pos=[]; miss=[]; rcm=0
+    for r in reads(f'exogenous.mix.reads.q1.{name}.fq'):
+        p=ref.find(r)
+        strand='+'
+        if p<0:
+            pr=ref.find(rc(r))
+            if pr>=0: p=pr; strand='-'; rcm+=1
+        if p>=0: pos.append(p)
+        else: miss.append(r)
+    print(name,'mapped exact',len(pos),'miss',len(miss),'rc',rcm,'minmax', (min(pos),max(pos)) if pos else None)
+    # bins 100bp
+    bins=Counter(p//100 for p in pos)
+    print('bins first', sorted(bins.items())[:10], 'last', sorted(bins.items())[-10:])
+# Approximate hamming <=2 find best for misses? Brute okay ref len 3k reads small
+for name in ['exo','endo','mix']:
+    misses=[]; approx=[]
+    for r in reads(f'exogenous.mix.reads.q1.{name}.fq'):
+        if ref.find(r)>=0 or ref.find(rc(r))>=0: continue
+        best=(999,None)
+        for rr in [r,rc(r)]:
+            for i in range(len(ref)-len(rr)+1):
+                d=sum(a"'!=b for a,b in zip(rr,ref[i:i+len(rr)]))
+                if d<best[0]: best=(d,i)
+                if d==0: break
+        if best[0]<=3: approx.append(best)
+        else: misses.append((r,best))
+    print(name,'"'approx<=3',len(approx),'miss>3',len(misses),'best dist counts',Counter(d for d,p in approx), 'bad dist counts',Counter(b[0] for r,b in misses).most_common(5))
+PY"

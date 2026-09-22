@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from scipy.stats import ttest_ind, mannwhitneyu, rankdata
+
+def load(f):
+    with h5py.File(f,'r') as h:
+        X=sp.csr_matrix((h['X/data'][:], h['X/indices'][:], h['X/indptr'][:]), shape=(len(h['var/_index']), len(h['obs/_index']))).T.tocsr()
+        guides=h['obs/guide/categories'][:].astype(str); codes=h['obs/guide/codes'][:]
+        genes=h['var/_index'][:].astype(str)
+        targets=h['obs/target_gene/categories'][:].astype(str) if 'obs/target_gene/categories' in h else None
+        tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+    return X, guides, codes, genes, targets, tcodes
+Xq,gq,cq,genes,_,_=load('perturb.seq.align.q1.query.h5ad')
+# use raw counts; normalize per cell CPM then log1p
+sums=np.asarray(Xq.sum(1)).ravel().astype(float); sums[sums==0]=1
+L=(Xq.multiply(1/sums[:,None]*1e6).tocsr()).log1p().toarray()
+ntq=np.where(np.char.startswith(gq,'NT-'))[0]
+nt_cells=np.isin(cq,ntq)
+control=L[nt_cells]
+pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+# function mean and pval for each gene target comparing cells with guide code vs NT
+for target in ['PABPC1','NUDT21','LEO1']:
+    gi=np.where(genes==target)[0][0]
+    print('\\n',target)
+    rows=[]
+    for giq in pq:
+        x=L[cq==giq,gi]; y=control[:,gi]
+        meanx=x.mean(); meany=y.mean()
+        # ttest on log cpm
+        t,p=ttest_ind(x,y,equal_var=False)
+        # rank biserial-like U
+        try:
+            u,p2=mannwhitneyu(x,y,alternative='two-sided')
+        except Exception:
+            p2=np.nan
+        rows.append((gq[giq], len(x), meanx, meany, meanx-meany, p, p2))
+    rows.sort(key=lambda z:z[4])
+    for r in rows[:20]:
+        print(f'{r[0]:8s} n={r[1]:3d} mean={r[2]:.3f} diff={r[4]:.3f} p={r[5]:.2g} pMW={r[6]:.2g}')
+PY"

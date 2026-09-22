@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io, numpy as np, pandas as pd
+from scipy.stats import mannwhitneyu, median_test, ttest_ind, ranksums
+from scipy.sparse import csr_matrix
+mat=scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv'); g2g=dict(zip(ref.id,ref.target_gene_name))
+bc['pos']=np.arange(len(bc)); calls=calls.merge(bc,left_on='cell_barcode',right_on='barcode')
+totals=np.asarray(mat.sum(axis=0)).ravel()
+cpm=mat.multiply(1.0/totals).tocsr()*10000
+logcpm=cpm.copy(); logcpm.data=np.log1p(logcpm.data)
+path_idx=np.arange(20)
+nt=calls[calls.feature_call.str.startswith('guide_00')]
+nt_score=np.asarray(logcpm[path_idx,:][:,nt.pos.values].mean(axis=0)).ravel()
+nt_pct=np.percentile(nt_score,[5,10,25,50])
+print('NT percentiles',nt_pct)
+for guide in ['guide_011','guide_012','guide_019','guide_010']:
+    grp=calls[calls.feature_call==guide]
+    # full score
+    sc=np.asarray(logcpm[path_idx,:][:,grp.pos.values].mean(axis=0)).ravel()
+    # excluding own target (if in path)
+    gene=g2g[guide]
+    ex_idx=[i for i in path_idx if feat['name'][i]"'!=gene]
+    sc_ex=np.asarray(logcpm[ex_idx,:][:,grp.pos.values].mean(axis=0)).ravel()
+    u,p=mannwhitneyu(sc,nt_score,alternative='"'two-sided')
+    print('\\n',guide,gene,'n',len(grp))
+    print('full score mean/median/std',sc.mean(),np.median(sc),sc.std(ddof=1),'minmax',sc.min(),sc.max())
+    print('excl score mean/median/std',sc_ex.mean(),np.median(sc_ex),sc_ex.std(ddof=1))
+    print('MW p full',p)
+    # median_test
+    medstat,medp,medtable,exp=median_test(sc,nt_score)
+    print('median test p',medp)
+    for q in [5,10,25,50]:
+        th=np.percentile(nt_score,q)
+        print('fraction <= NT',q,'th',th,':',np.mean(sc<=th))
+    print('values',np.round(sc,2))
+PY"

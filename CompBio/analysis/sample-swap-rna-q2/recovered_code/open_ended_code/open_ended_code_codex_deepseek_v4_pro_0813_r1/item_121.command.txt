@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, json, collections, openpyxl
+sample='sample.swap.rna.q2.tsv.gz'
+gene_expr={}; sample_cols=None
+with gzip.open(sample,'rt') as f:
+    raw=f.readline().rstrip('\\n'); fields=raw.split('\\t'); sample_cols=fields[1:]
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)"'!=len(sample_cols)+1: continue
+        gene_expr[p[0]]=[float(x) for x in p[1:]]
+mp=json.load(open('"'genehub_old_to_03_fixed.json'))
+wb=openpyxl.load_workbook('additional_file2.xlsx', read_only=True, data_only=True)
+ws=wb['Table S2']
+bycluster=collections.defaultdict(list)
+for r in ws.iter_rows(values_only=True):
+    cl=r[0]; old=r[1]
+    if isinstance(cl,int):
+        bycluster[int(cl)].append(str(old))
+print('clusters', sorted(bycluster))
+print({k:len(v) for k,v in sorted(bycluster.items())})
+bycluster_cur=collections.defaultdict(set); mapmiss=collections.Counter()
+for cl, olds in bycluster.items():
+    for old in olds:
+        cur=mp.get(old)
+        if not cur:
+            mapmiss[cl]+=1; continue
+        for c in cur: bycluster_cur[cl].add(c)
+print('mapmiss', mapmiss)
+for cl in sorted(bycluster_cur):
+    genes=list(bycluster_cur[cl]); found=[g for g in genes if g in gene_expr]
+    if not found: print('\\n',cl,'no found'); continue
+    vals=collections.defaultdict(list); votes=collections.Counter()
+    for g in found:
+        arr=gene_expr[g]
+        bi=max(range(len(arr)), key=lambda i:arr[i]); votes[sample_cols[bi]]+=1
+        for c,v in zip(sample_cols,arr): vals[c].append(v)
+    means={c:sum(vv)/len(vv) for c,vv in vals.items()}
+    ranked=sorted(means.items(), key=lambda kv:kv[1], reverse=True)
+    print(f'\\ncluster {cl}: genes={len(genes)} found={len(found)} missmap={mapmiss[cl]}')
+    print(' votes', votes.most_common(5))
+    print(' mean', ', '.join(f'{c}:{m:.2f}' for c,m in ranked))
+PY"

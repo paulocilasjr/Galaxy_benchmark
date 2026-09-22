@@ -1,0 +1,56 @@
+/bin/bash -lc "cat > mouse_contrasts.py <<'PY'
+import geo_de, re, pickle, json
+from scipy.stats import spearmanr
+q=[l.strip().upper() for l in open('characterize.response.q1.txt') if l.strip()]
+qset=set(q)
+cache=pickle.load(open('probe_symbol_cache.pkl','rb'))
+pmap={k:v.upper() for k,v in cache.items() if isinstance(v,str)}
+
+def groups_from_titles(titles):
+    groups={}
+    for i,t in enumerate(titles):
+        # strip quotes already
+        groups.setdefault(t.strip(),[]).append(i)
+    return groups
+
+def analyze(path, contrast_name, ga, gb, title_regex=None):
+    meta,ids,titles,mat=geo_de.parse_geo(path)
+    # normalize titles
+    titles=[t.strip() for t in titles]
+    groups=groups_from_titles(titles)
+    print('\\n',path, contrast_name)
+    print('group keys sample', list(groups.keys()))
+    idxA=[i for i,t in enumerate(titles) if re.match(ga,t)]
+    idxB=[i for i,t in enumerate(titles) if re.match(gb,t)]
+    if not idxA or not idxB:
+        print('missing groups',ga,gb); return
+    print('A', [titles[i] for i in idxA], 'B',[titles[i] for i in idxB])
+    res=geo_de.de_contrast(mat,idxA,idxB)
+    agg=geo_de.aggregate_gene(res,pmap,qset)
+    df=agg[agg.gene.isin(qset)].copy()
+    if len(df)<5: print('found low'); return
+    ranks={g:i for i,g in enumerate(q)}; df['qrank']=[ranks[g] for g in df.gene]
+    rho,p=spearmanr(df.qrank,df.logFC)
+    rho_abs,p2=spearmanr(df.qrank,df.logFC.abs())
+    pos=df.sort_values('logFC',ascending=False)
+    top20=pos.head(20).gene.tolist(); bot20=pos.tail(20).gene.tolist()
+    print(f'found={len(df)} rho={rho:.3f} rho_abs={rho_abs:.3f} mean_qrank_top20={sum(ranks[g] for g in top20)/20:.1f} bot={sum(ranks[g] for g in bot20)/20:.1f}')
+    print('top20',top20)
+    print('bot20',bot20)
+
+# GSE17721 BMDC LPS: group titles Lps, X_hours, repY and Control, X_hours, repY
+# Use time-matched controls? compare LPS 4h to Control 4h
+analyze('GSE17721.txt','LPS4h_vs_Ctrl4h', r'"'^Lps, 4_hours, rep'"\\d"'$'"', r'"'^Control, 4_hours, rep'"\\d"'$'"')
+analyze('GSE17721.txt','LPS24h_vs_Ctrl24h', r'"'^Lps, 24_hours, rep'"\\d"'$'"', r'"'^Control, 24_hours, rep'"\\d"'$'"')
+analyze('GSE17721.txt','LPS2h_vs_Ctrl2h', r'"'^Lps, 2_hours, rep'"\\d"'$'"', r'"'^Control, 2_hours, rep'"\\d"'$'"')
+# GSE63739 mouse neutrophils WT LPS 3h vs WT LPS 0h
+analyze('GSE63739.txt','Neutro_WT_LPS3h_vs_0h', r'"'^BM PMN_WT_LPS 3h$'"', r'"'^BM PMN_WT_LPS 0h$'"')
+# GSE14769 BMDM LPS timepoints vs 0: titles LPS1-0 etc. Use all 0h as controls and all 60/120/240? 
+# analyze only regex
+analyze('GSE14769.txt','BMDM_LPS60_vs_0', r'"'^LPS'"\\d-60"'$'"', r'"'^LPS'"\\d-0"'$'"')
+analyze('GSE14769.txt','BMDM_LPS120_vs_0', r'"'^LPS'"\\d-120"'$'"', r'"'^LPS'"\\d-0"'$'"')
+analyze('GSE14769.txt','BMDM_LPS240_vs_0', r'"'^(C57|WT).*240.*'"', r'"'^LPS'"\\d-0"'$'"')
+# GSE2002 RAW LPS vs untreated
+analyze('GSE2002_series_matrix.txt','RAW_LPS_vs_untreated', r'"'^RAW LPS '"\\d"'$'"', r'"'^RAW Untreated '"\\d"'$'"')
+PY
+python3 mouse_contrasts.py"

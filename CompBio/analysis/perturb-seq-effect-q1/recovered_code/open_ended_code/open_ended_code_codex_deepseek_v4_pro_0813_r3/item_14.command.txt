@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv, numpy as np
+from scipy.io import mmread
+from scipy import stats
+
+with gzip.open('filtered_feature_bc_matrix/matrix.mtx.gz','rb') as f: X=mmread(f)
+X=X.tocsc()
+feat=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: feat.append(line.rstrip('\\n').split('\\t')[0])
+bc=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    for line in f: bc.append(line.rstrip('\\n'))
+calls={}
+with open('protospacer_calls_per_cell.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: calls[row[0]]=row[2]
+ref={}
+with open('feature_reference.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: ref[row[0]]=row[7]
+guides=np.array([ref[calls[b]] for b in bc])
+path_genes=feat[:20]
+idx=np.array([feat.index(g) for g in path_genes])
+lib=np.asarray(X.sum(axis=0)).ravel().astype(float)
+L=X[idx,:].toarray().astype(float)
+logcpm=np.log1p(L*10000/lib[None,:])
+controls=guides=='Non-Targeting'
+cm=logcpm[:,controls].mean(axis=1)
+# compute mean diff per gene per target
+for t in ['ISG15','STAT1','SLC2A1','ZNF90','CD39','IL6','ATP49','TRIM20']:
+ m=guides==t
+ print(f'\\n{t} n={m.sum()}  mean logcpm differences vs ctrl:')
+ diffs=logcpm[:,m].mean(axis=1)-cm
+ for g,d in zip(path_genes,diffs):
+  if abs(d)>0.1:
+   print(f'  {g:8s} {d: .3f}')
+PY"

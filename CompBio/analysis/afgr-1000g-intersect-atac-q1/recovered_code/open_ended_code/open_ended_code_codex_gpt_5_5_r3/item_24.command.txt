@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, urllib.request, hashlib
+from urllib.request import Request, urlopen
+
+def post_json(url, obj):
+    req=Request(url, data=json.dumps(obj).encode(), headers={'Content-Type':'application/json','Accept':'application/json','User-Agent':'Mozilla/5.0'})
+    with urlopen(req, timeout=60) as r: return json.load(r)
+# all IGSR 3202
+samples=set()
+for start in range(0,4000,500):
+    j=post_json('https://www.internationalgenome.org/api/beta/sample/_search', {'from':start,'size':500,'_source':['name'], 'query': {'constant_score': {'filter': {'term': {'dataCollections.title':'1000 Genomes 30x on GRCh38'}}}}})
+    hits=j['hits']['hits']; samples.update(h['_source']['name'] for h in hits)
+    if start+len(hits)>=j['hits']['total']: break
+aliases=set(samples)
+for n in samples:
+    if n.startswith('NA'): aliases.add('GM'+n[2:])
+# encode list from search file refresh
+req=Request('https://www.encodeproject.org/search/?type=Experiment&searchTerm=AFGR&format=json&limit=all', headers={'Accept':'application/json','User-Agent':'Mozilla/5.0'})
+with urlopen(req, timeout=60) as r: enc=json.load(r)
+atac=[x for x in enc['@graph'] if x.get('assay_title')=='ATAC-seq']
+rows=[]; non=[]; problems=[]
+for x in atac:
+    acc=x['accession']; name=x.get('biosample_ontology',{}).get('term_name') or x.get('biosample_summary','').split()[-1]
+    req=Request(f'https://www.encodeproject.org/experiments/{acc}/?format=json', headers={'Accept':'application/json','User-Agent':'Mozilla/5.0'})
+    with urlopen(req, timeout=60) as r: exp=json.load(r)
+    bams=[f for f in exp['files'] if f.get('file_format')=='bam' and f.get('assembly')=='GRCh38' and f.get('status')=='released' and f.get('output_type')=='alignments']
+    if name in aliases:
+        if len(bams)"'!=1: problems.append((name,acc,len(bams)))
+        for f in bams: rows.append((name,acc,f['"'accession'],f['md5sum']))
+    else: non.append(name)
+print('rows',len(rows),'unique',len({r[0] for r in rows}),'non',len(non),'problems',problems)
+print('non', sorted(non))
+print('included samples')
+for r in sorted(rows): print('\\t'.join(r))
+md5s=sorted(r[3] for r in rows)
+open('afgr_1000g_filtered_bam_md5sums.txt','w').write(''.join(m+'\\n' for m in md5s))
+open('afgr_1000g_filtered_bam_details.tsv','w').write('sample\\texperiment\\tfile\\tmd5sum\\n'+''.join('\\t'.join(r)+'\\n' for r in sorted(rows)))
+h=hashlib.md5(open('afgr_1000g_filtered_bam_md5sums.txt','rb').read()).hexdigest()
+print('ANSWER', len({r[0] for r in rows}), h)
+PY"

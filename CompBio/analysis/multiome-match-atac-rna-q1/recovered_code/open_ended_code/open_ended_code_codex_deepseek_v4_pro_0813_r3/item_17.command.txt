@@ -1,0 +1,98 @@
+/bin/bash -lc "python - <<'PY'
+# Stability analysis: within-gene pearson assignment for subsets and different transforms/regions
+import gzip,csv,re,numpy as np
+from collections import defaultdict
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+
+# parse genes with biotype info
+gene_list=defaultdict(list)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        m=re.search(r'gene_name \"(["'^"]+)"'"',p[8]); b=re.search(r'gene_biotype \"(["'^"]+)"'"',p[8])
+        if not m: continue
+        gene_list[m.group(1)].append((p[0],int(p[3]),int(p[4]),p[6],b.group(1) if b else ''))
+def choose(ents, biotypes=None):
+    if biotypes is not None:
+        ents=[e for e in ents if e[4] in biotypes]
+        if not ents: return None
+    pc=[e for e in ents if e[4]=='protein_coding']
+    return max(pc if pc else ents,key=lambda e:e[2]-e[1])
+def build_genes(biotypes=None):
+    genes={}
+    for gn,ents in gene_list.items():
+        g=choose(ents,biotypes)
+        if g:
+            c,s,e,st,bt=g
+            if not c.startswith('chr'): c='chr'+c
+            tss=s if st=='+' else e
+            genes[gn]=(c,s,e,st,tss)
+    return genes
+
+# atac
+chr_starts=defaultdict(list); chr_vals=defaultdict(list)
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        c,s,e=row[0].split('_'); s=int(s)
+        chr_starts[c].append(s); chr_vals[c].append(np.array([float(x) for x in row[1:9]]))
+for c in chr_starts:
+    idx=np.argsort(chr_starts[c]); chr_starts[c]=np.array(chr_starts[c])[idx]; chr_vals[c]=np.array(chr_vals[c])[idx]
+def act(c,s,e):
+    st=chr_starts.get(c); va=chr_vals.get(c)
+    if st is None:return None
+    li=np.searchsorted(st,s-10000,side='right'); ri=np.searchsorted(st,e,side='right')
+    if li>=ri:return None
+    return va[li:ri].sum(axis=0)
+rna_syms=[]; R=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        rna_syms.append(row[0]); R.append([float(x) for x in row[1:9]])
+R=np.array(R)
+
+def perm_for(genes, region='gene_body', transform='log1p_pearson', filter_quant=0):
+    pairs=[]
+    for gi,gn in enumerate(rna_syms):
+        g=genes.get(gn)
+        if not g: continue
+        c,s,e,st,tss=g
+        if region=='tss': a=act(c,(tss//10000)*10000,(tss//10000)*10000)
+        elif region=='prom2kb': a=act(c,tss-2000,tss+2000)
+        elif region=='prom5kb': a=act(c,tss-5000,tss+5000)
+        else: a=act(c,s,e)
+        if a is None: continue
+        pairs.append((R[gi],a))
+    if len(pairs)<20: return None,len(pairs)
+    Rs=np.array([p[0] for p in pairs]); As=np.array([p[1] for p in pairs])
+    rr=np.log1p(Rs); aa=np.log1p(As)
+    if filter_quant>0:
+        rv=rr.var(axis=1); av=aa.var(axis=1)
+        qr=np.quantile(rv,filter_quant); qa=np.quantile(av,filter_quant)
+        keep=(rv>qr)&(av>qa)
+        rr=rr[keep]; aa=aa[keep]
+    if transform in ['pearson','rank']:
+        if transform=='rank':
+            rr=np.apply_along_axis(rankdata,1,rr); aa=np.apply_along_axis(rankdata,1,aa)
+        rz=rr-rr.mean(axis=1,keepdims=True); az=aa-aa.mean(axis=1,keepdims=True)
+        rd=np.sqrt((rz*rz).sum(axis=1,keepdims=True)); rd[rd==0]=1
+        ad=np.sqrt((az*az).sum(axis=1,keepdims=True)); ad[ad==0]=1
+        M=( (rz/rd)[:,:,None]*(az/ad)[:,None,:]).mean(axis=0)
+    elif transform=='cross':
+        M=np.array([[np.corrcoef(rr[:,i],aa[:,j])[0,1] for j in range(8)] for i in range(8)])
+    ri,cj=linear_sum_assignment(-M)
+    perm=[int(cj[i]) for i in range(8)]
+    return perm,len(pairs)
+
+for biotypes in [None,{'protein_coding'},{'protein_coding','lncRNA'},{'lncRNA'}]:
+    genes=build_genes(biotypes)
+    print('biotypes',biotypes,'ngenes',len(genes))
+    for region in ['tss','prom2kb','prom5kb','gene_body']:
+        for trans in ['pearson','rank']:
+            perm,n=perm_for(genes,region,trans)
+            if perm: print(' ',region,trans,n,perm)
+        print()
+PY"

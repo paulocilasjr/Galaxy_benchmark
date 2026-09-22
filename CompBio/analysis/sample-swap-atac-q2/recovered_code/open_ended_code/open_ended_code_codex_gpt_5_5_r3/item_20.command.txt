@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+# marker assignment with curated marker sets, test identity vs all single swaps
+import requests,pandas as pd,numpy as np,itertools
+from scipy.optimize import linear_sum_assignment
+fn='sample.swap.atac.q2.tsv.gz'
+df=pd.read_csv(fn,sep='\\t',compression='gzip')
+cols=list(df.columns[3:]); libs=df[cols].sum()
+markers={
+ 'AIIamacrine':['SLC6A9','GLRA2','GRM6','PROX1','TFAP2B','CALB2'],
+ 'Astrocyte':['GFAP','ALDH1L1','AQP4','S100B','GJA1','SLC1A3'],
+ 'Cone':['ARR3','OPN1LW','OPN1MW','OPN1SW','GNAT2','PDE6C','PDE6H','CNGB3','GNGT2'],
+ 'GABAamacrine':['GAD1','GAD2','SLC6A1','SLC32A1','DLX1','DLX2','TFAP2A'],
+ 'Horizontal':['LHX1','ONECUT1','ONECUT2','CALB1','PROX1','LHX5'],
+ 'Microglia':['PTPRC','AIF1','CX3CR1','C1QA','C1QB','TYROBP','P2RY12','TMEM119','CSF1R','LST1'],
+ 'Mullerglia':['RLBP1','GLUL','SLC1A3','VIM','CLU','CRYAB','SLC1A2','KCNJ10','AQP4'],
+ 'Retinalganglioncell':['RBPMS','THY1','POU4F1','POU4F2','SLC17A6','SNCG','NEFL','NEFM','ISL1'],
+ 'Rod':['RHO','NRL','PDE6B','GNAT1','SAG','CNGB1','PDE6A','NR2E3','ROM1','RP1']
+}
+syms=sorted(set(sum(markers.values(),[])))
+r=requests.post('https://mygene.info/v3/query',data={'q':','.join(syms),'scopes':'symbol,alias','fields':'symbol,genomic_pos_hg38,genomic_pos','species':'human'},timeout=60); r.raise_for_status()
+coord={}
+for it in r.json():
+ q=it.get('query'); gp=it.get('genomic_pos_hg38') or it.get('genomic_pos')
+ if not gp: continue
+ if isinstance(gp,list):
+  normal=[g for g in gp if str(g.get('chr')) in list(map(str,range(1,23)))+['X','Y']]
+  gp=normal[0] if normal else gp[0]
+ ch='chr'+str(gp['chr']).replace('chr','')
+ coord[q]=(ch,int(gp['start']),int(gp['end']),int(gp.get('strand',0) or 0))
+for mode,pad in [('prom10',10000),('gene10',10000),('gene50',50000),('prom50',50000)]:
+ gene_scores={}
+ for s,(ch,st,en,strand) in coord.items():
+  if mode.startswith('prom'):
+   tss=st if strand>=0 else en; wst=tss-pad; wen=tss+pad
+  else: wst=st-pad; wen=en+pad
+  sub=df[(df.chrom==ch)&(df.end>wst)&(df.start<wen)]
+  if sub.empty: continue
+  gene_scores[s]=np.log1p(sub[cols].sum()/libs*1e6)
+ # zscore each gene across columns to reduce ubiquitous openness
+ G=pd.DataFrame(gene_scores).T[cols]
+ Z=G.sub(G.mean(axis=1),axis=0).div(G.std(axis=1).replace(0,np.nan),axis=0).fillna(0)
+ S=pd.DataFrame(index=markers,columns=cols,dtype=float)
+ for ct,ms in markers.items():
+  avail=[s for s in ms if s in Z.index]
+  S.loc[ct]=Z.loc[avail].mean(axis=0)
+ row_ind,col_ind=linear_sum_assignment(-S.values)
+ assign={list(markers)[i]: cols[j] for i,j in zip(row_ind,col_ind)}
+ identity=sum(S.loc[ct,ct] for ct in markers)
+ best=sum(S.loc[ct,assign[ct]] for ct in markers)
+ # best single swap score: column c assigned to label after swapping names? For if labels a,b swapped, score = identity - diag a,b + S[a,b]+S[b,a]
+ swaps=[]
+ for a,b in itertools.combinations(cols,2):
+  sc=identity - S.loc[a,a]-S.loc[b,b]+S.loc[a,b]+S.loc[b,a]
+  swaps.append((sc,a,b,sc-identity,S.loc[a,b],S.loc[b,a],S.loc[a,a],S.loc[b,b]))
+ swaps=sorted(swaps, reverse=True)
+ print('\\n',mode,'identity',identity,'hungarian',best,assign)
+ print('diag')
+ print(S.round(2))
+ print('best swaps')
+ for x in swaps[:8]: print(x)
+PY"

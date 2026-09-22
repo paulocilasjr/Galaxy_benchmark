@@ -1,12 +1,8 @@
-# Annotate variant regulatory overlap q1
+# annotate-variant-regulatory-overlap-q1 retrospective audit
 
 Start with [history_analysis.md](history_analysis.md).
+The [evidence JSON](history_analysis_evidence.json) is validated against [Schema 2.0](history_analysis_evidence.schema.json).
+[Run inventory](run_manifest.json), [input manifest](input_manifest.json), [recovered-code manifest](recovered_code/manifest.json),
+source snapshots, selected outputs, and per-run job ledgers preserve the audit trail.
 
-- [Task metadata](annotate-variant-regulatory-overlap-q1.json): original prompt and text-specified variant.
-- [History analysis](history_analysis.md): all 12 replicates, tools and inferred rationale, outcomes, errors, coordinate handling, code differences, resource provenance and external-computation limits.
-- [Evidence](history_analysis_evidence.json): dataset/job records and downloaded artifact hashes.
-- [Input manifest](input_manifest.json): variant and large external registry references; no common input archive is supplied by this task.
-- [Representative code](ccre_query.py) and [Galaxy job](galaxy_job.json): successful ChatGPT-5.5 replicate 2 API-query tool.
-- [Recovered code](recovered_code/README.md), `selected_outputs/` and `job_ledgers/`: scripts, commands, small outputs and full per-replicate records.
-
-The histories agree at the reported locus on EH38E1957012 (pELS / Proximal enhancer), with different strengths of execution and release provenance. This is a retrospective audit, not a fresh benchmark execution or hidden-ground-truth score. Large reference files are linked rather than added to Git.
+This pipeline did not execute agent code, submit Galaxy jobs, or open hidden references.

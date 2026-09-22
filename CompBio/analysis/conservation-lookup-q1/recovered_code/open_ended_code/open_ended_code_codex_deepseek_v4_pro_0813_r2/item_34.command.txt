@@ -1,0 +1,91 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, time, json, statistics, sys
+
+def get_json(url, params=None, tries=8, delay=3):
+    for i in range(tries):
+        try:
+            r=requests.get(url,params=params,headers={'Content-Type':'application/json'},timeout=60)
+            if r.status_code==200:
+                return r.json()
+            print('   status',r.status_code,'try',i,url[:80])
+        except Exception as e:
+            print('   err',e,'try',i)
+        time.sleep(delay*(i+1)/2)
+    return None
+
+species_genes={
+'pan_troglodytes':'ENSPTRG00000019912',
+'macaca_mulatta':'ENSMMUG00000062128',
+'pan_paniscus':'ENSPPAG00000033504',
+'ailuropoda_melanoleuca':'ENSAMEG00000028933',
+'delphinapterus_leucas':'ENSDLEG00000014841',
+}
+
+def get_cdna(tid):
+    url=f'https://rest.ensembl.org/sequence/id/{tid}'
+    for i in range(8):
+        try:
+            r=requests.get(url,params={'type':'cdna'},headers={'Accept':'text/x-fasta'},timeout=60)
+            if r.status_code==200:
+                return ''.join(r.text.splitlines()[1:])
+            print(' cdna status',r.status_code)
+        except Exception as e: print(' cdna err',e)
+        time.sleep(3)
+    return None
+
+def lev(a,b):
+    # dp with two rows
+    if len(a)<len(b): a,b=b,a
+    prev=list(range(len(b)+1))
+    for i,ca in enumerate(a,1):
+        cur=[i]
+        for j,cb in enumerate(b,1):
+            cur.append(min(prev[j]+1, cur[-1]+1, prev[j-1]+(ca"'!=cb)))
+        prev=cur
+    return prev[-1]
+
+for sp,gene in species_genes.items():
+    print('"'\\n###',sp,gene)
+    data=get_json(f'https://rest.ensembl.org/lookup/id/{gene}',{'expand':'1'})
+    if not data: continue
+    print('strand',data.get('strand'),'canonical',data.get('canonical_transcript'))
+    ts=[t for t in data.get('Transcript',[]) if t.get('biotype')=='protein_coding']
+    for t in ts:
+        tl=t.get('Translation') or {}
+        print(' candidate',t.get('id'),'canonical',t.get('is_canonical'),'len',t.get('length'),'protlen',tl.get('length'),'start/end',t.get('start'),t.get('end'))
+    # choose longest protein-coding by translation length, tie canonical
+    ts_sorted=sorted(ts, key=lambda t: (-( (t.get('Translation') or {}).get('length') or 0), -(t.get('is_canonical') or 0)))
+    t=ts_sorted[0]
+    tid=t['id']
+    print('chosen',tid,'protlen',(t.get('Translation') or {}).get('length'))
+    strand=t['strand']
+    tstart=t['start']; tend=t['end']
+    exons=t.get('Exon',[])
+    # sort exons in transcript order
+    if strand==1:
+        exons_sorted=sorted(exons,key=lambda e:e['start'])
+    else:
+        exons_sorted=sorted(exons,key=lambda e:-e['end'])
+    first=exons_sorted[0]
+    print('first exon',first['id'],first['start'],first['end'],'length',first['end']-first['start']+1)
+    tr=t.get('Translation') or {}
+    print('translation',tr)
+    if strand==1:
+        cds_off=tr['start']-tstart
+        exon1_end=first['end']-tstart
+    else:
+        cds_off=tend-tr['end']
+        exon1_end=tend-first['start']
+    seq=get_cdna(tid)
+    if not seq:
+        print('no cdna'); continue
+    print('cdna len',len(seq),'cds_off',cds_off,'exon1_end',exon1_end,'seg len',exon1_end-cds_off+1)
+    if cds_off<0 or exon1_end+1>len(seq):
+        print('bounds issue')
+    seg=seq[cds_off:exon1_end+1]
+    print('seg start/end',seg[:20],seg[-20:],len(seg))
+    print('starts ATG?',seg[:3])
+    # human segment
+    human='ATGCTGCTGCTGGCGAGATGTCTGCTGCTAGTCCTCGTCTCCTCGCTGCTGGTATGCTCGGGACTGGCGTGCGGACCGGGCAGGGGGTTCGGGAAGAGGAGGCACCCCAAAAAGCTGACCCCTTTAGCCTACAAGCAGTTTATCCCCAATGTGGCCGAGAAGACCCTAGGCGCCAGCGGAAGGTATGAAGGGAAGATCTCCAGAAACTCCGAGCGATTTAAGGAACTCACCCCCAATTACAACCCCGACATCATATTTAAGGATGAAGAAAACACCGGAGCGGACAGGCTGATGACTCAG'
+    print('human len',len(human),'dist',lev(seg,human))
+PY"

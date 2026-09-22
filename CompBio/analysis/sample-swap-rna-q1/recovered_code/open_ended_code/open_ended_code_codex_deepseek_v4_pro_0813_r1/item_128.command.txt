@@ -1,0 +1,86 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, pandas as pd, re, numpy as np
+g=pd.read_csv('gene_pseudobulk.tsv',sep='\\t',index_col=0)
+cols=g.columns.tolist()
+log=np.log1p(g)
+# normalize markers expression
+wb=openpyxl.load_workbook('[REDACTED LOCAL PATH]', read_only=True, data_only=True)
+# collect rows from S2_N4 and S2_T1
+marker_rows=[]
+for sheet in ['S2_N4_cell_types','S2_T1_cell_types','S2_N2_cell_types']:
+    ws=wb[sheet]
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or row[0] is None: continue
+        cluster, identity, classification, celltype = row[0], row[1], row[2], row[3]
+        markers=[m for m in row[4:9] if m]
+        if markers:
+            marker_rows.append((sheet,str(identity),str(classification),markers))
+print('rows',len(marker_rows))
+
+def find_genes(m):
+    # normalize marker: split slash, parentheses, dots
+    tokens=[]
+    for part in re.split(r'[/,()]', m):
+        part=part.strip().rstrip('+')
+        if part:
+            tokens.append(part)
+    hits=[]
+    for tok in tokens:
+        # exact case-insensitive, then substring
+        exact=[x for x in g.index if x.upper()==tok.upper()]
+        if exact: hits.extend(exact)
+        else:
+            # regex with boundaries; avoid too broad
+            pat=re.compile(re.escape(tok), re.I)
+            sub=[x for x in g.index if pat.search(x)]
+            # if too many, choose exact word or containing token at start
+            if len(sub)>20:
+                sub=[x for x in sub if tok.lower() in x.lower() and (x.upper().startswith(tok.upper()) or x.upper()==tok.upper())][:5]
+            hits.extend(sub[:5])
+    return list(dict.fromkeys(hits))
+
+# For each marker row, compute max column for mean of marker expr (log)
+confusion=[]
+for sheet, ident, cls, markers in marker_rows:
+    genes=[]
+    for m in markers:
+        genes.extend(find_genes(m))
+    genes=list(dict.fromkeys(genes))
+    if not genes: continue
+    avg=log.loc[genes].mean(axis=0)
+    maxcol=avg.idxmax()
+    maxval=avg.max()
+    second=avg.sort_values(ascending=False).index[1]
+    confusion.append((sheet,ident,cls,markers,genes,maxcol,maxval,second))
+# Print where marker max not matching broad expected
+# define expected mapping rough by classification/identity keywords to columns
+expected=[]
+for sheet,ident,cls,markers,genes,maxcol,maxval,second in confusion:
+    ident_l=ident.lower(); cls_l=cls.lower()
+    exp=None
+    if 'club-shaped gland' in ident_l or 'endostyle' in ident_l:
+        exp='endostyle_csg'
+    elif 'epidermis' in ident_l or 'epithelial_ectoderm' in ident_l or 'epithelial' in ident_l:
+        exp='epidermis'
+    elif 'neural' in ident_l or 'cns' in ident_l or 'pigment' in ident_l or 'neuron' in ident_l or 'glia' in ident_l:
+        exp='neural'
+    elif 'notochord' in ident_l or 'mesoderm' in ident_l or 'somite' in ident_l or 'muscle' in ident_l:
+        # distinguish somite vs mesodermal_notochord etc
+        if 'somite' in ident_l or 'muscle' in ident_l:
+            exp='muscular_somites'
+        else:
+            exp='mesodermal_notochord'
+    elif 'endoderm' in ident_l or 'gut' in ident_l or 'pharyngeal' in ident_l or 'mouth' in ident_l or 'pre-oral' in ident_l or 'mesoendoderm' in ident_l:
+        exp='endoderm'
+    elif 'tailbud' in ident_l or 'neuromesoderm' in ident_l:
+        exp='tailbud'
+    else:
+        exp=None
+    confusion[-1]=(sheet,ident,cls,markers,genes,maxcol,maxval,second,exp)
+    if exp and maxcol"'!=exp:
+        print(f'"'MISMATCH {sheet} | {ident} | exp={exp} got={maxcol} second={second} markers={markers} genes={genes}')
+    elif exp:
+        print(f'OK {sheet} | {ident} | exp={exp} got={maxcol} markers={markers[:2]}')
+    else:
+        print(f'UNMAPPED {sheet} | {ident} | got={maxcol} markers={markers}')
+PY"

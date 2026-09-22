@@ -1,0 +1,44 @@
+/bin/bash -lc "cat > work/parse_pairs.py <<'PY'
+from collections import defaultdict, Counter
+import re, sys
+paf='work/reads_vs_tx_allchains.paf'
+by=defaultdict(list)
+for line in open(paf):
+    f=line.rstrip('\\n').split('\\t')
+    q=f[0]; qlen=int(f[1]); qs=int(f[2]); qe=int(f[3]); strand=f[4]; t=f[5]
+    gene=t.split('|')[5] if '|' in t else t
+    m=int(f[9]); alen=int(f[10]); mapq=int(f[11])
+    if alen < 28 or m/alen < 0.94: continue
+    # skip self pseudo ENS ids, non HGNC-looking? keep initially
+    by[q].append((qs,qe,strand,gene,t,m,alen,mapq))
+
+paircnt=Counter(); examples={}
+for q,als in by.items():
+    # reduce duplicate gene/interval/strand: keep longest per approximate interval/gene
+    # Use top 80 by length to avoid repetitive explosion
+    als=sorted(als, key=lambda x:(-(x[5]), x[0], x[3]))[:80]
+    n=len(als)
+    for i in range(n):
+        for j in range(n):
+            if i==j: continue
+            a,b=als[i],als[j]
+            # a query segment before b, adjacent or with small overlap/gap
+            if not (a[0] <= b[0] and a[1] <= b[1]): continue
+            overlap=max(0, min(a[1],b[1])-max(a[0],b[0]))
+            gap=max(0, b[0]-a[1])
+            if overlap>12 or gap>15: continue
+            if a[3]==b[3] or a[2]"'!=b[2]: continue
+            # require combined covers a decent fraction and both touch around junction
+            cov=(a[1]-a[0])+(b[1]-b[0])-overlap
+            if cov<85: continue
+            if a[2]=='"'+': pair=(a[3],b[3])
+            else: pair=(b[3],a[3])
+            paircnt[pair]+=1
+            examples.setdefault(pair, (q,a,b,cov,overlap,gap))
+
+for (g1,g2),c in paircnt.most_common(100):
+    ex=examples[(g1,g2)]
+    print(c, g1, g2, 'ex', ex[0], ex[1][:5], ex[2][:5], 'cov/ov/gap', ex[3:])
+PY
+python3 work/parse_pairs.py > results/pair_counts.txt
+head -80 results/pair_counts.txt"

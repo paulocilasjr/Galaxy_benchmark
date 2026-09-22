@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY' > screen_10m.tsv
+import gzip,requests,pyBigWig,numpy as np,concurrent.futures,collections,time,sys
+bams=[]
+for l in open('encode4_join.tsv'):
+ f=l.rstrip('\\n').split('\\t')
+ if len(f)<8: continue
+ exp,bam,rep,total,rl,run,summary,bw=f
+ if bw=='NO_BW': continue
+ bams.append((exp,bam,rep,int(total),rl,run,summary,bw))
+groups=collections.defaultdict(list)
+for x in bams: groups[x[0]].append(x)
+groups={e:xs for e,xs in groups.items() if 65_000_000 <= sum(x[3] for x in xs) <= 90_000_000}
+# 10Mb windows, exact 10kb bins
+regions=[('chr10',0,10_000_000,1000),('chr1',0,10_000_000,1000),('chr19',0,10_000_000,1000)]
+T={}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.rstrip().split('\\t');s=int(s)
+ if c in ('chr10','chr1','chr19') and s<10_000_000:T.setdefault(c,[]).append(float(v))
+target=np.concatenate([T[c] for c in ('chr10','chr1','chr19')])
+def fetch(x):
+ exp,bam,rep,total,rl,run,summary,bw=x
+ try:
+  rr=requests.get(f'https://www.encodeproject.org/files/{bw}/@@download/{bw}.bigWig',allow_redirects=False,timeout=20)
+  b=pyBigWig.open(rr.headers['location']); arr=[]
+  for c,s,e,n in regions: arr.extend(0.0 if v is None else v for v in (b.stats(c,s,e,nBins=n,type='sum',exact=False)))
+  b.close();return x,np.array(arr),''
+ except Exception as e:return x,None,repr(e)
+start=time.time(); data={}
+with concurrent.futures.ThreadPoolExecutor(max_workers=24) as p:
+ fs=[p.submit(fetch,x) for xs in groups.values() for x in xs]
+ for j,f in enumerate(concurrent.futures.as_completed(fs),1):
+  x,a,err=f.result();
+  if a is not None:data[x[7]]=a
+  else: print('ERR',x[7],err,file=sys.stderr)
+  if j%20==0:print(f'# progress {j}/{len(fs)} {time.time()-start:.1f}s',file=sys.stderr,flush=True)
+# score groups
+for exp,xs in groups.items():
+ aa=[data.get(x[7]) for x in xs]
+ if any(a is None for a in aa):continue
+ for label,a in [('raw',sum(aa)),('norm',sum(x/x.sum() for x in aa))]:
+  p=float(np.corrcoef(target,a)[0,1]);lp=float(np.corrcoef(np.log1p(target),np.log1p(a))[0,1]);rank=lambda v:np.argsort(np.argsort(v));sp=float(np.corrcoef(rank(target),rank(a))[0,1])
+  print('\\t'.join(map(str,(p,lp,sp,exp,label,','.join(x[7] for x in xs),','.join(x[1] for x in xs),sum(x[3] for x in xs),','.join(x[6] for x in xs)))))
+PY"

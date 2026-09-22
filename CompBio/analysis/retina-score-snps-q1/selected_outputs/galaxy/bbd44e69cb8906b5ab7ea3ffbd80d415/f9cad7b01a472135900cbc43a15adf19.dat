@@ -1,0 +1,209 @@
+import gc
+import os
+import sys
+
+import numpy as np
+import tensorflow as tf
+
+
+def read_fasta(path):
+    sequences = {}
+    current = None
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                current = line[1:].split()[0]
+                if current in sequences:
+                    raise ValueError(f"duplicate FASTA identifier: {current}")
+                sequences[current] = []
+            else:
+                if current is None:
+                    raise ValueError("FASTA sequence precedes its header")
+                sequences[current].append(line)
+    return {key: "".join(value) for key, value in sequences.items()}
+
+
+def read_labels(path):
+    records = []
+    with open(path, "r", encoding="utf-8") as handle:
+        header = handle.readline()
+        if not header:
+            raise ValueError("label table is empty")
+        for line_number, raw in enumerate(handle, start=2):
+            line = raw.rstrip("\r\n")
+            if not line:
+                continue
+            fields = line.split("\t")
+            if len(fields) < 5:
+                raise ValueError(f"label row {line_number} has fewer than five fields")
+            records.append(
+                {
+                    "id": str(line_number),
+                    "ref": fields[2],
+                    "alt": fields[3],
+                    "label": fields[4],
+                }
+            )
+    return records
+
+
+def dna_to_one_hot(sequences):
+    if not sequences:
+        raise ValueError("no sequences supplied")
+    length = len(sequences[0])
+    if any(len(sequence) != length for sequence in sequences):
+        raise ValueError("model sequences do not have a common length")
+    encoded = np.zeros((len(sequences), length, 4), dtype=np.float32)
+    channels = {"A": 0, "C": 1, "G": 2, "T": 3}
+    for row, sequence in enumerate(sequences):
+        for column, base in enumerate(sequence.upper()):
+            channel = channels.get(base)
+            if channel is not None:
+                encoded[row, column, channel] = 1.0
+    return encoded
+
+
+def count_predictions(predictions, expected):
+    if isinstance(predictions, (list, tuple)):
+        if len(predictions) < 2:
+            raise ValueError("Rod model did not return profile and count outputs")
+        counts = np.asarray(predictions[1])
+    elif isinstance(predictions, dict):
+        for key in ("logcounts", "count", "counts"):
+            if key in predictions:
+                counts = np.asarray(predictions[key])
+                break
+        else:
+            raise ValueError("Rod model returned an unrecognized output dictionary")
+    else:
+        values = np.asarray(predictions)
+        if values.ndim == 2 and values.shape[1] == 1:
+            counts = values
+        else:
+            raise ValueError("Rod model did not return a count output")
+    counts = counts.reshape(-1)
+    if counts.shape[0] != expected:
+        raise ValueError("count output has the wrong number of rows")
+    return counts.astype(np.float64, copy=False)
+
+
+def main():
+    if len(sys.argv) != 9:
+        raise ValueError("expected five models, a FASTA, a label table, and an output path")
+
+    model_paths = sys.argv[1:6]
+    fasta_path = sys.argv[6]
+    labels_path = sys.argv[7]
+    output_path = sys.argv[8]
+
+    slots = int(os.environ.get("GALAXY_SLOTS", "1"))
+    slots = max(1, slots)
+    tf.config.threading.set_intra_op_parallelism_threads(slots)
+    tf.config.threading.set_inter_op_parallelism_threads(slots)
+
+    labels = read_labels(labels_path)
+    genome_sequences = read_fasta(fasta_path)
+    if len(labels) != 500:
+        raise ValueError(f"expected 500 labeled SNPs, found {len(labels)}")
+    if len(genome_sequences) != 500:
+        raise ValueError(f"expected 500 FASTA sequences, found {len(genome_sequences)}")
+
+    input_length = 2114
+    center = input_length // 2 - 1
+    ref_sequences = []
+    alt_sequences = []
+    mismatches = []
+
+    for record in labels:
+        sequence = genome_sequences.get(record["id"])
+        if sequence is None:
+            raise ValueError(f"missing FASTA sequence for input row {record['id']}")
+        if len(sequence) != input_length:
+            raise ValueError(f"sequence {record['id']} has length {len(sequence)} instead of {input_length}")
+
+        supplied_ref = record["ref"]
+        supplied_alt = record["alt"]
+        mismatch = int(sequence[center : center + len(supplied_ref)] != supplied_ref)
+        corrected_ref = (
+            sequence[:center]
+            + supplied_ref
+            + sequence[center + len(supplied_ref) :]
+            if mismatch
+            else sequence
+        )
+        corrected_alt = (
+            corrected_ref[:center]
+            + supplied_alt
+            + corrected_ref[center + len(supplied_ref) :]
+        )
+        ref_sequences.append(corrected_ref[:input_length])
+        alt_sequences.append(corrected_alt[:input_length])
+        mismatches.append(mismatch)
+
+    ref_input = dna_to_one_hot(ref_sequences)
+    alt_input = dna_to_one_hot(alt_sequences)
+    fold_reference = []
+    fold_alternate = []
+    fold_lfc = []
+
+    for model_path in model_paths:
+        model = tf.keras.models.load_model(model_path, compile=False)
+        model_shape = model.input_shape
+        if isinstance(model_shape, list):
+            model_shape = model_shape[0]
+        if int(model_shape[1]) != input_length or int(model_shape[2]) != 4:
+            raise ValueError(f"unexpected Rod model input shape: {model_shape}")
+
+        ref_predictions = model.predict(ref_input, batch_size=256, verbose=0)
+        alt_predictions = model.predict(alt_input, batch_size=256, verbose=0)
+        ref_count = count_predictions(ref_predictions, len(labels))
+        alt_count = count_predictions(alt_predictions, len(labels))
+        fold_reference.append(ref_count)
+        fold_alternate.append(alt_count)
+        fold_lfc.append(alt_count - ref_count)
+        del model, ref_predictions, alt_predictions
+        gc.collect()
+
+    reference_matrix = np.asarray(fold_reference, dtype=np.float64).T
+    alternate_matrix = np.asarray(fold_alternate, dtype=np.float64).T
+    lfc_matrix = np.asarray(fold_lfc, dtype=np.float64).T
+    average_lfc = lfc_matrix.mean(axis=1)
+
+    header = ["id", "label", "supplied_ref", "supplied_alt", "ref_mismatch"]
+    for fold in range(5):
+        header.extend(
+            [
+                f"Rod_fold{fold}_ref_logcount",
+                f"Rod_fold{fold}_alt_logcount",
+                f"Rod_fold{fold}_lfc",
+            ]
+        )
+    header.extend(["Rod_fold_avg_lfc", "abs_Rod_fold_avg_lfc"])
+
+    with open(output_path, "w", encoding="utf-8") as output:
+        output.write("\t".join(header) + "\n")
+        for row, record in enumerate(labels):
+            fields = [
+                record["id"],
+                record["label"],
+                record["ref"],
+                record["alt"],
+                str(mismatches[row]),
+            ]
+            for fold in range(5):
+                fields.extend(
+                    [
+                        repr(float(reference_matrix[row, fold])),
+                        repr(float(alternate_matrix[row, fold])),
+                        repr(float(lfc_matrix[row, fold])),
+                    ]
+                )
+            fields.extend([repr(float(average_lfc[row])), repr(float(abs(average_lfc[row])))])
+            output.write("\t".join(fields) + "\n")
+
+
+if __name__ == "__main__":
+    main()

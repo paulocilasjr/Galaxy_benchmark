@@ -1,0 +1,109 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from collections import defaultdict
+
+# genes
+ids=[]; genes=[]
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+    f.readline()
+    for line in f:
+        a=line.rstrip('\\n').split('\\t'); ids.append(a[0]); genes.append(a[1] if len(a)>1 else a[0])
+sym_to_idxs=defaultdict(list)
+for i,g in enumerate(genes): sym_to_idxs[g.upper()].append(i)
+
+markers = {
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','SOX9','GJA1'],
+'microglial cell':['P2RY12','CX3CR1','C1QA','C1QB','C1QC','AIF1','TMEM119','TYROBP','CSF1R'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MITF','TTR','RDH5','LRAT'],
+'cone cell':['OPN1LW','OPN1MW','OPN1SW','GNAT2','ARR3','PDE6H','PDE6C','GNGT2','CNGA3'],
+'rod cell':['RHO','NRL','GNAT1','PDE6A','PDE6B','PDE6G','SAG','GNGT1','CNGB1','ROM1','NR2E3'],
+'horizontal cell':['PROX1','ONECUT1','ONECUT2','LHX1','CALB1','CALB2','TFAP2A','TFAP2B'],
+'bipolar cell':['VSX2','GRM6','TRPM1','PKD2L1','CABP5','PRKCA','PCP2','OTX2'],
+'RGC':['RBPMS','POU4F1','POU4F2','POU4F3','SNCG','THY1','NEFL','NEFM','ISL1'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','TRBC1','TRBC2','IL7R','LCK','CD2'],
+'macrophage':['CD68','LYZ','CD14','FCGR3A','FCGR1A','MSR1','MARCO','LST1','S100A8','S100A9'],
+'Schwann cell':['MPZ','SOX10','PLP1','MBP','PMP22','S100B','ERBB3','NGFR'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','ACTA2','NOTCH3','MYH11','TAGLN'],
+'B cell':['MS4A1','CD79A','CD79B','CD19','CD74','HLA-DRA','BANK1','CD37','IGHM'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA','FBLN1','C7','DPT'],
+'endothelial cell':['PECAM1','VWF','KDR','CLDN5','FLT1','RAMP2','EMCN','ESAM','CDH5'],
+'muller glia cell':['RLBP1','GLUL','VIM','SLC1A3','SLC1A2','APOE','CLU','CRYAB','AQP4','SOX9'],
+}
+marker_idxs={ct: sorted(set(j for m in ms for j in sym_to_idxs.get(m.upper(), []))) for ct,ms in markers.items()}
+
+print('loading')
+X1=mmread('differential.composition.q1.1.mtx.gz').tocsc().astype(np.float32)
+X2=mmread('differential.composition.q1.2.mtx.gz').tocsc().astype(np.float32)
+X=sparse.hstack([X1,X2], format='csc').T.tocsr() # cells x genes
+batch=np.array([0]*X1.shape[1]+[1]*X2.shape[1])
+lib=np.asarray(X.sum(axis=1)).ravel()
+# normalize log1p in sparse row scaling
+Xn=X.copy().astype(np.float32)
+row_counts=np.diff(Xn.indptr)
+rows=np.repeat(np.arange(Xn.shape[0]), row_counts)
+Xn.data=np.log1p(Xn.data*(10000.0/lib[rows]))
+print('normalized',Xn.shape,Xn.nnz)
+# HVG select top variance excluding very low/high means and MT/RPL/RPS maybe
+mean=np.asarray(Xn.mean(axis=0)).ravel()
+mean2=np.asarray(Xn.power(2).mean(axis=0)).ravel()
+var=mean2-mean**2
+# dispersion-like; high variance, exclude genes expressed in too few cells? use nonzero counts
+nnz=np.diff(Xn.tocsc().indptr)
+mask=(mean>0.005)&(mean<5)&(nnz>=20)
+# exclude MT-/RPS/RPL? not necessarily
+score=np.zeros_like(mean); score[mask]=var[mask]/(mean[mask]+1e-3)
+hvg=np.argsort(score)[-3000:]
+print('hvg top', [genes[i] for i in hvg[-20:]])
+Xh=Xn[:,hvg]
+svd=TruncatedSVD(n_components=50, random_state=1)
+Z=svd.fit_transform(Xh)
+Z=StandardScaler().fit_transform(Z)
+print('explained', svd.explained_variance_ratio_[:10], 'sum', svd.explained_variance_ratio_.sum())
+# compute marker scores all cells
+cts=list(markers.keys())
+S=[]
+for ct in cts:
+    idx=marker_idxs[ct]
+    S.append(np.asarray(Xn[:,idx].mean(axis=1)).ravel() if idx else np.zeros(Xn.shape[0]))
+S=np.vstack(S).T
+
+def top_cluster_genes(labels,c):
+    inx=(labels==c); out=~inx
+    # mean log expression; sparse mean ok
+    mi=np.asarray(Xn[inx].mean(axis=0)).ravel(); mo=np.asarray(Xn[out].mean(axis=0)).ravel()
+    diff=mi-mo
+    # require mean inside > .05
+    order=np.argsort(diff)[::-1]
+    res=[]
+    for i in order:
+        if mi[i]>0.05:
+            res.append((genes[i], diff[i], mi[i], mo[i]))
+        if len(res)>=12: break
+    return res
+
+for k in [18,24,30,40,55]:
+    km=KMeans(n_clusters=k, n_init=20, random_state=42)
+    lab=km.fit_predict(Z)
+    print('\\nK',k)
+    rows=[]
+    for c in range(k):
+        n1=((lab==c)&(batch==0)).sum(); n2=((lab==c)&(batch==1)).sum(); n=n1+n2
+        if n<10: continue
+        # imbalance ratio vs expected? proportions
+        p1=n1/X1.shape[1]; p2=n2/X2.shape[1]
+        ratio=(p1+1e-9)/(p2+1e-9)
+        ms=S[lab==c].mean(axis=0); topct=cts[int(ms.argmax())]
+        rows.append((max(ratio,1/ratio), ratio, c,n,n1,n2,p1,p2,topct,ms.max()))
+    rows=sorted(rows, reverse=True)[:12]
+    for imb,ratio,c,n,n1,n2,p1,p2,topct,mx in rows:
+        print(f'cl {c:2d} n={n:4d} n1={n1:4d} n2={n2:4d} p1={p1:.4f} p2={p2:.4f} ratio={ratio:.1f} topmarker={topct} score={mx:.2f}')
+        print('  topgenes', ', '.join(g for g,_,_,_ in top_cluster_genes(lab,c)[:8]))
+        # top marker mean ranking
+        rank=np.argsort(S[lab==c].mean(axis=0))[::-1][:4]
+        print('  markers', '; '.join(f'{cts[i]}:{S[lab==c].mean(axis=0)[i]:.2f}' for i in rank))
+PY"

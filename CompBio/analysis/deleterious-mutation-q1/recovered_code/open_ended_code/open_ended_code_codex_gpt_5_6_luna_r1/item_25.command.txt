@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, collections
+comp=str.maketrans('ACGTNacgtn','TGCANtgcan')
+with gzip.open('chr9.hg38.fa.gz','rt') as f:
+ f.readline(); genome=''.join(x.strip() for x in f)
+code={}
+for aa,cods in {'F':'TTT TTC','L':'TTA TTG CTT CTC CTA CTG','I':'ATT ATC ATA','M':'ATG','V':'GTT GTC GTA GTG','S':'TCT TCC TCA TCG AGT AGC','P':'CCT CCC CCA CCG','T':'ACT ACC ACA ACG','A':'GCT GCC GCA GCG','Y':'TAT TAC','*':'TAA TAG TGA','H':'CAT CAC','Q':'CAA CAG','N':'AAT AAC','K':'AAA AAG','D':'GAT GAC','E':'GAA GAG','C':'TGT TGC','W':'TGG','R':'CGT CGC CGA CGG AGA AGG','G':'GGT GGC GGA GGG'}.items():
+ for c in cods.split(): code[c]=aa
+posmap=collections.defaultdict(list)
+with gzip.open('ncbiRefSeq.hg38.txt.gz','rt') as f:
+ for line in f:
+  a=line.rstrip('\\n').split('\\t')
+  if len(a)<16 or a[2]"'!='"'chr9' or a[6]==a[7]: continue
+  strand=a[3]; c0=int(a[6]); c1=int(a[7]); starts=[int(x) for x in a[9].rstrip(',').split(',') if x]; ends=[int(x) for x in a[10].rstrip(',').split(',') if x]
+  ex=list(zip(starts,ends)); ex=ex if strand=='+' else ex[::-1]; inds=[]
+  for s,e in ex:
+   lo=max(s,c0); hi=min(e,c1)
+   if lo<hi:
+    z=list(range(lo,hi)); inds.extend(z if strand=='+' else z[::-1])
+  cds=''.join(genome[g] if strand=='+' else genome[g].translate(comp) for g in inds)
+  for i,g in enumerate(inds): posmap[g].append((a[12],a[1],strand,i,cds[i//3*3:i//3*3+3]))
+sites=collections.defaultdict(list)
+with gzip.open('q1.hg38.variants.vcf.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  a=line.rstrip().split('\\t')
+  if a[0]"'!='"'chr9' or len(a[3])"'!=1 or len(a[4])!=1: continue
+  d=dict(zip(a[8].split('"':'),a[9].split(':'))); dp=int(d.get('DP','0') or 0); ad=[int(x) for x in d.get('AD','0,0').split(',') if x"'!='"'.']; af=ad[1]/dp if len(ad)>1 and dp else 0
+  p=int(a[1])-1; alt=a[4].upper()
+  for gene,tr,strand,i,cod in posmap.get(p,[]):
+   oa=alt if strand=='+' else alt.translate(comp); acod=cod[:i%3]+oa+cod[i%3+1:]
+   if code.get(acod)=='*' and code.get(cod)"'!='"'*': sites[(a[1],a[3],a[4])].append((gene,tr,code.get(cod),cod,acod,float(a[5]),dp,af))
+print('distinct stop-gain sites:',len(sites))
+for k,v in sorted(sites.items(), key=lambda kv:(-kv[1][0][6],-kv[1][0][7],int(kv[0][0]))):
+ dp=v[0][6]; af=v[0][7]
+ if dp>=8 and af>=0.75:
+  genes=sorted(set(x[0] for x in v)); prot=sorted(set(x[2]+'>'+x[4] for x in v))
+  print('\\t'.join(map(str,k)), 'QUAL',v[0][5], 'DP',dp,'AF',round(af,3),'genes',','.join(genes),'effects',','.join(prot),'tx',len(v))
+PY"

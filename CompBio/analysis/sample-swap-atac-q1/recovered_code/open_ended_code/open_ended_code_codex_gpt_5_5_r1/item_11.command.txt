@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+path='sample.swap.atac.q1.tsv.gz'
+cols=pd.read_csv(path,sep='\\t',nrows=0).columns.tolist(); samples=cols[3:]
+# hard lib from previous? recompute and covariance in same pass
+lib=np.zeros(len(samples), dtype=np.float64)
+for chunk in pd.read_csv(path, sep='\\t', usecols=samples, chunksize=250000):
+    lib += chunk.to_numpy(dtype=np.float64).sum(axis=0)
+print('lib done')
+N=0; sx=np.zeros(len(samples)); sxx=np.zeros((len(samples),len(samples)))
+for chunk in pd.read_csv(path, sep='\\t', usecols=samples, chunksize=100000):
+    a=chunk.to_numpy(dtype=np.float64)
+    x=np.log2(a/lib*1e6 + 1.0)
+    sx += x.sum(axis=0)
+    sxx += x.T @ x
+    N += x.shape[0]
+mean=sx/N
+cov=(sxx - N*np.outer(mean,mean))/(N-1)
+std=np.sqrt(np.diag(cov))
+corr=cov/np.outer(std,std)
+print('N',N)
+print('nearest Pearson logCPM')
+for i,s in enumerate(samples):
+    order=np.argsort(-corr[i])
+    print(s, ', '.join(f'{samples[j]}:{corr[i,j]:.4f}' for j in order[1:6]))
+print('\\nCorrelation matrix')
+print('sample\\t'+'\\t'.join(samples))
+for i,s in enumerate(samples):
+    print(s+'\\t'+'\\t'.join(f'{corr[i,j]:.3f}' for j in range(len(samples))))
+# PCA from covariance
+w,v=np.linalg.eigh(cov); idx=np.argsort(w)[::-1]; w=w[idx]; v=v[:,idx]
+print('\\nPCA var', [round(float(x/w.sum()),4) for x in w[:5]])
+for k in range(5):
+    scores=v[:,k]*np.sqrt(w[k])
+    print('PC',k+1)
+    for s,sc in sorted(zip(samples,scores), key=lambda x:x[1]): print(f'  {s}\\t{sc:.4f}')
+PY"

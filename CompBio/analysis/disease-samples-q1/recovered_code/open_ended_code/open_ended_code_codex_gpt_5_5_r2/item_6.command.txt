@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
+from scipy.spatial.distance import pdist, squareform
+
+fn='disease.samples.q1.tsv'
+df=pd.read_csv(fn, sep='\\t', index_col=0)
+print(df.shape)
+print(df.columns.tolist())
+X=np.log2(df+1)
+# sample library summary original TPM sums
+print('TPM sums')
+print(df.sum().round(1).to_string())
+# pairwise correlations all genes
+corr=X.corr(method='pearson')
+print('corr')
+print(corr.round(3).to_string())
+# use most variable genes by variance across samples
+for n in [500,1000,2000,5000,10000,df.shape[0]]:
+    vars=X.var(axis=1)
+    top=vars.nlargest(n).index
+    Xt=X.loc[top].T
+    # zscore genes? yes
+    Z=(Xt-Xt.mean(axis=0))/Xt.std(axis=0).replace(0,np.nan)
+    Z=Z.fillna(0)
+    pca=PCA(n_components=4).fit_transform(Z)
+    ev=PCA(n_components=4).fit(Z).explained_variance_ratio_ # separate fit okay
+    print('\\nN',n,'EV',np.round(ev,3))
+    for i,s in enumerate(Xt.index):
+        print(s, 'PCs', ' '.join(f'{v:.2f}' for v in pca[i,:3]))
+    # distances cluster 2/3
+    dist=pdist(Z, metric='euclidean')
+    L=linkage(dist, method='ward')
+    print('leaves', [Xt.index[i] for i in leaves_list(L)])
+    for k in [2,3,4]:
+        labs=fcluster(L,k,criterion='maxclust')
+        groups={}
+        for s,l in zip(Xt.index,labs): groups.setdefault(l,[]).append(s)
+        print('k',k,groups)
+PY"

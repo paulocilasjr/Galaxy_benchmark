@@ -1,0 +1,42 @@
+/bin/bash -lc "cat > compare_tracks.py <<'PY'
+import csv,json,re,collections
+sei=[]
+for index,line in enumerate(open('sei_targets.txt')):
+ m=re.search(r'ID:(\\d+)',line)
+ if m:sei.append({'index':index,'label':line.strip(),'cistrome_id':int(m[1])})
+samples={x['id']:x for x in json.load(open('db3_samples.json'))['samples']}
+experiments={x['accession']:x for x in json.load(open('encode_experiments.json'))['@graph']}
+borzoi=[]
+for species in ['human','mouse']:
+ for row in csv.DictReader(open(f'borzoi_{species}.txt'),delimiter='\\t'):
+  row['species']=species
+  borzoi.append(row)
+accession_to_tracks=collections.defaultdict(list)
+missing=set()
+for row in borzoi:
+ accessions=set(re.findall(r'(?:ENCSR[A-Z0-9]+|GSM\\d+)',row['identifier']+' '+row['file']))
+ for enc in list(accessions):
+  if enc.startswith('ENCSR'):
+   if enc not in experiments:missing.add(enc)
+   else:
+    accessions.update(re.findall(r'GSM\\d+',' '.join(experiments[enc].get('dbxrefs',[]))))
+ for acc in accessions:accession_to_tracks[acc].append(row)
+matched=[]
+for row in sei:
+ sample=samples[row['cistrome_id']]
+ acc=sample['external_id'].split('_')[0]
+ if acc in accession_to_tracks:
+  matches=accession_to_tracks[acc]
+  matched.append(dict(row,accession=acc,borzoi_matches=[(x['species'],x['identifier'],x['description']) for x in matches]))
+json.dump(matched,open('matched_sei_tracks.json','w'),indent=2)
+json.dump(sorted(missing),open('missing_encode_experiments.json','w'),indent=2)
+print('Sei ID tracks:',len(sei))
+print('ENCODE experiments retrieved:',len(experiments))
+print('Borzoi ENCODE experiments absent:',len(missing))
+print('Matches:',len(matched))
+print('Accession types:',collections.Counter('GEO' if x['accession'].startswith('GSM') else 'ENCODE' for x in matched))
+print('Borzoi species:',collections.Counter(tuple(sorted(set(m[0] for m in x['borzoi_matches']))) for x in matched))
+print('Borzoi assay types:',collections.Counter(tuple(sorted(set(m[2].split(':')[0] for m in x['borzoi_matches']))) for x in matched))
+print('Rounded:',round(len(matched)/100)*100)
+PY
+python compare_tracks.py"

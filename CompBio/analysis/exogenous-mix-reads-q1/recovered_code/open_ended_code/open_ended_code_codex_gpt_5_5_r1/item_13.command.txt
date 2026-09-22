@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter, defaultdict
+import random, math
+
+def readseqs(path):
+    with open(path) as f:
+        return [line.strip().upper() for i,line in enumerate(f) if i%4==1]
+seqs={k:readseqs(f'exogenous.mix.reads.q1.{k}.fq') for k in ['exo','endo','mix']}
+# Try a leave-one-out/holdout kmer classifier: train on halves, classify heldout to estimate measurable rates.
+random.seed(1)
+for k in [12,15,20,25,31,35,40,45,50]:
+    print('\\nk',k)
+    for rep in range(3):
+        train={}; test={}
+        for cls in ['exo','endo']:
+            arr=seqs[cls][:]
+            random.shuffle(arr)
+            split=len(arr)//2
+            train[cls]=arr[:split]; test[cls]=arr[split:]
+        km={}
+        for cls in ['exo','endo']:
+            c=Counter()
+            for s in train[cls]:
+                for i in range(len(s)-k+1): c[s[i:i+k]]+=1
+            km[cls]=c
+        # log likelihood with add smoothing over union; per read sum log freqs
+        union=set(km['exo'])|set(km['endo']); V=len(union); totals={cls:sum(km[cls].values()) for cls in km}
+        def pred(s):
+            ll={}
+            for cls in ['exo','endo']:
+                t=totals[cls]+0.1*V
+                v=0.0
+                for i in range(len(s)-k+1):
+                    v += math.log((km[cls].get(s[i:i+k],0)+0.1)/t)
+                ll[cls]=v
+            return 'exo' if ll['exo']>ll['endo'] else 'endo', ll['exo']-ll['endo']
+        cm=Counter()
+        for cls in ['exo','endo']:
+            for s in test[cls]:
+                p,d=pred(s); cm[(cls,p)]+=1
+        mixpred=Counter(pred(s)[0] for s in seqs['mix'])
+        # estimate true exo fraction from apparent p_exo = a*sens + (1-a)*fpr
+        sens=cm[('exo','exo')]/len(test['exo'])
+        fpr=cm[('endo','exo')]/len(test['endo'])
+        app=mixpred['exo']/len(seqs['mix'])
+        est=(app-fpr)/(sens-fpr) if sens"'!=fpr else float('"'nan')
+        print('sens',round(sens,2),'fpr',round(fpr,2),'app',round(app,2),'est',round(est,2), 'mixpred',mixpred)
+PY"

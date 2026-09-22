@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import math, time
+import numpy as np, pysam
+from cyvcf2 import VCF
+vcf=VCF('panel.22.29500000-36000000.vcf.gz')
+samples=vcf.samples
+variants={}
+for rec in vcf('22:29500000-36000000'):
+    if len(rec.REF)==1 and len(rec.ALT)==1 and len(rec.ALT[0])==1 and rec.REF in 'ACGT' and rec.ALT[0] in 'ACGT':
+        variants[rec.POS]=(rec.REF,rec.ALT[0],rec.gt_types.copy())
+print('variants',len(variants),'samples',len(samples),flush=True)
+scores=np.zeros(len(samples),dtype=np.float64)
+covered=0; depth=0
+bam=pysam.AlignmentFile('reads.mm.sorted.bam','rb')
+t0=time.time()
+for col in bam.pileup('22',29500000-1,36000000,truncate=True,stepper='samtools',min_mapping_quality=20,min_base_quality=15,ignore_overlaps=True,flag_filter=0x4|0x100|0x200|0x400):
+    v=variants.get(col.reference_pos+1)
+    if v is None: continue
+    ref,alt,gt=v; nref=nalt=nother=0; lr=la=0.0
+    for pr in col.pileups:
+        if pr.is_del or pr.is_refskip or pr.query_position is None: continue
+        aln=pr.alignment; qp=pr.query_position; b=aln.query_sequence[qp].upper(); q=(aln.query_qualities[qp] if aln.query_qualities is not None else 30)
+        if q<15: continue
+        e=10.0**(-min(q,60)/10.0)
+        if b==ref: nref+=1; lr+=math.log(max(1e-12,1-e)); la+=math.log(max(1e-12,e/3))
+        elif b==alt: nalt+=1; lr+=math.log(max(1e-12,e/3)); la+=math.log(max(1e-12,1-e))
+        else: nother+=1; lr+=math.log(max(1e-12,e/3)); la+=math.log(max(1e-12,e/3))
+    d=nref+nalt+nother
+    if d:
+        covered+=1; depth+=d; lk=np.array([lr,.5*(lr+la),la]); ok=gt<3; scores[ok]+=lk[gt[ok]]
+bam.close()
+order=np.argsort(-scores)
+print('covered',covered,'mean_depth',depth/covered,'seconds',time.time()-t0)
+for rank,i in enumerate(order[:20],1): print(rank,samples[i],scores[i])
+PY"

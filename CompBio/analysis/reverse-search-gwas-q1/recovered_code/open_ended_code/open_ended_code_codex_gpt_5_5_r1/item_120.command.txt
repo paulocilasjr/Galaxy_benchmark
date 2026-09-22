@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request,gzip,io,concurrent.futures,sys,os,time
+from urllib.error import HTTPError, URLError
+acc_traits=[]
+with open('orru_studies.tsv') as f:
+    for line in f:
+        acc,trait=line.rstrip('\\n').split('\\t',1)
+        acc_traits.append((acc,trait))
+
+def group_for(acc):
+    n=int(acc[4:])
+    start=(n-1)//1000*1000+1
+    end=start+999
+    return f'GCST{start:08d}-GCST{end:08d}'
+
+def fetch(acc_trait):
+    acc,trait=acc_trait
+    group=group_for(acc)
+    url=f'https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/{group}/{acc}/{acc}_buildGRCh37.tsv.gz'
+    try:
+        req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            gz=gzip.GzipFile(fileobj=resp)
+            rows=[]
+            for i,line in enumerate(gz):
+                s=line.decode().rstrip('\\n')
+                if i>0: rows.append(s.split('\\t')[-1])
+                if len(rows)>=5: break
+            return acc,trait,rows,None
+    except Exception as e:
+        return acc,trait,[],repr(e)
+
+target=['0.567337','0.0702642','0.926934','0.915668','0.842973']
+# tolerate formatting exact-ish
+matches=[]; done=0
+with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
+    futs=[ex.submit(fetch,x) for x in acc_traits]
+    for fut in concurrent.futures.as_completed(futs):
+        acc,trait,rows,err=fut.result(); done+=1
+        if rows:
+            # score first 5 p-values against local prefix numerically
+            score=0
+            for a,b in zip(rows,target):
+                try: score += abs(float(a)-float(b))
+                except: score += 999
+            if score < 1e-8 or rows[:2]==target[:2]:
+                matches.append((score,acc,trait,rows))
+                print('MATCH',score,acc,trait,rows, flush=True)
+        if done%100==0:
+            print('done',done,'matches',len(matches), flush=True)
+print('FINAL')
+for m in sorted(matches): print(m)
+PY"

@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import fisher_exact
+import statsmodels.api as sm
+sets=['cond1','common','cond2']
+dfs={}
+# compute gc from fasta
+from Bio import SeqIO
+for s in sets:
+ d=pd.read_csv(f'macs/bdgdiff/{s}.motif_scan.tsv',sep='\\t')
+ recs=list(SeqIO.parse(f'macs/bdgdiff/{s}.fa','fasta'))
+ # fasta records order same as d; build gc list
+ gcs=[]; lens=[]
+ for rec in recs:
+  seq=str(rec.seq).upper(); lens.append(len(seq)); gcs.append((seq.count('G')+seq.count('C'))/len(seq) if seq else 0)
+ d['gc']=gcs; d['length']=lens
+ d['set']=s
+ dfs[s]=d
+# combined cond2 vs common
+cols=[c for c in dfs['cond2'].columns if c.endswith('_p1e-4')]
+rows=[]
+for col in cols:
+ motif=col[:-len('_p1e-4')]
+ d=pd.concat([dfs['cond2'],dfs['common']],ignore_index=True)
+ d['has']=(d[col]>0).astype(int)
+ d['cond2']=(d['set']=='cond2').astype(int)
+ # standardize gc maybe
+ X=sm.add_constant(d[['cond2','gc','length']].astype(float))
+ try:
+  model=sm.Logit(d['has'],X).fit(disp=0)
+  coef=model.params['cond2']; p=model.pvalues['cond2']
+  odds=np.exp(coef)
+ except Exception as e:
+  coef=np.nan;p=np.nan;odds=np.nan
+ rows.append({'motif':motif,'log_odds_adj':coef,'odds_adj':odds,'p_adj':p})
+res=pd.DataFrame(rows).sort_values('odds_adj',ascending=False)
+pd.set_option('display.width',200)
+print(res.to_string(index=False, float_format=lambda x:f'{x:,.4g}'))
+PY"

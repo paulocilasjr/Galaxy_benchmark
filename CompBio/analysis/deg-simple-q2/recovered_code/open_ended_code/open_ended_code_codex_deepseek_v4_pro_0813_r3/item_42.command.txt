@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+A=pd.read_csv('salmon_A/quant.sf',sep='\\t')
+B=pd.read_csv('salmon_B/quant.sf',sep='\\t')
+print(A.head())
+# parse names
+A['tid']=A.Name.str.split('|').str[0]
+A['gid']=A.Name.str.split('|').str[1]
+A['sym']=A.Name.str.split('|').str[5]
+B['tid']=B.Name.str.split('|').str[0]
+B['gid']=B.Name.str.split('|').str[1]
+B['sym']=B.Name.str.split('|').str[5]
+# check DEFB
+for df,s in [(A,'A'),(B,'B')]:
+ d=df[df.gid=='ENSG00000203970.4']
+ print(s,d[['Name','TPM','NumReads','EffectiveLength']].to_string(index=False))
+# aggregate
+ga=A.groupby('gid').agg(TPM=('TPM','sum'),reads=('NumReads','sum'))
+gb=B.groupby('gid').agg(TPM=('TPM','sum'),reads=('NumReads','sum'))
+# candidate isoform usage difference among genes with multiple transcripts and enough reads
+# merge transcript-level
+merged=A[['Name','tid','gid','sym','TPM','NumReads']].merge(B[['Name','TPM','NumReads']],on='Name',suffixes=('_A','_B'))
+merged['tpmfrac_A']=0.0; merged['tpmfrac_B']=0.0
+# compute frac within gene based on TPM
+for gid,grp in merged.groupby('gid'):
+    totA=grp.TPM_A.sum(); totB=grp.TPM_B.sum()
+    if totA>0 and totB>0:
+        merged.loc[grp.index,'tpmfrac_A']=grp.TPM_A/totA
+        merged.loc[grp.index,'tpmfrac_B']=grp.TPM_B/totB
+# aggregate gene metrics
+rows=[]
+for gid,grp in merged.groupby('gid'):
+    if len(grp)<2: continue
+    a=ga.loc[gid,'reads']; b=gb.loc[gid,'reads']
+    # skip low
+    if a<20 or b<20: continue
+    tv=sum(abs(grp.tpmfrac_A-grp.tpmfrac_B))/2
+    maxdiff=(grp.tpmfrac_A-grp.tpmfrac_B).abs().max()
+    rows.append((tv,maxdiff,a,b,gid,grp.sym.iloc[0]))
+rows.sort(reverse=True)
+print('\\nTop DTU by Salmon TPM TV, reads>=20')
+for r in rows[:50]:
+    tv,md,a,b,gid,sym=r
+    print(f'{sym:12} {gid:20} A={a:6.1f} B={b:6.1f} TV={tv:.3f} maxdiff={md:.3f}')
+print('\\nNumber with TV>0.8',sum(r[0]>0.8 for r in rows))
+print('Number with TV>0.5',sum(r[0]>0.5 for r in rows))
+PY"

@@ -1,0 +1,86 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+
+# load genes
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+    header=f.readline().strip().split('\\t')
+    genes=[]
+    ids=[]
+    for line in f:
+        a=line.rstrip('\\n').split('\\t')
+        ids.append(a[0]); genes.append(a[1] if len(a)>1 else a[0])
+
+gene_to_idx={g:i for i,g in enumerate(genes)}
+# if duplicates, keep all? build uppercase mapping list
+from collections import defaultdict
+sym_to_idxs=defaultdict(list)
+for i,g in enumerate(genes): sym_to_idxs[g.upper()].append(i)
+
+markers = {
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','SOX9','GJA1'],
+'microglial cell':['P2RY12','CX3CR1','C1QA','C1QB','C1QC','AIF1','TMEM119','TYROBP','CSF1R'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MITF','TTR','RDH5','LRAT'],
+'cone cell':['OPN1LW','OPN1MW','OPN1SW','GNAT2','ARR3','PDE6H','PDE6C','GNGT2','CNGA3'],
+'rod cell':['RHO','NRL','GNAT1','PDE6A','PDE6B','PDE6G','SAG','GNGT1','CNGB1','ROM1','NR2E3'],
+'horizontal cell':['PROX1','ONECUT1','ONECUT2','LHX1','CALB1','CALB2','TFAP2A','TFAP2B'],
+'bipolar cell':['VSX2','GRM6','TRPM1','PKD2L1','CABP5','PRKCA','PCP2','OTX2'],
+'RGC':['RBPMS','POU4F1','POU4F2','POU4F3','SNCG','THY1','NEFL','NEFM','ISL1'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','TRBC1','TRBC2','IL7R','LCK','CD2'],
+'macrophage':['CD68','LYZ','CD14','FCGR3A','FCGR1A','MSR1','MARCO','LST1','S100A8','S100A9'],
+'Schwann cell':['MPZ','SOX10','PLP1','MBP','PMP22','S100B','ERBB3','NGFR'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','ACTA2','NOTCH3','MYH11','TAGLN'],
+'B cell':['MS4A1','CD79A','CD79B','CD19','CD74','HLA-DRA','BANK1','CD37','IGHM'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA','FBLN1','C7','DPT'],
+'endothelial cell':['PECAM1','VWF','KDR','CLDN5','FLT1','RAMP2','EMCN','ESAM','CDH5'],
+'muller glia cell':['RLBP1','GLUL','VIM','SLC1A3','SLC1A2','APOE','CLU','CRYAB','AQP4','SOX9'],
+}
+marker_idxs={ct: sorted(set(j for m in ms for j in sym_to_idxs.get(m.upper(), []))) for ct,ms in markers.items()}
+print('marker genes present:')
+for ct,idx in marker_idxs.items():
+    print(ct, len(idx), [genes[i] for i in idx[:20]])
+
+# union marker matrix only for speed
+allidx=sorted(set(i for v in marker_idxs.values() for i in v))
+print('union markers', len(allidx))
+
+for label,fn in [('1','differential.composition.q1.1.mtx.gz'),('2','differential.composition.q1.2.mtx.gz')]:
+    print('\\nLOAD',label)
+    X=mmread(fn).tocsc().astype(np.float32) # genes x cells
+    n_cells=X.shape[1]
+    lib=np.asarray(X.sum(axis=0)).ravel()
+    # log normalize marker rows only
+    Xm=X[allidx,:].tocsc(copy=True)
+    # scale data by 1e4/lib then log1p
+    coo=Xm.tocoo(copy=False)
+    coo.data = np.log1p(coo.data * (10000.0 / lib[coo.col]))
+    Xm=coo.tocsr()
+    rowpos={idx:p for p,idx in enumerate(allidx)}
+    scores=[]
+    for ct,idx in marker_idxs.items():
+        rows=[rowpos[i] for i in idx if i in rowpos]
+        if rows:
+            s=np.asarray(Xm[rows,:].mean(axis=0)).ravel()
+        else:
+            s=np.zeros(n_cells)
+        scores.append(s)
+    S=np.vstack(scores)
+    cts=list(markers.keys())
+    top=S.argmax(axis=0)
+    mx=S.max(axis=0)
+    # count assignments unrestricted, and thresholded >0.2/0.5/1.0
+    print('libs median', np.median(lib), 'genes/cell median', np.median(np.diff(X.indptr)))
+    for thr in [0,0.2,0.5,1.0,1.5]:
+        counts=np.bincount(top[mx>thr], minlength=len(cts))
+        print('thr',thr,'assigned',counts.sum())
+        for ct,c in sorted(zip(cts,counts), key=lambda x:-x[1]):
+            if c>0:
+                print(f'  {ct}: {c} {c/n_cells:.3f}')
+    print('mean scores')
+    means=S.mean(axis=1)
+    meds=np.median(S,axis=1)
+    pos=(S>0.2).mean(axis=1)
+    for ct,mean,med,p in sorted(zip(cts,means,meds,pos), key=lambda x:-x[1]):
+        print(f'  {ct:18s} mean {mean:.3f} med {med:.3f} pos>0.2 {p:.3f}')
+PY"

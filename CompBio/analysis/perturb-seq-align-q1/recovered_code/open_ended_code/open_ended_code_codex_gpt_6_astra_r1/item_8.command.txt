@@ -1,0 +1,44 @@
+/bin/bash -lc "cat > analyze.py <<'PY'
+import anndata as ad
+import numpy as np
+import pandas as pd
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+r=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad');q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+assert np.array_equal(r.var_names,q.var_names)
+def summarize(a,col):
+ X=a.X.astype(float).tocsr(); X=sparse.diags(1e4/np.asarray(X.sum(1)).ravel())@X
+ L=X.copy();L.data=np.log1p(L.data)
+ labels=a.obs[col].astype(str).values
+ labels=np.array(['NT' if x.startswith('NT') else x for x in labels])
+ groups=sorted(set(labels));
+ means=np.array([np.asarray(L[labels==g].mean(0)).ravel() for g in groups]); raw=np.array([np.asarray(X[labels==g].mean(0)).ravel() for g in groups])
+ nt=labels=='NT'; m=np.asarray(L[nt].mean(0)).ravel();v=np.asarray(L[nt].power(2).mean(0)).ravel()-m*m
+ return groups, means,raw, v
+rg,rm,rr,rv=summarize(r,'target_gene');qg,qm,qr,qv=summarize(q,'guide')
+rd=rm-rm[rg.index('NT')];qd=qm-qm[qg.index('NT')]
+rc=np.log2((rr+.1)/(rr[rg.index('NT')]+.1));qc=np.log2((qr+.1)/(qr[qg.index('NT')]+.1))
+for gene in ['PABPC1','NUDT21','LEO1']:
+ j=r.var_names.get_loc(gene)
+ print('\\nTARGET',gene,'ref_effect',rd[rg.index(gene),j],rc[rg.index(gene),j],flush=True)
+ df=pd.DataFrame({'guide':qg,'mean':qm[:,j],'delta':qd[:,j],'lfc':qc[:,j]})
+ print(df.sort_values('lfc').head(12).to_string(index=False),flush=True)
+for mode in ['all','variance','topref','topref100','lfc']:
+ if mode=='variance':
+  w=1/np.sqrt((rv+qv)/2+.05); R=rd*w;Q=qd*w
+ else:R=rd.copy();Q=qd.copy()
+ if mode=='lfc':R=rc;Q=qc
+ if mode in ['topref','topref100']:
+  k=500 if mode=='topref' else 100
+  keep=np.unique(np.argsort(abs(rd),axis=1)[:,-k:]);R=R[:,keep];Q=Q[:,keep]
+ R=R-R.mean(1)[:,None];Q=Q-Q.mean(1)[:,None]
+ R/=np.maximum(np.linalg.norm(R,axis=1)[:,None],1e-10);Q/=np.maximum(np.linalg.norm(Q,axis=1)[:,None],1e-10)
+ sim=R@Q.T
+ print('\\nSIMILARITY',mode,flush=True)
+ for gene in ['PABPC1','NUDT21','LEO1']:
+  i=rg.index(gene);ix=np.argsort(sim[i])[::-1][:8];print(gene,[(qg[x],round(sim[i,x],3)) for x in ix],flush=True)
+ ii,jj=linear_sum_assignment(-sim)
+ print('assignment',[(rg[i],qg[j],round(sim[i,j],3)) for i,j in zip(ii,jj)],flush=True)
+ np.savez('summary.npz',rg=rg,qg=qg,rm=rm,qm=qm,rr=rr,qr=qr,rd=rd,qd=qd,rv=rv,qv=qv,genes=r.var_names.values.astype(str))
+PY
+OPENBLAS_NUM_THREADS=1 python -u analyze.py"

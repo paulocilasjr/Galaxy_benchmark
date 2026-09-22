@@ -1,0 +1,68 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, csv, math
+import pandas as pd, numpy as np
+from collections import defaultdict
+# Load counts
+counts=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t')
+cols=list(counts.columns[3:])
+lib=counts[cols].sum()
+logcpm=np.log1p(counts[cols].div(lib,axis=1)*1e6)
+# Attach coords
+coords=counts[['chrom','start','end']]
+# Load refGene, choose longest tx per gene symbol
+best={}
+with gzip.open('refGene.hg38.txt.gz','rt') as f:
+    for row in csv.reader(f, delimiter='\\t'):
+        if len(row)<13: continue
+        chrom=row[2]; strand=row[3]; txStart=int(row[4]); txEnd=int(row[5]); gene=row[12]
+        if '_' in chrom: continue
+        ln=txEnd-txStart
+        if gene not in best or ln > best[gene][3]-best[gene][2]:
+            best[gene]=(chrom,strand,txStart,txEnd)
+print('genes loaded',len(best))
+markers={
+'AIIamacrine':['SLC6A9','GRIK1','GJD2','TFAP2A','PROX1','SLC32A1','PAX6'],
+'GABAamacrine':['GAD1','GAD2','SLC32A1','DLX1','DLX2','TFAP2A','PAX6'],
+'Horizontal':['LHX1','ONECUT1','ONECUT2','PROX1','CALB1','ISL1'],
+'Retinalganglioncell':['RBPMS','THY1','SNCG','POU4F2','POU4F1','NEFL','NEFM'],
+'Rod':['RHO','NRL','GNAT1','PDE6A','PDE6B','SAG','CNGA1','RCVRN'],
+'Cone':['ARR3','GNAT2','PDE6C','PDE6H','OPN1SW','OPN1LW','OPN1MW','RXRG','THRB'],
+'Mullerglia':['RLBP1','GLUL','SLC1A3','VIM','CLU','CRYAB','AQP4','SOX9'],
+'Astrocyte':['GFAP','ALDH1L1','AQP4','SLC1A3','S100B','GJA1','SOX9'],
+'Microglia':['AIF1','CX3CR1','PTPRC','C1QA','C1QB','TYROBP','TREM2','CSF1R','LST1'],
+}
+# Index by chrom for bins
+idx_by_chr={c:np.where(coords['chrom'].values==c)[0] for c in coords['chrom'].unique()}
+starts=coords['start'].values; ends=coords['end'].values; chroms=coords['chrom'].values
+
+def gene_indices(gene, flank=50000, mode='gene'):
+    if gene not in best: return np.array([], dtype=int)
+    chrom,strand,txStart,txEnd=best[gene]
+    if mode=='tss':
+        tss=txStart if strand=='+' else txEnd
+        a,b=tss-flank,tss+flank
+    else:
+        a,b=txStart-flank,txEnd+flank
+    ii=idx_by_chr.get(chrom, np.array([],dtype=int))
+    if len(ii)==0: return ii
+    return ii[(ends[ii]>a)&(starts[ii]<b)]
+for mode,flank in [('tss',10000),('tss',50000),('gene',20000),('gene',100000)]:
+    print('\\nMODE',mode,'flank',flank)
+    score=pd.DataFrame(index=markers.keys(), columns=cols, dtype=float)
+    for ct,genes in markers.items():
+        vals=[]
+        used=[]
+        for g in genes:
+            ii=gene_indices(g,flank=flank,mode=mode)
+            if len(ii):
+                # mean in region
+                vals.append(logcpm.iloc[ii].mean(axis=0))
+                used.append(g)
+        if vals:
+            score.loc[ct]=pd.DataFrame(vals).mean(axis=0)
+        print(ct,'used',used)
+    print(score.round(3))
+    print('best column per marker set:')
+    for ct,row in score.iterrows():
+        print(ct, row.astype(float).sort_values(ascending=False).head(4).round(3).to_dict())
+PY"

@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, anndata as ad
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_predict, StratifiedKFold
+from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.pipeline import make_pipeline
+from sklearn.decomposition import PCA
+
+sums=pd.read_csv('group_sums_sample_id.csv',index_col=0)
+meta=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False)
+samples=sums.columns
+smeta=meta.groupby('sample_id').agg(Class=('Class','first'), Timepoint=('Timepoint','first')).loc[samples]
+genes=['ISG15','IFI27','IFI44L','IFIT1','IFIT2','IFIT3','IFIT5','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI6','IFIH1','IFI44','IFI35','IFITM1','IFITM2','IFITM3','ISG20','HLA-DRA','HLA-DRB1','CD14','LYZ','S100A8','S100A9','FCGR3A','CD3D','CD8A','MS4A1','IGHG1','JCHAIN','NKG7','GNLY','PPBP','PF4','IL1B','TNF','CXCL10','CCL2']
+present=[g for g in genes if g in sums.index]
+lib=sums.sum(axis=0); logcpm=np.log1p(sums.loc[present]/lib*1e6).T
+ct=meta.groupby(['sample_id','coursecelltype']).size().unstack(fill_value=0)
+ct=ct.div(ct.sum(axis=1),axis=0).loc[samples]
+train_mask=((smeta.Class=='HC') | (smeta.Timepoint=='T0')).values
+y=(smeta.Class[train_mask]=='COVID').astype(int)
+
+# our features
+adata=ad.read_h5ad('covid.patients.q1.h5ad'); our_names=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); sums_o=D['sum']; cats=D['cats']; cc=D['cell_counts']
+lib_o=sums_o.sum(axis=0); logcpm_o=np.log1p(sums_o/lib_o*1e6)
+freq=pd.read_csv('celltype_freq.csv',index_col=0)
+
+def build_X_o(cols):
+    Xo=pd.DataFrame(logcpm_o.T,index=cats,columns=our_names)
+    out=pd.DataFrame(index=cats)
+    for col in cols:
+        if col in Xo.columns: out[col]=Xo[col]
+        elif col in freq.columns: out[col]=freq[col].values
+        else: out[col]=0
+    return out
+
+feature_sets={
+ 'markers+freq': list(present)+list(ct.columns),
+ 'freq': list(ct.columns),
+ 'markers': list(present),
+}
+models={
+ 'LR': LogisticRegression(max_iter=2000,class_weight='balanced',C=1.0),
+ 'LDA': LinearDiscriminantAnalysis(solver='lsqr',shrinkage='auto'),
+ 'SVM': make_pipeline(StandardScaler(), SVC(kernel='linear',class_weight='balanced',probability=True,random_state=0)),
+ 'RF': RandomForestClassifier(n_estimators=1000,random_state=0,class_weight='balanced',min_samples_leaf=1),
+}
+for fsname,cols in feature_sets.items():
+    X=pd.concat([logcpm.reset_index(drop=True), ct.reset_index(drop=True)],axis=1); X.columns=list(present)+list(ct.columns)
+    X=X[cols]; Xtr=X[train_mask]; sc=StandardScaler(); Xtr_s=sc.fit_transform(Xtr)
+    Xo=build_X_o(cols); Xo_s=sc.transform(Xo)
+    print('\\nFEATURES',fsname)
+    for mname,model in models.items():
+        cv=StratifiedKFold(n_splits=5,shuffle=True,random_state=0)
+        try:
+            pred=cross_val_predict(model,Xtr_s,y,cv=cv,method='predict_proba')[:,1]
+        except Exception as e:
+            print(mname,'err',e); continue
+        print(' CV',mname,'AUC',round(roc_auc_score(y,pred),3),'acc',round(accuracy_score(y,(pred>0.5).astype(int)),3))
+        model.fit(Xtr_s,y)
+        prob=model.predict_proba(Xo_s)[:,1]
+        hc=[str(c) for c,p in zip(cats,prob) if p<0.5]
+        print('  pred HC',hc)
+PY"

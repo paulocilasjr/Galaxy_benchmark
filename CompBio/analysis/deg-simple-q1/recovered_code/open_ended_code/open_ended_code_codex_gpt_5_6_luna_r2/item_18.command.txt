@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess, collections, math, re
+for sample in ['A','B']:
+    tx=collections.Counter(); gene=collections.Counter(); mapq=collections.Counter(); total=0
+    p=subprocess.Popen(['samtools','view','-F','2052',f'results/sample{sample}.primary.bam'],stdout=subprocess.PIPE,text=True)
+    for line in p.stdout:
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<12: continue
+        total += 1
+        rname=f[2]; parts=rname.split('|')
+        txname=parts[0]
+        gname=parts[5] if len(parts)>5 else rname
+        tx[txname]+=1; gene[gname]+=1; mapq[gname]+=int(f[4])
+    p.wait()
+    print(sample, 'primary mapped', total, 'genes',len(gene),'tx',len(tx))
+    print('top genes')
+    for g,n in gene.most_common(30): print(g,n, 'meanMAPQ', round(mapq[g]/n,1))
+    print()
+# combine
+c=[]
+allg=set()
+C={}
+for sample in ['A','B']:
+    gene=collections.Counter()
+    p=subprocess.Popen(['samtools','view','-F','2052',f'results/sample{sample}.primary.bam'],stdout=subprocess.PIPE,text=True)
+    for line in p.stdout:
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<3: continue
+        parts=f[2].split('|'); g=parts[5] if len(parts)>5 else f[2]
+        gene[g]+=1
+    p.wait(); C[sample]=gene; allg.update(gene)
+totA=sum(C['A'].values()); totB=sum(C['B'].values())
+for g in allg:
+    a=C['A'][g]; b=C['B'][g]
+    # pseudocount normalized ratio
+    lfc=math.log2((a+0.5)/(totA+1) / ((b+0.5)/(totB+1)))
+    c.append((abs(lfc), lfc, a,b,g))
+print('top abs normalized log2 ratio with raw counts')
+for _,lfc,a,b,g in sorted(c,reverse=True)[:80]:
+    if a+b>=5: print(f'{g}\\tA={a}\\tB={b}\\tlog2A/B={lfc:.2f}')
+PY"

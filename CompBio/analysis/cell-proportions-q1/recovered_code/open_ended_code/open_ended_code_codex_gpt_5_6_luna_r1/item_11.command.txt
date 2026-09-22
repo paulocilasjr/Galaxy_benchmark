@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, calinski_harabasz_score
+with gzip.open('cell.proportions.q1.mtx.gz','rt') as f:
+ for line in f:
+  if line.startswith('%'): continue
+  g,n=map(int,line.split()); break
+ v=np.fromiter((float(x) for line in f for x in line.split()),np.float32)
+X=v.reshape((g,n),order='F')
+lib=X.sum(0); det=(X>0).sum(0)
+Y=np.log1p(X/lib*1e4).T
+var=Y.var(0)
+for mode, Z in [('all',Y),('var500',Y[:,np.argsort(var)[-500:]]),('var300',Y[:,np.argsort(var)[-300:]])]:
+ pca=PCA(n_components=30,random_state=1).fit(Z)
+ p=pca.transform(Z)
+ print('\\nMODE',mode,'shape',Z.shape,'explained',np.round(pca.explained_variance_ratio_[:10],4),flush=True)
+ for k in range(2,11):
+  km=KMeans(n_clusters=k,n_init=20,random_state=1).fit(p[:,:20])
+  sil=silhouette_score(p[:,:20],km.labels_,sample_size=min(n,3000),random_state=1)
+  sizes=np.bincount(km.labels_); print(k,'sil',round(sil,4),'CH',round(calinski_harabasz_score(p[:,:20],km.labels_),1),'sizes',','.join(map(str,sorted(sizes,reverse=True))),flush=True)
+ print('pc corr lib/det',[(i,round(np.corrcoef(p[:,i],lib)[0,1],3),round(np.corrcoef(p[:,i],det)[0,1],3)) for i in range(5)],flush=True)
+PY"

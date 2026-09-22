@@ -1,0 +1,53 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, pandas as pd, numpy as np, itertools
+from collections import defaultdict
+
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+log=np.log1p(df)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+def fnum(x):
+    try:return float(x)
+    except:return 0.0
+wb=openpyxl.load_workbook('supp/mmc5.xlsx', read_only=True, data_only=True)
+ws=wb['Table S4']; rows=[]
+for r in ws.iter_rows(values_only=True):
+    if r[0] and isinstance(r[0],str) and r[0].startswith('Traes') and r[7] and r[7]"'!='"'cluster':
+        cl=str(r[7]).strip();
+        if cl.startswith('10 - Xylem'): cl='10 - Xylem'
+        rows.append((r[0],cl,fnum(r[2]),fnum(r[5]),fnum(r[3])))
+wb.close()
+clusters=['0 - Unknown','1 - Epidermis','2 - Cortex','3 - G1/S','4 - Provascular Cells','5 - Unknown','6 - Pericycle','7 - Epidermis','8 - Root Hair','9 - Endodermis','10 - Xylem','11 - Endodermis/Phloem','12 - G2/M','13 - Phloem','14 - Root Cap']
+# expected cluster primary mapping
+expected={'cortex':['2 - Cortex'],'endodermis':['9 - Endodermis'],'epidermis':['1 - Epidermis','7 - Epidermis'],'meristems':['3 - G1/S','12 - G2/M'],'pericycle':['6 - Pericycle'],'phloem':['13 - Phloem'],'provascular':['4 - Provascular Cells'],'root_cap':['14 - Root Cap'],'root_hair':['8 - Root Hair'],'xylem':['10 - Xylem']}
+# Build cluster score matrix using top 100 markers per cluster
+N=100
+cluster_markers={}
+for cl in clusters:
+    pool=[r for r in rows if r[1]==cl]
+    best={}
+    for g,c,lfc,ratio,p1 in pool:
+        key=(ratio,lfc,p1)
+        if g not in best or key>best[g][0]: best[g]=key
+    gs=sorted(best, key=lambda g:best[g], reverse=True)[:N]
+    cluster_markers[cl]=[g for g in gs if g in df.index]
+cluster_scores=pd.DataFrame(index=clusters,columns=df.columns,dtype=float)
+for cl,gs in cluster_markers.items(): cluster_scores.loc[cl]=z.loc[gs].mean()
+# For each celltype, score = mean of expected clusters scores (maybe max)
+def type_score(celltype, column, mode='mean'):
+    cls=expected[celltype]
+    vals=cluster_scores.loc[cls,column]
+    return vals.mean() if mode=='mean' else vals.max()
+# unswapped score = sum across columns type_score(label,col)
+un=sum(type_score(c,c) for c in df.columns)
+print('unswapped score',un)
+scores=[]
+labels=list(df.columns)
+for i,j in itertools.combinations(range(len(labels)),2):
+    # swap labels for columns i,j
+    lab=labels.copy(); lab[i],lab[j]=lab[j],lab[i]
+    s=sum(type_score(lab[k],df.columns[k]) for k in range(len(labels)))
+    scores.append((s, labels[i], labels[j]))
+for s,a,b in sorted(scores, reverse=True)[:10]:
+    print(f'swap {a:12s} {b:12s}: {s:.3f} delta {s-un:.3f}')
+print('best swap delta',max(scores)[0]-un)
+PY"

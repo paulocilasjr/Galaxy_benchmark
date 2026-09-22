@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b59c5586280dade147",
+  "history_id": "bbd44e69cb8906b52de092ff46826384",
+  "tool_id": "spatial_spot710_fit_5f988b0f",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-13T23:56:17.954773",
+  "update_time": "2026-08-13T23:56:52.291914",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "cat > solve.py <<'PY'\n\nimport sys, tarfile, gzip, csv, io, json, math, itertools, collections\narchive=sys.argv[1]; TARGET='Spot_710-1'\n\ndef gaussian_solve(M,b):\n    n=len(b); A=[list(M[i])+[b[i]] for i in range(n)]\n    for col in range(n):\n        piv=max(range(col,n), key=lambda r: abs(A[r][col]))\n        if abs(A[piv][col]) < 1e-9: return None\n        A[col],A[piv]=A[piv],A[col]\n        pv=A[col][col]\n        for j in range(col,n+1): A[col][j]/=pv\n        for r in range(n):\n            if r==col: continue\n            fac=A[r][col]\n            if fac:\n                for j in range(col,n+1): A[r][j]-=fac*A[col][j]\n    return [A[i][n] for i in range(n)]\n\ndef fit_subset(Acols,y,idx):\n    k=len(Acols); n=len(idx); G=[[0.0]*k for _ in range(k)]; c=[0.0]*k; yy=0.0\n    for g in idx:\n        yg=y[g]; yy+=yg*yg; vals=[Acols[j][g] for j in range(k)]\n        for i,v in enumerate(vals):\n            c[i]+=v*yg\n            for j in range(i,k): G[i][j]+=v*vals[j]\n    for i in range(k):\n        for j in range(i): G[i][j]=G[j][i]\n        G[i][i]+=1e-8\n    w=gaussian_solve(G,c)\n    if w is None or min(w) < -1e-6: return None\n    w=[0.0 if x<0 else x for x in w]\n    sse=0.0\n    for g in idx:\n        d=y[g]-sum(w[j]*Acols[j][g] for j in range(k)); sse+=d*d\n    bic=n*math.log(max(sse/n,1e-12))+k*math.log(n); rel=math.sqrt(sse/max(yy,1e-12))\n    return w,sse,bic,rel\n\ndef subset_results(type_names,means,y,idx):\n    res=[]\n    for r in range(1,len(type_names)+1):\n        for combo in itertools.combinations(range(len(type_names)), r):\n            fit=fit_subset([means[i] for i in combo],y,idx)\n            if fit is None: continue\n            w,sse,bic,rel=fit\n            res.append({'types':[type_names[i] for i in combo], 'weights':w, 'sse':sse, 'bic':bic, 'rel_rmse':rel})\n    by_bic=sorted(res,key=lambda x:x['bic']); by_sse=sorted(res,key=lambda x:x['sse'])\n    return by_bic, by_sse\n\ndef coefficient_map(type_names, result):\n    d={t:0.0 for t in type_names}\n    for t,w in zip(result['types'],result['weights']): d[t]=w\n    return d\n\nout=[]\nwith tarfile.open(archive,'r:*') as tar:\n    names=[m.name for m in tar.getmembers() if m.isfile()]\n    def pick(*cands):\n        for c in cands:\n            if c in names: return c\n        for c in cands:\n            for n in names:\n                if n.endswith('/'+c) or n.endswith(c): return n\n        raise KeyError(cands)\n    counts=pick('spatial_q_sc_counts.csv','sc_counts.csv'); meta=pick('spatial_q_sc_metadata.csv','sc_metadata.csv')\n    featsn=pick('features.tsv.gz','spatial_q_features.tsv.gz'); barsn=pick('barcodes.tsv.gz','spatial_q_barcodes.tsv.gz'); mtxn=pick('matrix.mtx.gz','spatial_q_matrix.mtx.gz')\n    def text(name,gz=False):\n        f=tar.extractfile(name); return io.TextIOWrapper(gzip.GzipFile(fileobj=f),encoding='utf-8') if gz else io.TextIOWrapper(f,encoding='utf-8')\n    cell_type={}\n    with text(meta) as fh:\n        rdr=csv.reader(fh); hdr=next(rdr); tc=hdr.index('cell_type') if 'cell_type' in hdr else 1\n        for r in rdr: cell_type[r[0]]=r[tc]\n    with text(counts) as fh:\n        rdr=csv.reader(fh); header=next(rdr); genes=header[1:]; sums={}; nct=collections.Counter()\n        for row in rdr:\n            ct=cell_type[row[0]]; nct[ct]+=1\n            if ct not in sums: sums[ct]=[0.0]*len(genes)\n            acc=sums[ct]\n            for i,v in enumerate(row[1:]): acc[i]+=float(v)\n    type_names=sorted(sums); means=[[v/nct[ct] for v in sums[ct]] for ct in type_names]\n    feature_genes=[]\n    with text(featsn, True) as fh:\n        for line in fh:\n            p=line.rstrip('\\n').split('\\t'); feature_genes.append(p[1] if len(p)>1 else p[0])\n    gindex={g:i for i,g in enumerate(genes)}; map_idx=[]; mismatches=0\n    for fg in feature_genes:\n        gi=gindex.get(fg); map_idx.append(gi); mismatches += 1 if gi is None else 0\n    target_col=None\n    with text(barsn, True) as fh:\n        for i,line in enumerate(fh,start=1):\n            if line.strip()==TARGET: target_col=i\n    y=[0.0]*len(genes); nnz=0\n    with text(mtxn, True) as fh:\n        for line in fh:\n            if line.startswith('%'): continue\n            dims=line.split(); break\n        for line in fh:\n            r,c,v=line.split()\n            if int(c)==target_col:\n                gi=map_idx[int(r)-1]\n                if gi is not None: y[gi]=float(v); nnz+=1\n    scores=[]\n    for g in range(len(genes)):\n        vals=[m[g] for m in means]; mu=sum(vals)/len(vals); var=sum((x-mu)**2 for x in vals)/len(vals)\n        scores.append((var/(mu+1.0),g))\n    var_idx=[g for _,g in sorted(scores, reverse=True)[:300]]\n    all_idx=list(range(len(genes)))\n    var_bic,var_sse=subset_results(type_names,means,y,var_idx)\n    all_bic,all_sse=subset_results(type_names,means,y,all_idx)\n    best_var_bic=var_bic[0]; best_all_bic=all_bic[0]; nnls_var=var_sse[0]; nnls_all=all_sse[0]\n    cm_var=coefficient_map(type_names, nnls_var); cm_all=coefficient_map(type_names, nnls_all)\n    chosen_nnls_var=sorted([t for t,w in cm_var.items() if w>=0.25])\n    chosen_nnls_all=sorted([t for t,w in cm_all.items() if w>=0.25])\n    # Prefer agreement of all-gene and variable-gene exact NNLS coefficients; BIC lines are diagnostics for overfit control.\n    chosen=chosen_nnls_var if chosen_nnls_var==chosen_nnls_all else sorted(set(chosen_nnls_var).intersection(chosen_nnls_all))\n    if not chosen: chosen=sorted(set(chosen_nnls_var).union(chosen_nnls_all))\n    def compact(rows):\n        return [{'types':r['types'],'weights':[round(x,4) for x in r['weights']],'sse':round(r['sse'],3),'bic':round(r['bic'],3),'rel_rmse':round(r['rel_rmse'],6)} for r in rows[:12]]\n    out.append('cell_type_order\\t'+','.join(type_names))\n    out.append('gene_match_mismatches\\t'+str(mismatches))\n    out.append('target\\t%s\\tcolumn_1based=%s\\tnnz=%d\\ttotal_counts=%.3f'%(TARGET,target_col,nnz,sum(y)))\n    out.append('nnls_variable_coefficients\\t'+json.dumps({t:round(cm_var[t],4) for t in type_names}, sort_keys=True))\n    out.append('nnls_all_gene_coefficients\\t'+json.dumps({t:round(cm_all[t],4) for t in type_names}, sort_keys=True))\n    out.append('chosen_from_nnls_variable\\t'+','.join(chosen_nnls_var))\n    out.append('chosen_from_nnls_all\\t'+','.join(chosen_nnls_all))\n    out.append('best_variable_bic\\t'+json.dumps(compact(var_bic)))\n    out.append('best_all_gene_bic\\t'+json.dumps(compact(all_bic)))\n    out.append('best_variable_sse\\t'+json.dumps(compact(var_sse)))\n    out.append('best_all_gene_sse\\t'+json.dumps(compact(all_sse)))\n    out.append('ANSWER\\t'+','.join(chosen))\nprint('\\n'.join(out))\n\nPY\npython solve.py '/jetstream2/scratch/main/jobs/79122606/inputs/dataset_53fde8be-6982-4db6-9ae1-72a8946f02d6.dat' > spot710_celltypes.txt",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "archive": {
+      "id": "f9cad7b01a472135a31be07eebefb5ae",
+      "src": "hda",
+      "uuid": "53fde8be-6982-4db6-9ae1-72a8946f02d6"
+    }
+  },
+  "outputs": {
+    "spot710_celltypes": {
+      "id": "f9cad7b01a4721355dc75473b2c84e06",
+      "src": "hda",
+      "uuid": "ab45131e-d95a-4768-8f85-4be5f7edd311"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

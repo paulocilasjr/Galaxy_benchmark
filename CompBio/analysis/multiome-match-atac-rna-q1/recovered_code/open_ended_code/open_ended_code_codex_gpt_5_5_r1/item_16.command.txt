@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, itertools
+import numpy as np, pandas as pd
+from scipy.stats import rankdata
+attr_re=re.compile(r'(\\S+) \"(["'^"]+)"'"')
+rna=pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz', sep='\\t', compression='gzip', index_col=0)
+atac=pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz', sep='\\t', compression='gzip', index_col=0)
+rna_genes=set(rna.index); atac_index=set(atac.index)
+genes=[]
+with gzip.open('gencode.v44.annotation.gtf.gz','rt') as f:
+  for line in f:
+    if line.startswith('#'): continue
+    parts=line.rstrip('\\n').split('\\t')
+    if len(parts)<9 or parts[2]"'!='"'gene': continue
+    d=dict(attr_re.findall(parts[8])); name=d.get('gene_name')
+    if not name or name not in rna_genes: continue
+    chrom=parts[0]; start=int(parts[3]); end=int(parts[4]); strand=parts[6]
+    tss=start-1 if strand=='+' else end-1
+    base=(tss//10000)*10000
+    p=f'{chrom}_{base}_{base+10000}'
+    if p in atac_index:
+      genes.append((name,p))
+# unique gene names
+seen=set(); pairs=[]
+for name,p in genes:
+  if name not in seen:
+    seen.add(name); pairs.append((name,p))
+rows=[x[0] for x in pairs]; peaks=[x[1] for x in pairs]
+R=np.log1p(rna.loc[rows].to_numpy(float)); A=np.log1p(atac.loc[peaks].to_numpy(float))
+mask=(R.var(axis=1)>0)&(A.var(axis=1)>0)&(R.mean(axis=1)>0)&(A.mean(axis=1)>0)
+R=R[mask]; A=A[mask]
+print('pairs',R.shape[0])
+
+def row_z(X):
+  m=X.mean(axis=1,keepdims=True); s=X.std(axis=1,keepdims=True)
+  keep=s[:,0]>0
+  return (X[keep]-m[keep])/s[keep], keep
+
+def col_corr(X,Y):
+  X=(X-X.mean(axis=0))/X.std(axis=0)
+  Y=(Y-Y.mean(axis=0))/Y.std(axis=0)
+  return X.T@Y/(X.shape[0]-1)
+
+for mode in ['center','z','rank_then_center','rank_then_z']:
+  if mode.startswith('rank'):
+    R0=np.apply_along_axis(rankdata,1,R)
+    A0=np.apply_along_axis(rankdata,1,A)
+  else:
+    R0=R.copy(); A0=A.copy()
+  if mode.endswith('z') or mode=='z':
+    R1,k1=row_z(R0); A1,k2=row_z(A0); keep=k1 & k2
+    # row_z already dropped independently; easier recompute on common keep
+    R1,_=row_z(R0[keep]); A1,_=row_z(A0[keep])
+  else:
+    R1=R0-R0.mean(axis=1,keepdims=True); A1=A0-A0.mean(axis=1,keepdims=True)
+    keep=(R1.var(axis=1)>0)&(A1.var(axis=1)>0); R1=R1[keep]; A1=A1[keep]
+  C=col_corr(R1,A1)
+  print('\\n',mode)
+  print(np.array2string(C,precision=4,suppress_small=True))
+  print('row argmax',';'.join(map(str,C.argmax(axis=1))))
+  best=max(itertools.permutations(range(8)), key=lambda p:sum(C[i,p[i]] for i in range(8)))
+  print('best',';'.join(map(str,best)),sum(C[i,best[i]] for i in range(8)))
+  vals=sorted([(sum(C[i,p[i]] for i in range(8)),p) for p in itertools.permutations(range(8))], reverse=True)
+  print('second',';'.join(map(str,vals[1][1])),vals[1][0])
+PY"

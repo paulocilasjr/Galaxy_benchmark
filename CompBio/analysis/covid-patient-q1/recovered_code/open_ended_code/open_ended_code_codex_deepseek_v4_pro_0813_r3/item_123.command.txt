@@ -1,0 +1,38 @@
+/bin/bash -c "cat > summarize_GSE180578_GEX.py <<'PY'
+import tarfile, json, time, io
+outer=tarfile.open('GSE180578_RAW.tar','r')
+names=[m.name for m in outer.getmembers() if m.name.endswith('GEX.tar.gz')]
+gex=[n for n in names if 'CITEseq' not in n]
+print('n gex',len(gex), flush=True)
+summ=[]
+for name in gex:
+    t=time.time(); f=outer.extractfile(name); inner=tarfile.open(fileobj=f,mode='r:gz')
+    mm=bb=ff=None
+    for x in inner.getmembers():
+        if x.name.endswith('/matrix.mtx'): mm=x
+        if x.name.endswith('/barcodes.tsv'): bb=x
+        if x.name.endswith('/features.tsv'): ff=x
+    def count_lines(x):
+        if not x: return 0
+        stream=inner.extractfile(x); text=io.TextIOWrapper(stream,encoding='utf-8'); n=sum(1 for _ in text); text.detach(); stream.close(); return n
+    nb=count_lines(bb); nf=count_lines(ff)
+    mf=inner.extractfile(mm); text=io.TextIOWrapper(mf,encoding='utf-8')
+    header=[]
+    while len(header)<1:
+        line=text.readline()
+        if not line: break
+        if line.startswith('%'): continue
+        header.append(line.strip())
+    parts=header[0].split(); genes=int(parts[0]); cells=int(parts[1]); nnz_header=int(parts[2])
+    total=0; nnz=0
+    for line in text:
+        p=line.split()
+        if len(p)>=3: total+=float(p[2]); nnz+=1
+    text.detach(); mf.close(); inner.close(); f.close()
+    summ.append({'name':name,'nbarcodes':nb,'nfeatures':nf,'genes':genes,'cells':cells,'nnz':nnz,'total_umi':total})
+    print(name, 'barcodes',nb,'features',nf,'cells',cells,'nnz',nnz,'total',total, 'time',round(time.time()-t,1), flush=True)
+outer.close()
+json.dump(summ,open('GSE180578_GEX_summary.json','w'))
+print('saved')
+PY
+python summarize_GSE180578_GEX.py"

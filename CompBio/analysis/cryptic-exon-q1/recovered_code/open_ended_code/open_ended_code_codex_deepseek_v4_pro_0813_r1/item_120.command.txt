@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess,re,collections,pickle
+known=set(pickle.load(open('known_v38.pkl','rb')))
+adj=[]; clusters=collections.defaultdict(collections.Counter)
+for line in subprocess.Popen(['samtools','view','-F','4','cand2000_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6:continue
+    flag=int(f[1]);cigar=f[5]
+    # include primary and supplementary but not secondary? flag 0x100 secondary skip, 0x800 supplementary maybe include
+    if flag&0x100:continue
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"',f[2])
+    if not m:continue
+    label=m.group(1);chrom=m.group(2);ref_start=int(m.group(3));pos=int(f[3]);mapq=int(f[4])
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar);left=0;ints=[]
+    for n,op in ops:
+        n=int(n)
+        if op=='N':
+            gs=ref_start+1+(pos-1)+left;ge=gs+n-1;nov=(chrom,gs,ge) not in known
+            ints.append((gs,ge,n,nov))
+            if nov: clusters[(label,chrom)][(gs,ge)]+=1
+            left+=n
+        elif op in 'MDN=X':left+=n
+    for i in range(len(ints)-1):
+        a=ints[i];b=ints[i+1]
+        if a[3] and b[3]:
+            exon_len=b[0]-a[1]-1
+            adj.append((label,chrom,a[:2],b[:2],exon_len,pos,mapq,cigar,f[0],flag))
+print('adj no mapq filter',len(adj))
+for x in adj:print(x)
+print('clusters')
+for (label,chrom),jc in clusters.items():
+    js=sorted(jc)
+    for a,b in zip(js,js[1:]):
+        elen=b[0]-a[1]-1
+        if 10<=elen<=2000:
+            print(label,chrom,a,b,elen,jc[a],jc[b])
+PY"

@@ -1,0 +1,47 @@
+/bin/bash -lc "cat > classify.py <<'PY'
+import gzip, collections, json, sys
+
+def prepare():
+ with open('references/combined.fa','w') as out:
+  for sp in ['human','mouse','pig']:
+   n=0
+   with gzip.open(f'references/{sp}.fa.gz','rt') as f:
+    for line in f:
+     if line.startswith('>'):
+      out.write('>'+sp+'|'+line[1:].split()[0]+'\\n');n+=1
+     else:out.write(line)
+   print(sp,'transcripts',n,flush=True)
+ with gzip.open('three.way.barnyard.q1.R1.fq.gz','rt') as r1,gzip.open('three.way.barnyard.q1.R2.fq.gz','rt') as r2,open('barcoded_r2.fq','w') as out:
+  n=0
+  for h in r1:
+   b=next(r1).strip();next(r1);next(r1)
+   h2=next(r2);s=next(r2);next(r2);q=next(r2)
+   n+=1;out.write(f'@{b[:16]}_{b[16:]}_{n}\\n{s}+\\n{q}')
+ print('prepared',n,'reads',flush=True)
+
+def summarize():
+ allct=collections.defaultdict(collections.Counter);conf=collections.defaultdict(collections.Counter);umis=collections.defaultdict(lambda:collections.defaultdict(set));stats=collections.Counter()
+ with open('mapped.sam') as f:
+  for l in f:
+   if l.startswith('@'):continue
+   a=l.rstrip().split('\\t');flag=int(a[1]);stats['records']+=1
+   if flag&4:stats['unmapped']+=1;continue
+   if flag&2304:continue
+   bc,umi,_=a[0].split('_');sp=a[2].split('|')[0];mq=int(a[4]);allct[bc][sp]+=1
+   if mq>=10:
+    conf[bc][sp]+=1;umis[bc][sp].add(umi);stats['confident']+=1
+ labels=collections.Counter();alllabels=collections.Counter();umilabels=collections.Counter();weak=[];disagree=[]
+ with open('cell_assignments.tsv','w') as o:
+  o.write('barcode\\tspecies\\thuman_confident\\tmouse_confident\\tpig_confident\\tconfidence_fraction\\thuman_all\\tmouse_all\\tpig_all\\n')
+  for l in open('barcode_counts.tsv'):
+   bc,n=l.split();c=conf[bc];ac=allct[bc];uc={sp:len(v) for sp,v in umis[bc].items()}
+   pred=c.most_common(1)[0][0] if c else 'unknown';ap=ac.most_common(1)[0][0] if ac else 'unknown';up=max(uc,key=uc.get) if uc else 'unknown';labels[pred]+=1;alllabels[ap]+=1;umilabels[up]+=1
+   frac=c[pred]/sum(c.values()) if c else 0
+   if frac<.9 or sum(c.values())<10:weak.append((bc,pred,frac,dict(c),dict(ac)))
+   if pred"'!=ap or pred!=up:disagree.append((bc,pred,ap,up))
+   o.write('"'\\t'.join(map(str,[bc,pred,*[c[s] for s in ['human','mouse','pig']],frac,*[ac[s] for s in ['human','mouse','pig']]]))+'\\n')
+ result={'stats':stats,'confident_cell_counts':labels,'all_read_cell_counts':alllabels,'umi_cell_counts':umilabels,'weak_cells':weak,'disagreement':disagree}
+ print(json.dumps(result,indent=2));json.dump(result,open('summary.json','w'),indent=2)
+if __name__=='__main__':
+ {'prepare':prepare,'summarize':summarize}[sys.argv[1]]()
+PY"

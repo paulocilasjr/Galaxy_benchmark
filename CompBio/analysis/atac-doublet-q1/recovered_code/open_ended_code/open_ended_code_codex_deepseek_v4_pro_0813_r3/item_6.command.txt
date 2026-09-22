@@ -1,0 +1,49 @@
+/bin/bash -c "cat > build_matrix.py <<'PY'
+import gzip, time, pickle, numpy as np
+from scipy.sparse import coo_matrix, csr_matrix
+from collections import Counter
+
+path='atac.doublet.q1.bed.gz'
+bin_size=5000
+t=time.time()
+cells={}
+chrom_bin={}  # (chrom,bin)->col
+rows=[]; cols=[]; data=[]
+# Use lists of tuples? We'll accumulate raw fragment cell col then counter after? Too many duplicates.
+# Instead use dict counter per cell for sparse? We'll parse and for each line append row/col and then sum duplicates using coo.
+chrom_bin_list=[]
+cell_list=[]
+bins_list=[]
+chroms=set()
+with gzip.open(path,'rt') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        chrom=parts[0]; start=int(parts[1]); barcode=parts[3]
+        b=start//bin_size
+        key=(chrom,b)
+        col=chrom_bin.get(key)
+        if col is None:
+            col=len(chrom_bin)
+            chrom_bin[key]=col
+            chrom_bin_list.append(key)
+        r=cells.get(barcode)
+        if r is None:
+            r=len(cells)
+            cells[barcode]=r
+        rows.append(r); cols.append(col); data.append(1)
+print('parsed',len(rows),'cells',len(cells),'bins',len(chrom_bin),'time',time.time()-t, flush=True)
+# coo sums duplicates
+mat=coo_matrix((data,(rows,cols)), shape=(len(cells),len(chrom_bin))).tocsr()
+print('mat shape',mat.shape,'nnz',mat.nnz,'time',time.time()-t, flush=True)
+cell_ids=np.array(sorted(cells, key=cells.get), dtype=object)
+# bin keys sorted by col
+bin_keys=[None]*len(chrom_bin_list)
+for key,col in chrom_bin.items(): bin_keys[col]=key
+np.savez_compressed('atac_5kb.npz', data=mat.data, indices=mat.indices, indptr=mat.indptr, shape=np.array(mat.shape,dtype=np.int64))
+with open('cell_ids.txt','w') as out:
+    for c in cell_ids: out.write(c+'\\n')
+with open('bin_keys.txt','w') as out:
+    for k in bin_keys: out.write(k[0]+'\\t'+str(k[1])+'\\n')
+print('done',time.time()-t)
+PY
+python3 build_matrix.py"

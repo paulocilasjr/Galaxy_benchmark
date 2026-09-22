@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > work/depth_bins.py <<'PY'
+import pysam,numpy as np,collections,json
+bam=pysam.AlignmentFile('work/aligned.bam','rb')
+counts=collections.Counter()
+for r in bam:
+ if not r.is_unmapped and not r.is_secondary and not r.is_supplementary: counts[r.reference_name]+=1
+print('Primary alignments:',counts.most_common(12),flush=True)
+chrom=counts.most_common(1)[0][0]
+length=bam.get_reference_length(chrom)
+size=10000
+out=np.zeros(((length+size-1)//size,3),dtype=np.int64)
+bam.reset()
+for r in bam:
+ if r.is_unmapped or r.is_secondary or r.is_supplementary or r.reference_name"'!=chrom: continue
+ for s,e in r.get_blocks():
+  for b in range(s//size,(e-1)//size+1):
+   n=min(e,(b+1)*size)-max(s,b*size)
+   out[b,0]+=n
+   if r.mapping_quality>=20: out[b,1]+=n
+   if r.mapping_quality>=50: out[b,2]+=n
+np.save('"'work/depth_bins.npy',out)
+json.dump({'chrom':chrom,'length':length,'bin_size':size,'counts':dict(counts)},open('work/metadata.json','w'))
+with open('work/depth_bins.tsv','w') as f:
+ f.write('chrom\\tstart\\tend\\tdepth_all\\tdepth_q20\\tdepth_q50\\n')
+ for i,row in enumerate(out):
+  s=i*size;e=min(s+size,length)
+  f.write(f'{chrom}\\t{s}\\t{e}\\t'+ '\\t'.join(f'{n/(e-s):.6f}' for n in row)+'\\n')
+for i in range(0,len(out),100):
+ print(chrom,i*size,min((i+100)*size,length),np.round(out[i:i+100].sum(axis=0)/(min((i+100)*size,length)-i*size),3),flush=True)
+PY"

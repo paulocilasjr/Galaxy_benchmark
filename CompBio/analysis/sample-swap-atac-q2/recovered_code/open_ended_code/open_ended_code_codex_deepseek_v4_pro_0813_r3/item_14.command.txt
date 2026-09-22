@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, gzip
+from collections import defaultdict
+
+# load matrix
+df = pd.read_csv('data.tsv', sep='\\t')
+cols = df.columns[3:]
+print('loaded', df.shape)
+# gene tss
+gt = pd.read_csv('gene_tss.tsv', sep='\\t')
+# function assign windows: bins with overlap window around tss
+bins = df[['chrom','start','end']].copy()
+
+def counts_for_genes(genes, upstream=2000, downstream=2000):
+    res = {}
+    for g in genes:
+        row = gt[gt.gene==g]
+        if row.empty:
+            print('missing',g); continue
+        r=row.iloc[0]
+        chrom=r.chrom
+        tss=r.tss
+        # window coordinate based on strand? use TSS-2000,TSS+2000
+        s=tss-upstream; e=tss+downstream
+        mask=(bins.chrom==chrom)&(bins.start < e)&(bins.end > s)
+        sub=df.loc[mask, cols].sum(axis=0)
+        res[g]=sub
+    return pd.DataFrame(res)
+
+markers = {
+ 'Rod': ['RHO','NRL','NR2E3','PDE6B','PDE6A','GNAT1','CNGA1','CNGB1','SAG','ROM1','ABCA4','RBP3'],
+ 'Cone': ['ARR3','PDE6C','PDE6H','GNAT2','CNGB3','OPN1SW','OPN1MW','OPN1LW','RXRG','SALL3','GUCA1A'],
+ 'Mullerglia': ['RLBP1','GLUL','SLC1A3','CLU','SOX9','DIO3','VIM','KCNJ10','HES1','CAR2'],
+ 'Astrocyte': ['GFAP','AQP4','S100B','ALDH1L1','SLC1A2','GJA1','SOX2'],
+ 'Microglia': ['P2RY12','CSF1R','CX3CR1','TYROBP','ITGAM','TMEM119','SPI1','AIF1','C1QA','C1QB','PTPRC'],
+ 'Retinalganglioncell': ['RBPMS','POU4F1','POU4F2','SLC17A6','THY1','NEFL','NEFM','ISL1','SNCG'],
+ 'GABAamacrine': ['GAD1','GAD2','SLC6A1','SLC32A1','CALB2','TFAP2A'],
+ 'AIIamacrine': ['GJD2','SLC12A7','DAB1','NEUROD1','DPYSL3','GRM7'],
+ 'Horizontal': ['ONECUT1','ONECUT2','LHX1','CALB1','SEMA5A'],
+}
+for win in [0,2000,5000,10000]:
+    print('\\n=== window +/-',win,'===')
+    allgenes = [g for gl in markers.values() for g in gl]
+    mat=counts_for_genes(allgenes, upstream=win or 1, downstream=win or 1)
+    # normalize cpm per column
+    sums=df[cols].sum()
+    cpm=mat.div(sums, axis=0)*1e6
+    # For each cell type label, mean cpm across its markers
+    out=[]
+    for ct, gl in markers.items():
+        score=cpm[gl].mean(axis=1).round(1)
+        out.append((ct, score))
+    score_df=pd.DataFrame({ct:s for ct,s in out})
+    print(score_df.round(1).to_string())
+    # print raw counts for selected genes table
+    print('\\nRaw counts selected:')
+    print(mat.loc[:, ['RHO','ARR3','RLBP1','GFAP','P2RY12','RBPMS','GAD1','GJD2']].to_string())
+PY"

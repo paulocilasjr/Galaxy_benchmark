@@ -1,0 +1,31 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+fasta=pysam.FastaFile('hg38.fa')
+bam=pysam.AlignmentFile('phase.bam','rb')
+start=27079100; end=27080650
+refseq=fasta.fetch('chr22', start-1, end).upper()
+counts={}
+for col in bam.pileup('chr22', start, end, truncate=True, min_base_quality=0, stepper='nofilter', max_depth=1000000):
+    pos=col.reference_pos+1
+    c=collections.Counter()
+    for pr in col.pileups:
+        if pr.is_refskip: continue
+        if pr.is_del:
+            c['D']+=1
+        else:
+            c[pr.alignment.query_sequence[pr.query_position]]+=1
+    counts[pos]=c
+print('pos ref total states...')
+for pos,c in sorted(counts.items()):
+    tot=sum(c.values())
+    if tot<30: continue
+    ref=refseq[pos-start]
+    top=c.most_common(2)
+    top1=top[0]; 
+    top2=top[1] if len(top)>1 else (None,0)
+    # event if two states dominate (each >=0.2, sum>=0.9) or one state dominates and ref is minor
+    cond2 = len(c)>=2 and top1[1]/tot>=0.2 and top2[1]/tot>=0.2 and (top1[1]+top2[1])/tot>=0.9
+    cond_hom = (c.get(ref,0)/tot < 0.15 and top1[1]/tot > 0.8)
+    if cond2 or cond_hom:
+        print(pos, 'ref',ref, 'tot',tot, c.most_common(5), 'frac', [round(n/tot,3) for _,n in c.most_common(5)])
+PY"

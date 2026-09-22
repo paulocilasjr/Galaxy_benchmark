@@ -1,0 +1,19 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4e1f39245f2f9a7c6ca6323c/workspace && python - <<'PY'
+import os, sys, time, torch
+sys.path.insert(0, os.getcwd())
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+seq=open('sequence.txt').read().strip()
+tok=AutoTokenizer.from_pretrained('model_files', trust_remote_code=True)
+model=AutoModelForMaskedLM.from_pretrained('model_files', trust_remote_code=True); model.eval().to('mps')
+base_ids=tok(''.join(seq), add_special_tokens=False).input_ids
+# CPU single
+model_cpu=model.cpu(); model_cpu.eval()
+ids=torch.tensor([base_ids]); ids[0,0]=3
+with torch.no_grad():
+    out_cpu=model_cpu(ids)
+    model=model_cpu.to('mps'); ids_m=torch.tensor([base_ids],device='mps'); ids_m[0,0]=3
+    out_m=model(ids_m)
+print('diff max', (out_cpu.logits-out_m.logits.cpu()).abs().max().item())
+print('ent cpu', -(torch.softmax(out_cpu.logits[0,0][[7,8,9,10]],0)*torch.log2(torch.softmax(out_cpu.logits[0,0][[7,8,9,10]],0))).sum().item())
+print('ent mps', -(torch.softmax(out_m.logits[0,0][[7,8,9,10]],0)*torch.log2(torch.softmax(out_m.logits[0,0][[7,8,9,10]],0))).sum().item())
+PY"

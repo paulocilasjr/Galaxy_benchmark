@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, struct, urllib.request, zlib, os, time
+files=json.load(open('[REDACTED LOCAL PATH]'))
+baseurl='https://download.scidb.cn/download?fileId=bd0c4facb0edfad65059a26eb1943878&path=/V3/single_cell_amphioxus.zip&fileName=single_cell_amphioxus.zip'
+name='N2_KO.rds'
+f=next(x for x in files if x['name']==name)
+print(f)
+def fetch_range(start,end):
+    req=urllib.request.Request(baseurl, headers={'Range':f'bytes={start}-{end}'})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return r.read()
+head=fetch_range(f['off'], f['off']+200)
+sig,ver,flags,comp,modt,modd,crc,cs,us,fnl,exl=struct.unpack('<IHHHHHIIIHH', head[:30])
+local_len=30+fnl+exl
+print('local_len',local_len,'compressed',f['cs'])
+# download compressed in chunks to workspace
+out=os.path.join(os.getcwd(), name)
+start=f['off']+local_len; end=f['off']+local_len+f['cs']-1
+print('downloading',end-start+1,'bytes')
+with open(out,'wb') as w:
+    pos=start
+    chunk=10_000_000
+    while pos<=end:
+        e=min(pos+chunk-1,end)
+        data=fetch_range(pos,e)
+        if not data:
+            print('empty at',pos); break
+        w.write(data)
+        pos=e+1
+        if pos%(chunk*5)==0:
+            print(' progress',pos-start+1)
+print('downloaded',os.path.getsize(out))
+# decompress raw deflate
+with open(out,'rb') as fh:
+    compressed=fh.read()
+print('reading done')
+try:
+    raw=zlib.decompressobj(-15).decompress(compressed)
+    print('decompressed',len(raw))
+except Exception as e:
+    print('err',e)
+# write decompressed
+with open(name+'.decomp','wb') as fh:
+    fh.write(raw)
+print('wrote decomp')
+PY"

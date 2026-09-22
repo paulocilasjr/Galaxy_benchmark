@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, urllib.request, json, time, collections, concurrent.futures, os, sys, urllib.parse
+wb=openpyxl.load_workbook('refs/13059_2023_2908_MOESM2_ESM.xlsx', read_only=True, data_only=True)
+ws=wb['Table S2']
+genes=[]
+for row in ws.iter_rows(values_only=True):
+    c,g,p,h,a=row[:5]
+    if c is not None and str(c).isdigit() and g:
+        genes.append(str(g))
+unique=list(dict.fromkeys(genes))
+print('unique',len(unique), flush=True)
+# load existing
+outfile='refs/v1_entrez.json'
+if os.path.exists(outfile):
+    res=json.load(open(outfile))
+else:
+    res={}
+todo=[g for g in unique if g not in res]
+print('todo',len(todo), flush=True)
+
+def fetch(g):
+    url='https://rest.ensembl.org/xrefs/id/'+urllib.parse.quote(g)+'?content-type=application/json'
+    for attempt in range(3):
+        try:
+            r=urllib.request.urlopen(url, timeout=20)
+            data=json.loads(r.read().decode())
+            ids=[]
+            for x in data:
+                if x.get('dbname') in ('EntrezGene','NCBI gene (formerly Entrezgene)','WikiGene'):
+                    ids.append((x.get('dbname'), x.get('primary_id')))
+            return g, ids
+        except Exception as e:
+            if attempt==2:
+                return g, [('ERR', str(e))]
+            time.sleep(1*(attempt+1))
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+    futures=[ex.submit(fetch,g) for g in todo]
+    done=0
+    for f in concurrent.futures.as_completed(futures):
+        g,ids=f.result()
+        res[g]=ids
+        done+=1
+        if done%100==0:
+            print('done',done,'of',len(todo), flush=True)
+            json.dump(res, open(outfile,'w'))
+json.dump(res, open(outfile,'w'))
+# summarize
+entrez={}
+errs=[]
+for g,ids in res.items():
+    if ids and ids[0][0]"'!='"'ERR':
+        # prefer EntrezGene
+        vals=[pid for db,pid in ids if db=='EntrezGene']
+        if vals:
+            entrez[g]=vals[0]
+        else:
+            vals=[pid for db,pid in ids]
+            entrez[g]=vals[0]
+    else:
+        errs.append(g)
+print('entrez mapped',len(entrez),'errs',len(errs), flush=True)
+json.dump(entrez, open('refs/v1_entrez_clean.json','w'), indent=0)
+print('errors sample',errs[:20])
+PY"

@@ -1,0 +1,81 @@
+/bin/bash -lc "./venv/bin/python - <<'PY'
+import inspect, math, json
+if not hasattr(inspect,'ArgSpec'):
+    from collections import namedtuple
+    inspect.ArgSpec=namedtuple('ArgSpec','args varargs keywords defaults')
+if not hasattr(inspect,'getargspec'):
+    inspect.getargspec=lambda f: inspect.ArgSpec(*inspect.getfullargspec(f)[:4])
+from tensorflow_checkpoint_reader import table, core, errors, bundle_reader, tensor_shape
+from tensorflow_checkpoint_reader.py_checkpoint_reader import NewCheckpointReader
+import snappy, numpy as np
+
+def read_block(file, handle):
+    result=table.BlockContents(); n=handle.size
+    contents=errors.raise_if_error(file.read(handle.offset, n+table.kBlockTrailerSize))
+    if contents.size()"'!=n+table.kBlockTrailerSize: raise errors.DataLoss('"'truncated')
+    data=contents.slice(); comp=data[n]
+    if comp==table.CompressionType.kNoCompression.value:
+        result.data=core.StringPiece(data,n)
+    elif comp==table.CompressionType.kSnappyCompression.value:
+        result.data=core.StringPiece(snappy.decompress(bytes(data[:n])))
+    else: raise NotImplementedError(comp)
+    result.cacheable=False; result.heap_allocated=False
+    return result
+table.read_block=read_block
+
+def fake_get_numpy(self, entry):
+    shape=tensor_shape.TensorShape.from_proto(entry.shape).to_list()
+    return errors.Status.OK(), np.zeros(shape, dtype=np.float32)
+bundle_reader.BundleReader.get_numpy=fake_get_numpy
+
+r=NewCheckpointReader('enformer_saved/variables/variables')
+shapes=r.get_variable_to_shape_map()
+
+def params(shape):
+    n=1
+    for s in shape: n*=s
+    return n
+
+def trainable(name):
+    if name == '_CHECKPOINTABLE_OBJECT_GRAPH' or name == 'save_counter/.ATTRIBUTES/VARIABLE_VALUE':
+        return False
+    if '/moving_mean/' in name or '/moving_variance/' in name:
+        return False
+    return True
+
+all_total=sum(params(s) for s in shapes.values())
+train_total=sum(params(s) for n,s in shapes.items() if trainable(n))
+non_total=all_total-train_total
+print('num vars', len(shapes))
+print('all_total', all_total, f'{all_total:,}')
+print('train_total', train_total, f'{train_total:,}')
+print('non_total', non_total, f'{non_total:,}')
+# list excluded names counts
+from collections import Counter,defaultdict
+cat=defaultdict(lambda:[0,0])
+for n,s in shapes.items():
+    if trainable(n): cat['train'][0]+=1; cat['train'][1]+=params(s)
+    else:
+        if n=='_CHECKPOINTABLE_OBJECT_GRAPH': key='object_graph'
+        elif n=='save_counter/.ATTRIBUTES/VARIABLE_VALUE': key='save_counter'
+        elif '/moving_mean/' in n: key='moving_mean'
+        elif '/moving_variance/' in n: key='moving_variance'
+        else: key='other_nontrain'
+        cat[key][0]+=1; cat[key][1]+=params(s)
+for k,(cnt,p) in cat.items():
+    print(k,cnt,p)
+# print trainables grouped by component
+comp=defaultdict(lambda:[0,0])
+for n,s in shapes.items():
+    if not trainable(n): continue
+    if n.startswith('model/_stem/'): c='stem'
+    elif n.startswith('model/_downres/'): c='downres'
+    elif n.startswith('model/_transformer/'): c='transformer'
+    elif n.startswith('model/_final_pointwise/'): c='final_pointwise'
+    elif n.startswith('model/_heads/human/'): c='head_human'
+    elif n.startswith('model/_heads/mouse/'): c='head_mouse'
+    else: c='other'
+    comp[c][0]+=1; comp[c][1]+=params(s)
+for k,(cnt,p) in comp.items():
+    print(k,cnt,p,f'{p:,}')
+PY"

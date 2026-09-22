@@ -1,0 +1,36 @@
+/bin/bash -c "python3 - <<'PY'
+import re, requests, json, collections, statistics
+r=open('sample-select.js').read(); start=r.find('var treeData_ImmGen_ULI_RNASeq = ['); end=r.find('var treeData_Microarray', start); seg=r[start:end]
+entries=[]
+for m in re.finditer(r'\\{(.*?)\\}', seg, re.S):
+ s=m.group(1); title=re.search(r'title\\s*:\\s*\"(["'^"]*)"'"',s); key=re.search(r'key\\s*:\\s*\"(["'^"]*)"'"',s); tool=re.search(r'tooltip\\s*:\\s*\"(["'^"]*)"'"',s,re.S)
+ if title and key: entries.append((title.group(1),key.group(1),tool.group(1).replace('\\\\n',' ') if tool else ''))
+groups={'Monocytes':'Group Name: Monocytes','Neutrophils':'Group Name: Granulocytes','Dendritic':'Group Name: Dendritic cells','B':'Group Name: B cells','CD8':'Group Name: ab T cells','CD4':'Group Name: ab T cells','NK':'Group Name: Innate Lymphocytes','Macrophages':'Group Name: Macrophages'}
+keys_by=collections.defaultdict(list)
+for title,key,tool in entries:
+ if '_' not in key: continue
+ for cat,pat in groups.items():
+  if pat.lower() in tool.lower(): keys_by[cat].append(key)
+for k in keys_by: keys_by[k]=list(dict.fromkeys(keys_by[k]))
+print({k:len(v) for k,v in keys_by.items()})
+allkeys=[]
+for k,v in keys_by.items(): allkeys+=v
+allkeys=list(dict.fromkeys(allkeys)); print('all',len(allkeys))
+genes=open('characterize.response.q1.txt').read().split()
+data=[('type','rnaseq'),('groups',','.join(allkeys)),('groups_num',str(len(allkeys))),('dataset','ULI_RNASeq')]
+for g in genes: data.append(('genes[]',g))
+r=requests.post('https://rstats.immgen.org/MyGeneSet_New/wplot_get_data.php',data=data,timeout=180)
+print(r.status_code,len(r.content),r.text[:100])
+if r.status_code==200:
+ open('immgen_wplot.json','w').write(r.text); ds=json.loads(r.text); print('rows',len(ds),'sample',ds[0])
+ # aggregate mean norm_value per category
+ from collections import defaultdict
+ vals=defaultdict(list)
+ for row in ds:
+  pop=row['population']
+  for cat,ks in keys_by.items():
+   if pop in ks: vals[cat].append(row['norm_value']); break
+ print('\\nmean expression per category (all gene-population rows):')
+ for cat in ['Monocytes','Dendritic','Neutrophils','Macrophages','B','CD8','CD4','NK']:
+  v=vals[cat]; print(cat,len(v),statistics.mean(v) if v else None, statistics.median(v) if v else None)
+PY"

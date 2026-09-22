@@ -1,0 +1,56 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b55927c192f6528fc0",
+  "history_id": "bbd44e69cb8906b5213a1b92a908622e",
+  "tool_id": "score_wheat_pseudobulk_swap_v2",
+  "state": "error",
+  "exit_code": 1,
+  "create_time": "2026-08-10T07:32:12.828553",
+  "update_time": "2026-08-10T07:32:44.461844",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "python -m pip install --quiet numpy openpyxl &&\npython - <<'PY'\nimport csv,gzip,math\nfrom urllib.request import Request,urlopen\nfrom openpyxl import load_workbook\nimport numpy as np\n\nexpr_path='/jetstream2/scratch/main/jobs/79036663/inputs/dataset_2dd44a7e-8ce3-4b19-92f0-bba8a12200e9.dat'\nwith open(expr_path,'rb') as fh: magic=fh.read(2)\nopener=gzip.open if magic==b'\\x1f\\x8b' else open\ngenes=[]; rows=[]\nwith opener(expr_path,'rt',newline='') as fh:\n    rd=csv.reader(fh,delimiter='\\t'); header=next(rd); labels=header[1:]\n    for r in rd:\n        if r:\n            genes.append(r[0]); rows.append([float(x) for x in r[1:]])\nX=np.asarray(rows,dtype=float)\nfinite=np.all(np.isfinite(X),axis=1)\nX=X[finite]\ngenes=[g for g,k in zip(genes,finite) if k]\nlogX=np.log1p(np.maximum(X,0))\nmu=logX.mean(axis=1,keepdims=True); sd=logX.std(axis=1,keepdims=True)\nZ=np.divide(logX-mu,sd,out=np.zeros_like(logX),where=sd>0)\ngene_to_i={g:i for i,g in enumerate(genes)}\n\nurl='https://ars.els-cdn.com/content/image/1-s2.0-S2211124725000117-mmc5.xlsx'\nreq=Request(url,headers={'User-Agent':'Mozilla/5.0','Referer':'https://www.cell.com/'})\nopen('mmc5.xlsx','wb').write(urlopen(req,timeout=90).read())\nws=load_workbook('mmc5.xlsx',read_only=True,data_only=True)['Table S4']\nit=ws.iter_rows(values_only=True); h=list(next(it)); ix={str(v):i for i,v in enumerate(h)}\nby_cluster={i:[] for i in range(15)}\nfor r in it:\n    try:\n        g=str(r[ix['Gene_ID']]); fc=float(r[ix['avg_log2FC']]); padj=float(r[ix['p_val_adj']]); c=int(r[ix['cluster']])\n    except Exception: continue\n    if c in by_cluster and math.isfinite(fc) and math.isfinite(padj) and padj<0.05 and fc>0.25 and g in gene_to_i:\n        by_cluster[c].append((g,fc))\nfor c in by_cluster: by_cluster[c].sort(key=lambda t:(-t[1],t[0]))\n\ngroups={'cortex':[2],'endodermis':[9],'epidermis':[1,5,7],'meristems':[0,3,12],'pericycle':[6],'phloem':[11,13],'provascular':[4],'root_cap':[14],'root_hair':[8],'xylem':[10]}\ntypes=list(groups); depths=[20,50,100,200,500]\n\ndef max_assignment(S):\n    n=S.shape[0]; dp={0:(0.0,[])}\n    for i in range(n):\n        nd={}\n        for mask,(score,cols) in dp.items():\n            for j in range(n):\n                if not mask>>j&1:\n                    nm=mask|1<<j; ns=score+float(S[i,j])\n                    if nm not in nd or ns>nd[nm][0]: nd[nm]=(ns,cols+[j])\n        dp=nd\n    return dp[(1<<n)-1]\n\nscore_by_depth={}; assignments={}; swap_by_depth={}; counts_by_depth={}\nfor depth in depths:\n    S=np.zeros((len(types),len(labels))); counts={}\n    for ti,t in enumerate(types):\n        best={}\n        for c in groups[t]:\n            for g,fc in by_cluster[c]:\n                if g not in best or fc>best[g]: best[g]=fc\n        selected=sorted(best,key=lambda g:(-best[g],g))[:depth]\n        ids=[gene_to_i[g] for g in selected]\n        counts[t]=len(ids)\n        S[ti,:]=Z[ids,:].mean(axis=0) if ids else -99.0\n    S=np.nan_to_num(S,nan=-99.0,posinf=99.0,neginf=-99.0)\n    score_by_depth[depth]=S; counts_by_depth[depth]=counts\n    _,cols=max_assignment(S)\n    pred={labels[cols[i]]:types[i] for i in range(len(types))}\n    assignments[depth]=pred\n    base=sum(S[types.index(l),labels.index(l)] for l in labels)\n    candidates=[(0.0,None)]\n    for a in range(len(labels)):\n      for b in range(a+1,len(labels)):\n        gain=-S[types.index(labels[a]),a]-S[types.index(labels[b]),b]+S[types.index(labels[b]),a]+S[types.index(labels[a]),b]\n        candidates.append((float(gain),(labels[a],labels[b])))\n    swap_by_depth[depth]=max(candidates,key=lambda x:x[0])\n\nCs=[]\nfor S in score_by_depth.values():\n    sm=S.mean(axis=1,keepdims=True); ss=S.std(axis=1,keepdims=True)\n    Cs.append((S-sm)/np.where(ss==0,1,ss))\nC=np.mean(Cs,axis=0)\n_,cols=max_assignment(C)\ncons={labels[cols[i]]:types[i] for i in range(len(types))}\nbase=sum(C[types.index(l),labels.index(l)] for l in labels)\npairs=[]\nfor a in range(len(labels)):\n  for b in range(a+1,len(labels)):\n    gain=-C[types.index(labels[a]),a]-C[types.index(labels[b]),b]+C[types.index(labels[b]),a]+C[types.index(labels[a]),b]\n    pairs.append((float(gain),labels[a],labels[b]))\npairs.sort(reverse=True)\n\nwith open('swap_diagnostics.txt','w') as out:\n    out.write(f'MATRIX\\tgenes_total={len(rows)}\\tgenes_finite={len(genes)}\\tcolumns={len(labels)}\\tlabels={\",\".join(labels)}\\n')\n    out.write('CLUSTER_DEG_COUNTS\\t'+'\\t'.join(f'{c}:{len(by_cluster[c])}' for c in range(15))+'\\n')\n    for depth in depths:\n        pair,gain=swap_by_depth[depth]\n        out.write(f'DEPTH\\t{depth}\\tMARKERS\\t'+','.join(f'{t}:{counts_by_depth[depth][t]}' for t in types)+f'\\tBEST_SWAP\\t{pair}\\tGAIN\\t{gain:.6f}\\n')\n        out.write('ASSIGNMENT\\t'+';'.join(f'{lab}->{assignments[depth][lab]}' for lab in labels)+'\\n')\n    out.write('CONSENSUS_ASSIGNMENT\\t'+';'.join(f'{lab}->{cons[lab]}' for lab in labels)+'\\n')\n    out.write('TOP_TRANSPOSITIONS\\n')\n    for gain,a,b in pairs[:8]: out.write(f'{a},{b}\\t{gain:.6f}\\n')\n    out.write('CONSENSUS_SCORE_MATRIX\\n')\n    out.write('reference_observed\\t'+'\\t'.join(labels)+'\\n')\n    for i,t in enumerate(types): out.write(t+'\\t'+'\\t'.join(f'{v:.3f}' for v in C[i])+'\\n')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135431f3fb678490516",
+      "src": "hda",
+      "uuid": "2dd44a7e-8ce3-4b19-92f0-bba8a12200e9"
+    }
+  },
+  "outputs": {
+    "diagnostics": {
+      "id": "f9cad7b01a472135b5d6b97f118316df",
+      "src": "hda",
+      "uuid": "4ac1da98-3486-4571-a7c6-0e3129178db8"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\nTraceback (most recent call last):\n  File \"<stdin>\", line 98, in <module>\nTypeError: unsupported format string passed to NoneType.__format__\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\nTraceback (most recent call last):\n  File \"<stdin>\", line 98, in <module>\nTypeError: unsupported format string passed to NoneType.__format__\n",
+  "job_messages": [
+    {
+      "desc": "Fatal error: Exit code 1 ()",
+      "code_desc": "",
+      "error_level": 3.0,
+      "type": "exit_code",
+      "exit_code": 1
+    }
+  ],
+  "dependencies": [],
+  "job_metrics": null
+}

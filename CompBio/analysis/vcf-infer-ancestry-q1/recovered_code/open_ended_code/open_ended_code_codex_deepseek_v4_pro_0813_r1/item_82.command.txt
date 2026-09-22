@@ -1,0 +1,58 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, pickle
+G=np.load('samples.G.npy')
+with open('sites.pkl','rb') as f: sites=pickle.load(f)
+# parse 1000g gt file: each line starts POS then 2504 genotypes
+ref_pos=[]; ref_gts=[]
+with open('first5000.1000g.gt.tsv') as f:
+ for line in f:
+  parts=line.rstrip().split('\\t')
+  pos=int(parts[0]); gts=parts[1:]
+  if len(gts)"'!=2504:
+   print('"'bad',pos,len(gts)); continue
+  ref_pos.append(pos); ref_gts.append(gts)
+print('ref rows',len(ref_pos), 'cols', len(ref_gts[0]) if ref_gts else 0)
+# map position to our index among first 5000
+pos_to_idx={sites[i][1]:i for i in range(5000)}
+# Convert our G for rows present
+our_mat=[]
+for p in ref_pos:
+ i=pos_to_idx[p]
+ our_mat.append(G[i])
+our_mat=np.array(our_mat,dtype=np.int8)
+# Convert ref gts to dosage 0/1/2; phased split |, handle . and multiallelic as -1
+def gt_dosage(g):
+ if g in ('0|0','0/0'): return 0
+ if g in ('0|1','1|0','0/1','1/0'): return 1
+ if g in ('1|1','1/1'): return 2
+ if '.' in g or g=='.': return -1
+ # multi allelic; parse numbers
+ nums=g.replace('|','/').split('/')
+ if len(nums)>=2:
+  try: a=int(nums[0]); b=int(nums[1])
+  except: return -1
+  if a==b==0: return 0
+  if a==b and a>0: return 2 # alt/alt (could alt 2)
+  if a"'!=b: return 1
+ return -1
+refmat=np.array([[gt_dosage(g) for g in row] for row in ref_gts], dtype=np.int8)
+print('"'refmat',refmat.shape)
+# compute mismatch concordance for each sample vs each ref individual over sites where both known
+best=[]
+for si in range(4):
+ scores=np.zeros(refmat.shape[1])
+ counts=np.zeros(refmat.shape[1])
+ for ri in range(refmat.shape[0]):
+  ours=our_mat[ri,si]
+  if ours==3: continue
+  for j in range(refmat.shape[1]):
+   rv=refmat[ri,j]
+   if rv<0: continue
+   # compare dosage: our G is 0/1/2 for ref/alt; if ref pos alt same as ours (we matched in AF extraction) assume.
+   if ours==rv: scores[j]+=1
+   counts[j]+=1
+ concord=scores/counts
+ order=np.argsort(-concord)
+ print('Sample',si+1,'top:')
+ for k in range(5): print(order[k], concord[order[k]], counts[order[k]])
+PY"

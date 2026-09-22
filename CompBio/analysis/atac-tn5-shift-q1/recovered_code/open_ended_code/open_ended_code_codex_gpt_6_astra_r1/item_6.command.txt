@@ -1,0 +1,43 @@
+/bin/bash -lc "cat > infer_shift.py <<'PY'
+import gzip
+import numpy as np
+from collections import Counter
+W=80
+with gzip.open('chr1.fa.gz','rt') as f:
+ seq=''.join(l.strip() for l in f if not l.startswith('>')).upper()
+lookup=np.full(256,4,dtype=np.uint8)
+for i,c in enumerate('ACGT'): lookup[ord(c)]=i
+seq=lookup[np.frombuffer(seq.encode(),dtype=np.uint8)]
+profiles=[]
+for col in (1,2):
+ counts=np.zeros((2*W+1,5),dtype=np.int64)
+ seen=set()
+ with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+  for line in f:
+   a=line.split()
+   if a[0]"'!='"'chr1': continue
+   pos=int(a[col])
+   if pos in seen or pos<W or pos+W>=len(seq): continue
+   seen.add(pos)
+   np.add.at(counts,(np.arange(2*W+1),seq[pos-W:pos+W+1]),1)
+ p=counts[:,:4]/counts[:,:4].sum(axis=1,keepdims=True)
+ profiles.append(p)
+ print('END',col,'N',len(seen))
+ info=np.sum(p*np.log2(p/.25),axis=1)
+ for x in np.argsort(info)[-25:]: print(x-W, np.round(p[x],4),round(info[x],4))
+ scores=[]
+ for center2 in range(-100,101):
+  # center2 is twice a candidate symmetry center, in base coordinates.
+  # Compare sequence bias to reverse complement around center.
+  ps=[];qs=[]
+  for x in range(-W,W+1):
+   y=center2-x
+   if -W<=y<=W and abs(x-center2/2)<=15:
+    ps.append(p[x+W]);qs.append(p[y+W][::-1])
+  ps=np.array(ps);qs=np.array(qs)
+  corr=np.corrcoef((ps-.25).ravel(),(qs-.25).ravel())[0,1]
+  err=np.mean((ps-qs)**2)
+  scores.append((corr,center2/2,err))
+ print('BEST SYMMETRY',sorted(scores,reverse=True)[:15])
+np.savez('profiles.npz',left=profiles[0],right=profiles[1],W=W)
+PY"

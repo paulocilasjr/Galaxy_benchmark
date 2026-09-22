@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, urllib.parse, subprocess, json, re, html
+expr=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+cols=['meristems','pericycle','root_hair','epidermis']
+genes=[]
+for col in cols:
+    vals=expr[col]
+    score=(vals+1)/(expr.drop(columns=[col]).mean(axis=1)+1)
+    top=score[vals>5].sort_values(ascending=False).head(8).index.tolist()
+    print(col, top)
+    genes+=top
+# Also S4 top G1S/G2M
+s4=pd.read_excel('PMC11860762/mmc5.xlsx', sheet_name='Table S4')
+for cl in ['3 - G1/S','12 - G2/M']:
+    top=s4[s4.cluster.str.strip()==cl].sort_values('avg_log2FC',ascending=False).Gene_ID.astype(str).head(8).tolist()
+    print(cl, top)
+    genes+=top
+genes=list(dict.fromkeys(genes))
+open('query_genes.txt','w').write(','.join(genes))
+print(len(genes))
+PY
+GENES="'$(cat query_genes.txt)
+curl -s -L -X POST '"'https://wheatomics.sdau.edu.cn/scRNA/?genome=Chinese_Spring#results' -F 'genome=Chinese_Spring' -F \"gene="'$GENES" -o scRNA_ambig.html
+python3 - <<'"'PY'
+import re,json,pandas as pd
+s=open('scRNA_ambig.html').read()
+m=re.search(r'window\\.__dotplotRows_dotplot_root = (\\[.*?\\]);',s,re.S)
+print('found', bool(m))
+rows=json.loads(m.group(1))
+df=pd.DataFrame(rows)
+# for each gene top cluster by scaled and avg
+for g,sub in df.groupby('gene'):
+    top=sub.sort_values('avg_exp_scaled',ascending=False).iloc[:3]
+    print(g, ' | '.join(f\"{r.cluster}:{r.avg_exp_scaled:.2f}/{r.avg_exp:.2f}\" for _,r in top.iterrows()))
+PY"

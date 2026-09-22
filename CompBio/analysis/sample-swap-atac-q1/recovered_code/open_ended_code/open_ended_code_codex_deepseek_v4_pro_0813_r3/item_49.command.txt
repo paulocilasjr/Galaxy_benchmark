@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+atac=pd.read_csv('atac_gene_promoter_counts.tsv',sep='\\t')
+rna=pd.read_csv('bulk_rna_counts_clean.tsv',sep='\\t')
+A=atac.groupby('symbol').sum(numeric_only=True)
+R=rna.set_index('symbol')
+common=A.index.intersection(R.index).tolist()
+# CPM
+Ac=A.loc[common].div(A.loc[common].sum(axis=0),axis=1)*1e6
+Rc=R.loc[common].div(R.loc[common].sum(axis=0),axis=1)*1e6
+clo=Rc['Cloacal_chamber_featurecounts']; sto=Rc['Stomach_featurecounts']
+# filter expression > 1 cpm in one
+mask=((clo>1)|(sto>1)).values
+clo=clo[mask]; sto=sto[mask]
+fc=np.log2((sto+1)/(clo+1))
+top_stomach=fc.sort_values(ascending=False).head(150)
+top_cloaca=fc.sort_values(ascending=True).head(150)
+print('top stomach genes (should high in true stomach):')
+print(top_stomach.head(30).index.tolist())
+print('top cloaca genes:')
+print(top_cloaca.head(30).index.tolist())
+# aggregate ATAC for top markers per direction, z across samples
+def atac_score(genes):
+ sub=Ac.loc[Ac.index.isin(genes.index)]
+ vals=np.log1p(sub).mean(axis=0)
+ return vals
+ss=atac_score(top_stomach); cs=atac_score(top_cloaca)
+score=ss-cs
+print('\\nATAC stomach-cloaca score (higher = stomach-like)')
+for c in A.columns:
+ print(f'{c:12s} {score[c]:.3f}')
+print('\\nSorted by score:')
+print(score.sort_values(ascending=False))
+PY"

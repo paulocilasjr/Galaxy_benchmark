@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,csv,re
+meta=json.load(open('sei_cistrome_meta.json'))
+sei_enc=[]
+for cid,v in meta.items():
+ if v.get('external_id_type')=='ENCODE':
+  ext=v.get('external_id','')
+  base=ext.split('_')[0]
+  rep=ext.split('_')[1] if '_' in ext else None
+  sei_enc.append((cid,ext,base,rep))
+print('sei enc tracks',len(sei_enc))
+# Borzoi target file rows
+rows=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+enc_rows=[r for r in rows if re.match(r'ENCFF\\d{3}[A-Z]{3}',r['identifier'])]
+print('bor enc rows',len(enc_rows))
+file_meta=json.load(open('borzoi_encff_meta.json'))
+print('file_meta',len(file_meta))
+bor_reps=set()
+missing=[]
+for r in enc_rows:
+ ident=re.match(r'(ENCFF\\d{3}[A-Z]{3})',r['identifier'].strip()).group(1)
+ m=file_meta.get(ident)
+ if not m:
+  missing.append(ident); continue
+ ds=m.get('dataset','')
+ acc=ds.rstrip('/').split('/')[-1] if ds else ''
+ brs=m.get('biological_replicates',[]) or []
+ for b in brs:
+  bor_reps.add((acc,str(b)))
+print('missing',missing)
+print('bor rep pairs',len(bor_reps))
+# match
+matched=[]; unmatched_base=[]
+for cid,ext,base,rep in sei_enc:
+ if rep is not None and (base,rep) in bor_reps:
+  matched.append((cid,ext,base,rep))
+ elif rep is None:
+  # count no rep? maybe any replicate under experiment
+  unmatched_base.append((cid,ext,base,rep))
+print('matched exact',len(matched),'unique base exact',len(set(x[2] for x in matched)))
+print('no rep sei tracks',len(unmatched_base))
+# if no rep treat as any replicate? count no rep with base in any bor_reps
+bor_acc=set(a for a,b in bor_reps)
+print('no rep base in bor acc',sum(1 for x in unmatched_base if x[2] in bor_acc))
+# total if no-rep match any, exact for rep tracks
+total=len(matched)+sum(1 for x in unmatched_base if x[2] in bor_acc)
+print('total exact-ish',total)
+PY"

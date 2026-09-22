@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+D=np.load('shift_counts_fast.npz')
+Avals=D['Avals']; Bvals=D['Bvals']; L=D['left_counts']; R=D['right_counts']
+W=L.shape[1]
+# freq
+Lf=L/(L.sum(axis=2,keepdims=True)+1e-12)
+Rf=R/(R.sum(axis=2,keepdims=True)+1e-12)
+# revcomp order: A<->T, C<->G; reverse positions
+rc_order=[3,2,1,0] # indices T,G,C,A for bases A,C,G,T? Let's map: bases='ACGT'. revcomp of A=T idx3; C=G idx2; G=C idx1; T=A idx0 -> [3,2,1,0]
+Rrc=Rf[:, ::-1, :][:, :, rc_order]
+# correlation
+Lc=Lf.reshape(Lf.shape[0],-1)
+Rc=Rrc.reshape(Rf.shape[0],-1)
+# subtract mean per candidate matrix
+Lm=Lc-Lc.mean(axis=1,keepdims=True)
+Rm=Rc-Rc.mean(axis=1,keepdims=True)
+corr=(Lm@Rm.T)/np.sqrt((Lm*Lm).sum(axis=1,keepdims=True)@(Rm*Rm).sum(axis=1,keepdims=True).T)
+print('corr max positions')
+inds=np.unravel_index(np.argmax(corr),corr.shape)
+print('max',corr[inds], 'A,B',Avals[inds[0]],Bvals[inds[1]])
+# top 20
+flat=np.argsort(corr,axis=None)[::-1][:50]
+for idx in flat:
+ i,j=np.unravel_index(idx,corr.shape)
+ print(Avals[i],Bvals[j],f'{corr[i,j]:.4f}')
+# print row/col max
+for i,A in enumerate(Avals):
+ j=np.argmax(corr[i]); print('A',A,'bestB',Bvals[j],f'{corr[i,j]:.4f}')
+PY"

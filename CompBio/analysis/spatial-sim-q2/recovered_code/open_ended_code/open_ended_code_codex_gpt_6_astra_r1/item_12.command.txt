@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > analysis/test_proximity.py <<'PY'
+import numpy as np, pandas as pd
+from scipy.spatial.distance import cdist
+w=pd.read_csv('analysis/abundance.csv',index_col=0)
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode').loc[w.index]
+d=cdist(pos[['pxl_col_in_fullres','pxl_row_in_fullres']],pos[['pxl_col_in_fullres','pxl_row_in_fullres']])
+# Coefficients are near integer numbers of single cells per spot.
+counts=np.rint(w.to_numpy()).astype(int)
+present=counts>0
+t=w.columns.get_loc('Tumor_Core')
+tum=present[:,t]
+dist=d[:,tum].min(1)
+rng=np.random.default_rng(5729)
+print('Max deviation from integer cell count:',np.abs(w.to_numpy()-counts).max())
+print('Tumor spots:',tum.sum())
+print('All spots mean distance:',dist.mean())
+for exclude in [False,True]:
+ mask=~tum if exclude else np.ones(len(w),dtype=bool)
+ ds=dist[mask]; pr=present[mask]
+ observed=ds@pr/pr.sum(0)
+ null=np.stack([rng.permutation(ds)@pr/pr.sum(0) for _ in range(19999)])
+ pv=(1+(null<=observed).sum(0))/(1+len(null))
+ print('\\nExclude tumor spots:',exclude)
+ for j,ct in enumerate(w.columns):
+  if j==t:continue
+  print(ct,'spots',pr[:,j].sum(),'mean_distance',round(observed[j],2),'null_mean',round(null[:,j].mean(),2),'p_closer',pv[j],'Bonferroni_p',min(1,pv[j]*5))
+print('\\nAbundance by distance range')
+print(pd.DataFrame(counts,columns=w.columns).groupby(pd.cut(dist,[-1,0,100,200,300,400,600,1000])).mean().to_string())
+PY
+OPENBLAS_NUM_THREADS=1 python analysis/test_proximity.py"

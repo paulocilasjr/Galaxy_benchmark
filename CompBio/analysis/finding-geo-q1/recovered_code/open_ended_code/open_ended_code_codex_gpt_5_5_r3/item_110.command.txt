@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import MiniBatchKMeans
+from sklearn.preprocessing import normalize
+p='finding.geo.q1.h5ad'
+with h5py.File(p,'r') as f:
+    X=csr_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=tuple(f['X'].attrs['shape']))
+    cats=f['var/gene_symbols/categories'][:]; codes=f['var/gene_symbols/codes'][:]
+    genes=np.array([(cats[i].decode() if i>=0 else '') for i in codes])
+# normalize per cell, log1p, select variable-ish top by nonzero/top excluding mito/ribo maybe
+counts=np.asarray(X.sum(axis=1)).ravel()
+Xn=X.multiply(1e4/counts[:,None]).tocsr(); Xn.data=np.log1p(Xn.data)
+# pick genes high variance approx E[x"'^2]-mean''^2
+mean=np.asarray(Xn.mean(axis=0)).ravel(); mean2=np.asarray(Xn.power(2).mean(axis=0)).ravel(); var=mean2-mean**2
+mask=np.array([not (g.startswith('"'mt-') or g.startswith('Rpl') or g.startswith('Rps')) for g in genes])
+idx=np.argsort(-(var*mask))[:2000]
+Z=TruncatedSVD(n_components=30, random_state=0).fit_transform(Xn[:,idx])
+Z=normalize(Z)
+km=MiniBatchKMeans(n_clusters=12, random_state=0, batch_size=2048, n_init=10).fit(Z)
+labels=km.labels_
+markers=['Sox11','Sox4','Onecut2','Neurog2','Dcx','Tubb3','Stmn2','Pou4f1','Tlx3','Phox2b','Ntrk1','Ntrk3','Isl1','Prph','Epcam','Krt8','Pax2','Eya1','Six1','Shox2','Pou3f1','Pou3f2','Otx2','Lhx2','Lhx9','Meis2','Gata3','Dlx1','Dlx2','Ascl1','Hes5','Sox2','Mki67','Top2a','Aif1','Ptprc','Col1a1','Pdgfra','Mbp','Plp1','Foxj1','Ttr','Apoe']
+gmap={g:i for i,g in enumerate(genes)}
+for c in range(12):
+    cells=np.where(labels==c)[0]
+    print('\\nCLUSTER',c,'n',len(cells),'median_counts',np.median(counts[cells]))
+    vals=[]
+    for g in markers:
+        if g in gmap:
+            col=X[cells,gmap[g]]
+            vals.append((g, np.asarray(col.sum()).item()/len(cells), (col>0).sum()/len(cells)))
+    print(' '.join([f'{g}:{m:.2f}/{p:.2f}' for g,m,p in vals if m>0.02 or p>0.02]))
+    sums=np.asarray(X[cells,:].sum(axis=0)).ravel()/len(cells)
+    top=[(genes[i],sums[i]) for i in np.argsort(-sums)[:15]]
+    print('top','; '.join(f'{g}:{v:.1f}' for g,v in top))
+PY"

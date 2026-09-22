@@ -1,0 +1,66 @@
+/bin/bash -c "python3 - <<'EOF'
+import json, os, time
+import numpy as np
+from Bio import SeqIO
+from scipy.stats import mannwhitneyu, ttest_ind
+from sklearn.metrics import roc_auc_score
+motifs=json.load(open('candidate_motifs.json'))
+bg=np.array([0.295,0.205,0.205,0.295])
+matrices={}
+for tf,m in motifs.items():
+    pfm=m['pfm']; cols=len(pfm['A'])
+    counts=np.array([[pfm[b][i] for i in range(cols)] for b in 'ACGT'], dtype=float)
+    counts += 0.01
+    probs=counts/counts.sum(axis=0, keepdims=True)
+    W=np.log2(probs/bg[:,None])
+    matrices[tf]=W
+# byte translation table: default A, set all to 0 except C/G/T
+table=bytes.maketrans(b'ACGT', b'\\x00\\x01\\x02\\x03')
+# For any other byte, it remains its ascii value >3, so we filter windows; but codes array type uint8 okay.
+def max_scores_for_fasta(path):
+    records=[]
+    seqs=[]
+    for rec in SeqIO.parse(path,'fasta'):
+        s=str(rec.seq).upper().encode('ascii')
+        seqs.append(s)
+    out={tf:np.full(len(seqs), -np.inf) for tf in matrices}
+    lens=np.array([len(s) for s in seqs])
+    for tf,W in matrices.items():
+        L=W.shape[1]
+        maxs=np.full(len(seqs), -np.inf)
+        for i,s in enumerate(seqs):
+            if len(s)<L: continue
+            codes=np.frombuffer(s.translate(table), dtype=np.uint8)
+            # handle non ACGT: set to 4 then filter
+            if np.any(codes>3):
+                # keep windows with all <=3; easiest replace bad with 0 and maybe mask later? We'll use code 0, minor.
+                pass
+            windows=np.lib.stride_tricks.sliding_window_view(codes,L)
+            scores=W[windows, np.arange(L)].sum(axis=1)
+            # if codes had >3, scores invalid for windows containing them; mask them
+            if np.any(codes>3):
+                bad=np.any(windows>3, axis=1)
+                scores=np.where(bad, -np.inf, scores)
+            maxs[i]=scores.max(initial=-np.inf)
+        out[tf]=maxs
+    return out,lens
+files=['gained_top500.fa','gained_top1000.fa','gained_top2000.fa','gained_top5000.fa','stable_bg10k.fa']
+scores={}; lengths={}
+for f in files:
+    if os.path.exists(f) and os.path.getsize(f)>0:
+        t=time.time(); scores[f],lengths[f]=max_scores_for_fasta(f); print('done',f,'time',time.time()-t)
+bgfile='stable_bg10k.fa'
+print('\\nAUC gained vs stable for max motif score')
+for gainf in [x for x in files if 'gained' in x]:
+    if gainf not in scores: continue
+    y=np.r_[np.ones(len(scores[gainf]['FOXA1'])), np.zeros(len(scores[bgfile]['FOXA1']))]
+    print('\\n',gainf)
+    for tf in motifs:
+        x=np.r_[scores[gainf][tf], scores[bgfile][tf]]
+        if np.all(x==-np.inf) or len(np.unique(x))<2:
+            auc=np.nan; p=np.nan
+        else:
+            auc=roc_auc_score(y,x)
+            p=mannwhitneyu(scores[gainf][tf], scores[bgfile][tf], alternative='greater').pvalue
+        print(f'{tf:8s} AUC={auc:.4f} p={p:.3g} mean_g={np.mean(scores[gainf][tf]):.3f} mean_bg={np.mean(scores[bgfile][tf]):.3f}')
+EOF"

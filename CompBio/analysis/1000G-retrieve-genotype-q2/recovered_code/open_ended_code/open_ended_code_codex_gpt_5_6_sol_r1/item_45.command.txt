@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv,gzip,hashlib
+with gzip.open('ENCFF717TCQ.bed.gz','rt') as f:
+    peaks=[line.rstrip('\\n').split('\\t') for line in f]
+top=sorted(peaks,key=lambda r:float(r[8]),reverse=True)[:1000]
+with open('top1000.bed') as f:
+    saved=[line.rstrip('\\n').split('\\t') for line in f]
+assert top==saved
+chr1=[(int(r[1]),int(r[2])) for r in top if r[0]=='chr1']
+assert len(chr1)==93
+common=set()
+with open('common_snps.bed') as f:
+    for c,s,e,o in csv.reader(f,delimiter='\\t'):
+        common.add((c,int(s)+1))
+assert len(common)==313
+with open('genotypes.tsv',newline='') as f:
+    rows=list(csv.reader(f,delimiter='\\t'))
+assert len(rows)==296
+assert rows[0][:4]==['CHROM','POS','REF','ALT']
+assert len(rows[0])==3206 and rows[0][4:]==sorted(rows[0][4:]) and len(set(rows[0][4:]))==3202
+last=0
+seen=set()
+allowed={'0/0','0/1','1/1','./.'}
+for r in rows[1:]:
+    assert len(r)==3206 and r[0]=='chr1' and r[2] in 'ACGT' and len(r[2])==1 and r[3] in 'ACGT' and len(r[3])==1
+    pos=int(r[1]); assert pos>=last; last=pos
+    assert ('chr1',pos) in common
+    assert any(start <= pos-1 < end for start,end in chr1)
+    assert set(r[4:]) <= allowed
+    assert tuple(r[:4]) not in seen; seen.add(tuple(r[:4]))
+data=open('genotypes.tsv','rb').read()
+assert b'\\r' not in data and data.endswith(b'\\n') and data.count(b'\\n')==296
+print(len(rows),hashlib.md5(data).hexdigest(),len(seen))
+PY
+wc -l query_parts/*.tsv | tail -1
+md5sum genotypes.tsv
+md5sum genotypes.tsv"

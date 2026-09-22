@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv
+import numpy as np
+from cyvcf2 import VCF
+super_by_sample={}
+with open('refs/integrated_call_samples_v3.20130502.ALL.panel') as f:
+    next(f)
+    for line in f:
+        p=line.split()
+        if len(p)>=3: super_by_sample[p[0]]=p[2]
+# NA set
+na={}
+with gzip.open('gwas.ancestry.q1.tsv.gz','rt') as f:
+    r=csv.DictReader(f,delimiter='\\t')
+    for row in r:
+        if row['P']=='NA':
+            chrom,pos,a,b=row['SNPID'].split(':')
+            na[(int(pos),frozenset([a,b]))]=(row['RSID'],a,b)
+vcf=VCF('refs/kg_chr1_na.vcf.gz'); samples=vcf.samples
+idxs={sp:np.array([i for i,s in enumerate(samples) if super_by_sample.get(s)==sp]) for sp in sorted(set(super_by_sample.values()))}
+rows=[]
+for v in vcf:
+    if len(v.REF)"'!=1: continue
+    for alt_i, alt in enumerate(v.ALT, start=1):
+        if len(alt)!=1: continue
+        key=(v.POS,frozenset([v.REF,alt]))
+        if key not in na: continue
+        # dosage of this alt allele in possibly multiallelic genotype
+        ds=[]
+        for gt in v.genotypes:
+            a,b=gt[0],gt[1]
+            if a<0 or b<0: ds.append(np.nan)
+            else: ds.append((1 if a==alt_i else 0)+(1 if b==alt_i else 0))
+        arr=np.array(ds,float)
+        mafs={}
+        for sp,idx in idxs.items():
+            sub=arr[idx]
+            af=np.nanmean(sub)/2
+            mafs[sp]=min(af,1-af)
+        rows.append((v.POS,na[key][0],mafs))
+print('"'matched NA',len(rows),'of',len(na))
+print('mean MAF among NA')
+for sp in idxs:
+    vals=[r[2][sp] for r in rows]
+    print(sp, 'mean',round(float(np.mean(vals)),4),'median',round(float(np.median(vals)),4),'zeros',sum(v<1e-6 for v in vals),'lt1pct',sum(v<0.01 for v in vals))
+print('\\nrare pattern rows')
+for pos,rs,mafs in rows:
+    # print sorted if any pop <.01
+    if min(mafs.values())<0.01:
+        print(pos,rs,{k:round(v,4) for k,v in mafs.items()})
+PY"

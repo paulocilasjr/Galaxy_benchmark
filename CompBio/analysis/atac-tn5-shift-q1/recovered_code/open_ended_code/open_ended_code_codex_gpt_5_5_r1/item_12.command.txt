@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+seq=''.join(l.strip().upper() for l in open('hg38_chr1.fa') if not l.startswith('>'))
+L=len(seq)
+starts=[]; ends=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        c,s,e,*_=line.rstrip('\\n').split('\\t')
+        if c=='chr1':
+            starts.append(int(s)); ends.append(int(e))
+print('chr1 len',L,'n',len(starts),'range',min(starts),max(ends))
+comp=str.maketrans('ACGT','TGCA')
+# collect seq windows relative to coordinates, plus for start, minus rc for end boundary p (base p-1 is immediately left of end)
+def count_profile(points, orient='plus', coord_shift=0, half=25):
+    bases='ACGT'
+    counts=[[0,0,0,0] for _ in range(2*half+1)]
+    bidx={b:i for i,b in enumerate(bases)}
+    n=0
+    for p0 in points:
+        p=p0+coord_shift
+        ok=True; chars=[]
+        for ii,r in enumerate(range(-half,half+1)):
+            idx=p+r if orient=='plus' else p-1-r
+            if idx<0 or idx>=L: ok=False; break
+            b=seq[idx]
+            if b not in bidx: ok=False; break
+            if orient"'!='"'plus': b=b.translate(comp)
+            chars.append(b)
+        if not ok: continue
+        n+=1
+        for ii,b in enumerate(chars): counts[ii][bidx[b]]+=1
+    freqs=[]; ics=[]
+    for row in counts:
+        tot=sum(row)
+        fs=[x/tot for x in row] if tot else [0]*4
+        freqs.append(fs)
+        ics.append(2+sum(p*math.log2(p) for p in fs if p>0) if tot else 0)
+    return freqs,ics,n
+# Print profile consensus for no additional shift
+for name,pts,orient in [('start',starts,'plus'),('endrc',ends,'minus')]:
+    f,ic,n=count_profile(pts,orient,0,25)
+    print('\\n',name,n,'ICsum',sum(ic))
+    for r,fs,ici in zip(range(-15,16), f[10:41], ic[10:41]):
+        cons='ACGT'[max(range(4),key=lambda i:fs[i])]
+        print(f'{r:3d} {cons} {max(fs):.3f} IC {ici:.3f} A{fs[0]:.2f} C{fs[1]:.2f} G{fs[2]:.2f} T{fs[3]:.2f}')
+# pairwise distance between start profile at shift ds and end rc at de, for motif positions -10..10
+print('\\nBest align offsets distance over shifts -12..12 (additional coordinate shifts)')
+prof={}
+for ds in range(-12,13): prof[('s',ds)]=count_profile(starts,'plus',ds,15)[0]
+for de in range(-12,13): prof[('e',de)]=count_profile(ends,'minus',de,15)[0]
+res=[]
+for ds in range(-12,13):
+    for de in range(-12,13):
+        dist=0
+        for i in range(31):
+            fs=prof[('s',ds)][i]; fe=prof[('e',de)][i]
+            dist+=sum((fs[j]-fe[j])**2 for j in range(4))
+        res.append((dist,ds,de))
+for dist,ds,de in sorted(res)[:20]:
+    print(f'{dist:.4f} ds={ds} de={de} diff={de-ds}')
+PY"

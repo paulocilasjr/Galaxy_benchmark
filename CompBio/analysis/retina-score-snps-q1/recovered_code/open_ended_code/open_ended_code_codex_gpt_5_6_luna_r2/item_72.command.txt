@@ -1,0 +1,32 @@
+/bin/bash -lc "DYLD_LIBRARY_PATH=/opt/miniconda3/pkgs/libffi-3.5.2-hcf2aa1b_0/lib:/opt/miniconda3/lib TF_CPP_MIN_LOG_LEVEL=2 zenodo/native_env/bin/python -u - <<'PY'
+from pathlib import Path
+import csv,json,gc
+import numpy as np
+import tensorflow as tf
+rows=list(csv.DictReader(open('retina.score.snps.q1.tsv'),delimiter='\\t'))
+seqs=json.loads(Path('zenodo/hg19_windows.json').read_text())
+L=2114; c=L//2; shift=c-1
+# This is the notebook's exact correction/replacement convention applied to these 0-based rows.
+ref=[]; alt=[]
+for r,s in zip(rows,seqs):
+ s=s.upper(); s=s[:shift]+r['ref'].upper()+s[shift+1:]
+ ref.append(s); alt.append(s[:shift]+r['alt'].upper()+s[shift+1:])
+def oh(ss):
+ a=np.zeros((len(ss),L,4),dtype=np.float32)
+ for k,b in enumerate('ACGT'): a[:,:,k]=np.array([[ch==b for ch in s] for s in ss],dtype=np.float32)[:,:,0] if False else a[:,:,k]
+ # use direct loop to avoid dtype surprises
+ for i,s in enumerate(ss):
+  for j,ch in enumerate(s):
+   if ch in 'ACGT': a[i,j,'ACGT'.index(ch)]=1
+ return a
+r_oh=oh(ref); a_oh=oh(alt); rs=[]; ats=[]
+for fold in range(5):
+ print('fold',fold,flush=True)
+ m=tf.keras.models.load_model(f'zenodo/models/fold{fold}/Rod.h5',compile=False)
+ rp=m.predict(r_oh,batch_size=256,verbose=0); ap=m.predict(a_oh,batch_size=256,verbose=0)
+ rs.append(np.asarray(rp[1]).ravel()); ats.append(np.asarray(ap[1]).ravel())
+ del m,rp,ap; tf.keras.backend.clear_session(); gc.collect()
+lfc=(np.array(ats)-np.array(rs)).mean(0)
+np.savez('zenodo/rod_scores_notebook_shift.npz',lfcs=lfc,labels=np.array([int(r['label']) for r in rows]))
+print('saved',lfc.min(),lfc.max(),flush=True)
+PY"

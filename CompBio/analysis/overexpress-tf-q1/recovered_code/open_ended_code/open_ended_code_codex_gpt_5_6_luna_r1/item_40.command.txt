@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, random, statistics, time
+from collections import defaultdict
+import numpy as np
+from pyfaidx import Fasta
+
+rows=[]
+with open('diff_bins500.tsv') as f:
+ next(f)
+ for line in f:
+  l2,z,c,s,e,rr,pp=line.rstrip().split('\\t'); rows.append((float(l2),float(z),c,int(s),int(e),int(rr),int(pp)))
+main={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+gains=[r for r in rows if r[2] in main and r[1]>0]
+losses=[r for r in rows if r[2] in main and r[1]<0]
+stable=[r for r in rows if r[2] in main and abs(r[1])<1 and r[5]+r[6]>=40]
+def select_nonoverlap(a,n=600,dist=1500,reverse=True):
+ out=[]; taken=defaultdict(list)
+ for r in sorted(a,key=lambda x:x[1],reverse=reverse):
+  center=r[3]+250; c=r[2]
+  if any(abs(center-x)<dist for x in taken[c]): continue
+  out.append(r); taken[c].append(center)
+  if len(out)>=n: break
+ return out
+G=select_nonoverlap(gains); L=select_nonoverlap(losses); random.seed(1); S=random.sample(stable,min(600,len(stable)))
+print('rows',len(gains),len(losses),len(stable),'selected',len(G),len(L),len(S),flush=True)
+lines=open('jaspar.meme').read().splitlines(); wanted={'FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3'}; motifs=[]; i=0
+while i<len(lines):
+ if lines[i].startswith('MOTIF '):
+  parts=lines[i].split(); mid=parts[1]; name=' '.join(parts[2:]); j=i+1
+  while j<len(lines) and not lines[j].startswith('MOTIF '): j+=1
+  m=re.search(r'letter-probability matrix:\\s+alength=\\s*4\\s+w=\\s*(\\d+)', '\\n'.join(lines[i:j]))
+  if m and name.upper().split()[0] in wanted:
+   w=int(m.group(1)); st=next(k for k in range(i,j) if lines[k].startswith('letter-probability matrix:'))+1
+   motifs.append((mid,name,np.array([[float(x) for x in q.split()] for q in lines[st:st+w]],dtype=float)))
+  i=j
+ else:i+=1
+print('motifs',[(x[0],x[1],x[2].shape[0]) for x in motifs],flush=True)
+fa=Fasta('hg38.fa',as_raw=True,sequence_always_upper=True)
+def seqs(sel):
+ out=[]
+ for r in sel:
+  q=str(fa[r[2]][r[3]:r[4]])
+  if len(q)==500 and 'N' not in q: out.append(q)
+ return out
+sg,sl,ss=seqs(G),seqs(L),seqs(S); print('seqs',len(sg),len(sl),len(ss),flush=True)
+# byte encoder and scanner
+maparr=np.full(256, -1, dtype=np.int8)
+for i,ch in enumerate(b'ACGT'):maparr[ch]=i
+
+def scan_seq(seq,mat):
+ p=(mat+0.01)/(mat.sum(axis=1,keepdims=True)+0.04)
+ lo=np.log2(p/.25); lo=lo.astype(np.float32); rev=lo[::-1,::-1] # WRONG column order? columns A,C,G,T, reverse comp mapping should [T,G,C,A] -> indexes [3,2,1,0]
+ rev=lo[::-1][:,[3,2,1,0]]
+ code=maparr[np.frombuffer(seq.encode('ascii'),dtype=np.uint8)]
+ w=lo.shape[0]; n=len(code)-w+1; best=-1e9; h8=h9=0
+ maxscore=float(np.max(lo,axis=1).sum())
+ for mm in (lo,rev):
+  sc=np.zeros(n,dtype=np.float32)
+  for k in range(w): sc += mm[k,code[k:k+n]]
+  best=max(best,float(sc.max()))
+  h8 += int((sc>=.8*maxscore).sum()); h9 += int((sc>=.9*maxscore).sum())
+ return best/maxscore,h8,h9
+for mid,name,mat in motifs:
+ t=time.time()
+ out=[]
+ for label,arr in [('G',sg),('L',sl),('S',ss)]:
+  vals=[scan_seq(q,mat) for q in arr]
+  out.append((label,round(statistics.mean(v[0] for v in vals),4),round(statistics.median(v[0] for v in vals),4),round(sum(v[1]>0 for v in vals)/len(vals),4),round(sum(v[2]>0 for v in vals)/len(vals),4),round(statistics.mean(v[1] for v in vals),3),round(statistics.mean(v[2] for v in vals),3)))
+ print(mid,name,'time',round(time.time()-t,2),out,flush=True)
+PY"

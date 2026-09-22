@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, time
+sc=pd.read_csv('data/spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('data/spatial_q_sc_metadata.csv', index_col=0)
+cts=sorted(meta['cell_type'].unique()); m=len(cts)
+S=np.column_stack([sc.values[meta['cell_type']==ct].mean(axis=0) for ct in cts])
+rng=np.random.default_rng(1)
+comps_by_k={}
+for k in range(1,6):
+ comps=[]
+ def rec(start, rem, cur):
+  if rem==0:
+   counts=np.zeros(m,dtype=int)
+   for idx in cur: counts[idx]+=1
+   comps.append(counts); return
+  for i in range(start,m):
+   cur.append(i); rec(i, rem-1, cur); cur.pop()
+ rec(0,k,[])
+ comps_by_k[k]=comps
+print({k:len(v) for k,v in comps_by_k.items()})
+N=500
+true_comp=[]; Y=[]
+for i in range(N):
+ k=int(rng.integers(1,6))
+ counts=np.zeros(m,dtype=int)
+ for _ in range(k): counts[int(rng.integers(m))]+=1
+ true_comp.append(counts)
+ cells=np.zeros(sc.shape[1])
+ for idx,cnt in enumerate(counts):
+  if cnt:
+   idxs=rng.choice(200,size=int(cnt),replace=False)
+   cells += sc.values[meta['cell_type']==cts[idx]][idxs].sum(axis=0)
+ Y.append(cells)
+Y=np.array(Y)
+pred=[]
+start=time.time()
+for yi in Y:
+ best=None; bestll=-1e18
+ for k,comps in comps_by_k.items():
+  for comp in comps:
+   lam=S@comp
+   ll=np.sum(yi*np.log(lam+1e-12)-lam)
+   if ll>bestll: bestll=ll; best=comp
+ pred.append(best)
+acc_exact=np.mean([np.array_equal(np.array(p),np.array(t)) for p,t in zip(pred,true_comp)])
+pres_acc=np.mean([np.array_equal((np.array(p)>0),(np.array(t)>0)) for p,t in zip(pred,true_comp)])
+print('presence accuracy',pres_acc,'exact',acc_exact,'time',time.time()-start)
+PY"

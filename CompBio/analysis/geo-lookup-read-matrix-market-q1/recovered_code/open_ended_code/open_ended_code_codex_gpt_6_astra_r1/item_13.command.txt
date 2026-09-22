@@ -1,0 +1,35 @@
+/bin/bash -lc "cat > extract_count.py <<'PY'
+import gzip
+import json
+
+def find(path, target):
+    with gzip.open(path, 'rt') as f:
+        lines = [line.rstrip().split('\\t') for line in f]
+    hits = [(i, fields) for i, fields in enumerate(lines, 1) if target in fields]
+    assert len(hits) == 1, hits
+    return hits[0], len(lines)
+
+(gene_index, gene), n_genes = find('genes.tsv.gz', 'SOX2')
+(barcode_index, barcode), n_barcodes = find('D2.barcodes.tsv.gz', 'AAACCCAAGTCTTCGA-1')
+with gzip.open('D2.matrix.mtx.gz', 'rt') as f:
+    header = next(f).strip()
+    assert header == '%%MatrixMarket matrix coordinate integer general', header
+    line = next(f)
+    while line.startswith('%'):
+        line = next(f)
+    rows, cols, expected_entries = map(int, line.split())
+    assert (rows, cols) == (n_genes, n_barcodes)
+    matches = []
+    entries = 0
+    for line in f:
+        entries += 1
+        r, c, v = line.split()
+        if int(r) == gene_index and int(c) == barcode_index:
+            matches.append(int(v))
+    assert entries == expected_entries, (entries, expected_entries)
+result = dict(gene=gene, gene_index=gene_index, barcode=barcode[0], barcode_index=barcode_index, shape=[rows,cols], entries=entries, matching_values=matches, count=sum(matches))
+with open('result.json', 'w') as f:
+    json.dump(result,f,indent=2)
+print(json.dumps(result))
+PY
+python3 extract_count.py"

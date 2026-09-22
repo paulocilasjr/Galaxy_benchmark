@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.sparse import csc_matrix
+
+base='extracted'
+meta=pd.read_csv(f'{base}/spatial_q_sc_metadata.csv')
+print('meta shape', meta.shape)
+print(meta['cell_type'].value_counts().sort_index())
+counts=pd.read_csv(f'{base}/spatial_q_sc_counts.csv', index_col=0)
+print('counts shape', counts.shape, 'index head', counts.index[:3].tolist(), 'cols head', counts.columns[:3].tolist())
+# verify align
+print('align', (counts.index.values==meta.iloc[:,0].values).all())
+barcodes=[l.strip() for l in gzip.open(f'{base}/barcodes.tsv.gz','rt')]
+idx=barcodes.index('Spot_710-1')
+print('spot idx',idx)
+M=mmread(f'{base}/matrix.mtx.gz').tocsc() # genes x spots
+spot=np.asarray(M[:,idx].todense()).ravel().astype(float)
+print('spot total', spot.sum(), 'nnz', np.count_nonzero(spot), 'max', spot.max())
+# cell type mean raw
+celltypes=sorted(meta['cell_type'].unique())
+means=[]; sums=[]
+for ct in celltypes:
+    X=counts.loc[meta.loc[meta['cell_type']==ct, meta.columns[0]].values].values.astype(float)
+    means.append(X.mean(axis=0))
+    sums.append(X.sum(axis=0))
+A=np.vstack(means).T
+coef, res=nnls(A, spot)
+print('NNLS raw means res',res)
+for ct,c in sorted(zip(celltypes,coef), key=lambda x:-x[1]):
+    print(ct, c)
+# normalized library size per type? Use proportions (mean normalized to sum=1), fit count total via coef = molecules/cells
+An=A / A.sum(axis=0)
+coef2, res2=nnls(An, spot)
+print('NNLS profiles res',res2)
+for ct,c in sorted(zip(celltypes,coef2), key=lambda x:-x[1]):
+    print(ct, c, 'frac', c/sum(coef2) if coef2.sum() else 0)
+# correlations to each type mean and marker score
+corr=[]
+for ct,v in zip(celltypes,means):
+    corr.append((ct, np.corrcoef(spot, v)[0,1], np.dot(spot,v)/(np.linalg.norm(spot)*np.linalg.norm(v))))
+print('corrs')
+for row in sorted(corr,key=lambda x:-x[1]): print(row)
+PY"

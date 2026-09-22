@@ -1,0 +1,23 @@
+/bin/bash -lc "PYTORCH_ENABLE_MPS_FALLBACK=1 native_venv/bin/python - <<'PY'
+import sys,time,gzip,numpy as np,torch
+sys.path.insert(0,'borzoi_pytorch_repo')
+from borzoi_pytorch import Borzoi
+from borzoi_pytorch.config_borzoi import BorzoiConfig
+from safetensors.torch import load_file
+cs,ce=70157360,70353968; pad=(524288-(ce-cs))//2; ss,se=cs-pad,ce+pad
+with gzip.open('assets/chr1.fa.gz','rt') as f: seq=''.join(line.strip() for line in f if not line.startswith('>'))
+sub=seq[ss:se].upper(); one=np.zeros((4,len(sub)),np.float32)
+for i,b in enumerate('ACGT'): one[i]=np.frombuffer(sub.encode(),dtype=np.uint8)==ord(b)
+x=torch.from_numpy(one[None]); xr=torch.from_numpy(one[::-1,::-1].copy()[None])
+model=Borzoi(BorzoiConfig(return_center_bins_only=True,enable_mouse_head=False)); model.load_state_dict(load_file('assets/borzoi_rep0_model.safetensors',device='cpu')); model.eval().to('mps'); x=x.to('mps'); xr=xr.to('mps')
+with torch.inference_mode():
+ y=model(x); yr=model(xr)
+torch.mps.synchronize(); y=y.cpu().numpy(); yr=yr.cpu().numpy();
+v=y[0,6068]; vr=yr[0,6069,::-1]; va=(v+vr)/2
+for name,z in [('direct',v),('rc_aligned',vr),('rc_avg_squashed',va)]:
+ c=(z/.3)**(4/3)
+ print(name,'rawsum',float(z.sum()),'countsum',float(c.sum()),'round10',round(float(c.sum())/10)*10,'minmax',float(z.min()),float(z.max()),flush=True)
+c=(v/.3)**(4/3)/2+(vr/.3)**(4/3)/2
+print('rc_avg_inverse_counts','countsum',float(c.sum()),'round10',round(float(c.sum())/10)*10,flush=True)
+np.save('assets/borzoi_rep0_pred_rc.npy',yr)
+PY"

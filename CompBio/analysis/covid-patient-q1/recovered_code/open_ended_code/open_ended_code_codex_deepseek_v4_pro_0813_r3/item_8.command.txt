@@ -1,0 +1,33 @@
+/bin/bash -c "cat > pseudobulk.py <<'PY'
+import h5py, numpy as np, scipy.sparse as sp, time, json
+p='covid.patients.q1.h5ad'
+t=time.time()
+with h5py.File(p,'r') as f:
+    data=f['X/data'][:]
+    indices=f['X/indices'][:]
+    indptr=f['X/indptr'][:]
+    codes=f['obs/donor_id/codes'][:]
+    donor_cats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/donor_id/categories'][:]]
+    var_names=[x.decode() if isinstance(x,bytes) else x for x in f['var/feature_name/categories'][:]]
+    var_codes=f['var/feature_name/codes'][:]
+print('read',time.time()-t)
+t=time.time()
+X=sp.csr_matrix((data, indices, indptr), shape=(len(codes), len(var_codes)))
+print('X built', X.shape, X.nnz, time.time()-t)
+# one-hot donors CSR rows cells cols donors
+rows=np.arange(len(codes), dtype=np.int64)
+A=sp.csr_matrix((np.ones(len(codes), dtype=np.float32), (rows, codes.astype(np.int64))), shape=(len(codes), len(donor_cats)))
+print('A built', time.time()-t)
+# pseudobulk genes x donors
+PB=(X.T @ A).astype(np.float64)
+print('PB shape', PB.shape, 'sum', PB.sum(), 'time',time.time()-t)
+# gene names
+names=np.array([var_names[c] if c<len(var_names) else '?' for c in var_codes], dtype=object)
+np.save('pb.npy', PB)
+np.save('donor_names.npy', np.array(donor_cats,dtype=object))
+np.save('gene_names.npy', names)
+print('saved')
+print(donor_cats)
+print(PB[:5,:5])
+PY
+python pseudobulk.py"

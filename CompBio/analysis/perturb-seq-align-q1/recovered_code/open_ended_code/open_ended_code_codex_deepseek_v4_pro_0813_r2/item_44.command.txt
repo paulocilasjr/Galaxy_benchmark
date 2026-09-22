@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+# Quick logistic/PCA transfer focus
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from collections import Counter
+warnings.filterwarnings('ignore')
+# use functions from earlier but quick
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']; X=sp.csc_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]),shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]; gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc]); var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  tgt=None
+  if 'obs/target_gene' in f:
+   tc=f['obs/target_gene/codes'][:]; cats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/target_gene/categories'][:]]; tgt=np.array([cats[i] for i in tc])
+  out.append((X,g,var,tgt))
+X1,g1,v1,t1=out[0]; X2,g2,v2,t2=out[1]
+common=[x for x in v1 if x in set(v2)]
+X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr(); X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+for X in [X1,X2]:
+ lib=np.asarray(X.sum(1)).ravel();lib[lib==0]=1;X=X.multiply(1.0/lib[:,None]).tocsr();X.data=np.log1p(X.data*1e4)
+nt1=np.char.startswith(g1.astype(str),'NT-'); nt2=np.char.startswith(g2.astype(str),'NT-')
+m1=np.asarray(X1.mean(0)).ravel(); v1=np.asarray(X1.power(2).mean(0)).ravel()-m1**2; m2=np.asarray(X2.mean(0)).ravel(); v2=np.asarray(X2.power(2).mean(0)).ravel()-m2**2
+comb=v1+v2; top=np.argsort(comb)[::-1][:3000]
+X1=X1[:,top];X2=X2[:,top]
+mu1=np.asarray(X1[nt1].mean(0)).ravel();sd1=np.sqrt(np.asarray(X1[nt1].power(2).mean(0)).ravel()-mu1**2);mu2=np.asarray(X2[nt2].mean(0)).ravel();sd2=np.sqrt(np.asarray(X2[nt2].power(2).mean(0)).ravel()-mu2**2);sd1[sd1==0]=1;sd2[sd2==0]=1
+Z1=(X1.toarray()-mu1)/sd1; Z2=(X2.toarray()-mu2)/sd2
+ref_non=np.where(~nt1)[0]; q_non=np.where(~nt2)[0]; y=t1[ref_non]
+for ncomp in [20,50,100]:
+ pca=PCA(n_components=ncomp,random_state=0); R=pca.fit_transform(Z1[ref_non]); Q=pca.transform(Z2[q_non])
+ for modelname,model in [('knn5',KNeighborsClassifier(n_neighbors=5,weights='distance')),('knn20',KNeighborsClassifier(n_neighbors=20,weights='distance')),('logreg',LogisticRegression(max_iter=1000,C=0.1))]:
+  model.fit(R,y); pred=model.predict(Q); qg=g2[q_non]
+  assign={}
+  for gg in np.unique(qg):
+   c=Counter(pred[qg==gg]); assign[gg]=c.most_common(1)[0][0]
+  print('ncomp',ncomp,modelname,{t:[q for q,a in assign.items() if a==t] for t in ['PABPC1','NUDT21','LEO1']})
+PY"

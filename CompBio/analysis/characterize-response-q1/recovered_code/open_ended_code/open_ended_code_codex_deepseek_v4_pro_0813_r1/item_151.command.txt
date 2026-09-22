@@ -1,0 +1,139 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse, pandas as pd, numpy as np, os, re, glob
+q=[g.upper() for g in open('characterize.response.q1.txt').read().split()]
+qset=set(q)
+
+def get_symbol(gpl):
+ cols=list(gpl.table.columns)
+ candidates=[]
+ for c in cols:
+  if c.upper() in ['GENE_SYMBOL','SYMBOL','GENE SYMBOL','GENESYMBOL'] or c.upper().startswith('GENE_SYMBOL'):
+   candidates.append(c)
+  elif c.upper()=='GENE':
+   candidates.append(c)
+  elif c.upper()=='SYMBOL':
+   candidates.append(c)
+ # prefer exact GENE_SYMBOL/Symbol
+ pref=[c for c in candidates if 'SYMBOL' in c.upper() or c.upper()=='SYMBOL']
+ if pref: col=pref[0]
+ elif candidates: col=candidates[0]
+ else: col=None
+ if col:
+  return gpl.table.set_index('ID')[col].to_dict()
+ # if no ID but ID column maybe
+ return None
+
+def parse(f):
+ gse=GEOparse.get_GEO(filepath=f, silent=True)
+ # multiple platforms? use first with symbol col if possible
+ sym=None
+ for gn,gpl in gse.gpls.items():
+  s=get_symbol(gpl)
+  if s:
+   sym=s; break
+ # If no sym, try gene_assignment on first gpl
+ if sym is None:
+  gpl=list(gse.gpls.values())[0]
+  if 'gene_assignment' in gpl.table.columns:
+   d=gpl.table.set_index('ID')['gene_assignment']
+   sym={}
+   for pid,v in d.items():
+    if not isinstance(v,str): continue
+    # format: accession // symbol // desc ...
+    parts=v.split('//')
+    if len(parts)>1 and parts[1].strip():
+     sym[pid]=parts[1].strip()
+    elif '///' in v:
+     sym[pid]=v.split('///')[0].strip()
+  elif 'ID' in gpl.table.columns:
+   # perhaps table has symbol in ID? no
+   pass
+ # use platform corresponding to samples? 
+ mats={}
+ for n,gsm in gse.gsms.items():
+  t=gsm.table
+  # find ID column: ID_REF or ID
+  idcol='ID_REF' if 'ID_REF' in t.columns else 'ID'
+  if idcol not in t.columns:
+   # maybe table index? ignore
+   continue
+  df=t.set_index(idcol)['VALUE']
+  mats[n]=df
+ mat=pd.DataFrame(mats)
+ titles={n:gsm.metadata.get('title',[''])[0] for n,gsm in gse.gsms.items()}
+ return gse,sym,mat,titles
+
+def compute(f,a,b,name):
+ try:
+  gse,sym,mat,titles=parse(f)
+ except Exception as e:
+  print('ERR',os.path.basename(f),e); return
+ if sym is None:
+  print('no symbol',os.path.basename(f)); return
+ a=[x for x in a if x in mat.columns]; b=[x for x in b if x in mat.columns]
+ if not a or not b: print('missing',os.path.basename(f),name); return
+ A=mat[a].mean(axis=1); B=mat[b].mean(axis=1); lfc=B-A
+ valid=lfc.dropna()
+ rows=[]; seen=set()
+ for pid in valid.index:
+  s=sym.get(pid)
+  if not isinstance(s,str): continue
+  s=re.split(r'///|\\|',s)[0].strip()
+  if not s or s.lower()=='nan': continue
+  su=s.upper()
+  if su in seen: continue
+  seen.add(su); rows.append((s,lfc[pid]))
+ df=pd.DataFrame(rows,columns=['gene','lfc']).sort_values('lfc',ascending=False)
+ # dedup by gene: keep max abs? currently first sorted by lfc might not max; but okay
+ df=df.drop_duplicates(subset='gene')
+ df=df.sort_values('lfc',ascending=False)
+ up=df.head(112).gene.str.upper().tolist(); down=df.tail(112).gene.str.upper().tolist()
+ # abs within positive and negative
+ dfp=df[df.lfc>0].assign(al=df[df.lfc>0].lfc.abs()).sort_values('al',ascending=False).head(112)
+ dfn=df[df.lfc<0].assign(al=df[df.lfc<0].lfc.abs()).sort_values('al',ascending=False).head(112)
+ ovup=len(set(up)&qset); ovdn=len(set(down)&qset); ovap=len(set(dfp.gene.str.upper())&qset); ovan=len(set(dfn.gene.str.upper())&qset)
+ print(f'{os.path.basename(f):32s} {name:22s} up={ovup:3d} down={ovdn:3d} abs_pos={ovap:3d} abs_neg={ovan:3d}')
+
+# simplified group definitions based on titles
+for f in sorted(glob.glob('geo/*_family.soft.gz')):
+ base=os.path.basename(f)
+ try:
+  gse,sym,mat,titles=parse(f)
+ except Exception as e:
+  continue
+ if 'GSE108289' in base:
+  compute(f,[n for n,t in titles.items() if 'immature' in t.lower()],[n for n,t in titles.items() if 'maturation' in t.lower()],'immature->mature')
+ elif 'GSE69076' in base:
+  ctrl=[n for n,t in titles.items() if 'Unstimulated' in t]
+  for tp in ['1hr','6hr','24hr']:
+   compute(f,ctrl,[n for n,t in titles.items() if re.search(r'LPS\\s+'+tp,t,re.I)],'ctrl->LPS'+tp)
+ elif 'GSE17721' in base:
+  ctrl=[n for n,t in titles.items() if re.search(r'0_hours|0h|control|unstim',t,re.I)]
+  for tp in ['1_hours','2_hours','4_hours','6_hours','8_hours','12_hours','16_hours','24_hours']:
+   tr=[n for n,t in titles.items() if re.search(tp,t,re.I)]
+   if ctrl and tr: compute(f,ctrl,tr,'ctrl->'+tp)
+ elif 'GSE15718' in base:
+  ctrl=[n for n,t in titles.items() if re.search(r'unstimulated"'$'"',t,re.I) and 'EGTA' not in t]
+  for tp in ['2 hours','4 hours','6 hours','12 hours','24 hours']:
+   compute(f,ctrl,[n for n,t in titles.items() if re.search(r'stimulated with LPS for '+tp+'"'$'"',t,re.I)],'ctrl->LPS'+tp)
+ elif 'GSE15720' in base:
+  ctrl=[n for n,t in titles.items() if 'unstimulated' in t.lower()]
+  compute(f,ctrl,[n for n,t in titles.items() if re.search(r'stimulated with LPS for 48 hours"'$'"',t)],'ctrl->LPS48')
+ elif 'GSE15721' in base:
+  ctrl=[n for n,t in titles.items() if 'unstimulated' in t.lower()]
+  compute(f,ctrl,[n for n,t in titles.items() if re.search(r'stimulated with LPS for 6 hours"'$'"',t)],'ctrl->LPS6')
+ elif 'GSE167853' in base:
+  compute(f,[n for n,t in titles.items() if 'control' in t.lower()],[n for n,t in titles.items() if 'lps' in t.lower()],'ctrl->LPS')
+ elif 'GSE63739' in base:
+  compute(f,[n for n,t in titles.items() if re.search(r'WT_LPS 0h',t)],[n for n,t in titles.items() if re.search(r'WT_LPS 3h',t)],'WT 0h->3h')
+ elif 'GSE64666' in base:
+  compute(f,[n for n,t in titles.items() if re.search(r'no treatment',t,re.I)],[n for n,t in titles.items() if re.search(r'LPS and CpG',t,re.I)],'ctrl->LPS+CpG')
+ elif 'GSE73484' in base:
+  compute(f,[n for n,t in titles.items() if 'WT BMDMs-UT' in t],[n for n,t in titles.items() if 'WT BMDMs-LPS 3h' in t],'WT->LPS3h')
+ elif 'GSE14769' in base:
+  compute(f,[n for n,t in titles.items() if re.search(r'LPS\\d-0"'$'"',t)],[n for n,t in titles.items() if re.search(r'LPS\\d-120"'$'"',t)],'0->120')
+ elif 'GSE185150' in base:
+  compute(f,[n for n,t in titles.items() if 'control' in t.lower()],[n for n,t in titles.items() if 'LPS 1h' in t],'peritoneal 0->1h')
+ elif 'GSE242816' in base:
+  compute(f,[n for n,t in titles.items() if 'PBS' in t],[n for n,t in titles.items() if 'LPS' in t],'BMMC PBS->LPS')
+PY"

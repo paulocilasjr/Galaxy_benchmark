@@ -1,0 +1,28 @@
+/bin/bash -lc "POLARS_SKIP_CPU_CHECK=1 python3 - <<'PY'
+import snapatac2 as snap, numpy as np, time
+from scipy.sparse import csr_matrix
+adata=snap.read('atac.h5ad')
+X=adata.X[:]
+names=adata.obs_names
+ci=names.index('AACATGGAGCGCCGGG-1')
+cand=X.getrow(ci)
+idx=np.flatnonzero(cand.toarray().ravel())
+Xs=X[:,idx].astype(np.float32).tocsr()
+dots=(Xs @ Xs.T).toarray()
+norms=np.sqrt(dots.diagonal())
+cnorm=np.linalg.norm(cand.data)
+d=(Xs @ cand[:,idx].T).toarray().ravel()
+D=d[:,None]+d[None,:]
+den=np.sqrt(norms[:,None]**2+norms[None,:]**2+2*dots)
+S=D/(den*cnorm)
+# exclude candidate from pair entirely
+S[ci,:]=-1; S[:,ci]=-1
+np.fill_diagonal(S,-1)
+i,j=np.unravel_index(np.argmax(S),S.shape)
+print('best other pair',names[i],names[j],S[i,j])
+vals=S.ravel(); inds=np.argsort(vals)[::-1]
+for k in inds[:50]:
+ ii,jj=np.unravel_index(k,S.shape)
+ if ii<jj:
+  print(names[ii],names[jj],vals[k], d[ii]/norms[ii]/cnorm, d[jj]/norms[jj]/cnorm)
+PY"

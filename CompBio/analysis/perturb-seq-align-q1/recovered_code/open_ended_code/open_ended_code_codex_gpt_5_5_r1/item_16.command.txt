@@ -1,0 +1,80 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, collections, time
+from scipy import sparse
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+
+def decode_arr(arr):
+    return np.array([x.decode() if isinstance(x, (bytes, bytearray)) else str(x) for x in arr])
+
+def read(fn):
+    with h5py.File(fn,'r') as f:
+        X=sparse.csc_matrix((f['X/data'][()].astype(np.float32), f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape']))
+        var=decode_arr(f['var/_index'][()])
+        gc=decode_arr(f['obs/guide/categories'][()]); guides=gc[f['obs/guide/codes'][()]]
+        target=None
+        if 'target_gene' in f['obs']:
+            tc=decode_arr(f['obs/target_gene/categories'][()]); target=tc[f['obs/target_gene/codes'][()]]
+        return X,var,guides,gc,target
+
+def lognorm(X):
+    totals=np.asarray(X.sum(axis=1)).ravel().astype(np.float32); totals[totals==0]=1
+    coo=X.tocoo(copy=True); coo.data=np.log1p(coo.data/totals[coo.row]*1e4).astype(np.float32)
+    return coo.tocsr()
+
+def means(X, labels, groups):
+    M=np.zeros((len(groups), X.shape[1]), np.float32); sizes=[]
+    for i,g in enumerate(groups):
+        idx=np.flatnonzero(labels==g); sizes.append(len(idx))
+        M[i]=np.asarray(X[idx].mean(axis=0)).ravel()
+    return M,np.array(sizes)
+
+def corr(A,B):
+    A=A.astype(np.float64); B=B.astype(np.float64)
+    A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True)
+    return A@B.T/(np.linalg.norm(A,axis=1)[:,None]*np.linalg.norm(B,axis=1)[None,:]+1e-12)
+
+REQ=['PABPC1','NUDT21','LEO1']
+Xr,vr,gr,grc,tr=read('perturb.seq.align.q1.ref.h5ad')
+Xq,vq,gq,gqc,tq=read('perturb.seq.align.q1.query.h5ad')
+ref_map={g: collections.Counter(tr[gr==g]).most_common(1)[0][0] for g in grc}
+# common gene indices preserve shared gene names
+qpos={g:i for i,g in enumerate(vq)}
+r_idx=[]; q_idx=[]; names=[]
+for i,g in enumerate(vr):
+    if g in qpos:
+        r_idx.append(i); q_idx.append(qpos[g]); names.append(g)
+r_idx=np.array(r_idx); q_idx=np.array(q_idx); names=np.array(names)
+print('common genes', len(names), 'excluded targets', [x for x in sorted(set(vr)-set(vq)) if x in set(ref_map.values())])
+
+Mr,sr=means(lognorm(Xr)[:,r_idx], gr, list(grc))
+Mq,sq=means(lognorm(Xq)[:,q_idx], gq, list(gqc))
+ref_groups=list(grc); query_groups=list(gqc)
+ref_nt=[i for i,g in enumerate(ref_groups) if g.startswith('NT-')]
+q_nt=[i for i,g in enumerate(query_groups) if g.startswith('NT-')]
+ref_non=[i for i,g in enumerate(ref_groups) if not g.startswith('NT-')]
+q_non=[i for i,g in enumerate(query_groups) if not g.startswith('NT-')]
+ref_names=[ref_groups[i] for i in ref_non]; query_names=[query_groups[i] for i in q_non]
+Er=Mr[ref_non]-Mr[ref_nt].mean(0)
+Eq=Mq[q_non]-Mq[q_nt].mean(0)
+
+# Optional: standardize effect by across-guide sd per gene within each dataset
+for mode in ['raw','gene_z','rank_rows']:
+    Ar=Er.copy(); Bq=Eq.copy()
+    if mode=='gene_z':
+        Ar=Ar/(Ar.std(0,ddof=1)+1e-3); Bq=Bq/(Bq.std(0,ddof=1)+1e-3)
+    if mode=='rank_rows':
+        Ar=np.apply_along_axis(rankdata,1,Ar); Bq=np.apply_along_axis(rankdata,1,Bq)
+    score=np.maximum(np.max(np.abs(Ar),0), np.max(np.abs(Bq),0))
+    print('\\nMODE',mode)
+    for k in [200,500,1000,2000,5000,len(names)]:
+        idx=np.argsort(score)[-k:] if k<len(names) else np.arange(len(names))
+        C=corr(Ar[:,idx], Bq[:,idx])
+        rows,cols=linear_sum_assignment(-C)
+        assign={ref_names[r]:query_names[c] for r,c in zip(rows,cols)}
+        print(' K',k,'assign', {gene:assign.get([g for g,t in ref_map.items() if t==gene][0]) for gene in REQ})
+        for gene in REQ:
+            rg=[g for g,t in ref_map.items() if t==gene][0]; ri=ref_names.index(rg)
+            ord=np.argsort(C[ri])[::-1][:5]
+            print('  ', gene, rg, [(query_names[j], round(float(C[ri,j]),4)) for j in ord])
+PY"

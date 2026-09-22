@@ -1,0 +1,75 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, numpy as np
+# load query biallelic
+query=[]
+with gzip.open('vcf.infer.ancestry.q1.vcf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if ',' in p[4]: continue
+        key=(int(p[1]),p[3],p[4])
+        ds=[]
+        ok=True
+        for x in p[9:]:
+            gt=x.split(':')[0]
+            if '.' in gt: ok=False; break
+            a=gt.split('/') if '/' in gt else gt.split('|')
+            ds.append(int(a[0])+int(a[1]))
+        if ok: query.append((key,ds))
+print('query',len(query))
+pops=['AFR','AMR','EAS','EUR','SAS']
+ll={s:np.zeros(4) for s in pops}
+n={s:0 for s in pops}
+# stream 1kg_overlap
+for line in open('1kg_overlap.vcf'):
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<10 or ',' in p[4]: continue
+    info=p[7]
+    # parse AF fields safely
+    af={}
+    for field in info.split(';'):
+        if field.endswith('_AF') or field=='AF':
+            k,v=field.split('='); 
+            try: af[k]=float(v)
+            except: pass
+    # also need all superpop AF
+    key=(int(p[1]),p[3],p[4])
+    # find query; could use dict better but ok
+    # let's build dict first would be better; do now if not built? skip
+# redo with dict
+qdict={k:v for k,v in query}
+for line in open('1kg_overlap.vcf'):
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<10 or ',' in p[4]: continue
+    key=(int(p[1]),p[3],p[4])
+    ds=qdict.get(key)
+    if ds is None: continue
+    af={}
+    for field in p[7].split(';'):
+        if '=' in field:
+            k,v=field.split('=',1)
+            if k in ['AF','AFR_AF','AMR_AF','EAS_AF','EUR_AF','SAS_AF']:
+                try: af[k]=float(v)
+                except: pass
+    for s in pops:
+        pr=af.get(s+'_AF')
+        if pr is None or pr<=0 or pr>=1: continue
+        for qi,d in enumerate(ds):
+            if d==1:
+                val=math.log(2*(1-pr)/(2-pr))
+            elif d==2:
+                val=math.log(pr/(2-pr))
+            else:
+                continue
+            ll[s][qi]+=val
+            n[s]+=1
+print('sites per pop? n',n)
+print('Average loglik per site per sample')
+for s in pops:
+    counts=n[s]//4
+    print(s, ll[s]/counts if counts else 'na')
+# print total normalized maybe
+for qi in range(4):
+    vals={s:ll[s][qi]/(n[s]//4) for s in pops}
+    print('Sample',qi+1, 'best',max(vals,key=vals.get), {s:round(v,5) for s,v in vals.items()})
+PY"

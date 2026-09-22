@@ -1,0 +1,53 @@
+/bin/bash -c "cat > analyze_pb.py <<'PY'
+import numpy as np, pandas as pd
+from scipy.sparse import issparse
+from sklearn.decomposition import PCA
+from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
+from scipy.spatial.distance import pdist
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+PB=np.load('pb_dense.npy') # genes x donors
+donors=np.load('donor_names.npy', allow_pickle=True)
+genes=np.load('gene_names.npy', allow_pickle=True)
+print(PB.shape, donors, genes.shape)
+# normalize CPM
+lib=PB.sum(axis=0, keepdims=True)
+cpm=PB/lib*1e6
+# filter genes with median cpm > ? and variance
+# log2
+log=np.log2(cpm+1)
+# Use protein coding? feature names loaded symbols; filter genes with no symbol? not needed
+# select top variable genes by dispersion/variance
+# first standardize? PCA on log CPM of all genes may be dominated by mitochondrial etc. Use top 2000 variable genes.
+mean=log.mean(axis=1)
+var=log.var(axis=1, ddof=1)
+# filter low mean
+mask=(mean>0.5)&(var>0.1)
+idx=np.where(mask)[0]
+# choose top 3000 by var
+top=np.argsort(var[mask])[::-1][:3000]
+idx=idx[top]
+X=log[idx,:].T
+print('selected', X.shape)
+# scale
+from sklearn.preprocessing import StandardScaler
+Xs=StandardScaler().fit_transform(X)
+pca=PCA(n_components=min(10,Xs.shape[0]-1), random_state=0)
+Z=pca.fit_transform(Xs)
+print('explained', pca.explained_variance_ratio_[:10])
+print('PCA coords')
+for i,d in enumerate(donors):
+    print(d, np.round(Z[i,:5],3))
+# clustering
+for method in ['ward','average','complete']:
+    Zlink=linkage(Xs, method=method, metric='euclidean')
+    for k in [2,3,4]:
+        labels=fcluster(Zlink,k,criterion='maxclust')
+        groups={}
+        for d,l in zip(donors,labels): groups.setdefault(l,[]).append(d)
+        print(method,k, {k: sorted(v, key=lambda x:int(x[5:])) for k,v in groups.items()})
+# heatmap maybe top genes
+PY
+python analyze_pb.py"

@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,math
+from collections import defaultdict
+
+def fnum(x):
+    try: return float(x) if x not in ('', 'NA', '#N/A') else 0.0
+    except: return 0.0
+site=defaultdict(dict)
+with open('Chinese_Spring_root_dotplot_data_full.tsv') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        site[row['cluster']][row['gene']]=fnum(row.get('avg_exp','0'))
+clusters=sorted(site)
+source_genes=set().union(*(set(d) for d in site.values()))
+local={}
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t')
+    header=next(r)[1:]
+    for row in r:
+        if row[0] in source_genes:
+            local[row[0]]=[float(x) for x in row[1:]]
+genes=sorted(local)
+print('source genes', len(source_genes), 'local overlap', len(genes), 'clusters', len(clusters))
+def pearson(x,y):
+    n=len(x); mx=sum(x)/n; my=sum(y)/n
+    vx=sum((a-mx)**2 for a in x); vy=sum((b-my)**2 for b in y)
+    return sum((a-mx)*(b-my) for a,b in zip(x,y))/math.sqrt(vx*vy) if vx and vy else float('nan')
+site_logs={cl:[math.log1p(site[cl].get(g,0)) for g in genes] for cl in clusters}
+local_logs={h:[math.log1p(local[g][j]) for g in genes] for j,h in enumerate(header)}
+print('\\nLocal -> source, all overlap')
+for h in header:
+    vals=[(cl, pearson(local_logs[h], site_logs[cl])) for cl in clusters]
+    vals.sort(key=lambda x:x[1], reverse=True)
+    print(f'{h:<12} ' + ' | '.join(f'{cl}:{r:.3f}' for cl,r in vals[:7]))
+print('\\nSource -> local, all overlap')
+for cl in clusters:
+    vals=[(h, pearson(site_logs[cl], local_logs[h])) for h in header]
+    vals.sort(key=lambda x:x[1], reverse=True)
+    print(f'{cl:<18} ' + ' | '.join(f'{h}:{r:.3f}' for h,r in vals[:5]))
+name_map={'cortex':'Cortex','endodermis':'Endodermis','epidermis':'Epidermis','meristems':'Meristems','pericycle':'Pericycle','phloem':'Phloem','provascular':'Provascular cells','root_cap':'Root Cap','root_hair':'Root Hair','xylem':'Xylem'}
+print('\\nExpected-label correlations')
+for h,cl in name_map.items():
+    corr=pearson(local_logs[h], site_logs[cl])
+    best=max(((hh, pearson(site_logs[cl], local_logs[hh])) for hh in header), key=lambda x:x[1])
+    print(f'{h:<12} vs {cl:<17} corr={corr:.3f} best_local_for_source={best[0]}:{best[1]:.3f}')
+PY"

@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+import glob, os, subprocess, math
+# For each peak file, intersect with closed/open regions and sum signal col7 and q col9, count
+for regfile,regname in [('dnase/hotspots_union.bed','hotspots'),('dnase/peaks_union.bed','peaks')]:
+    print('\\nWeighted by signalValue/qValue',regname)
+    for f in sorted(glob.glob('macs/TF*_peaks.narrowPeak')):
+        tf=os.path.basename(f).split('_')[0]
+        # use bedtools intersect -wa with region, then awk sum fields from original not available; use Python with bedtools output names? Easier use bedtools intersect -wa -a file -b reg, output original lines, parse.
+        acc_lines=subprocess.check_output(f\"bedtools intersect -wa -a '{f}' -b '{regfile}'\",shell=True,text=True).strip().splitlines()
+        # parse all file for totals too
+        def sums(lines):
+            tot=0; sig=0; q=0
+            for line in lines:
+                p=line.split('\\t')
+                if len(p)<9: continue
+                tot+=1
+                try: sig+=float(p[6])
+                except: pass
+                try:
+                    qv=float(p[8])
+                    if qv>0: q+=qv
+                except: pass
+            return tot,sig,q
+        all_lines=[l for l in open(f) if l.strip()]
+        atot,asig,aq=sums(all_lines)
+        btot,bsig,bq=sums(acc_lines)
+        ct=atot-btot; cs=asig-bsig; cq=aq-bq
+        print(tf, 'N closed',ct, 'fracN',round(ct/atot,3), 'fracSignal_closed', round(cs/asig,3) if asig else 0, 'fracQ_closed', round(cq/aq,3) if aq else 0)
+PY"

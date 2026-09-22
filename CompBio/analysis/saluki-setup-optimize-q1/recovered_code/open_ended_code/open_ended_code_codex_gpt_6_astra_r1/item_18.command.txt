@@ -1,0 +1,48 @@
+/bin/bash -lc "cat > fetch_models.py <<'PY'
+import io,json,os,requests,struct,time,zipfile,zlib
+from pathlib import Path
+URL='https://zenodo.org/records/6326409/files/datasets.zip?download=1'
+SIZE=18751132386
+s=requests.Session()
+def fetch(start,end):
+    for attempt in range(8):
+        try:
+            r=s.get(URL,headers={'Range':f'bytes={start}-{end}'},timeout=180)
+            r.raise_for_status()
+            assert r.status_code==206 and len(r.content)==end-start+1,(r.status_code,len(r.content),start,end)
+            return r.content
+        except Exception as e:
+            print('retry',attempt,str(e),flush=True); time.sleep(10*(attempt+1))
+    raise RuntimeError('download failed')
+b=Path('zip_tail.bin').read_bytes()
+i=b.rfind(b'PK\\x06\\x06')
+if i>=0:
+    e=struct.unpack_from('<4sQ2H2L4Q',b,i); cdsize,cdstart=e[-2:]
+else:
+    e=struct.unpack_from('<4s4H2LH',b,b.rfind(b'PK\\x05\\x06')); cdsize,cdstart=e[-3:-1]
+print('central directory',cdstart,cdsize,flush=True)
+cd=fetch(cdstart,SIZE-1)
+# Sparse archive contains directory, allowing zipfile to decode Zip64 offsets.
+with open('archive_sparse.zip','wb') as f:
+    f.seek(cdstart);f.write(cd)
+z=zipfile.ZipFile('archive_sparse.zip')
+Path('zip_members.txt').write_text('\\n'.join(f'{i.filename}\\t{i.file_size}\\t{i.compress_size}' for i in z.infolist()))
+selected=[i for i in z.infolist() if '/train_gru/' in i.filename and (i.filename.endswith('model0_best.h5') or i.filename.endswith('params.json')) and not i.filename.startswith('__MACOSX')]
+print('selected',len(selected),sum(i.compress_size for i in selected),flush=True)
+for info in selected:
+    rel=info.filename.split('/train_gru/')[1]
+    out=Path('models')/rel
+    if out.exists() and out.stat().st_size==info.file_size:
+        print('exists',rel,flush=True);continue
+    print('fetch',rel,info.compress_size,flush=True)
+    # Local filename/extra fields fit within this modest overhead.
+    raw=fetch(info.header_offset,info.header_offset+info.compress_size+4095)
+    h=struct.unpack_from('<4s5H3L2H',raw)
+    start=30+h[-2]+h[-1]
+    data=raw[start:start+info.compress_size]
+    if info.compress_type==8:data=zlib.decompress(data,-15)
+    assert len(data)==info.file_size and (zlib.crc32(data)&0xffffffff)==info.CRC
+    out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(data)
+print('finished',flush=True)
+PY
+python -u fetch_models.py > fetch_models.log 2>&1"

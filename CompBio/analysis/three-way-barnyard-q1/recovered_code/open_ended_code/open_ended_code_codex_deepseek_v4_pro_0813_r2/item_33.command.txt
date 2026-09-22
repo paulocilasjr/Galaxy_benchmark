@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter, defaultdict
+import gzip, re, statistics
+
+# read index -> barcode
+bcs=['']
+with gzip.open('three.way.barnyard.q1.R1.fq.gz','rt') as f:
+    for i,line in enumerate(f):
+        if i%4==1:
+            bcs.append(line[:16])
+print('reads',len(bcs)-1,'unique barcodes',len(set(bcs[1:])))
+
+# best alignment per read by s1:i score (or AS)
+best_sp={}
+best_score={}
+best_matches={}
+best_alnlen={}
+best_mq={}
+align_count=Counter()
+with open('work/r2_vs_cdna.paf') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        qname=p[0]
+        # parse read num
+        m=re.match(r'READ_(\\d+)/2', qname)
+        if not m:
+            continue
+        rid=int(m.group(1))
+        sp=p[5].split('|',1)[0]
+        matches=int(p[9]); alnlen=int(p[10]); mq=int(p[11])
+        s1=0
+        for tag in p[12:]:
+            if tag.startswith('s1:i:'):
+                s1=int(tag[5:]); break
+        align_count[rid]+=1
+        if rid not in best_score or s1>best_score[rid] or (s1==best_score[rid] and matches>best_matches[rid]):
+            best_score[rid]=s1; best_sp[rid]=sp; best_matches[rid]=matches; best_alnlen[rid]=alnlen; best_mq[rid]=mq
+print('reads with alignment',len(best_sp),'align total',sum(align_count.values()))
+print('best species raw reads',Counter(best_sp.values()))
+print('alignments per read distribution', Counter(align_count.values()))
+
+# barcode counts best species, with thresholds
+for min_score in [0,20,40,60,80]:
+    for min_frac in [0.5,0.8]:
+        bc_sp_counts=defaultdict(Counter)
+        for rid,sp in best_sp.items():
+            if best_score[rid] < min_score: continue
+            bc_sp_counts[bcs[rid]][sp]+=1
+        cell=Counter(); bad=0; tie=0; novote=0
+        for bc in set(bcs[1:]):
+            c=bc_sp_counts.get(bc, Counter())
+            total=sum(c.values())
+            if total==0:
+                novote+=1; continue
+            sp,n=c.most_common(1)[0]
+            frac=n/total
+            if frac < min_frac:
+                bad+=1; continue
+            cell[sp]+=1
+        print(f'min_score {min_score} min_frac {min_frac}: cell {dict(cell)} sum {sum(cell.values())} bad {bad} novote {novote}')
+# Show per cell best species with no thresholds to see if all 500 assign cleanly
+bc_sp_counts=defaultdict(Counter)
+for rid,sp in best_sp.items(): bc_sp_counts[bcs[rid]][sp]+=1
+print('all best per barcode species counts, head')
+for bc,c in list(bc_sp_counts.items())[:20]: print(bc,dict(c))
+PY"

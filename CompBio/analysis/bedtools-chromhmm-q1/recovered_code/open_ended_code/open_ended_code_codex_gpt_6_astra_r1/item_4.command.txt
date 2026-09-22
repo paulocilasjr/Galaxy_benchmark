@@ -1,0 +1,52 @@
+/bin/bash -lc "cat > calculate.py <<'PY'
+import gzip
+from collections import defaultdict, Counter
+from bisect import bisect_right
+
+annotations=defaultdict(list)
+with gzip.open('E055_15_coreMarks_dense.bed.gz','rt') as f:
+    for line in f:
+        if line.startswith(('track','browser','#')): continue
+        chrom,start,end,state,*_=line.split()
+        annotations[chrom].append((int(start),int(end),state))
+for chrom,rows in annotations.items():
+    rows.sort()
+    assert all(rows[i][1]<=rows[i+1][0] for i in range(len(rows)-1))
+ends={c:[row[1] for row in rows] for c,rows in annotations.items()}
+peaks=defaultdict(list)
+with gzip.open('ENCFF333TAT.bed.gz','rt') as f:
+    for line in f:
+        if line.startswith(('track','browser','#')): continue
+        chrom,start,end,*_=line.split()
+        peaks[chrom].append((int(start),int(end)))
+
+def count(intervals):
+    counts=Counter()
+    total=0
+    for chrom,rows in intervals.items():
+        ann=annotations.get(chrom,[])
+        for start,end in rows:
+            total+=end-start
+            i=bisect_right(ends.get(chrom,[]),start)
+            while i<len(ann) and ann[i][0]<end:
+                a,b,state=ann[i]
+                counts[state]+=min(end,b)-max(start,a)
+                i+=1
+    denominator=sum(counts.values())
+    numerator=counts['14_ReprPCWk']
+    print('peak bases',total,'annotated bases',denominator,'14_ReprPCWk bases',numerator,'percentage',100*numerator/denominator,'rounded',round(100*numerator/denominator))
+    print(dict(counts))
+
+print('All peak intervals:',sum(map(len,peaks.values())))
+count(peaks)
+merged=defaultdict(list)
+for chrom,rows in peaks.items():
+    for start,end in sorted(rows):
+        if merged[chrom] and start<=merged[chrom][-1][1]:
+            a,b=merged[chrom][-1]
+            merged[chrom][-1]=(a,max(b,end))
+        else: merged[chrom].append((start,end))
+print('Union of peak intervals:',sum(map(len,merged.values())))
+count(merged)
+PY
+python calculate.py"

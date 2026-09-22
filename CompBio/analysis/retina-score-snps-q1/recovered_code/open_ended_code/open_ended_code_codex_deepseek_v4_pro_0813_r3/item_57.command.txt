@@ -1,0 +1,43 @@
+/bin/bash -c "python - <<'PY'
+import gzip
+path='ref/hg19ToHg38.over.chain.gz'
+qpos=51540905; tpos=46054917
+with gzip.open(path,'rt') as f:
+    for line in f:
+        if not line.startswith('chain'): continue
+        p=line.split()
+        tName=p[2]; tSize=int(p[3]); tStrand=p[4]; tStart=int(p[5]); tEnd=int(p[6])
+        qName=p[7]; qSize=int(p[8]); qStrand=p[9]; qStart=int(p[10]); qEnd=int(p[11])
+        if qName=='chr10' and qStart<=qpos<=qEnd and qStrand=='-':
+            print(line.strip())
+            blocks=[]
+            for line2 in f:
+                if line2.startswith('chain') or line2.strip()=='':
+                    # can't pushback; stop
+                    break
+                if line2.strip(): blocks.append(line2.strip())
+            # map qpos to tpos
+            t=tStart; q=qStart
+            found=False
+            for b in blocks:
+                parts=b.split()
+                if len(parts)==3:
+                    size=int(parts[0]); dt=int(parts[1]); dq=int(parts[2])
+                elif len(parts)==1:
+                    size=int(parts[0]); dt=0; dq=0
+                # block maps q [q,q+size) to t [t,t+size) with reverse? tStrand/qStrand? Actually chain blocks align q to t, orientation qStrand relative to tStrand. For qStrand '-', target coordinate within block maps reversed.
+                if q <= qpos < q+size:
+                    # offset in q
+                    off=qpos-q
+                    if qStrand=='-':
+                        toff=size-1-off
+                    else:
+                        toff=off
+                    print('FOUND block',b,'t',t,'q',q,'size',size,'off',off,'toff',toff,'tpos0',t+toff,'tpos1',t+toff+1)
+                    found=True
+                    break
+                t += size+dt
+                q += size+dq
+            if found: break
+            # continue outer? We broke inner but no pushback; we may miss but okay
+PY"

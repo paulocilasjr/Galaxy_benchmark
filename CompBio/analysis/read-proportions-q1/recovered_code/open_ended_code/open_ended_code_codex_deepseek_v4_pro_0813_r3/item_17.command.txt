@@ -1,0 +1,93 @@
+/bin/bash -lc "python3 - <<'PY'
+from Bio import SeqIO
+import gzip, time, pickle, math
+from collections import defaultdict, Counter
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+names=list(seqs)
+comp=str.maketrans('ACGT','TGCA')
+L=36;k=9;maxd=3
+# build index: for each chr,strand, kmer->list of seed positions
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in seqs}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1): index[name]['f'][s[i:i+k]].append(i)
+    rs=s.translate(comp)[::-1]
+    for i in range(len(rs)-L+1): index[name]['r'][rs[i:i+k]].append(i)
+
+def count_dists(read,name):
+    cnt=[0]*(maxd+1)
+    min_any=L+1
+    for strand in ['f','r']:
+        idx=index[name][strand]
+        sstr=seqs[name] if strand=='f' else seqs[name].translate(comp)[::-1]
+        aligns=set()
+        for start in [0,k,2*k,3*k]:
+            seed=read[start:start+k]
+            for pos in idx.get(seed,()):
+                a=pos-start
+                if 0<=a<=len(sstr)-L:
+                    aligns.add(a)
+        for a in aligns:
+            d=sum(sstr[a+j]"'!=read[j] for j in range(L))
+            if d<min_any: min_any=d
+            if d<=maxd: cnt[d]+=1
+    return cnt,min_any
+start=time.time()
+# process all reads, store counts and min
+allcnt=[]; mins=[]
+reads=[]
+with gzip.open('"'read.proportions.q1.fq.gz','rt') as f:
+    for i in range(40000):
+        h=f.readline(); seq=f.readline().strip().upper(); f.readline(); f.readline()
+        reads.append(seq)
+        row={n:None for n in names}; md={}
+        for n in names:
+            c,m=count_dists(seq,n); row[n]=c; md[n]=m
+        allcnt.append(row); mins.append(md)
+print('counts time',time.time()-start)
+# EM fixed p values and joint-ish
+N=len(reads)
+
+def run_em(p, maxiter=1000, tol=1e-12, init=None):
+    pi=[0.25]*4 if init is None else init[:]
+    q=1-p
+    loglik_prev=-1e100
+    for it in range(maxiter):
+        # E step vectorized manually
+        newpi=[0.0]*4
+        ll=0.0
+        for i,row in enumerate(allcnt):
+            vals=[]
+            for j,n in enumerate(names):
+                c=row[n]; m=mins[i][n]
+                lik=0.0
+                # counts up to maxd
+                for d,cc in enumerate(c):
+                    if cc:
+                        lik += cc * (p**d) * (q**(L-d))
+                # tail using min if > maxd
+                if m>maxd:
+                    lik += (p**m) * (q**(L-m))
+                if lik==0:
+                    lik=1e-300
+                vals.append(pi[j]*lik)
+            denom=sum(vals)
+            ll += math.log(denom)
+            for j in range(4):
+                newpi[j]+=vals[j]/denom
+        pi=[x/N for x in newpi]
+        if abs(ll-loglik_prev)<tol:
+            break
+        loglik_prev=ll
+    return pi,ll,it
+
+for p in [0.001,0.003,0.005,0.008,0.01,0.015,0.02,0.03,0.05,0.1]:
+    pi,ll,it=run_em(p)
+    print('p',p,'pi',[round(x,6) for x in pi],'pct',[100*x for x in pi],'ll',ll,'it',it)
+# Also simple unique percentages
+with open('min_ds.pkl','rb') as f: old=pickle.load(f)
+unique=Counter()
+for md in old:
+    m=min(md.values()); ns=[n for n,d in md.items() if d==m]
+    if len(ns)==1: unique[ns[0]]+=1
+print('unique',unique)
+PY"

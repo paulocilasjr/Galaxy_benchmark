@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import torch, numpy as np
+from borzoi_pytorch import Borzoi
+seq=open('input.fa').read().split('\\n',1)[1].replace('\\n','')
+# onehot fwd and rc
+map={'A':0,'C':1,'G':2,'T':3}
+idx=np.array([map[c] for c in seq])
+x=np.zeros((4,len(seq)),dtype=np.float32); x[idx,np.arange(len(seq))]=1
+# rc one-hot: complement and reverse. mapping rc: A<->T (0<->3), C<->G (1<->2)
+rc_idx=np.array([{0:3,3:0,1:2,2:1}[i] for i in idx[::-1]])
+xrc=np.zeros((4,len(seq)),dtype=np.float32); xrc[rc_idx,np.arange(len(seq))]=1
+model=Borzoi.from_pretrained('johahi/borzoi-replicate-0').eval().to('mps')
+with torch.no_grad():
+ yf=model(torch.from_numpy(x)[None].to('mps'))[0,6068].float().cpu().numpy()
+ yrc=model(torch.from_numpy(xrc)[None].to('mps'))[0,6069].float().cpu().numpy()  # switch strand pair
+ yrc_rev=yrc[::-1].copy()  # SwitchReverse also reverses length for rc input
+ y_avg=(yf+yrc_rev)/2
+print('fwd',yf.sum(), 'rc switched reversed', yrc_rev.sum(), 'avg', y_avg.sum())
+for label,z in [('fwd',yf),('avg',y_avg)]:
+ r=z/0.3
+ r=np.where(r>384,384+(r-384)**2,r)
+ y=r**(4/3)
+ print(label,'count sum',y.sum(),'round',round(float(y.sum())/10)*10)
+ # no scale (paper)
+ y2=z.copy(); y2=np.where(y2<=384,y2**(4/3),(384+(y2-384)**2)**(4/3))
+ print(label,'no_scale sum',y2.sum(),'round',round(float(y2.sum())/10)*10)
+PY"

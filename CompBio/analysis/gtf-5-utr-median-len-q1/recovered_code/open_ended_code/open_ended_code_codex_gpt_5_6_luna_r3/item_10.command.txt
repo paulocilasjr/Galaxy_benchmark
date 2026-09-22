@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,numpy as np
+from collections import defaultdict,Counter
+path='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+def attrs(s):
+ d=defaultdict(list)
+ for k,v in re.findall(r'(\\S+) \"(["'^"]*)"'"',s): d[k].append(v)
+ return d
+def union_len(iv):
+ if not iv:return 0
+ iv=sorted(iv); s,e=iv[0]; total=0
+ for a,b in iv[1:]:
+  if a<=e+1:e=max(e,b)
+  else:total+=e-s+1;s,e=a,b
+ return total+e-s+1
+D={}
+with gzip.open(path,'rt') as fh:
+ for line in fh:
+  if line.startswith('#'):continue
+  f=line.rstrip('\\n').split('\\t'); a=attrs(f[8])
+  if f[0] not in std or 'MANE Select' not in a.get('tag',[]):continue
+  tid=a['transcript_id'][0]
+  d=D.setdefault(tid,{'seq':f[0],'strand':f[6],'exon':[],'CDS':[],'start_codon':[],'stop_codon':[]})
+  if f[2] in d:d[f[2]].append((int(f[3]),int(f[4])))
+vals=[]
+for tid,d in D.items():
+ ex=d['exon']; cds=d['CDS']; stop=d['stop_codon']
+ assert ex and cds and stop, (tid,{k:len(v) for k,v in d.items()})
+ coding=cds+stop
+ lo=min(a for a,b in coding); hi=max(b for a,b in coding)
+ five=[]; three=[]
+ for a,b in ex:
+  if d['strand']=='+':
+   if a<lo:five.append((a,min(b,lo-1)))
+   if b>hi:three.append((max(a,hi+1),b))
+  else:
+   if b>hi:five.append((max(a,hi+1),b))
+   if a<lo:three.append((a,min(b,lo-1)))
+ vals.append((tid,union_len(five),union_len(coding),union_len(three),union_len(cds),union_len(stop)))
+a=np.array([v[1:4] for v in vals])
+print('n',len(vals),'shape',a.shape)
+print('np.median',np.median(a,axis=0),'floor',np.floor(np.median(a,axis=0)).astype(int))
+for j,name in enumerate(('5UTR','CDS+stop','3UTR')):
+ s=np.sort(a[:,j]); n=len(s); print(name,'positions',s[n//2-2:n//2+2].tolist(),'counts',Counter(a[:,j]).most_common(5))
+print('stop lengths',Counter(v[5] for v in vals),'CDS+stop consistency', all(v[3]==v[4]+v[5] for v in vals))
+# show whether transcript total equals components
+print('totals',sum(union_len(D[t]['exon']) "'!= sum(v[1:4]) for t,*v in vals))
+PY'

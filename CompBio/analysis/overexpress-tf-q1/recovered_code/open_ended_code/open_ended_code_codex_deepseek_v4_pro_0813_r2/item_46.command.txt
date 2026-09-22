@@ -1,0 +1,59 @@
+/bin/bash -c "python3 - <<'EOF'
+import pandas as pd, numpy as np
+coords = pd.read_csv('union_peaks.sorted.bed', sep='\\t', header=None, names=['chr','start','end'])
+ref = pd.read_csv('ref_counts.txt', sep='\\t', header=None, names=['chr','start','end','count'])
+pert = pd.read_csv('perturb_counts.txt', sep='\\t', header=None, names=['chr','start','end','count'])
+assert coords.equals(ref[['chr','start','end']])
+assert coords.equals(pert[['chr','start','end']])
+counts = pd.DataFrame({'ref': ref['count'].values, 'perturb': pert['count'].values})
+lib = counts.sum(axis=0)
+# TMM-like simple normalization factors
+nf = lib / np.exp(np.mean(np.log(lib)))
+counts_norm = counts / nf.values
+cpm = counts / lib.values * 1e6
+maxcpm = cpm.max(axis=1)
+pseudo=0.5
+log2FC = np.log2((counts_norm['perturb']+pseudo)/(counts_norm['ref']+pseudo))
+mean_norm = counts_norm.mean(axis=1)
+# simple approximate z-score using NB var = mu + disp*mu"'^2 with disp=0.1
+disp=0.1
+mu_ref=counts_norm['"'ref'].values
+mu_pert=counts_norm['perturb'].values
+# For testing difference, use quasi-likelihood? simple score:
+delta = counts_norm['perturb'] - counts_norm['ref']
+var = (mu_ref+disp*mu_ref**2) + (mu_pert+disp*mu_pert**2)
+z = delta/np.sqrt(var)
+# approximate p two-sided from normal
+from scipy.stats import norm
+p = 2*norm.sf(np.abs(z))
+res = coords.copy()
+res['ref_count']=counts['ref']; res['perturb_count']=counts['perturb']
+res['ref_norm']=counts_norm['ref']; res['perturb_norm']=counts_norm['perturb']
+res['cpm_max']=maxcpm
+res['log2FC']=log2FC
+res['z']=z
+res['p']=p
+res['padj']=p*len(res)
+res.loc[res.padj>1,'padj']=1
+res.to_csv('diff_peaks.tsv', sep='\\t', index=False)
+print(res.head())
+print('n total', len(res))
+print('maxcpm>=5', (maxcpm>=5).sum())
+print('up log2FC>1 & maxcpm>=5 & perturb_count>=10', ((log2FC>1)&(maxcpm>=5)&(counts['perturb']>=10)).sum())
+print('up log2FC>2 & maxcpm>=5 & perturb_count>=10', ((log2FC>2)&(maxcpm>=5)&(counts['perturb']>=10)).sum())
+print('up z>5 & maxcpm>=5', ((z>5)&(maxcpm>=5)).sum())
+print('down log2FC<-1 & maxcpm>=5', ((log2FC<-1)&(maxcpm>=5)).sum())
+print('median log2FC', np.median(log2FC))
+# Save top sets
+for k in [500,1000,2000,5000]:
+    subset = res[(log2FC>0)&(maxcpm>=3)&(counts['perturb']>=10)].sort_values('z', ascending=False).head(k)
+    subset[['chr','start','end']].to_csv(f'gained_top{k}.bed', sep='\\t', header=False, index=False)
+# all positive z significant
+subset = res[(z>4)&(maxcpm>=3)&(counts['perturb']>=10)&(log2FC>0)].sort_values('z', ascending=False)
+subset[['chr','start','end']].to_csv('gained_z4.bed', sep='\\t', header=False, index=False)
+print('z>4 gained', len(subset))
+# stable background: low abs logFC, high cpm
+bg = res[(np.abs(log2FC)<0.2)&(maxcpm>=5)].sort_values('cpm_max', ascending=False).head(10000)
+bg[['chr','start','end']].to_csv('stable_bg10k.bed', sep='\\t', header=False, index=False)
+print('bg n', len(bg))
+EOF"

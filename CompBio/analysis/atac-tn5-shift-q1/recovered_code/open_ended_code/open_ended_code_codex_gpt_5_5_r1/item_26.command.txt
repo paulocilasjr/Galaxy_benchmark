@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, random, collections, os
+chroms=['chr1','chr2','chr3']
+seqs={}
+for c in chroms:
+    seqs[c]=''.join(l.strip().upper() for l in open(f'hg38_{c}.fa') if not l.startswith('>'))
+points={c:{'s':[],'e':[]} for c in chroms}
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        c,s,e,*_=line.split('\\t')
+        if c in seqs:
+            points[c]['s'].append(int(s)); points[c]['e'].append(int(e))
+print({c:(len(points[c]['s']),len(seqs[c])) for c in chroms})
+comp=str.maketrans('ACGT','TGCA')
+def getk(c,p,k,orient):
+    seq=seqs[c]; L=len(seq); a=p-k//2; b=a+k
+    if a<0 or b>L: return None
+    mer=seq[a:b]
+    if set(mer)-set('ACGT'): return None
+    if orient=='minus': mer=mer.translate(comp)[::-1]
+    return mer
+random.seed(2)
+for k in [5,6,7,8]:
+    bg=collections.Counter(); bgN=0
+    for c in chroms:
+        seq=seqs[c]; L=len(seq); got=0
+        while got<70000:
+            p=random.randrange(20,L-20)
+            m=getk(c,p,k,'plus')
+            if m:
+                bg[m]+=1; bgN+=1; got+=1
+    print('\\nk',k,'bgN',bgN)
+    for label,key,orient in [('start','s','plus'),('endrc','e','minus')]:
+        scores=[]
+        for d in range(-10,11):
+            obs=collections.Counter(); n=0
+            for c in chroms:
+                for p in points[c][key]:
+                    m=getk(c,p+d,k,orient)
+                    if m: obs[m]+=1; n+=1
+            kl=0.0
+            for m,cnt in obs.items():
+                p=cnt/n; q=(bg.get(m,0)+0.5)/(bgN+0.5*4**k)
+                kl += p*math.log(p/q,2)
+            scores.append((kl,d,n))
+        print(label, ' '.join(f'{d}:{kl:.3f}' for kl,d,n in sorted(scores, reverse=True)[:10]))
+PY"

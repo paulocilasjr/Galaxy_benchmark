@@ -1,0 +1,41 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, mygene, json, time
+lines=open('GSE2002_series_matrix.txt').read().splitlines()
+for i,l in enumerate(lines):
+    if l.startswith('"'!series_matrix_table_begin'"'): start=i+1
+    if l.startswith('"'!series_matrix_table_end'"'): end=i
+header=lines[start].split('\\t')
+data=[l.split('\\t') for l in lines[start+1:end]]
+# sample columns: GSM35899,35900,35901 untreated; 35902-35904 LPS
+cols={h.strip('\"'):j for j,h in enumerate(header)}
+ctrl_cols=[cols.get('GSM35899'),cols.get('GSM35900'),cols.get('GSM35901')]
+lps_cols=[cols.get('GSM35902'),cols.get('GSM35903'),cols.get('GSM35904')]
+probes=[]
+ctrl=[]; lps=[]
+for row in data:
+    probes.append(row[0].strip('\"'))
+    try: c=np.array([float(row[j]) for j in ctrl_cols])
+    except: continue
+    try: l=np.array([float(row[j]) for j in lps_cols])
+    except: continue
+    ctrl.append(c.mean()); lps.append(l.mean())
+ctrl=np.array(ctrl); lps=np.array(lps)
+logfc=np.log2((lps+1)/(ctrl+1))
+order=np.argsort(-np.abs(logfc))
+# map top 300 probes
+top=order[:300]
+# query mygene batch maybe slow; use one query for all probes? do batch
+mg=mygene.MyGeneInfo()
+probes_top=[probes[i] for i in top]
+res=mg.querymany(probes_top, scopes='reporter', species='mouse', fields='symbol', returnall=True, verbose=False)
+print(res.keys())
+# Build map
+sym={}
+for out in res.get('out',[]):
+    q=out.get('query'); s=out.get('symbol')
+    if s: sym[q]=s
+print('missing', len(res.get('missing',[])))
+for rank,i in enumerate(top[:150]):
+    p=probes[i]; s=sym.get(p)
+    print(rank+1, p, s, f'{logfc[i]:+.3f}')
+PY"

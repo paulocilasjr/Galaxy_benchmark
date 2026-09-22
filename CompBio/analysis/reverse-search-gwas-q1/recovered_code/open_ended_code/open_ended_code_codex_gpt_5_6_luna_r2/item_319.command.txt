@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,struct,urllib.request,zlib,os,concurrent.futures
+# Published UKB 35-biomarker imputed files are GRCh37; target positions mapped from the file's GRCh38 anchors.
+anchors={'1':[161612233], '4':[3446883], '6':[32629716], '17':[16842991]}
+q1={'1':7.85125e-21,'4':1.61837e-10,'6':2.61044e-18,'17':1.4221e-16}
+meta=json.load(open('figshare-12355382.json'))['files']
+urls={f['name'].replace('.imp.gz.tbi','.imp.gz'):f['download_url'] for f in meta if f['name'].endswith('.imp.gz')}
+traits=sorted(urls)
+
+def parse_index(path):
+ D=gzip.open(path,'rb').read(); o=36
+ magic,nref,fmt,cs,cb,ce,meta,skip,l_nm=struct.unpack_from('<4s8i',D,0)
+ names=D[o:o+l_nm].rstrip(b'\\0').split(b'\\0');o+=l_nm; refs={}
+ for name in names:
+  nbin=struct.unpack_from('<i',D,o)[0];o+=4
+  for _ in range(nbin):
+   b,nc=struct.unpack_from('<II',D,o);o+=8+16*nc
+  ni=struct.unpack_from('<i',D,o)[0];o+=4
+  refs[name.decode()]=struct.unpack_from('<'+'Q'*ni,D,o) if ni else ();o+=8*ni
+ return refs
+
+def decode(raw):
+ out=[];p=0
+ while p+18<=len(raw) and raw[p:p+2]==b'\\x1f\\x8b':
+  n=int.from_bytes(raw[p+16:p+18],'little')+1
+  if p+n>len(raw):break
+  try: out.append(zlib.decompress(raw[p+18:p+n-8],-15))
+  except zlib.error:break
+  p+=n
+ return b''.join(out)
+
+def get(trait):
+ path=trait+'.tbi'; refs=parse_index(path)
+ found={}
+ for chrom,poss in anchors.items():
+  ints=refs[chrom]; tile=min(poss)>>14; start=ints[tile]>>16
+  # 1.5 MB covers the indexed tile and the target row in these dense regions.
+  req=urllib.request.Request(urls[trait],headers={'Range':f'bytes={start}-{start+1500000-1}'})
+  try:
+   with urllib.request.urlopen(req,timeout=30) as rr: raw=rr.read()
+   text=decode(raw).decode('utf-8','replace')
+   for line in text.splitlines():
+    a=line.split('\\t')
+    if len(a)>7 and a[0]==chrom and a[1].isdigit() and int(a[1]) in poss:
+     found[(chrom,int(a[1]))]=a[7]
+  except Exception as e:
+   found['ERR']=type(e).__name__+':'+str(e)
+ return trait,found
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+ results=list(ex.map(get,traits))
+for trait,found in results:
+ vals=[found.get((c,p),'NA') for c,ps in anchors.items() for p in ps]
+ print(trait+'\\t'+'\\t'.join(vals))
+PY"

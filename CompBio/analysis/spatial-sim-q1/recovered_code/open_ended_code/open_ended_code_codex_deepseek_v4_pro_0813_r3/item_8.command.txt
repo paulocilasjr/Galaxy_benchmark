@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+import gzip
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rt') as f:
+    X=mmread(f).toarray().T # spots x genes
+# mean profiles per cell type
+types=sorted(meta.cell_type.unique())
+ref=pd.DataFrame(sc.values, columns=sc.columns, index=sc.index).groupby(meta['cell_type']).mean()
+print(ref.index.tolist())
+print(ref.shape)
+y=X[710]
+# NNLS with means (sum-normalize? raw means)
+A=ref.values.T
+coef,res=nnls(A,y)
+print('NNLS raw coefs', dict(zip(ref.index, np.round(coef,3))))
+# normalized profiles (each type to sum 1)
+A2=ref.div(ref.sum(axis=1),axis=0).values.T
+coef2,res2=nnls(A2,y)
+print('NNLS norm coefs', dict(zip(ref.index, np.round(coef2,3))))
+# predicted y sum
+print('y sum', y.sum(), 'pred sum raw', (A@coef).sum(), 'pred sum norm', (A2@coef2).sum())
+# correlation of spot with each mean normalized
+corrs=[]
+for t in types:
+ corrs.append((t, np.corrcoef(y, ref.loc[t])[0,1], np.corrcoef(y, ref.loc[t]/ref.loc[t].sum())[0,1]))
+print('corrs raw/norm', corrs)
+# corr with each cell
+Ysc=sc.values
+print('corr y to top cells')
+for t in types:
+ idx=np.where(meta.cell_type==t)[0]
+ cs=[np.corrcoef(y, Ysc[i])[0,1] for i in idx]
+ print(t, min(cs), np.mean(cs), max(cs), 'top', idx[np.argmax(cs)])
+PY"

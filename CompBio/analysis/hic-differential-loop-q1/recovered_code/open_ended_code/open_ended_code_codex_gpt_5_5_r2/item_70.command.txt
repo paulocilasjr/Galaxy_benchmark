@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests,base64,numpy as np,math,matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+H1='JfVtzAhFSCS-j6tNALioCQ'; HFF='3e8b4161-556e-4722-bcef-88265a3436a1'; server='https://higlass.4dnucleome.org/api/v1/tiles/'
+offset=1943767673; res_for_z={12:1000,11:2000}; cache={}
+def fetch(uid,z,x,y):
+ key=f'{uid}.{z}.{x}.{y}'
+ if key not in cache:
+  j=requests.get(server,params={'d':key},timeout=60).json()[key]; dt='<f2' if j.get('dtype')=='float16' else '<f4'
+  cache[key]=np.frombuffer(base64.b64decode(j['dense']),dtype=dt).astype('f4').reshape(256,256)
+ return cache[key]
+def mosaic(uid,z,win):
+ res=res_for_z[z]; gs=offset+win[0]; ge=offset+win[1]; tw=256*res; x0=gs//tw; x1=(ge-1)//tw
+ mat=np.full(((x1-x0+1)*256,(x1-x0+1)*256),np.nan,'f4')
+ for x in range(x0,x1+1):
+  for y in range(x0,x1+1): mat[(y-x0)*256:(y-x0+1)*256,(x-x0)*256:(x-x0+1)*256]=fetch(uid,z,x,y)
+ a=(gs//res)-x0*256; b=math.ceil(ge/res)-x0*256
+ return mat[a:b,a:b],res
+for label,win,z in [('gene_loop',(7580000,7860000),12),('downstream',(7760000,7980000),12),('both',(7580000,7980000),11)]:
+ h1,res=mosaic(H1,z,win); hff,_=mosaic(HFF,z,win); diff=h1-hff
+ extent=[win[0]/1e6,win[1]/1e6,win[1]/1e6,win[0]/1e6]
+ fig,axs=plt.subplots(1,3,figsize=(13,4),constrained_layout=True)
+ vals=np.r_[h1[np.isfinite(h1)],hff[np.isfinite(hff)]]; vmax=np.nanpercentile(vals,98.5)
+ md=np.nanpercentile(np.abs(diff[np.isfinite(diff)]),99.2)
+ for ax,arr,title in zip(axs,[h1,hff,diff],['H1','HFF','H1-HFF']):
+  if title=='H1-HFF': im=ax.imshow(arr,origin='upper',extent=extent,cmap='coolwarm',vmin=-md,vmax=md,interpolation='nearest')
+  else: im=ax.imshow(arr,origin='upper',extent=extent,cmap='Reds',vmin=0,vmax=vmax,interpolation='nearest')
+  ax.set_title(title); ax.set_xlabel('chr12 Mb'); ax.set_ylabel('chr12 Mb')
+  fig.colorbar(im,ax=ax,fraction=.046)
+ fig.savefig(f'{label}_focus.png',dpi=220)
+ print(label,f'{label}_focus.png',h1.shape,vmax,md)
+PY"

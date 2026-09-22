@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+
+d=np.load('donor_pseudobulk.npz', allow_pickle=True)
+sums=d['sums']; detected=d['detected']; cell_counts=d['cell_counts']; names=d['names'].astype(str); donors=d['donors'].astype(str); lib=d['lib']
+ids=np.array([int(x.replace('donor','')) for x in donors])
+idx={g:i for i,g in enumerate(names)}
+cpm=sums/lib[:,None]*1e6; logcpm=np.log1p(cpm)
+sets={
+'ISG':['IFI27','IFI6','ISG15','MX1','OAS1','OAS2','OAS3','IFIT1','IFIT2','IFIT3','RSAD2','SIGLEC1','LY6E','STAT1','IRF7','XAF1','USP18','IFI44L','IFI44'],
+'InflamMono':['S100A8','S100A9','FCN1','LST1','IL1B','VCAN','LGALS3','CTSS','CST3','TYROBP','FCGR3A','CD14'],
+'NaiveT':['CCR7','LEF1','TCF7','IL7R','LTB','S1PR1','MAL','SELL'],
+'NKcyto':['NKG7','GNLY','GZMB','PRF1','KLRD1','FGFBP2'],
+'B_naive':['MS4A1','CD79A','CD79B','BANK1','CD22','TCL1A'],
+'Plasmablast':['MZB1','JCHAIN','XBP1','PRDM1','TNFRSF17','DERL3','SSR4','IGHG1','IGHA1'],
+'CellCycle':['MKI67','TOP2A','STMN1','TUBA1B','HMGB2','TYMS','MCM6','PCNA','UBE2C','NUSAP1'],
+'Stress':['HSPA1A','HSPA1B','HSP90AA1','DNAJB1','JUN','FOS'],
+'Platelet':['PPBP','PF4','NRGN','GP9'],
+'Erythroid':['HBB','HBA1','HBA2','ALAS2'],
+'DC_IFN':['LILRA4','GZMB','IRF7','TCF4','PLD4','SERPINF1'],
+}
+rows=[]
+for i,donor in enumerate(donors):
+    row={'id':ids[i], 'cells':cell_counts[i]}
+    for name,genes in sets.items():
+        present=[idx[g] for g in genes if g in idx]
+        row[name]=logcpm[i,present].mean() if present else np.nan
+        row[name+'_pct']=(detected[i,present]/cell_counts[i]).mean() if present else np.nan
+    rows.append(row)
+df=pd.DataFrame(rows).sort_values('id')
+# derive z composite covid = ISG + inflam + plasmablast + cycle - naiveT
+for col in [k for k in sets]:
+    df[col+'_z']=(df[col]-df[col].mean())/df[col].std(ddof=0)
+df['covid_composite']=df['ISG_z']+df['InflamMono_z']+df['Plasmablast_z']+df['CellCycle_z']-df['NaiveT_z']
+print(df[['id','ISG','InflamMono','NaiveT','B_naive','Plasmablast','CellCycle','NKcyto','Platelet','covid_composite']].sort_values('covid_composite').to_string(index=False))
+print('\\nPct selected')
+print(df[['id','ISG_pct','InflamMono_pct','NaiveT_pct','Plasmablast_pct','CellCycle_pct']].sort_values('id').to_string(index=False))
+PY"

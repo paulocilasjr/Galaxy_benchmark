@@ -1,0 +1,137 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, csv, bisect, json, os
+from collections import defaultdict
+# Build chunk offsets from chrom sizes
+chunks_by_base=defaultdict(list)
+with open('sample.swap.atac.q1.chrom.sizes') as f:
+    for line in f:
+        chunk,size=line.strip().split('\\t'); size=int(size)
+        base=chunk.rsplit('_',1)[0]
+        chunks_by_base[base].append((chunk,size))
+offsets={}
+for base,lst in chunks_by_base.items():
+    off=0
+    for chunk,size in lst:
+        offsets[chunk]=(base,off,size)
+        off+=size
+# parse genes: human symbol [hs]
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)"'"')
+genes=[]
+with gzip.open('data/AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2] "'!= '"'gene': continue
+        chrom,_,_,start,end,_,strand,_,attr=parts
+        start=int(start); end=int(end)
+        attrs=dict(attr_re.findall(attr))
+        gname=attrs.get('gene_name',attrs.get('gene_id',''))
+        m=re.search(r'([A-Za-z0-9_.-]+) \\[hs\\]', gname)
+        hs=m.group(1).upper() if m else None
+        nr=None
+        m2=re.search(r'([A-Za-z0-9_.-]+) \\[nr\\]', gname)
+        if m2: nr=m2.group(1).upper()
+        tss=start if strand=='+' else end
+        genes.append((chrom,start,end,strand,tss,attrs.get('gene_id',''),gname,hs,nr))
+print('genes',len(genes),'hs',sum(1 for g in genes if g[7]))
+# create marker gene list
+markers={
+'Brain':['RBFOX3','SNAP25','SYT1','SLC17A7','SLC17A6','GAD1','MAP2','TUBB3','NEUROD1','NEFL'],
+'Heart':['TNNT2','MYH6','MYH7','ACTC1','NPPA','NPPB','RYR2','TTN','TNNI3','MYL2','MYL7'],
+'Liver':['ALB','APOA1','APOB','TTR','TF','FGA','FGB','FGG','CYP3A4','CYP2E1','HNF4A','SERPINA1'],
+'GallBladder':['KRT19','KRT7','EPCAM','SOX17','MUC1','MUC5B','SLC4A2','CFTR','KRT8','KRT18'],
+'Pancreas':['PRSS1','PRSS2','PRSS3','CPA1','CPB1','CELA3A','PNLIP','AMY2A','INS','GCG','PDX1','REG1A'],
+'Intestine':['VIL1','FABP2','APOA4','ALPI','MUC2','CDX2','SI','LCT','KRT20'],
+'Stomach':['ATP4A','ATP4B','PGA3','PGA5','PGC','GIF','MUC5AC','MUC6','GKN1','GKN2'],
+'Kidney':['SLC34A1','SLC12A1','SLC12A3','UMOD','NPHS1','NPHS2','AQP2','PAX2','PAX8'],
+'Spleen':['PTPRC','CD3D','CD79A','MS4A1','LCK','CD74','HLA-DRA','SPI1'],
+'Lung':['SFTPA1','SFTPB','SFTPC','SFTPD','NKX2-1','SCGB1A1','FOXJ1','MUC5B'],
+'Bladder':['UPK1A','UPK1B','UPK2','UPK3A','KRT5','KRT13','KRT20','TP63'],
+'Prostate':['KLK3','KLK2','ACPP','NKX3-1','AR','MSMB','KRT8','KRT18'],
+'Limb':['HOXA13','HOXD13','PITX1','TBX5','TBX4','PRRX1','HAND2','SHOX2','MEIS1'],
+'Gill':['KRT8','KRT18','FOXI1','ATP6V1B1','SLC26A4','CA2','KRT5'],
+'Cloaca':['KRT13','TP63','EPCAM','KRT8','KRT18','MUC2','KRT5']
+}
+allm=sorted(set(x for v in markers.values() for x in v))
+# selected gene records
+sel=[g for g in genes if g[7] in allm]
+print('selected records',len(sel),'unique',len(set(g[7] for g in sel)))
+print('missing markers')
+for tissue,ms in markers.items():
+    found=sorted(set(g[7] for g in sel if g[7] in ms))
+    miss=[m for m in ms if m not in found]
+    if miss: print(tissue,'missing',miss)
+# Save gene promoter intervals ±50kb mapped to chunks
+promoters=[]
+for chrom,start,end,strand,tss,gid,gname,hs,nr in sel:
+    if chrom not in chunks_by_base: continue
+    # Map interval tss +/-50kb to chunk coords, maybe split over chunks
+    lo=max(1,tss-50000); hi=tss+50000
+    off=0
+    for chunk,size in chunks_by_base[chrom]:
+        c_lo=off+1; c_hi=off+size
+        ovlo=max(lo,c_lo); ovhi=min(hi,c_hi)
+        if ovlo<=ovhi:
+            promoters.append((chunk, ovlo-off-1, ovhi-off, hs, gid, gname, chrom, tss)) # 0-based half-open local
+        off+=size
+print('promoter intervals',len(promoters))
+# Group intervals by chunk for scanning counts
+bychunk=defaultdict(list)
+for rec in promoters:
+    bychunk[rec[0]].append(rec)
+# scan matrix, summing bins whose intervals overlap promoters; weighted no, whole bin count if center in interval? use overlap any.
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    samples=header[3:]
+    # library sums for normalization
+    libs=[0]*len(samples)
+    raw_rows=[]
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        vals=list(map(int,p[3:]))
+        for i,v in enumerate(vals): libs[i]+=v
+        raw_rows.append((p[0],int(p[1]),int(p[2]),vals))
+# initialize gene sums, count interval hits separately aggregate by hs across duplicates
+activity=defaultdict(lambda:[0]*len(samples))
+hits=defaultdict(int)
+for chunk,bs,be,vals in raw_rows:
+    if chunk not in bychunk: continue
+    for rec in bychunk[chunk]:
+        _,lo,hi,hs,gid,gname,chrom,tss=rec
+        if bs < hi and be > lo:
+            a=activity[hs]
+            for i,v in enumerate(vals): a[i]+=v
+            hits[hs]+=1
+# normalize CPM
+med=sorted(libs)[len(libs)//2]
+out='tmp/marker_promoter_activity.tsv'
+with open(out,'w') as f:
+    f.write('gene\\thits\\t'+'\\t'.join(samples)+'\\n')
+    for gene in sorted(activity):
+        vals=[activity[gene][i]/libs[i]*1e6 for i in range(len(samples))]
+        f.write(gene+'\\t'+str(hits[gene])+'\\t'+'\\t'.join(f'{x:.3f}' for x in vals)+'\\n')
+print('wrote',out,'genes',len(activity))
+# marker tissue average z/ranks
+# load into dict
+act={g:activity[g] for g in activity}
+import numpy as np
+libs=np.array(libs,float)
+# log norm per gene
+scores=[]
+for tissue,ms in markers.items():
+    present=[m for m in ms if m in act]
+    if not present: continue
+    mat=[]
+    for m in present:
+        v=np.array(act[m],float)/libs*1e6
+        x=np.log1p(v)
+        # z across samples per gene
+        if x.std()>0: x=(x-x.mean())/x.std()
+        mat.append(x)
+    sc=np.vstack(mat).mean(axis=0)
+    order=sorted(zip(sc,samples), reverse=True)
+    scores.append((tissue,present,order))
+    print('\\nMARKER',tissue,'present',present)
+    for val,s in order[:8]: print(f'{s}:{val:.2f}',end=' ')
+    print()
+PY"

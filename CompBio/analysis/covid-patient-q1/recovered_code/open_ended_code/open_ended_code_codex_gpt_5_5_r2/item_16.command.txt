@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > /dev/null <<'EOF'
+EOF
+python - <<'PY'
+import anndata as ad, h5py, numpy as np, pandas as pd, scipy.sparse as sp
+fn='covid.patients.q1.h5ad'
+adata=ad.read_h5ad(fn, backed='r')
+obs=adata.obs.copy()
+donors=list(obs['donor_id'].cat.categories)
+donor_codes=obs['donor_id'].cat.codes.to_numpy().astype(np.int32)
+var=adata.var.copy()
+genes=var['feature_name'].astype(str).to_numpy()
+n_d=len(donors); n_g=len(genes); n_cells=adata.n_obs
+counts=np.zeros((n_d,n_g), dtype=np.float64)
+cell_counts=np.bincount(donor_codes, minlength=n_d)
+cell_umis=np.zeros(n_cells, dtype=np.float64)
+cell_genes=np.zeros(n_cells, dtype=np.int32)
+with h5py.File(fn,'r') as f:
+    indptr=f['X']['indptr'][:]
+    data=f['X']['data']; indices=f['X']['indices']
+    chunk_rows=2000
+    for start in range(0,n_cells,chunk_rows):
+        end=min(n_cells,start+chunk_rows)
+        a=int(indptr[start]); b=int(indptr[end])
+        idx=indices[a:b]
+        vals=data[a:b].astype(np.float64)
+        nnz=np.diff(indptr[start:end+1])
+        cell_genes[start:end]=nnz
+        if vals.size:
+            # row sums
+            row_sums=np.add.reduceat(vals, np.r_[0, np.cumsum(nnz)[:-1]])
+            cell_umis[start:end]=row_sums
+            rows=np.repeat(np.arange(start,end,dtype=np.int32), nnz)
+            dc=donor_codes[rows]
+            flat=dc.astype(np.int64)*n_g + idx.astype(np.int64)
+            bc=np.bincount(flat, weights=vals, minlength=n_d*n_g)
+            counts += bc.reshape(n_d,n_g)
+        if start % 40000 == 0:
+            print('processed', start, flush=True)
+np.savez_compressed('donor_pseudobulk.npz', counts=counts, donors=np.array(donors), genes=genes, cell_counts=cell_counts, donor_codes=donor_codes, cell_umis=cell_umis, cell_genes=cell_genes)
+print('saved donor_pseudobulk.npz', counts.shape)
+PY"

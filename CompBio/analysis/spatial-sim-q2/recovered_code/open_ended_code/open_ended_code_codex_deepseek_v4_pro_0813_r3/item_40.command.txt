@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.spatial
+pos=pd.read_csv('data/tissue_positions.csv', index_col=0)
+coords=pos[['array_row','array_col']].values.astype(float)
+cts=['B_Cell','Endothelial','Fibroblast_Stroma','Macrophage','T_Cell','Tumor_Core']
+C=pd.read_csv('map_compositions.csv'); C.columns=cts
+tumor=C['Tumor_Core'].values>0; tcoords=coords[tumor]
+D=scipy.spatial.distance.cdist(coords,tcoords).min(axis=1)
+# Use non-tumor spots only to avoid zero distances from cells in tumor spots? define baseline set nonT
+nonT_idx=np.where(~tumor)[0]
+rng=np.random.default_rng(123)
+for weight in [False,True]:
+ print('\\nweighted' if weight else 'binary')
+ for ct in cts[:-1]:
+  counts=C[ct].values
+  # observations on non-tumor spots
+  vals=counts[nonT_idx]
+  if weight:
+   obs=np.average(D[nonT_idx],weights=vals) if vals.sum()>0 else np.nan
+  else:
+   obs=D[nonT_idx[vals>0]].mean() if (vals>0).sum()>0 else np.nan
+  n=vals.sum() if weight else (vals>0).sum()
+  perms=[]
+  for _ in range(5000):
+   if weight:
+    # permute counts among nonT spots
+    perm_vals=rng.permutation(vals)
+    perms.append(np.average(D[nonT_idx],weights=perm_vals))
+   else:
+    idx=rng.choice(nonT_idx,size=int((vals>0).sum()),replace=False)
+    perms.append(D[idx].mean())
+  perms=np.array(perms); p=(perms<=obs).mean()
+  z=(obs-perms.mean())/perms.std()
+  print(f'{ct:20s} obs={obs:.3f} p={p:.5f} z={z:.2f}')
+PY"

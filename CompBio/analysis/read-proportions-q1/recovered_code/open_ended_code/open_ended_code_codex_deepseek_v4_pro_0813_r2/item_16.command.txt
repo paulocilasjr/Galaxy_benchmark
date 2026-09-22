@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+# Load? Need recompute cnt. But maybe previous process didn't save. Let's save from a rerun? Could use npy if existed no. Quick rerun maybe long. Instead create a smaller simulation? 
+# We'll rerun but save cnt this time; wait, we can modify command to recompute and save.
+import numpy as np, gzip, time, os
+seqs={};name=None
+for line in open('read.proportions.q1.fa'):
+ line=line.strip()
+ if line.startswith('>'): name=line[1:];seqs[name]=''
+ else: seqs[name]+=line.upper()
+order=['chr1','chr2','chr3','chr4']; windows=[];meta=[]
+for c in order:
+ s=seqs[c]
+ for i in range(len(s)-35): windows.append(s[i:i+36]); meta.append(c)
+comp=str.maketrans('ACGT','TGCA')
+def rc(x): return x.translate(comp)[::-1]
+ref=np.frombuffer(''.join(windows).encode(),dtype=np.uint8).reshape(len(windows),36)
+ref_rc=np.frombuffer(''.join(rc(w) for w in windows).encode(),dtype=np.uint8).reshape(len(windows),36)
+meta_idx=np.array([order.index(m) for m in meta])
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ reads=[]
+ while True:
+  h=f.readline()
+  if not h: break
+  s=f.readline().strip().upper();f.readline();f.readline();reads.append(s)
+N=len(reads)
+if os.path.exists('cnt.npy'):
+ cnt=np.load('cnt.npy')
+else:
+ cnt=np.zeros((N,4,37),dtype=np.int32)
+ for start in range(0,N,2000):
+  end=min(N,start+2000); rarr=np.frombuffer(''.join(reads[start:end]).encode(),dtype=np.uint8).reshape(end-start,36)
+  d1=np.count_nonzero(ref[None,:,:]"'!=rarr[:,None,:],axis=2)
+  d2=np.count_nonzero(ref_rc[None,:,:]!=rarr[:,None,:],axis=2)
+  for j in range(end-start):
+   for ci in range(4):
+    mask=meta_idx==ci
+    h=np.bincount(np.concatenate([d1[j,mask],d2[j,mask]]),minlength=37)
+    cnt[start+j,ci]+=h
+  print(start,end)
+ np.save('"'cnt.npy',cnt)
+K=37; eps=0.01
+P=np.array([(1-eps)**(K-1-d)*(eps/3)**d for d in range(K)])
+pi=np.ones(4)/4
+for it in range(10):
+ ll=cnt.astype(float)@np.log(P)+np.log(pi)[None,:]
+ mx=ll.max(axis=1,keepdims=True); w=np.exp(ll-mx); gamma=w/w.sum(axis=1,keepdims=True)
+ newpi=gamma.mean(axis=0)
+ print(it,'pi',pi*100,'new',newpi*100)
+ pi=newpi
+# inspect unique chr3 read indices and gamma at final
+PY"

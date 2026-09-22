@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b590a77921a02cf294",
+  "history_id": "bbd44e69cb8906b5213a1b92a908622e",
+  "tool_id": "score_wheat_pseudobulk_swap_v4",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-10T07:35:18.630606",
+  "update_time": "2026-08-10T07:35:44.501990",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "python -m pip install --quiet numpy openpyxl &&\npython - <<'PY'\nimport csv,gzip,math\nfrom urllib.request import Request,urlopen\nfrom openpyxl import load_workbook\nimport numpy as np\nexpr_path='/jetstream2/scratch/main/jobs/79036708/inputs/dataset_2dd44a7e-8ce3-4b19-92f0-bba8a12200e9.dat'\nwith open(expr_path,'rb') as fh: magic=fh.read(2)\nopener=gzip.open if magic==b'\\x1f\\x8b' else open\ngenes=[]; rows=[]\nwith opener(expr_path,'rt',newline='') as fh:\n rd=csv.reader(fh,delimiter='\\t'); header=next(rd); labels=header[1:]\n for r in rd:\n  if r: genes.append(r[0]); rows.append([float(x) for x in r[1:]])\nX=np.asarray(rows,float); finite=np.all(np.isfinite(X),1); X=X[finite]; genes=[g for g,k in zip(genes,finite) if k]\nL=np.log1p(np.maximum(X,0)); mu=L.mean(1,keepdims=True); sd=L.std(1,keepdims=True)\nZ=np.divide(L-mu,sd,out=np.zeros_like(L),where=sd>0); gi={g:i for i,g in enumerate(genes)}\nu='https://ars.els-cdn.com/content/image/1-s2.0-S2211124725000117-mmc5.xlsx'\nb=urlopen(Request(u,headers={'User-Agent':'Mozilla/5.0','Referer':'https://www.cell.com/'}),timeout=90).read(); open('m.xlsx','wb').write(b)\nws=load_workbook('m.xlsx',read_only=True,data_only=True)['Table S4']; it=ws.iter_rows(values_only=True); h=list(next(it)); ix={str(v):i for i,v in enumerate(h)}\nbc={i:[] for i in range(15)}\nfor r in it:\n try: g=str(r[ix['Gene_ID']]); fc=float(r[ix['avg_log2FC']]); p=float(r[ix['p_val_adj']]); c=int(str(r[ix['cluster']]).split()[0])\n except Exception: continue\n if c in bc and math.isfinite(fc) and math.isfinite(p) and p<.05 and fc>.25 and g in gi: bc[c].append((g,fc))\nfor c in bc: bc[c].sort(key=lambda t:(-t[1],t[0]))\ngroups={'cortex':[2],'endodermis':[9],'epidermis':[1,5,7],'meristems':[0,3,12],'pericycle':[6],'phloem':[11,13],'provascular':[4],'root_cap':[14],'root_hair':[8],'xylem':[10]}\ntypes=list(groups); depths=[20,50,100,200,500]\ndef assign(S):\n n=len(S); dp={0:(0.,[])}\n for i in range(n):\n  nd={}\n  for m,(sc,cols) in dp.items():\n   for j in range(n):\n    if not (m>>j)&1:\n     nm=m|1<<j; ns=sc+float(S[i,j])\n     if nm not in nd or ns>nd[nm][0]: nd[nm]=(ns,cols+[j])\n  dp=nd\n return dp[(1<<n)-1]\nscore={}; preds={}; swaps={}; counts={}\nfor d in depths:\n S=np.zeros((10,10)); counts[d]={}\n for i,t in enumerate(types):\n  best={}\n  for c in groups[t]:\n   for g,fc in bc[c]:\n    if g not in best or fc>best[g]: best[g]=fc\n  sel=sorted(best,key=lambda g:(-best[g],g))[:d]; ids=[gi[g] for g in sel]; counts[d][t]=len(ids)\n  S[i]=Z[ids].mean(0) if ids else -99.\n score[d]=np.nan_to_num(S,nan=-99.,posinf=99.,neginf=-99.); _,cols=assign(score[d]); preds[d]={labels[cols[i]]:types[i] for i in range(10)}\n cand=[(0.,None)]\n for a in range(10):\n  for b in range(a+1,10):\n   gain=-S[types.index(labels[a]),a]-S[types.index(labels[b]),b]+S[types.index(labels[b]),a]+S[types.index(labels[a]),b]\n   cand.append((float(gain),(labels[a],labels[b])))\n swaps[d]=max(cand,key=lambda x:x[0])\nCs=[]\nfor S in score.values():\n sm=S.mean(1,keepdims=True); ss=S.std(1,keepdims=True); Cs.append((S-sm)/np.where(ss==0,1,ss))\nC=np.mean(Cs,0); _,cols=assign(C); cons={labels[cols[i]]:types[i] for i in range(10)}\npairs=[]\nfor a in range(10):\n for b in range(a+1,10):\n  gain=-C[types.index(labels[a]),a]-C[types.index(labels[b]),b]+C[types.index(labels[b]),a]+C[types.index(labels[a]),b]\n  pairs.append((float(gain),labels[a],labels[b]))\npairs.sort(reverse=True)\nwith open('swap_diagnostics.txt','w') as out:\n out.write(f'MATRIX\\tgenes_total={len(rows)}\\tgenes_finite={len(genes)}\\tcolumns={len(labels)}\\tlabels={\",\".join(labels)}\\n')\n out.write('CLUSTER_DEG_COUNTS\\t'+'\\t'.join(f'{c}:{len(bc[c])}' for c in range(15))+'\\n')\n for d in depths:\n  gain,pair=swaps[d]; out.write(f'DEPTH\\t{d}\\tMARKERS\\t'+','.join(f'{t}:{counts[d][t]}' for t in types)+f'\\tBEST_SWAP\\t{pair}\\tGAIN\\t{gain:.6f}\\n')\n  out.write('ASSIGNMENT\\t'+';'.join(f'{lab}->{preds[d][lab]}' for lab in labels)+'\\n')\n out.write('CONSENSUS_ASSIGNMENT\\t'+';'.join(f'{lab}->{cons[lab]}' for lab in labels)+'\\nTOP_TRANSPOSITIONS\\n')\n for gain,a,b in pairs[:8]: out.write(f'{a},{b}\\t{gain:.6f}\\n')\n out.write('CONSENSUS_SCORE_MATRIX\\nreference_observed\\t'+'\\t'.join(labels)+'\\n')\n for i,t in enumerate(types): out.write(t+'\\t'+'\\t'.join(f'{v:.3f}' for v in C[i])+'\\n')\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135431f3fb678490516",
+      "src": "hda",
+      "uuid": "2dd44a7e-8ce3-4b19-92f0-bba8a12200e9"
+    }
+  },
+  "outputs": {
+    "diagnostics": {
+      "id": "f9cad7b01a472135914a646d89beb88c",
+      "src": "hda",
+      "uuid": "651202b6-30a3-46a0-bd8f-e3c44ea37254"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

@@ -1,0 +1,61 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csc_matrix
+from scipy.stats import spearmanr
+from sklearn.preprocessing import StandardScaler
+
+def load(fn):
+ with h5py.File(fn,'r') as f:
+  nobs,nvar=len(f['obs/_index']),len(f['var/_index'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=(nobs,nvar)).tocsr()
+  genes=f['var/_index'][...].astype(str); cats=f['obs/guide/categories'][...].astype(str); codes=f['obs/guide/codes'][...]
+ lib=np.asarray(X.sum(1)).ravel().astype(float)
+ Y=X.multiply(1e4/np.maximum(lib,1)[:,None]).tocsr(); Y.data=np.log1p(Y.data)
+ ctr=np.isin(codes,[i for i,x in enumerate(cats) if x.startswith('NT-')])
+ base=Y[ctr].mean(0).A1
+ means=np.vstack([Y[codes==i].mean(0).A1 for i in range(len(cats))])
+ return Y,genes,cats,codes,means-base,base
+R,gr,rg,rc,DR,BR=load('perturb.seq.align.q1.ref.h5ad'); Q,gq,qg,qc,DQ,BQ=load('perturb.seq.align.q1.query.h5ad')
+idxr={g:i for i,g in enumerate(gr)}; iq=np.array([i for i,g in enumerate(gq) if g in idxr]); ir=np.array([idxr[g] for g in gq if g in idxr]); common=np.array([g for g in gq if g in idxr])
+A=DR[:,ir]; B=DQ[:,iq]
+# ref and query target index
+ref_i={g:i for i,g in enumerate(rg)}; query_i={g:i for i,g in enumerate(qg)}
+# filters based on genes
+filters={}
+filters['all']=np.ones(len(common),bool)
+# baseline variable: use control mean? calculate between cell log variance approximated perhaps group mean? use combined baseline group? 
+# gene mean abundance
+filters['ref_topvar']=np.argsort(np.var(R[:,ir].toarray() if False else np.zeros((1,1)),axis=0)) if False else np.ones(len(common),bool)
+# Use absolute delta top k
+for k in [20,50,100,200,500,1000,2000,5000]:
+ filters[f'LEO_abs{k}']=np.argsort(np.abs(A[ref_i['LEO1-I2']]))[-k:]
+ filters[f'LEO_signed{k}']=np.argsort(A[ref_i['LEO1-I2']])[-k:]
+# Ref specific discriminative: genes where LEO delta differs from other target means, standardized?
+target_ref=np.array([i for i,g in enumerate(rg) if not g.startswith('NT-')])
+other=np.delete(target_ref,np.where(target_ref==ref_i['LEO1-I2'])[0])
+for k in [50,100,200,500,1000,2000]:
+ disc=np.abs(A[ref_i['LEO1-I2']]-np.median(A[other],axis=0))
+ filters[f'LEO_disc{k}']=np.argsort(disc)[-k:]
+# compute corr and display top candidate among query generic
+for name,sel in filters.items():
+ if isinstance(sel,np.ndarray) and sel.dtype==bool: s=np.where(sel)[0]
+ else:s=np.asarray(sel)
+ # center each vector over selected genes for pearson
+ aa=A[ref_i['LEO1-I2'],s];
+ scores=[]
+ for j,g in enumerate(qg):
+  if g.startswith('NT'):continue
+  bb=B[j,s]
+  if np.std(bb)==0:sc=np.nan
+  else: sc=np.corrcoef(aa,bb)[0,1]
+  scores.append((sc,g))
+ print(name, sorted(scores,reverse=True)[:8])
+# top overlap signed/absolute
+for k in [20,50,100,200,500,1000]:
+ rrank=np.argsort(np.abs(A[ref_i['LEO1-I2']]))[-k:]
+ vals=[]
+ for j,g in enumerate(qg):
+  if g.startswith('NT'):continue
+  qrank=set(np.argsort(np.abs(B[j]))[-k:]); vals.append((len(set(rrank)&qrank),g))
+ print('overlap abs',k,sorted(vals,reverse=True)[:8])
+PY"

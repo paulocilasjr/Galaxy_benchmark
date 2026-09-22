@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,re,gzip,collections,os
+workspace='.'
+# Borzoi targets normalized identifiers
+borzoi_ids=set()
+for path in ['[REDACTED LOCAL PATH]','[REDACTED LOCAL PATH]']:
+ f=gzip.open(path,'rt'); f.readline()
+ for line in f:
+  ident=line.rstrip('\\n').split('\\t')[1]
+  norm=re.sub(r'[+-]"'$'"','',ident)
+  borzoi_ids.add(norm)
+print('borzoi all normalized unique',len(borzoi_ids))
+gsm_direct={x for x in borzoi_ids if x.startswith('GSM')}
+print('direct GSM',len(gsm_direct))
+# ENCODE file metadata
+enc_rows=[json.loads(l) for l in open('data/borzoi_encff_metadata.jsonl')]
+# experiment metadata
+exp_rows={g['accession']:g for g in [json.loads(l) for l in open('data/borzoi_experiments_metadata.jsonl')]}
+# Build Borzoi provenance sets
+geo=set(gsm_direct)
+encode=set()
+for r in enc_rows:
+ acc=r.get('dataset','').rstrip('/').split('/')[-1]
+ ex=exp_rows.get(acc)
+ if ex:
+  for db in ex.get('dbxrefs',[]):
+   if db.startswith('GEO:GSM'):
+    geo.add(db.split(':',1)[1])
+ reps=r.get('biological_replicates') or []
+ for n in reps:
+  encode.add(f'{acc}_{n}')
+print('borzoi GEO set',len(geo),'direct',len(gsm_direct),'from encff',len(geo)-len(gsm_direct))
+print('borzoi ENCODE set',len(encode))
+# check some
+print('sample encode',sorted(encode)[:10])
+# Sei rows
+sei=[json.loads(l) for l in open('data/sei_cistrome_samples.jsonl')]
+print('sei rows',len(sei))
+count=0; by_type=collections.Counter(); matched_ids=[]
+for r in sei:
+ ext=r.get('external_id'); typ=r.get('external_id_type')
+ if typ=='GEO':
+  if ext in geo:
+   count+=1; by_type['GEO']+=1; matched_ids.append(r['id'])
+ elif typ=='ENCODE':
+  if ext in encode:
+   count+=1; by_type['ENCODE']+=1; matched_ids.append(r['id'])
+print('count',count,'by type',by_type,'unique sei ids',len(set(matched_ids)))
+print('matched ids first 50',matched_ids[:50])
+print('round',round(count/100)*100)
+# overlap details
+print('Sei geo unique',len({r['external_id'] for r in sei if r['external_id_type']=='GEO'}),'borzoi geo',len(geo),'intersection',len({r['external_id'] for r in sei if r['external_id_type']=='GEO'}&geo))
+print('Sei encode unique',len({r['external_id'] for r in sei if r['external_id_type']=='ENCODE'}),'borzoi encode',len(encode),'intersection',len({r['external_id'] for r in sei if r['external_id_type']=='ENCODE'}&encode))
+PY"

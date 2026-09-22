@@ -1,0 +1,76 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu
+
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+print('sc', sc.shape)
+print(meta.cell_type.value_counts())
+types=sorted(meta.cell_type.unique())
+# signatures genes x types raw means
+means=np.vstack([sc.loc[meta.cell_type==t].mean(axis=0).values for t in types]).T
+print('types', types, 'means shape', means.shape)
+# marker top genes per type by mean / rest
+for i,t in enumerate(types):
+    rest=np.delete(means, i, axis=1).mean(axis=1)
+    score=(means[:,i]+1)/(rest+1)
+    top=np.argsort(score)[-8:][::-1]
+    print(t, top[:8], score[top[:8]], means[top[:8], i], rest[top[:8]])
+
+sp=mmread('matrix.mtx.gz').tocsc()  # genes x spots
+barcodes=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+pos=pd.read_csv('tissue_positions.csv')
+print('sp', sp.shape, 'pos', pos.shape)
+X=sp.toarray().astype(float)
+# NNLS raw signatures with intercept? scale columns are per-cell; spots may multi-cell. include all genes.
+W=[]
+res=[]
+for j in range(X.shape[1]):
+    w,r=nnls(means, X[:,j])
+    W.append(w); res.append(r)
+W=np.array(W) # spots x types
+props=W/W.sum(axis=1, keepdims=True)
+cls=np.array(types)[props.argmax(axis=1)]
+print('NNLS counts')
+print(pd.Series(cls).value_counts().sort_index())
+print('prop max summary', np.percentile(props.max(axis=1), [0,1,5,25,50,75,95,99,100]))
+# correlations log normalized
+ref=np.log1p(means / means.sum(axis=0)*1e4)
+obs=np.log1p((X / X.sum(axis=0))*1e4)
+# center genes
+Rc=ref-ref.mean(axis=0); Oc=obs-obs.mean(axis=0)
+corr=Oc.T@Rc/np.sqrt((Oc**2).sum(axis=0)[:,None]*(Rc**2).sum(axis=0)[None,:])
+cls2=np.array(types)[corr.argmax(axis=1)]
+print('corr counts')
+print(pd.Series(cls2).value_counts().sort_index())
+print('agreement', np.mean(cls==cls2))
+# show map 30 x 30 if Spot_i order with positions array_row/col
+p=pos.set_index('barcode').loc[barcodes]
+print(p[['array_row','array_col','pxl_row_in_fullres','pxl_col_in_fullres']].head(), p[['array_row','array_col']].max())
+abbr={'B_Cell':'B','Endothelial':'E','Fibroblast_Stroma':'F','Macrophage':'M','T_Cell':'T','Tumor_Core':'C'}
+grid=np.full((p.array_row.max()+1, p.array_col.max()+1), '.', dtype=object)
+for idx,(r,c) in enumerate(zip(p.array_row, p.array_col)):
+    grid[r,c]=abbr[cls[idx]]
+print('NNLS dominant map')
+for row in grid:
+    print(''.join(row))
+# proximity based on dominant classes: nearest distance to any Tumor_Core spot excluding tumor itself for each type
+coords=p[['pxl_row_in_fullres','pxl_col_in_fullres']].values.astype(float)
+tumor=cls=='Tumor_Core'
+D=cdist(coords, coords[tumor])
+nearest=D.min(axis=1)
+for t in types:
+    if t=='Tumor_Core': continue
+    vals=nearest[cls==t]
+    others=nearest[(cls"'!=t)&(~tumor)]
+    u,pv=mannwhitneyu(vals, others, alternative='"'less')
+    print('dom prox', t, len(vals), 'mean', vals.mean() if len(vals) else None, 'median', np.median(vals) if len(vals) else None, 'p', pv)
+# proximity using proportions weighted: mean of prop by distance bins to tumor
+for t in types:
+    if t=='Tumor_Core': continue
+    rho=np.corrcoef(props[:,types.index(t)], nearest)[0,1]
+    print('prop corr distance', t, rho, 'near quant means', [props[nearest<=q,types.index(t)].mean() for q in np.percentile(nearest,[25,50,75])])
+PY"

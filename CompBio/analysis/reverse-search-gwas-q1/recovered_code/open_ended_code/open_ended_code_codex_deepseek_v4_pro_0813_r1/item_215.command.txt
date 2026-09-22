@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, urllib.request, re, concurrent.futures, sys
+path='summary_statistics_table_export.tsv'
+rows=[]
+with open(path, encoding='utf-8', newline='') as f:
+    r=csv.DictReader(f, delimiter='\\t')
+    for row in r:
+        if row.get('pubmedId')=='40593539':
+            rows.append(row)
+print('rows',len(rows))
+# unique directories
+urls=[]
+for row in rows:
+    u=row['summaryStatistics']
+    if u and u not in urls: urls.append(u)
+print('urls',len(urls))
+target=151441444
+
+def list_dir(u):
+    try:
+        req=urllib.request.Request(u, headers={'User-Agent':'curl/8'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html=resp.read().decode('utf-8','replace')
+        matches=[]
+        for name,size in re.findall(r'<a href=\"(["'^"]+)">[''^<]*</a></td><td[''^>]*>(?:&nbsp;|[''^<]*)</td><td align="right">'"\\s*([0-9]+)\\s*</td>', html):
+            matches.append((name, int(size)))
+        # also file hrefs with size later
+        return (u, matches)
+    except Exception as e:
+        return (u, [('__ERROR__',str(e))])
+
+found=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    futs=[ex.submit(list_dir,u) for u in urls]
+    for fut in concurrent.futures.as_completed(futs):
+        u,matches=fut.result()
+        for name,size in matches:
+            if size==target:
+                found.append((u,name,size))
+                print('FOUND',u,name,size,flush=True)
+            elif abs(size-target)<10000000:
+                pass
+print('found count',len(found))
+if not found:
+    # print summary of min size difference among returned files maybe
+    pass
+PY"

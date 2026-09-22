@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.parse,urllib.request,edlib,collections
+from Bio.Seq import Seq
+url='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'+urllib.parse.urlencode({'db':'nuccore','id':'AL008638.1','seq_start':'60000','seq_stop':'70000','rettype':'fasta','strand':'1','retmode':'text'})
+out=urllib.request.urlopen(url,timeout=30).read().decode(); ref=''.join(x.strip() for x in out.splitlines() if not x.startswith('>'))
+def reads(p):
+ with gzip.open(p,'rt') as f:
+  while True:
+   h=f.readline().strip()
+   if not h: return
+   s=f.readline().strip(); f.readline(); f.readline()
+   yield h,s
+for fn in ['phase.chain.q1.R1.fq.gz','phase.chain.q1.R2.fq.gz']:
+ ds=list(reads(fn)); best=[]
+ for h,s in ds:
+  arr=[]
+  for ori,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+   a=edlib.align(q,ref,mode='HW',task='path',k=-1)
+   arr.append((a['editDistance'],ori,a['locations'][0],a['cigar']))
+  arr.sort()
+  best.append((arr[0][0],arr[0][1],arr[0][2],arr[0][3],arr[1][0]))
+ print(fn,'min dist',collections.Counter(x[0] for x in best))
+ print('ori',collections.Counter(x[1] for x in best))
+ print('start range',min(x[2][0] for x in best),max(x[2][0] for x in best),'end',min(x[2][1] for x in best),max(x[2][1] for x in best))
+ print('bad >10',[(i+1,x[0:3]) for i,x in enumerate(best) if x[0]>10][:20])
+ print('top starts',collections.Counter(x[2][0] for x in best).most_common(10))
+PY"

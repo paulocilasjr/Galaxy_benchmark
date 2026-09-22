@@ -1,0 +1,69 @@
+/bin/bash -c "python3 - <<'PY'
+import requests,time,json
+H='ATGCTGCTGCTGGCGAGATGTCTGCTGCTAGTCCTCGTCTCCTCGCTGCTGGTATGCTCGGGACTGGCGTGCGGACCGGGCAGGGGGTTCGGGAAGAGGAGGCACCCCAAAAAGCTGACCCCTTTAGCCTACAAGCAGTTTATCCCCAATGTGGCCGAGAAGACCCTAGGCGCCAGCGGAAGGTATGAAGGGAAGATCTCCAGAAACTCCGAGCGATTTAAGGAACTCACCCCCAATTACAACCCCGACATCATATTTAAGGATGAAGAAAACACCGGAGCGGACAGGCTGATGACTCAG'
+def get_json(url,params=None):
+ for i in range(15):
+  try:
+   r=requests.get(url,params=params,headers={'Content-Type':'application/json'},timeout=60)
+   if r.status_code==200:return r.json()
+   print('json',r.status_code,'try',i,url)
+  except Exception as e: print('err',e,'try',i)
+  time.sleep(2+2*i)
+ return None
+def get_cdna(tid):
+ for i in range(15):
+  try:
+   r=requests.get(f'https://rest.ensembl.org/sequence/id/{tid}',params={'type':'cdna'},headers={'Accept':'text/x-fasta'},timeout=60)
+   if r.status_code==200:return ''.join(r.text.splitlines()[1:])
+   print('seq',r.status_code,'try',i,tid)
+  except Exception as e: print('err seq',e,'try',i)
+  time.sleep(2+2*i)
+ return None
+def lev(a,b):
+ if len(a)<len(b):a,b=b,a
+ prev=list(range(len(b)+1))
+ for i,ca in enumerate(a,1):
+  cur=[i]
+  for j,cb in enumerate(b,1):
+   cur.append(min(prev[j]+1,cur[-1]+1,prev[j-1]+(ca"'!=cb)))
+  prev=cur
+ return prev[-1]
+def choose(data):
+ ts=[t for t in data.get('"'Transcript',[]) if t.get('biotype')=='protein_coding']
+ if not ts: return None
+ # longest protein length, tie canonical
+ def key(t):
+  return (-((t.get('Translation') or {}).get('length') or 0), -(t.get('is_canonical') or 0))
+ ts.sort(key=key)
+ return ts[0]
+species={
+'pan_troglodytes':'ENSPTRG00000019912',
+'macaca_mulatta':'ENSMMUG00000062128',
+'pan_paniscus':'ENSPPAG00000033504',
+'ailuropoda_melanoleuca':'ENSAMEG00000028933',
+'delphinapterus_leucas':'ENSDLEG00000014841',
+}
+out={}
+for sp,gene in species.items():
+ data=get_json(f'https://rest.ensembl.org/lookup/id/{gene}',{'expand':'1'})
+ print('\\n',sp, 'data', bool(data))
+ if not data: continue
+ t=choose(data)
+ tid=t['id']; strand=t['strand']; tstart=t['start']; tend=t['end']; tr=t.get('Translation') or {}
+ exons=sorted(t.get('Exon',[]), key=lambda e: (e['start'] if strand==1 else -e['end']))
+ first=exons[0]
+ if strand==1:
+  cds=tr['start']-tstart; eend=first['end']-tstart
+ else:
+  cds=tend-tr['end']; eend=tend-first['start']
+ seq=get_cdna(tid)
+ if not seq:
+  print('no seq'); continue
+ seg=seq[cds:eend+1]
+ d=lev(seg,H)
+ print('chosen',tid,'prot',tr.get('length'),'cds_off',cds,'eend',eend,'seg_len',len(seg),'dist',d,'start',seg[:30],'end',seg[-30:])
+ out[sp]={'transcript':tid,'segment':seg,'distance':d}
+open('ensembl_segments.json','w').write(json.dumps(out,indent=2))
+print('\\nSUMMARY')
+for sp in species: print(sp, out.get(sp,{}).get('distance'))
+PY"

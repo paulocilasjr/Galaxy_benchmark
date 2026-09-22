@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+candidates=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+bam=pysam.AlignmentFile('aln.chr22.bam')
+# read allele extraction at positions, D for deletion; insertion not present
+def read_alleles(r):
+    vals={}
+    qpos=0; refpos=r.reference_start+1
+    cand=set(candidates)
+    for op,l in r.cigartuples:
+        if op in (0,7,8):
+            for i in range(l):
+                p=refpos+i
+                if p in cand:
+                    vals[p]=r.query_sequence[qpos+i]
+            qpos+=l; refpos+=l
+        elif op==1:
+            qpos+=l
+        elif op==2:
+            for p in range(refpos,refpos+l):
+                if p in cand: vals[p]='D'
+            refpos+=l
+        elif op==4:
+            qpos+=l
+        elif op==3:
+            refpos+=l
+    return vals
+pairs=collections.defaultdict(list)
+for r in bam.fetch('chr22',27079100-1,27080650):
+    if not(r.is_secondary or r.is_supplementary or r.is_unmapped):
+        pairs[r.query_name].append(read_alleles(r))
+patterns=collections.Counter(); conflicts=0
+for q,lst in pairs.items():
+    merged={}
+    bad=False
+    for d in lst:
+        for p,a in d.items():
+            if p in merged and merged[p]"'!=a:
+                # ignore if one is low? count conflict
+                bad=True
+            else: merged[p]=a
+    pat='"'-'.join(merged.get(p,'.') for p in candidates)
+    if sum(1 for p in candidates if p in merged)>=2:
+        patterns[pat]+=1
+    if bad: conflicts+=1
+print('pairs',len(pairs),'conflicts',conflicts)
+for pat,n in patterns.most_common(50): print(n,pat)
+# pairwise allele links for adjacent candidates
+for i in range(len(candidates)-1):
+    p1,p2=candidates[i],candidates[i+1]
+    cc=collections.Counter()
+    for q,lst in pairs.items():
+        merged={}; bad=False
+        for d in lst:
+            for p,a in d.items():
+                if p in merged and merged[p]"'!=a: bad=True
+                merged[p]=a
+        if p1 in merged and p2 in merged and not bad:
+            cc[(merged[p1],merged[p2])]+=1
+    print('"'LINK',p1,p2,cc.most_common())
+PY"

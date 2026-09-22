@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp, pandas as pd
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+    syms=np.array([x.decode() if isinstance(x,bytes) else x for x in f['var/symbol'][:]])
+    cats=np.array([x.decode() if isinstance(x,bytes) else x for x in f['obs/sampleID/categories'][:]])
+    sample=cats[f['obs/sampleID/codes'][:]]
+    X=sp.csr_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=tuple(f['X'].attrs['shape']))
+lib=np.asarray(X.sum(axis=1)).ravel().astype(float)
+g2i={g:i for i,g in enumerate(syms)}
+panels={
+ 'immune':['PTPRC','CD3D','CD3E','CD2','NKG7','MS4A1','CD79A','LYZ','HLA-DRA','CD74','LST1'],
+ 't':['CD3D','CD3E','CD2','TRAC'], 'nk':['NKG7','GNLY','PRF1','KLRD1'], 'b':['MS4A1','CD79A','CD79B','BANK1'], 'myeloid':['LYZ','S100A8','S100A9','FCGR3A','CD68','CSF1R','LST1'],
+ 'dc':['FCER1A','CLEC10A','CD1C','CD1E','CLEC9A','XCR1','LILRA4','IL3RA','LAMP3','CCR7','FLT3','ITGAX'],
+ 'epithelial':['EPCAM','KRT8','KRT18','KRT19','KRT7','MUC1'], 'endo':['PECAM1','VWF','CLDN5','ENG','KDR'], 'fibro':['COL1A1','COL1A2','DCN','LUM','COL3A1','PDGFRA'], 'mast':['TPSAB1','TPSB2','CPA3','KIT'],
+ 'basal':['KRT5','KRT6A','KRT6B','KRT14','KRT17','TP63','DSG3','SERPINB5','S100A2'], 'adeno':['SFTPA1','SFTPA2','SFTPB','SFTPC','NAPSA','NKX2-1','SLC34A2','MUC1','AGER','SCGB3A1'],
+}
+genes=sorted({g for v in panels.values() for g in v if g in g2i})
+N=np.log1p(X[:,[g2i[g] for g in genes]].toarray().astype(float)/lib[:,None]*1e4)
+pos={g:i for i,g in enumerate(genes)}
+def score(gs):
+    ids=[pos[g] for g in gs if g in pos]
+    return N[:,ids].mean(1)
+S={k:score(v) for k,v in panels.items()}
+comp_names=['immune','epithelial','endo','fibro','mast']
+comp_mat=np.vstack([S[k] for k in comp_names]).T
+comp=np.array(comp_names,object)[comp_mat.argmax(1)]; comp[comp_mat.max(1)<0.15]='unknown'
+imm_names=['t','nk','b','myeloid','dc','mast']
+imm_sub=np.array(imm_names,object)[np.vstack([S[k] for k in imm_names]).T.argmax(1)]
+rows=[]
+for sid in cats:
+    m=sample==sid; epi=m&(comp=='epithelial')
+    rows.append([sid, epi.sum(), S['basal'][epi].mean() if epi.sum() else np.nan, S['adeno'][epi].mean() if epi.sum() else np.nan, ((m)&(comp=='immune')&(imm_sub=='dc')&(S['dc']>0.2)).sum()/m.sum()])
+df=pd.DataFrame(rows,columns='sid epi_n basal adeno dcprop'.split())
+lusc=set(df.loc[(df.epi_n>=20)&(df.basal>df.adeno),'sid'])
+query=['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']
+first=df[df.sid.isin(query) & df.sid.isin(lusc)].sort_values('dcprop',ascending=False).iloc[0].sid
+basal_lusc=np.isin(sample,list(lusc))&(comp=='epithelial')&(S['basal']>S['adeno'])&(S['basal']>0.3)
+nonimmune=(comp"'!='"'immune')&(comp"'!='"'unknown')
+second=int(round((basal_lusc.sum()/nonimmune.sum())*100/20)*20)
+print(first+';'+str(second))
+PY"

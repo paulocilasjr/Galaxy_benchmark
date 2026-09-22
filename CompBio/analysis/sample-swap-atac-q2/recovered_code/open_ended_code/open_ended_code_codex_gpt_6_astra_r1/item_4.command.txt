@@ -1,0 +1,35 @@
+/bin/bash -lc "cat > analyze.py <<'PY'
+import pandas as pd, numpy as np
+x=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t')
+cols=x.columns[3:].tolist()
+x.index=pd.MultiIndex.from_arrays([x.chrom,x.start//10000])
+cpm=x[cols]/x[cols].sum()*1e6
+r=pd.read_csv('hg38.ncbiRefSeq.txt.gz',sep='\\t',header=None)
+r=r[r[2].isin(x.chrom.unique())].copy()
+r['tss']=np.where(r[3]=='+',r[4],r[5]-1)
+markers={
+'Rod':['RHO','NRL','NR2E3','PDE6A','PDE6B','GNAT1','CNGA1','SAG'],
+'Cone':['ARR3','GNAT2','PDE6C','PDE6H','CNGA3','CNGB3','OPN1SW','OPN1LW','RXRG'],
+'Astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A2','PAX2','GJA1'],
+'Mullerglia':['RLBP1','GLUL','SLC1A3','SOX9','SOX2','RGR','CLUL1'],
+'Microglia':['P2RY12','CX3CR1','AIF1','TYROBP','SPI1','C1QA','CSF1R'],
+'Retinalganglioncell':['RBPMS','POU4F1','POU4F2','SNCG','NEFL','NEFM','THY1'],
+'Horizontal':['ONECUT1','ONECUT2','PROX1','LHX1','CALB1'],
+'GABAamacrine':['GAD1','GAD2','SLC32A1','TFAP2A','TFAP2B'],
+'AIIamacrine':['SLC6A9','GJD2','DAB1','PROX1','CALB2','PAX6'],
+}
+for typ,genes in markers.items():
+ print('\\n'+typ)
+ vals=[]
+ for gene in genes:
+  g=r[r[12]==gene]
+  idx=list(set((a,int(b)//10000) for a,b in zip(g[2],g.tss)))
+  idx=[i for i in idx if i in cpm.index]
+  if not idx: continue
+  v=cpm.loc[idx].mean()
+  vals.append(v/(v.mean()+1e-9))
+  print(gene,' '.join(f'{c}:{v[c]:.1f}' for c in cols),'MAX='+v.idxmax())
+ score=pd.DataFrame(vals).mean().sort_values(ascending=False)
+ print('SCORE',score.round(2).to_dict())
+PY
+python analyze.py"
