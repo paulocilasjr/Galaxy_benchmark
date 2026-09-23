@@ -1,0 +1,31 @@
+/usr/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp, math
+p='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+a=ad.read_h5ad(p)
+counts=a.layers['counts'].tocsr()
+obs=a.obs.copy()
+vc=obs.groupby(['individual','cell_type'], observed=False).size().rename('ncells').reset_index()
+ret=vc[vc.ncells>=10].reset_index(drop=True)
+N=len(ret)
+groups=[]
+for r in ret.itertuples(index=False):
+    idx=np.where((obs['individual']==r.individual)&(obs['cell_type']==r.cell_type))[0]
+    arr=np.asarray(counts[idx].sum(axis=0)).ravel().astype(np.int64)
+    col=(str(r.individual)+'_'+str(r.cell_type)).replace(' ','_').replace('-','_')
+    groups.append((col, arr))
+mat=np.vstack([x[1] for x in groups])
+tot=mat.sum(axis=1)
+M=np.median(tot)
+S=math.ceil(10+0.7*(N-10))
+thr_cpm=10.0/M*1_000_000
+print('N',N,'M',M,'S',S,'cpm_threshold',thr_cpm)
+cpm=mat / tot[:,None] * 1_000_000
+pass_n=(cpm >= thr_cpm).sum(axis=0)
+summed=mat.sum(axis=0)
+mask=(pass_n>=S)&(summed>=1000)
+print('retained genes', mask.sum(), 'of', mat.shape[1])
+print('pass_n distribution retained', np.unique(pass_n[mask], return_counts=True))
+print('summed min/max retained', summed[mask].min(), summed[mask].max())
+# print sample totals median/summary
+print(pd.Series(tot).describe())
+PY"

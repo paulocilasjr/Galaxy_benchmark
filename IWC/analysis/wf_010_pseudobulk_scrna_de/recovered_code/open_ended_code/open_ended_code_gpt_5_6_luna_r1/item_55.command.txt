@@ -1,0 +1,57 @@
+/usr/bin/bash -lc "/opt/conda/bin/python3.11 -u - <<'PY'
+from pathlib import Path
+import h5py, numpy as np, pandas as pd, math, json
+from scipy.sparse import csr_matrix
+
+root=Path('/workspace')
+src=root/'data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+pbfile=root/'final_answer/pseudobulk_counts.tsv'
+defile=root/'final_answer/differential_expression.tsv'
+methodfile=root/'final_answer/method.json'
+
+def dec(a): return np.asarray([x.decode() if isinstance(x,bytes) else str(x) for x in a], dtype=object)
+def clean(x): return x.replace(' ','_').replace('-','_')
+with h5py.File(src,'r') as f:
+    ctcat=dec(f['obs/cell_type/categories'][()]); dcat=dec(f['obs/disease/categories'][()]); icat=dec(f['obs/individual/categories'][()])
+    ct=ctcat[f['obs/cell_type/codes'][()]]; disease=dcat[f['obs/disease/codes'][()]]; ind=icat[f['obs/individual/codes'][()]]
+    genes=dec(f['var/gene_symbol'][()])
+    raw=f['layers/counts/data'][()]
+    assert np.all(np.isfinite(raw)) and np.all(raw>=0) and np.all(raw==np.floor(raw))
+    X=csr_matrix((raw.astype(np.int64),f['layers/counts/indices'][()],f['layers/counts/indptr'][()]),shape=(len(ind),len(genes)))
+meta=pd.DataFrame({'individual':ind,'cell_type':ct,'disease':disease})
+combos=list(meta.groupby(['individual','cell_type'],sort=False,observed=True).size().loc[lambda s:s>=10].index)
+cols=[clean(i)+'_'+clean(c) for i,c in combos]
+PB=np.vstack([np.asarray(X[(meta.individual==i)&(meta.cell_type==c)].sum(axis=0)).ravel() for i,c in combos]).astype(np.int64)
+tot=PB.sum(axis=1); M=float(np.median(tot)); S=math.ceil(10+0.7*(len(combos)-10)); threshold=10/M*1_000_000
+mask=((PB/tot[:,None]*1_000_000)>=threshold).sum(axis=0)>=S
+mask &= PB.sum(axis=0)>=1000
+expected_genes=genes[mask]; expected=PB[:,mask].T
+pbt=pd.read_csv(pbfile,sep='\\t')
+assert list(pbt.columns)==['gene']+cols, 'column mismatch'
+assert pbt.shape==(len(expected_genes),1+len(cols)), pbt.shape
+assert pbt['gene'].tolist()==expected_genes.tolist(), 'gene order/content mismatch'
+vals=pbt.iloc[:,1:].to_numpy()
+assert np.issubdtype(vals.dtype,np.integer), vals.dtype
+assert np.array_equal(vals,expected), 'count matrix mismatch'
+assert np.all(vals>=0)
+# DE table exact schema and one-to-one identifiers
+det=pd.read_csv(defile,sep='\\t')
+assert list(det.columns)==['gene','log2_fold_change','p_value','fdr']
+assert det.shape==(len(expected_genes),4),det.shape
+assert det['gene'].tolist()==expected_genes.tolist()
+for c in ['log2_fold_change','p_value','fdr']:
+    a=det[c].to_numpy(float)
+    assert np.all(np.isfinite(a)), c
+assert np.all((det['p_value']>=0)&(det['p_value']<=1))
+assert np.all((det['fdr']>=0)&(det['fdr']<=1))
+# Independent BH recomputation.
+p=det.p_value.to_numpy(float); order=np.argsort(p,kind='mergesort'); q=p[order]*len(p)/np.arange(1,len(p)+1); q=np.minimum.accumulate(q[::-1])[::-1]; q=np.clip(q,0,1); expected_q=np.empty_like(p); expected_q[order]=q
+assert np.allclose(det.fdr.to_numpy(float),expected_q,rtol=0,atol=1e-14)
+method=json.loads(methodfile.read_text())
+assert method=={'method':'DESeq2'}
+print('PASS')
+print(f'rows={pbt.shape[0]} columns={pbt.shape[1]-1} N={len(combos)} M={M:.1f} S={S} CPM={threshold:.12g}')
+print(f'counts min={vals.min()} max={vals.max()} total={vals.sum()}')
+print(f'LFC range={det.log2_fold_change.min():.6g}..{det.log2_fold_change.max():.6g}; p range={p.min():.6g}..{p.max():.6g}; fdr min={det.fdr.min():.6g}')
+print('method',method)
+PY"

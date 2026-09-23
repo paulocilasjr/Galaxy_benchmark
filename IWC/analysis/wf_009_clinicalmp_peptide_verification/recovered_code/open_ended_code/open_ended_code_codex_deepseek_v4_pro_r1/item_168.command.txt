@@ -1,0 +1,89 @@
+/usr/bin/bash -lc "cat > /tmp/make_final.py <<'PY'
+from pathlib import Path
+import csv, gzip, re, sys
+
+WORK=Path('work')
+def read_fa_accessions(path):
+    acc=set()
+    opener = gzip.open(path,'rt',errors='replace') if Path(path).read_bytes()[:2]==b'\\x1f\\x8b' else open(path)
+    with opener as f:
+        for line in f:
+            if line.startswith('>'):
+                tok=line[1:].strip().split()[0]
+                if '|' in tok:
+                    parts=tok.split('|')
+                    if len(parts)>=2: acc.add(parts[1].upper())
+                else:
+                    acc.add(tok.upper())
+    return acc
+human_acc=read_fa_accessions('data/inputs/human_uniprot_isoforms_fasta/stream')
+crap_acc=read_fa_accessions('data/inputs/crap/Contaminants%28cRAP%29-Protein-Database.fasta')
+# also con prefixes
+verified=set()
+for p in sorted(WORK.glob('pepquery_out/F*_nodb_5g/psm_rank.txt')):
+    with open(p) as f:
+        header=f.readline().rstrip('\\n').split('\\t')
+        ci=header.index('confident'); pi=header.index('peptide')
+        for line in f:
+            parts=line.rstrip('\\n').split('\\t')
+            if parts[ci]=='Yes':
+                verified.add(parts[pi].upper())
+
+def proteins_from_field(field):
+    toks=[]
+    for part in re.split(r'[;,]', field):
+        t=part.strip()
+        if t: toks.append(t)
+    return toks
+
+def norm(tok):
+    tok=tok.strip()
+    if not tok: return None
+    if '|' in tok:
+        parts=tok.split('|')
+        db=parts[0].upper()
+        if len(parts)>=2:
+            acc=parts[1].upper()
+            if db=='TR': return acc
+            # sp/generic/con are human/contaminant
+            return None
+        return None
+    acc=tok.upper()
+    if acc.startswith('CON_') or acc in crap_acc or acc in human_acc:
+        return None
+    return acc
+
+mapping={}
+def add(seq, field):
+    if seq not in verified: return
+    for tok in proteins_from_field(field):
+        acc=norm(tok)
+        if acc: mapping.setdefault(seq,set()).add(acc)
+
+with open('data/inputs/sgps_peptide_report/SGPS_peptide-report.tabular', newline='') as f:
+    r=csv.reader(f, delimiter='\\t')
+    next(r)
+    for row in r:
+        if len(row)>=6:
+            add(row[5].upper(), row[1])
+with open('data/inputs/maxquant_peptide_report/MaxQuant-peptide-report.tabular', newline='') as f:
+    r=csv.reader(f, delimiter='\\t')
+    next(r)
+    for row in r:
+        if len(row)>=35:
+            add(row[0].upper(), row[34])
+
+# debug
+print('verified',len(verified))
+print('mapped peptides',len(mapping),'unmapped',sorted(verified-set(mapping)))
+rows=[]
+for seq in sorted(verified):
+    ids=sorted(mapping.get(seq,[]))
+    for aid in ids: rows.append((seq,aid))
+print('rows',len(rows),'unique ids',len({r[1] for r in rows}))
+with open('/tmp/final_preview.tsv','w') as f:
+    f.write('peptide\\tprotein_id\\n')
+    for seq,aid in rows: f.write(f'{seq}\\t{aid}\\n')
+PY
+micromamba run -n pepquery python3 /tmp/make_final.py
+head -30 /tmp/final_preview.tsv; echo '--- tail'; tail -20 /tmp/final_preview.tsv"

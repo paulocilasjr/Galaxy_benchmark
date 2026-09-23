@@ -1,0 +1,56 @@
+/usr/bin/bash -lc "perl <<'PERL'
+use strict;
+use warnings;
+
+my "'$fp = '"'final_answer/trimmed_forward.fastqsanger.gz';
+my "'$rp = '"'final_answer/trimmed_reverse.fastqsanger.gz';
+open my "'$f, '"'-|', 'gzip', '-cd', "'$fp or die "cannot open $fp: $!'"\\n\";
+open my "'$r, '"'-|', 'gzip', '-cd', "'$rp or die "cannot open $rp: $!'"\\n\";
+
+sub record {
+    my ("'$fh, $which) = @_;
+    my $h = <$fh>;
+    return undef if !defined $h;
+    my $s = <$fh>;
+    my $p = <$fh>;
+    my $q = <$fh>;
+    die "$which truncated FASTQ record'"\\n\" if "'!defined($s) || !defined($p) || !defined($q);
+    chomp($h); chomp($s); chomp($p); chomp($q);
+    die "$which malformed header'"\\n\" unless "'$h =~ /''^@/;
+    die "$which malformed plus line'"\\n\" unless "'$p =~ /''^'"\\+/;
+    die \""'$which sequence/quality length mismatch'"\\n\" unless length("'$s) == length($q);
+    return [$h, $s, $q];
+}
+
+my ($pairs, $bases, $low, $n_bases, $min_len, $max_len) = (0, 0, 0, 0, 10**9, 0);
+while (1) {
+    my $a = record($f, '"'forward');
+    my "'$b = record($r, '"'reverse');
+    last if "'!defined($a) && !defined($b);
+    die "mate record count mismatch near pair ".($pairs+1)."'"\\n\" if "'!defined($a) || !defined($b);
+    my ($aid) = split /'"\\s+/, "'$a->[0];
+    my ($bid) = split /'"\\s+/, "'$b->[0];
+    die "mate IDs/order mismatch at pair ".($pairs+1).": $aid vs $bid'"\\n\" unless "'$aid eq $bid;
+    for my $rec ($a, $b) {
+        my ($s, $q) = ($rec->[1], $rec->[2]);
+        my $len = length($s);
+        die "read shorter than 15 at pair ".($pairs+1)."'"\\n\" if "'$len < 15;
+        my $ns = () = ($s =~ /N/g);
+        die "read has more than 5 Ns at pair ".($pairs+1)."'"\\n\" if "'$ns > 5;
+        my $lq = 0;
+        for my $i (0 .. $len-1) {
+            $lq++ if ord(substr($q, $i, 1)) - 33 < 20;
+        }
+        die "read has >40% Q<20 at pair ".($pairs+1)."'"\\n\" if "'$lq * 100 > 40 * $len;
+        $bases += $len;
+        $low += $lq;
+        $n_bases += $ns;
+        $min_len = $len if $len < $min_len;
+        $max_len = $len if $len > $max_len;
+    }
+    $pairs++;
+}
+close $f or die "forward gzip stream failed'"\\n\";
+close "'$r or die "reverse gzip stream failed'"\\n\";
+printf \"validated_pairs=%d validated_reads=%d validated_bases=%d lowQ20_bases=%d N_bases=%d min_len=%d max_len=%d\\n\", "'$pairs, 2*$pairs, $bases, $low, $n_bases, $min_len, $max_len;
+PERL'

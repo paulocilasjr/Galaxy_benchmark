@@ -1,0 +1,33 @@
+/usr/bin/bash -lc "/opt/conda/bin/python3.11 -u - <<'PY'
+print('start', flush=True)
+import h5py,numpy as np,pandas as pd
+from scipy.sparse import csr_matrix
+print('imports basic', flush=True)
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+print('imports dds', flush=True)
+p='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+def ds(a): return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a],dtype=object)
+with h5py.File(p,'r') as f:
+ ct=ds(f['obs/cell_type/categories'][()])[f['obs/cell_type/codes'][()]]; di=ds(f['obs/disease/categories'][()])[f['obs/disease/codes'][()]]; ind=ds(f['obs/individual/categories'][()])[f['obs/individual/codes'][()]]; gn=ds(f['var/gene_symbol'][()]); X=csr_matrix((f['layers/counts/data'][()].astype(np.int64),f['layers/counts/indices'][()],f['layers/counts/indptr'][()]),shape=(len(ind),len(gn)))
+meta=pd.DataFrame({'individual':ind,'cell_type':ct,'disease':di}); meta['key']=meta.individual+'\\x1f'+meta.cell_type
+keep=meta.groupby('key',sort=False).size(); keep=keep[keep>=10].index.tolist(); m2=meta.drop_duplicates('key').set_index('key').loc[keep]
+PB=np.vstack([np.asarray(X[meta.key.to_numpy()==k].sum(axis=0)).ravel() for k in keep])
+col=[k.split('\\x1f')[0].replace(' ','_').replace('-','_')+'_'+k.split('\\x1f')[1].replace(' ','_').replace('-','_') for k in keep]
+metadata=m2[['individual','cell_type','disease']].copy(); metadata.index=col
+M=np.median(PB.sum(axis=1)); S=int(np.ceil(10+.7*(len(keep)-10))); good=(np.sum((PB/PB.sum(axis=1,keepdims=True)*1e6)>=(10/M*1e6),axis=0)>=S)&(PB.sum(axis=0)>=1000); gi=np.flatnonzero(good)[:20]
+counts=pd.DataFrame(PB[:,gi],index=col,columns=gn[gi]).astype('int64')
+metadata['cell_type']=pd.Categorical(metadata['cell_type'],categories=sorted(metadata['cell_type'].unique()))
+metadata['disease']=pd.Categorical(metadata['disease'],categories=['COVID-19','normal'])
+print('before dds',counts.shape, flush=True)
+dds=DeseqDataSet(counts=counts,metadata=metadata,design='~ cell_type + disease',quiet=False,n_cpus=1,refit_cooks=False,low_memory=False)
+print('after init', flush=True)
+dds.deseq2()
+print('after dds', flush=True)
+stat=DeseqStats(dds,contrast=['disease','normal','COVID-19'],cooks_filter=False,independent_filter=False,quiet=False,n_cpus=1)
+print('after stat', flush=True)
+stat.summary()
+print('results',stat.results_df.to_string(), flush=True)
+print('na',stat.results_df.isna().sum().to_dict(), flush=True)
+PY
+s="'$?; echo status=$s'

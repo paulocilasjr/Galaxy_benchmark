@@ -1,0 +1,59 @@
+/usr/bin/bash -c "python3 - <<'PY'
+import gzip, json, hashlib, os, re
+
+root='/workspace/final_answer'
+files=['filtered_forward.fastqsanger.gz','filtered_reverse.fastqsanger.gz','method.json']
+print('files:')
+for f in files:
+    p=os.path.join(root,f)
+    print(p, os.path.getsize(p))
+
+for f in files[:2]:
+    p=os.path.join(root,f)
+    with gzip.open(p,'rb') as h:
+        h.read()
+    print(f, 'gzip_ok')
+
+# Read all records and compare header key sets/order.
+def read_records(path):
+    recs=[]
+    with gzip.open(path,'rb') as h:
+        while True:
+            header=h.readline()
+            if not header: break
+            seq=h.readline(); plus=h.readline(); qual=h.readline()
+            assert seq and plus and qual, 'truncated'
+            key=header.split()[0]
+            if key.startswith(b'@'): key=key[1:]
+            key=re.sub(rb'/[12]"'$'"',b'',key).decode()
+            recs.append((key,header,seq,plus,qual))
+    return recs
+fwd=read_records(os.path.join(root,files[0]))
+rev=read_records(os.path.join(root,files[1]))
+print('forward_records',len(fwd),'reverse_records',len(rev))
+print('same_keys',[k for k,_,_,_,_ in fwd]==[k for k,_,_,_,_ in rev])
+print('unique_forward_keys',len({k for k,_,_,_,_ in fwd}))
+
+# Verify retained records exist byte-for-byte in the original files.
+def original_by_key(path):
+    d={}
+    with gzip.open(path,'rb') as h:
+        while True:
+            header=h.readline()
+            if not header: break
+            seq=h.readline(); plus=h.readline(); qual=h.readline()
+            key=header.split()[0]
+            if key.startswith(b'@'): key=key[1:]
+            key=re.sub(rb'/[12]"'$'"',b'',key).decode()
+            d[key]=(header,seq,plus,qual)
+    return d
+of=original_by_key('/workspace/data/inputs/short_reads/pair/forward/forward.fastqsanger.gz')
+orr=original_by_key('/workspace/data/inputs/short_reads/pair/reverse/reverse.fastqsanger.gz')
+print('forward_exact_matches', all(tuple(r[1:])==of[r[0]] for r in fwd))
+print('reverse_exact_matches', all(tuple(r[1:])==orr[r[0]] for r in rev))
+
+with open(os.path.join(root,'method.json')) as h:
+    method=json.load(h)
+print('method', method)
+PY
+ls -la /workspace/final_answer"

@@ -1,0 +1,81 @@
+/usr/bin/bash -c "cat > /workspace/aggregate_pseudobulk.py <<'PY'
+#"'!/usr/bin/env python3
+import h5py
+import numpy as np
+import pandas as pd
+from scipy import sparse
+from pathlib import Path
+
+adata_path = Path('"'/workspace/data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad')
+out_meta = Path('/workspace/pseudobulk_metadata.tsv')
+out_all = Path('/workspace/pseudobulk_counts_raw_all.tsv')
+
+with h5py.File(adata_path, 'r') as f:
+    # observations
+    obs = {}
+    for key in ['individual', 'cell_type', 'disease', 'sex']:
+        g = f['obs'][key]
+        cats = [x.decode() if isinstance(x, bytes) else x for x in g['categories'][:]]
+        codes = g['codes'][:]
+        obs[key] = np.array([cats[c] for c in codes], dtype=object)
+    obs['barcode'] = np.array([
+        x.decode() if isinstance(x, bytes) else x for x in f['obs']['_index'][:]
+    ], dtype=object)
+    # variables
+    var_symbol = np.array([
+        x.decode() if isinstance(x, bytes) else x for x in f['var']['gene_symbol'][:]
+    ], dtype=object)
+    var_ensembl = np.array([
+        x.decode() if isinstance(x, bytes) else x for x in f['var']['ensembl_gene_id'][:]
+    ], dtype=object)
+    # counts layer CSR
+    g = f['layers/counts']
+    data = np.asarray(g['data'][:])
+    indices = np.asarray(g['indices'][:])
+    indptr = np.asarray(g['indptr'][:])
+    shape = tuple(g.attrs['shape'])
+    X = sparse.csr_matrix((data, indices, indptr), shape=shape)
+
+obs_df = pd.DataFrame(obs)
+obs_df['individual_cell'] = obs_df['individual'] + '||' + obs_df['cell_type']
+# cell counts before >=10 filtering
+keep_counts = obs_df.groupby('individual_cell').size()
+
+# Create dummy matrix for retained individual-cell combinations only.
+groups = obs_df['individual_cell'].values
+valid = obs_df['individual_cell'].isin(keep_counts[keep_counts >= 10].index).values
+obs_df = obs_df.loc[valid].copy()
+groups_kept = pd.Categorical(obs_df['individual_cell'])
+indicator = sparse.csr_matrix(
+    (np.ones(obs_df.shape[0], dtype=np.float64),
+     (np.arange(obs_df.shape[0], dtype=np.int32), groups_kept.codes.astype(np.int32))),
+    shape=(obs_df.shape[0], len(groups_kept.categories))
+)
+Xk = X[valid, :]
+pseudo = (indicator.T @ Xk).tocsr()
+pseudo = np.asarray(pseudo.todense(), dtype=np.float64)
+pseudo = np.rint(pseudo).astype(np.int64)
+# sample metadata: unique retained groups, order matches categories
+sample_meta = obs_df.groupby('individual_cell').agg(
+    individual=('individual', 'first'),
+    cell_type=('cell_type', 'first'),
+    disease=('disease', 'first'),
+    n_cells=('barcode', 'size'),
+).reindex(groups_kept.categories).reset_index(drop=True)
+sample_meta['sample'] = sample_meta['individual'] + '_' + sample_meta['cell_type']
+sample_meta['sample'] = sample_meta['sample'].str.replace(' ', '_', regex=False).str.replace('-', '_', regex=False)
+sample_meta['total_counts'] = pseudo.sum(axis=1)
+
+# Dump all filtered-sample pseudobulk before gene filtering for trace/audit.
+sample_meta.to_csv(out_meta, sep='\\t', index=False)
+gene_ids = np.array([f'{s}_{e}' for s,e in zip(var_symbol, var_ensembl)], dtype=object)
+all_df = pd.DataFrame(pseudo, columns=sample_meta['sample'].values, index=gene_ids)
+all_df.to_csv(out_all, sep='\\t', index=True, index_label='gene')
+print('cells:', X.shape[0], 'genes:', X.shape[1])
+print('retained sample groups:', sample_meta.shape[0])
+print(sample_meta.to_string(index=False))
+print('total counts summary:')
+print(sample_meta['total_counts'].describe().to_string())
+print('wrote', out_meta, out_all)
+PY
+python /workspace/aggregate_pseudobulk.py"

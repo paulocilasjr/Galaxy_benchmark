@@ -1,0 +1,63 @@
+/usr/bin/bash -lc "/workspace/.analysis_env/bin/python - <<'PY'
+import json, math
+from pathlib import Path
+import anndata as ad
+import numpy as np
+import pandas as pd
+from scipy import sparse
+root=Path('/workspace')
+p=root/'data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+a=ad.read_h5ad(p)
+out_counts=pd.read_csv(root/'final_answer/pseudobulk_counts.tsv',sep='\\t')
+out_de=pd.read_csv(root/'final_answer/differential_expression.tsv',sep='\\t',float_precision='round_trip')
+checks={}
+# Independently identify retained groups and output names.
+raw_obs=a.obs[['individual','cell_type','disease']].copy()
+checks['metadata_nonmissing']=not raw_obs.isna().any().any()
+obs=raw_obs.astype(str)
+group_sizes=obs.groupby(['individual','cell_type'],sort=False).size()
+retained=group_sizes[group_sizes>=10]
+expected_cols=[f'{i}_{c}'.replace(' ','_').replace('-','_') for i,c in retained.index]
+checks['exact_sample_columns']=out_counts.columns[1:].tolist()==expected_cols
+checks['sample_count_34']=len(expected_cols)==34
+checks['sample_names_unique']=len(set(expected_cols))==len(expected_cols)
+# Independently sum each retained group and compare every emitted count.
+X=a.layers['counts'].tocsr().astype(np.int64)
+source_gene_pos=a.var_names.get_indexer(out_counts.gene)
+checks['all_output_genes_in_source']=(source_gene_pos>=0).all()
+for col,(individual,cell_type) in zip(expected_cols,retained.index):
+    mask=((obs.individual==individual)&(obs.cell_type==cell_type)).to_numpy()
+    expected=np.asarray(X[mask][:,source_gene_pos].sum(axis=0)).ravel()
+    if not np.array_equal(expected,out_counts[col].to_numpy(dtype=np.int64)):
+        raise AssertionError(f'Count mismatch for {col}')
+checks['all_counts_match_source_sums']=True
+# Independently recompute the global expression filter over all retained samples.
+pb=[]
+for individual,cell_type in retained.index:
+    mask=((obs.individual==individual)&(obs.cell_type==cell_type)).to_numpy()
+    pb.append(np.asarray(X[mask].sum(axis=0)).ravel())
+pb=np.vstack(pb).astype(np.int64)
+totals=pb.sum(axis=1); N=len(pb); M=float(np.median(totals)); S=math.ceil(10+0.7*(N-10)); threshold=10/M*1_000_000
+eligible=(((pb/totals[:,None]*1_000_000)>=threshold).sum(axis=0)>=S)&(pb.sum(axis=0)>=1000)
+expected_genes=a.var_names[eligible].astype(str).tolist()
+checks['exact_global_gene_filter']=out_counts.gene.tolist()==expected_genes
+checks['gene_count_1429']=len(expected_genes)==1429
+# DE table and numeric requirements.
+checks['de_exact_columns']=out_de.columns.tolist()==['gene','log2_fold_change','p_value','fdr']
+checks['de_exact_genes']=out_de.gene.tolist()==out_counts.gene.tolist()
+checks['de_all_finite']=np.isfinite(out_de.iloc[:,1:].to_numpy()).all()
+checks['p_in_unit_interval']=out_de.p_value.between(0,1,inclusive='both').all()
+checks['fdr_in_unit_interval']=out_de.fdr.between(0,1,inclusive='both').all()
+pvals=out_de.p_value.to_numpy(); order=np.argsort(pvals,kind='mergesort'); n=len(pvals)
+ranked=np.minimum.accumulate((pvals[order]*n/np.arange(1,n+1))[::-1])[::-1]
+q=np.empty(n); q[order]=np.clip(ranked,0,1)
+checks['bh_matches_reported']=np.array_equal(q,out_de.fdr.to_numpy())
+checks['method_exact']=json.loads((root/'final_answer/method.json').read_text())=={'method':'DESeq2'}
+checks['exact_final_file_set']={x.name for x in (root/'final_answer').iterdir() if x.is_file()}=={'pseudobulk_counts.tsv','differential_expression.tsv','method.json'}
+failed=[k for k,v in checks.items() if not v]
+for k,v in checks.items(): print(k, 'PASS' if v else 'FAIL')
+print('N',N,'M',format(M,'.17g'),'S',S,'CPM_threshold',format(threshold,'.17g'),'genes',len(expected_genes))
+print('significant_fdr_lt_0.05',int((out_de.fdr<0.05).sum()))
+if failed: raise AssertionError('Failed checks: '+', '.join(failed))
+print('INDEPENDENT_VALIDATION=PASS')
+PY"

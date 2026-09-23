@@ -1,0 +1,34 @@
+/usr/bin/bash -lc "find final_answer -maxdepth 1 -type f -printf '%f\\t%s bytes\\n' | sort
+sed -n '1,80p' run_trace/analysis.log
+/workspace/.analysis_env/bin/python - <<'PY'
+import json
+from pathlib import Path
+import numpy as np
+import pandas as pd
+root=Path('/workspace')
+counts=pd.read_csv(root/'final_answer/pseudobulk_counts.tsv',sep='\\t')
+de=pd.read_csv(root/'final_answer/differential_expression.tsv',sep='\\t')
+method=json.loads((root/'final_answer/method.json').read_text())
+assert counts.columns[0]=='gene'
+assert counts.shape[1]==35
+assert counts['gene'].is_unique and counts['gene'].notna().all()
+vals=counts.iloc[:,1:].to_numpy()
+assert np.issubdtype(vals.dtype,np.integer) and (vals>=0).all()
+assert de.columns.tolist()==['gene','log2_fold_change','p_value','fdr']
+assert len(de)==len(counts) and de.gene.tolist()==counts.gene.tolist()
+assert np.isfinite(de.iloc[:,1:].to_numpy()).all()
+assert de.p_value.between(0,1,inclusive='both').all()
+assert de.fdr.between(0,1,inclusive='both').all()
+p=de.p_value.to_numpy(); n=len(p); order=np.argsort(p,kind='mergesort'); q0=np.minimum.accumulate((p[order]*n/np.arange(1,n+1))[::-1])[::-1]; q=np.empty(n); q[order]=np.clip(q0,0,1)
+assert np.allclose(q,de.fdr.to_numpy(),rtol=1e-13,atol=1e-15)
+assert method=={'method':'DESeq2'}
+print('counts_shape',counts.shape)
+print('de_shape',de.shape)
+print('count_range',vals.min(),vals.max())
+print('lfc_range',de.log2_fold_change.min(),de.log2_fold_change.max())
+print('p_range',de.p_value.min(),de.p_value.max())
+print('fdr_range',de.fdr.min(),de.fdr.max())
+print('fdr_lt_0.05',int((de.fdr<0.05).sum()))
+print('first_headers',counts.columns[:5].tolist())
+print('all_deliverable_checks=passed')
+PY"

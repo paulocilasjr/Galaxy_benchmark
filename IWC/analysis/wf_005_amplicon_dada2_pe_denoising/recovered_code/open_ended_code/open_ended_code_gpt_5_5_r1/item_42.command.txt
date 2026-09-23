@@ -1,0 +1,28 @@
+/usr/bin/bash -lc "micromamba run -p /workspace/.env_dada2 Rscript - <<'RS'
+read_ee <- function(file, trunc) {
+  con <- gzfile(file, 'rt'); on.exit(close(con))
+  ees <- numeric(); lens <- integer(); n <- 0L
+  repeat {
+    h <- readLines(con, n=1)
+    if (length(h) == 0) break
+    seq <- readLines(con, n=1); plus <- readLines(con, n=1); qual <- readLines(con, n=1)
+    n <- n + 1L
+    if (n > 5000) break
+    qchars <- strsplit(substr(qual, 1, min(trunc, nchar(qual))), '', fixed=TRUE)[[1]]
+    qs <- utf8ToInt(paste0(qchars, collapse='')) - 33L
+    ees[n] <- sum(10"'^(-qs/10))
+    lens[n] <- nchar(seq)
+  }
+  quantile(ees, probs=c(.1,.25,.5,.75,.9,.95,.99), na.rm=TRUE)
+}
+for (mate in c('"'forward','reverse')) {
+  cat('\\n', mate, '\\n', sep='')
+  vals <- do.call(rbind, lapply(sort(list.dirs('data/inputs/paired_input_data', recursive=FALSE, full.names=TRUE)), function(d) {
+    file <- if (mate=='forward') file.path(d,'forward','forward.fastqsanger.gz') else file.path(d,'reverse','reverse.fastqsanger.gz')
+    trunc <- if (mate=='forward') 240 else 200
+    q <- read_ee(file, trunc)
+    data.frame(sample=basename(d), t(q), check.names=FALSE)
+  }))
+  print(vals, row.names=FALSE)
+}
+RS"

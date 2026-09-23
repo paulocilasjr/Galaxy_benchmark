@@ -1,0 +1,45 @@
+/usr/bin/bash -lc "micromamba run -p /tmp/sc_analysis_env python - <<'PY'
+from pathlib import Path
+import json, re
+import numpy as np
+import pandas as pd
+root=Path('/workspace')
+final=root/'final_answer'
+expected={'pseudobulk_counts.tsv','differential_expression.tsv','method.json'}
+actual={p.name for p in final.iterdir() if p.is_file()}
+assert actual==expected,(actual,expected)
+counts=pd.read_csv(final/'pseudobulk_counts.tsv',sep='\\t')
+de=pd.read_csv(final/'differential_expression.tsv',sep='\\t')
+method=json.loads((final/'method.json').read_text())
+assert counts.columns[0]=='gene'
+assert counts.shape==(1429,35),counts.shape
+assert counts['gene'].is_unique and counts['gene'].notna().all()
+assert all((' ' not in c and '-' not in c) for c in counts.columns[1:])
+assert len(set(counts.columns[1:]))==34
+vals=counts.iloc[:,1:].to_numpy()
+assert np.isfinite(vals).all() and (vals>=0).all() and np.equal(vals,np.floor(vals)).all()
+assert list(de.columns)==['gene','log2_fold_change','p_value','fdr']
+assert de.shape==(1429,4)
+assert de['gene'].is_unique and set(de.gene)==set(counts.gene)
+assert np.isfinite(de.log2_fold_change).all()
+assert np.isfinite(de.p_value).all() and de.p_value.between(0,1,inclusive='both').all()
+assert np.isfinite(de.fdr).all() and de.fdr.between(0,1,inclusive='both').all()
+p=de.p_value.to_numpy(); n=len(p); order=np.argsort(p,kind='mergesort'); qrank=np.minimum.accumulate((p[order]*n/np.arange(1,n+1))[::-1])[::-1]; qrank=np.clip(qrank,0,1); q=np.empty(n); q[order]=qrank
+assert np.allclose(q,de.fdr.to_numpy(),rtol=1e-12,atol=1e-15)
+assert method=={'method':'DESeq2'}
+assert (root/'run_trace'/'execution.log').is_file()
+print('final files',sorted(actual))
+print('counts shape',counts.shape,'min/max',int(vals.min()),int(vals.max()))
+print('DE shape',de.shape)
+print('LFC range',de.log2_fold_change.min(),de.log2_fold_change.max())
+print('p range',de.p_value.min(),de.p_value.max())
+print('FDR range',de.fdr.min(),de.fdr.max())
+print('FDR < 0.05',int((de.fdr<0.05).sum()))
+print('method',method)
+print('trace:')
+print((root/'run_trace'/'execution.log').read_text())
+PY
+wc -l final_answer/pseudobulk_counts.tsv final_answer/differential_expression.tsv
+head -n 2 final_answer/pseudobulk_counts.tsv | cut -c1-400
+head -n 4 final_answer/differential_expression.tsv
+find final_answer -maxdepth 1 -type f -printf '%f\\t%s bytes\\n' | sort"

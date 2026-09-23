@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+import re
 
 def _fmt(value, digits=3):
     if value is None:
@@ -56,7 +57,8 @@ def render(output: Path, evidence: dict) -> None:
     for r in runs:
         out = r["outcome"]
         route = (r["solution_route"].get("classification") or "unclassified").replace("|", "\\|")
-        answer = (out.get("submitted_answer") or "unavailable").replace("|", "\\|").replace("\n", " ")[:90]
+        answer = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", out.get("submitted_answer") or "unavailable")
+        answer = answer.replace("|", "\\|").replace("\n", " ")[:90]
         jobs_count = r["derived_metrics"].get("analytical_job_count")
         failed = r["derived_metrics"].get("total_failed_jobs")
         lines.append(f"| `{r['run_id']}` | {_fmt(r['model']['verified_runtime_id'])} | {_fmt(out['original_evaluator_score_field'])} / {_fmt(out['original_evaluator_score'])} | {answer} | {route} | {_fmt(jobs_count)} / {_fmt(failed)} | {r['derived_metrics']['nonzero_exit_shell_calls']} |")

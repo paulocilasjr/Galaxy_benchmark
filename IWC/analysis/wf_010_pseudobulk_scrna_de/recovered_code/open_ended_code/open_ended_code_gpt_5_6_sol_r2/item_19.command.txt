@@ -1,0 +1,36 @@
+/usr/bin/bash -lc "micromamba run -p /tmp/sc_analysis_env python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+from math import ceil
+p='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+a=ad.read_h5ad(p)
+X=a.layers['counts'].tocsr()
+X.eliminate_zeros()
+print('counts integrity dtype',X.dtype,'nnz',X.nnz,'min',X.data.min(),'max',X.data.max(),'finite',np.isfinite(X.data).all(),'nonnegative',(X.data>=0).all(),'integer',np.equal(X.data,np.floor(X.data)).all())
+print('gene symbols unique',a.var_names.is_unique,'missing',a.var_names.isna().sum(),'blank',(a.var_names=='').sum())
+obs=a.obs[['individual','disease','cell_type']].astype(str).copy()
+g=obs.groupby(['individual','cell_type'],sort=True,observed=True).agg(n_cells=('disease','size'),disease=('disease',lambda x: x.iloc[0]),disease_n=('disease','nunique')).reset_index()
+print('all combinations',len(g),'retained >=10',(g.n_cells>=10).sum())
+print(g.to_string(index=False))
+r=g[g.n_cells>=10].copy().reset_index(drop=True)
+r['sample']=r.individual.str.replace(r'[ -]', '_',regex=True)+'_'+r.cell_type.str.replace(r'[ -]', '_',regex=True)
+print('sample names unique',r['sample'].is_unique)
+# Aggregate using indicator matrix
+key=pd.MultiIndex.from_frame(obs[['individual','cell_type']])
+rkey=pd.MultiIndex.from_frame(r[['individual','cell_type']])
+lookup={k:i for i,k in enumerate(rkey)}
+row=np.array([lookup.get(k,-1) for k in key],dtype=int)
+keep=row>=0
+G=sparse.csr_matrix((np.ones(keep.sum(),dtype=np.int64),(row[keep],np.flatnonzero(keep))),shape=(len(r),a.n_obs))
+pb=(G @ X).tocsr()
+tot=np.asarray(pb.sum(axis=1)).ravel().astype(np.int64)
+N=len(r); M=float(np.median(tot)); S=ceil(10+0.7*(N-10)); threshold=10/M*1_000_000
+present=np.asarray((pb.multiply(1_000_000/tot[:,None]) >= threshold).sum(axis=0)).ravel()
+genesum=np.asarray(pb.sum(axis=0)).ravel()
+passmask=(present>=S)&(genesum>=1000)
+print('N',N,'M',M,'S',S,'CPM threshold',threshold,'retained genes',passmask.sum())
+print('sample totals min/median/max',tot.min(),np.median(tot),tot.max())
+print(r.assign(total=tot).to_string(index=False))
+print('disease sample counts',r.disease.value_counts().to_dict())
+print('cell type sample counts',r.cell_type.value_counts().to_dict())
+PY"

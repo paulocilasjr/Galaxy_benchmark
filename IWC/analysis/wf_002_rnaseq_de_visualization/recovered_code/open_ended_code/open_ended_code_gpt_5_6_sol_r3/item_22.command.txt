@@ -1,0 +1,34 @@
+/usr/bin/bash -lc "printf '%s\\n' '--- deliverables ---'
+find final_answer -maxdepth 1 -type f -printf '%f\\n' | sort
+wc -l final_answer/differential_expression.tsv
+awk -F '\\t' 'NR==1 {print \"header=\" "'$0} {n[NF]++} END {for (k in n) print "fields=" k, "rows=" n[k]}'"' final_answer/differential_expression.tsv
+printf '%s\\n' '--- method ---'
+sed -n '1,5p' final_answer/method.json
+printf '%s\\n' '--- result preview ---'
+sed -n '1,6p' final_answer/differential_expression.tsv
+printf '%s\\n' '--- trace ---'
+sed -n '1,80p' run_trace/execution.log
+printf '%s\\n' '--- independent validation ---'
+micromamba run -p /tmp/deseq2-env Rscript -e '
+  fs <- c(
+    \"data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat\",
+    \"data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat\",
+    \"data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat\",
+    \"data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat\"
+  )
+  xs <- lapply(fs, read.delim, check.names=FALSE)
+  stopifnot(all(vapply(xs, function(x) identical(x[[1]], xs[[1]][[1]]), logical(1))))
+  m <- do.call(cbind, lapply(xs, "'`[[`, 2L))
+  expected <- xs[[1]][[1]][rowSums(m >= 10) >= 2]
+  z <- read.delim("final_answer/differential_expression.tsv", check.names=FALSE)
+  stopifnot(identical(names(z), c("gene_id","log2_fold_change","p_value","fdr")))
+  stopifnot(identical(z$gene_id, expected), nrow(z)==length(expected), !anyDuplicated(z$gene_id))
+  stopifnot(all(is.finite(z$log2_fold_change)))
+  stopifnot(all(is.finite(z$p_value)), all(z$p_value >= 0 & z$p_value <= 1))
+  stopifnot(all(is.finite(z$fdr)), all(z$fdr >= 0 & z$fdr <= 1))
+  stopifnot(isTRUE(all.equal(z$fdr, p.adjust(z$p_value, "BH"), tolerance=1e-12)))
+  j <- jsonlite::fromJSON("final_answer/method.json")
+  stopifnot(identical(names(j), "method"), identical(j$method, "DESeq2"))
+  cat("PASS: retained rows=", nrow(z), "; exact universe, columns, ranges, and BH verified'"\\n\", sep=\"\")
+' 
+sha256sum final_answer/differential_expression.tsv final_answer/method.json"

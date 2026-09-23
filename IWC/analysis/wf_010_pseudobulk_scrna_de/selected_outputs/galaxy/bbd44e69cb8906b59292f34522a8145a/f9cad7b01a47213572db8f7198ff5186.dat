@@ -1,0 +1,134 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "366f938d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T21:47:58.409099Z",
+     "iopub.status.busy": "2026-08-28T21:47:58.408926Z",
+     "iopub.status.idle": "2026-08-28T21:47:59.401565Z",
+     "shell.execute_reply": "2026-08-28T21:47:59.401000Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "{\"M_median_total_counts\": 556360.0, \"N_retained_samples\": 34, \"S_required_samples\": 27, \"cell_type_counts\": {\"B cell\": 7, \"T cell\": 7, \"erythroid lineage cell\": 4, \"monocyte\": 6, \"neutrophil\": 6, \"platelet\": 4}, \"cpm_threshold\": 17.97397368610252, \"disease_counts\": {\"COVID-19\": 19, \"normal\": 15}, \"genes_after_filter\": 1429, \"genes_before_filter\": 18431, \"sample_names\": [\"Control_#1_B_cell\", \"Control_#2_B_cell\", \"Control_#3_B_cell\", \"SARS_CoV2_pos_Mild_B_cell\", \"SARS_CoV2_pos_Severe_#1_B_cell\", \"SARS_CoV2_pos_Severe_#2_B_cell\", \"SARS_CoV2_pos_Severe_#3_B_cell\", \"Control_#1_T_cell\", \"Control_#2_T_cell\", \"Control_#3_T_cell\", \"SARS_CoV2_pos_Mild_T_cell\", \"SARS_CoV2_pos_Severe_#1_T_cell\", \"SARS_CoV2_pos_Severe_#2_T_cell\", \"SARS_CoV2_pos_Severe_#3_T_cell\", \"Control_#3_erythroid_lineage_cell\", \"SARS_CoV2_pos_Mild_erythroid_lineage_cell\", \"SARS_CoV2_pos_Severe_#1_erythroid_lineage_cell\", \"SARS_CoV2_pos_Severe_#2_erythroid_lineage_cell\", \"Control_#1_monocyte\", \"Control_#2_monocyte\", \"Control_#3_monocyte\", \"SARS_CoV2_pos_Mild_monocyte\", \"SARS_CoV2_pos_Severe_#1_monocyte\", \"SARS_CoV2_pos_Severe_#2_monocyte\", \"Control_#1_neutrophil\", \"Control_#2_neutrophil\", \"Control_#3_neutrophil\", \"SARS_CoV2_pos_Mild_neutrophil\", \"SARS_CoV2_pos_Severe_#1_neutrophil\", \"SARS_CoV2_pos_Severe_#2_neutrophil\", \"Control_#1_platelet\", \"Control_#3_platelet\", \"SARS_CoV2_pos_Severe_#1_platelet\", \"SARS_CoV2_pos_Severe_#2_platelet\"]}\n"
+     ]
+    }
+   ],
+   "source": [
+    "import os, math, re, json\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "\n",
+    "def galaxy_path(name):\n",
+    "    return GALAXY_INPUTS[name][0]['path']\n",
+    "\n",
+    "counts_path = galaxy_path('counts')\n",
+    "meta_path = galaxy_path('meta')\n",
+    "genes_path = galaxy_path('genes')\n",
+    "counts_df = pd.read_csv(counts_path, sep='\\t', index_col=0)\n",
+    "meta = pd.read_csv(meta_path, sep='\\t', index_col=0)\n",
+    "genes = pd.read_csv(genes_path, sep='\\t')\n",
+    "\n",
+    "if 'gene_symbol' not in genes.columns:\n",
+    "    raise ValueError('Genes metadata lacks gene_symbol')\n",
+    "gene_symbols = genes['gene_symbol'].astype(str).tolist()\n",
+    "if len(gene_symbols) != counts_df.shape[0]:\n",
+    "    raise ValueError('Count matrix and gene metadata row counts differ')\n",
+    "count_index = counts_df.index.astype(str).tolist()\n",
+    "if count_index != gene_symbols:\n",
+    "    if 'ensembl_gene_id' in genes.columns and count_index == genes['ensembl_gene_id'].astype(str).tolist():\n",
+    "        pass\n",
+    "    else:\n",
+    "        raise ValueError('Count matrix rows do not match gene metadata order')\n",
+    "if len(set(gene_symbols)) != len(gene_symbols):\n",
+    "    raise ValueError('gene_symbol values are not unique')\n",
+    "\n",
+    "def sanitize(value):\n",
+    "    return re.sub(r'[ \\-]', '_', str(value))\n",
+    "\n",
+    "sample_names = [sanitize(x) for x in counts_df.columns.astype(str)]\n",
+    "if len(set(sample_names)) != len(sample_names):\n",
+    "    raise ValueError('Pseudobulk sample names collide after sanitization')\n",
+    "meta.index = [sanitize(x) for x in meta.index.astype(str)]\n",
+    "if len(set(meta.index)) != len(meta.index):\n",
+    "    raise ValueError('Metadata sample names collide after sanitization')\n",
+    "if set(sample_names) != set(meta.index):\n",
+    "    raise ValueError('Count matrix columns and metadata sample names differ')\n",
+    "meta = meta.loc[sample_names]\n",
+    "if not {'disease', 'cell_type'}.issubset(meta.columns):\n",
+    "    raise ValueError('Required disease/cell_type metadata missing')\n",
+    "\n",
+    "raw_float = counts_df.to_numpy(dtype=float)\n",
+    "if not np.isfinite(raw_float).all() or (raw_float < 0).any():\n",
+    "    raise ValueError('Counts contain non-finite or negative values')\n",
+    "if not np.allclose(raw_float, np.round(raw_float), rtol=0, atol=1e-8):\n",
+    "    raise ValueError('Counts are not integer-valued')\n",
+    "raw = np.round(raw_float).astype(np.int64)\n",
+    "\n",
+    "N = raw.shape[1]\n",
+    "sample_totals = raw.sum(axis=0, dtype=np.int64)\n",
+    "if N == 0 or (sample_totals <= 0).any():\n",
+    "    raise ValueError('Retained pseudobulk samples must have positive totals')\n",
+    "M = float(np.median(sample_totals))\n",
+    "S = int(math.ceil(10 + 0.7 * (N - 10)))\n",
+    "cpm_threshold = (10.0 / M) * 1000000.0\n",
+    "cpm = raw.astype(float) / sample_totals[None, :] * 1000000.0\n",
+    "keep = (cpm >= cpm_threshold).sum(axis=1) >= S\n",
+    "keep &= raw.sum(axis=1, dtype=np.int64) >= 1000\n",
+    "\n",
+    "filtered_genes = [gene_symbols[i] for i, flag in enumerate(keep) if flag]\n",
+    "filtered = raw[keep, :]\n",
+    "out_dir = 'outputs'\n",
+    "collection_dir = os.path.join(out_dir, 'collection')\n",
+    "os.makedirs(collection_dir, exist_ok=True)\n",
+    "pbulk = pd.DataFrame(filtered, columns=sample_names)\n",
+    "pbulk.insert(0, 'gene', filtered_genes)\n",
+    "pbulk.to_csv(os.path.join(out_dir, 'pseudobulk_counts.tsv'), sep='\\t', index=False, lineterminator='\\n')\n",
+    "for j, sample in enumerate(sample_names):\n",
+    "    one = pd.DataFrame({'gene': filtered_genes, 'count': filtered[:, j].astype(np.int64)})\n",
+    "    one.to_csv(os.path.join(collection_dir, sample + '.tsv'), sep='\\t', index=False, lineterminator='\\n')\n",
+    "\n",
+    "summary = {\n",
+    "    'N_retained_samples': N,\n",
+    "    'M_median_total_counts': M,\n",
+    "    'S_required_samples': S,\n",
+    "    'cpm_threshold': cpm_threshold,\n",
+    "    'genes_before_filter': int(raw.shape[0]),\n",
+    "    'genes_after_filter': int(filtered.shape[0]),\n",
+    "    'sample_names': sample_names,\n",
+    "    'disease_counts': meta['disease'].value_counts().to_dict(),\n",
+    "    'cell_type_counts': meta['cell_type'].value_counts().to_dict()\n",
+    "}\n",
+    "print(json.dumps(summary, sort_keys=True))\n"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.11"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

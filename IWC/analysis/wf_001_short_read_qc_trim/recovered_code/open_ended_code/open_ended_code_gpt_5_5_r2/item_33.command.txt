@@ -1,0 +1,59 @@
+/usr/bin/bash -lc "set -euo pipefail
+gzip -t /workspace/final_answer/trimmed_forward.fastqsanger.gz /workspace/final_answer/trimmed_reverse.fastqsanger.gz
+perl -MIO::Uncompress::Gunzip -e '
+use strict; use warnings;
+my ("'$r1, $r2) = @ARGV;
+my $fh1 = IO::Uncompress::Gunzip->new($r1, MultiStream => 1) or die "gunzip $r1: $IO::Uncompress::Gunzip::GunzipError'"\\n\";
+my "'$fh2 = IO::Uncompress::Gunzip->new($r2, MultiStream => 1) or die "gunzip $r2: $IO::Uncompress::Gunzip::GunzipError'"\\n\";
+sub norm_id {
+  my ("'$h) = @_;
+  my ($token) = split /'"\\s+/, "'$h;
+  $token =~ s/''^@//;
+  $token =~ s|/[12]$||;
+  return $token;
+}
+sub rec {
+  my ($fh, $path, $num) = @_;
+  my $h = <$fh>;
+  return undef unless defined $h;
+  my $s = <$fh>; my $p = <$fh>; my $q = <$fh>;
+  die "truncated FASTQ record near $num in $path'"\\n\" unless defined "'$s && defined $p && defined $q;
+  chomp($h, $s, $p, $q);
+  die "malformed FASTQ record $num in $path'"\\n\" unless "'$h =~ /''^@/ && $p =~ /''^'"\\+/ && length("'$s) == length($q);
+  return [$h, $s, $q];
+}
+my ($count, $min1, $min2, $max1, $max2, $maxn1, $maxn2, $maxlow1, $maxlow2) = (0, undef, undef, 0, 0, 0, 0, 0, 0);
+while (1) {
+  my $a = rec($fh1, $r1, $count + 1);
+  my $b = rec($fh2, $r2, $count + 1);
+  last unless defined $a || defined $b;
+  die "mate_count_mismatch'"\\n\" unless defined "'$a && defined $b;
+  $count++;
+  my ($h1, $s1, $q1) = @$a;
+  my ($h2, $s2, $q2) = @$b;
+  die "pair_id_mismatch at pair $count: $h1 vs $h2'"\\n\" unless norm_id("'$h1) eq norm_id($h2);
+  for my $m ([1,$s1,$q1], [2,$s2,$q2]) {
+    my ($mate, $seq, $qual) = @$m;
+    my $len = length($seq);
+    my $nseq = $seq;
+    my $n = ($nseq =~ tr/Nn/Nn/);
+    my $low = 0;
+    for my $i (0 .. length($qual)-1) { $low++ if ord(substr($qual,$i,1)) - 33 < 20; }
+    my $pct = $len ? (100.0 * $low / $len) : 100.0;
+    die sprintf("filter_violation pair=%d mate=%d len=%d n=%d low_pct=%.6f'"\\n\", "'$count, $mate, $len, $n, $pct) if $len < 15 || $n > 5 || $pct > 40.0;
+    if ($mate == 1) { $maxn1 = $n if $n > $maxn1; $maxlow1 = $pct if $pct > $maxlow1; }
+    else { $maxn2 = $n if $n > $maxn2; $maxlow2 = $pct if $pct > $maxlow2; }
+  }
+  my $l1 = length($s1); my $l2 = length($s2);
+  $min1 = $l1 if !defined($min1) || $l1 < $min1; $min2 = $l2 if !defined($min2) || $l2 < $min2;
+  $max1 = $l1 if $l1 > $max1; $max2 = $l2 if $l2 > $max2;
+}
+print "validation=PASSED'"\\n\";
+print \"retained_pairs="'$count'"\\n\";
+print \"forward_len_min="'$min1 forward_len_max=$max1'"\\n\";
+print \"reverse_len_min="'$min2 reverse_len_max=$max2'"\\n\";
+print \"forward_max_N="'$maxn1 reverse_max_N=$maxn2'"\\n\";
+printf \"forward_max_lowq_percent=%.6f\\n\", "'$maxlow1;
+printf "reverse_max_lowq_percent=%.6f'"\\n\", "'$maxlow2;
+'"' /workspace/final_answer/trimmed_forward.fastqsanger.gz /workspace/final_answer/trimmed_reverse.fastqsanger.gz | tee /workspace/run_trace/validation.log
+find /workspace/final_answer -maxdepth 1 -type f -printf '%f\\t%s bytes\\n' | sort | tee /workspace/run_trace/final_files.log"

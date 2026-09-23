@@ -1,0 +1,38 @@
+/usr/bin/bash -lc 'set -e
+analysis_tmp=$(cat /tmp/amr_analysis_path)
+"$analysis_tmp/env/bin/python" - <<'"'PY'
+import csv, json, re
+from pathlib import Path
+root = Path('/workspace')
+work = Path(open('/tmp/amr_analysis_path').read().strip())
+with open(work/'results/ResFinder_results_tab.txt', newline='') as fh:
+    rows = list(csv.DictReader(fh, delimiter='\\t'))
+assert rows and all(float(r['Identity']) >= 90 and float(r['Coverage']) >= 60 for r in rows)
+acquired = list(dict.fromkeys(r['Resistance gene'] for r in rows))
+point = []
+for line in (work/'results/PointFinder_results.txt').read_text().splitlines()[1:]:
+    m = re.match(r'(["'^'"\\t ]+) p\\.(["'^'"\\t ]+)', line)
+    if m:
+        point.append(f'{m.group(1)} ({m.group(2)})')
+with open(root/'final_answer/resistance_determinants.tsv', newline='') as fh:
+    final_rows = list(csv.DictReader(fh, delimiter='\\t'))
+assert list(final_rows[0]) == ['determinant']
+observed = [r['determinant'] for r in final_rows]
+expected = acquired + point
+assert observed == expected, (observed, expected)
+assert len(observed) == len(set(observed)) == 13
+j = json.loads((work/'results/input.json').read_text())
+exec_params = next(iter(j['software_executions'].values()))['parameters']
+assert exec_params['rf_gene_id'] == 0.9 and exec_params['rf_gene_cov'] == 0.6
+assert exec_params['pf_gene_id'] == 0.9 and exec_params['pf_gene_cov'] == 0.95
+assert exec_params['species_dir'] == 'escherichia_coli'
+assert j['databases']['ResFinder-2.4.0']['database_commit'].startswith('d1e607b')
+assert j['databases']['PointFinder-4.1.1']['database_commit'].startswith('694919f')
+print(f'validated_rows={len(observed)} acquired={len(acquired)} point_mutations={len(point)}')
+print('\\n'.join(observed))
+PY
+find /workspace/final_answer -maxdepth 1 -type f -printf '%f\\n' | sort
+find /workspace/run_trace -maxdepth 1 -type f -printf '%f\\n' | sort
+sha256sum /workspace/final_answer/resistance_determinants.tsv
+wc -l /workspace/final_answer/resistance_determinants.tsv
+sed -n '1,40l' /workspace/final_answer/resistance_determinants.tsv"

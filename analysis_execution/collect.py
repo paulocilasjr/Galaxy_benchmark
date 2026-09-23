@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 import re
 import ssl
 import threading
@@ -354,6 +355,9 @@ def collect_galaxy(client: Client, run: RunLink, output: Path, *, max_output_byt
 
 def galaxy_credential_gate(repo_root: Path) -> str:
     """Honor SKILL.md's gate before even read-only Galaxy API requests."""
+    configured = os.environ.get("GALAXY_API_KEY", "").strip()
+    if configured:
+        return configured
     env_path = repo_root / ".env"
     if not env_path.exists():
         raise RuntimeError("Galaxy credential gate: repository .env is missing")

@@ -1,0 +1,39 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+from collections import Counter
+p='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+def vals(ds):
+    a=ds[()]
+    if getattr(a,'dtype',None)==object:
+        return [x.decode() if isinstance(x,(bytes,np.bytes_)) else str(x) for x in a]
+    return a
+with h5py.File(p,'r') as f:
+    shape=tuple(map(int,f['layers/counts'].attrs['shape']))
+    X=csr_matrix((f['layers/counts/data'][:], f['layers/counts/indices'][:], f['layers/counts/indptr'][:]),shape=shape)
+    indiv_cat=vals(f['obs/individual/categories']); indiv_codes=f['obs/individual/codes'][:]
+    dis_cat=vals(f['obs/disease/categories']); dis_codes=f['obs/disease/codes'][:]
+    ct_cat=vals(f['obs/cell_type/categories']); ct_codes=f['obs/cell_type/codes'][:]
+    genes=vals(f['var/gene_symbol'])
+    print('shape', shape,'nnz',X.nnz,'dtype',X.dtype,'min',X.data.min(),'max',X.data.max(),'all integer?',np.all(X.data==np.floor(X.data)))
+    totals=np.asarray(X.sum(axis=1)).ravel()
+    print('cell total counts min median max',totals.min(),np.median(totals),totals.max())
+    print('individuals/disease')
+    for i,n in enumerate(indiv_cat):
+        ds=np.unique(dis_codes[indiv_codes==i])
+        print(n,[dis_cat[int(x)] for x in ds],int((indiv_codes==i).sum()), {ct_cat[j]: int(np.sum((indiv_codes==i)&(ct_codes==j))) for j in range(len(ct_cat))})
+    print('disease cell counts')
+    for d,n in enumerate(dis_cat): print(n,{ct_cat[j]:int(np.sum((dis_codes==d)&(ct_codes==j))) for j in range(len(ct_cat))})
+    combos=[]
+    for i,n in enumerate(indiv_cat):
+      for j,c in enumerate(ct_cat):
+        k=int(np.sum((indiv_codes==i)&(ct_codes==j)))
+        if k>=10:
+          ds=np.unique(dis_codes[(indiv_codes==i)&(ct_codes==j)])
+          combos.append((n,c,k,[dis_cat[int(x)] for x in ds]))
+    print('retained combos',len(combos))
+    print('\\n'.join(map(str,combos)))
+    print('genes',len(genes),'unique',len(set(genes)),'duplicates',len(genes)-len(set(genes)))
+    dup=[(g,c) for g,c in Counter(genes).items() if c>1]
+    print('dup examples',dup[:30])
+PY"

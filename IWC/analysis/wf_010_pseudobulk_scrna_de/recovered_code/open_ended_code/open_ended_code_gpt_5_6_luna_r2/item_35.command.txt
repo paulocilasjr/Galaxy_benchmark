@@ -1,0 +1,36 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+import h5py, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+p='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+def dec(d):
+ a=d[()]
+ return [x.decode() if isinstance(x,(bytes,np.bytes_)) else str(x) for x in a]
+def san(x): return x.replace(' ','_').replace('-','_')
+with h5py.File(p,'r') as f:
+ g=f['layers/counts']; shape=tuple(map(int,g.attrs['shape']))
+ X=csr_matrix((g['data'][()].astype(np.int64),g['indices'][()],g['indptr'][()]),shape=shape)
+ inds=dec(f['obs/individual/categories']); ic=f['obs/individual/codes'][()].astype(int)
+ cts=dec(f['obs/cell_type/categories']); cc=f['obs/cell_type/codes'][()].astype(int)
+ dis=dec(f['obs/disease/categories']); dc=f['obs/disease/codes'][()].astype(int)
+ genes=np.array(dec(f['var/gene_symbol']))
+ nct=len(cts); pairs=ic*nct+cc; nind=len(inds)
+ ncell=np.bincount(pairs,minlength=nind*nct); kept=np.flatnonzero(ncell>=10)
+ group={int(x):i for i,x in enumerate(kept)}; valid=np.isin(pairs,kept); rows=np.flatnonzero(valid); cols=np.array([group[int(x)] for x in pairs[valid]])
+ A=csr_matrix((np.ones(len(rows),dtype=np.int64),(rows,cols)),shape=(len(ic),len(kept)))
+ PB=(A.T@X).toarray().astype(np.int64)
+ names=[]
+ for pid in kept:
+  i=int(pid)//nct;j=int(pid)%nct;names.append(f'{san(inds[i])}_{san(cts[j])}')
+ totals=PB.sum(1); M=np.median(totals); S=int(np.ceil(10+0.7*(len(kept)-10))); th=10/M*1e6
+ keepg=((PB/totals[:,None]*1e6>=th).sum(0)>=S)&(PB.sum(0)>=1000)
+ out=pd.read_csv('final_answer/pseudobulk_counts.tsv',sep='\\t')
+ assert out.columns[1:].tolist()==names, (out.columns[1:].tolist(),names)
+ assert out.gene.tolist()==genes[keepg].tolist()
+ assert np.array_equal(out.iloc[:,1:].to_numpy(dtype=np.int64).T,PB[:,keepg])
+ assert np.all(out.iloc[:,1:].to_numpy()>=0)
+ print('independent_reconstruction=PASS')
+ print('N=',len(kept),'M=',M,'S=',S,'threshold=',th,'genes=',keepg.sum(),'excluded_cells=',(~valid).sum())
+ print('per-column totals range=',int(totals.min()),int(totals.max()))
+ print('CPM qualifying-count range among retained genes=',int(((PB[:,keepg]/totals[:,None]*1e6)>=th).sum(0).min()),int(((PB[:,keepg]/totals[:,None]*1e6)>=th).sum(0).max()))
+PY
+printf '%s\\n' '---line counts---'; wc -l final_answer/pseudobulk_counts.tsv final_answer/differential_expression.tsv; printf '%s\\n' '---unexpected final_answer entries---'; find final_answer -maxdepth 1 -type f -printf '%f\\n' | sort"

@@ -1,0 +1,27 @@
+/usr/bin/bash -lc "micromamba run -n sc_pseudobulk python - <<'PY'
+from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+root=Path('/workspace')
+counts=pd.read_csv(root/'final_answer/pseudobulk_counts.tsv',sep='\\t')
+de=pd.read_csv(root/'final_answer/differential_expression.tsv',sep='\\t')
+assert list(counts.columns[:1])==['gene']
+assert not counts['gene'].duplicated().any()
+assert len(de)==len(counts) and set(de['gene'])==set(counts['gene']) and not de['gene'].duplicated().any()
+assert list(de.columns)==['gene','log2_fold_change','p_value','fdr']
+values=counts.drop(columns='gene').to_numpy()
+assert np.issubdtype(values.dtype,np.integer) and np.isfinite(values).all() and (values>=0).all()
+lfc=de['log2_fold_change'].to_numpy(float); p=de['p_value'].to_numpy(float); q=de['fdr'].to_numpy(float)
+assert np.isfinite(lfc).all()
+assert np.isfinite(p).all() and ((p>=0)&(p<=1)).all()
+assert np.isfinite(q).all() and ((q>=0)&(q<=1)).all()
+order=np.argsort(p,kind='mergesort'); qs=p[order]*len(p)/np.arange(1,len(p)+1,dtype=float); qs=np.minimum.accumulate(qs[::-1])[::-1]; expected=np.empty_like(qs); expected[order]=np.clip(qs,0,1)
+print('max BH re-read absolute difference',float(np.max(np.abs(q-expected))))
+assert np.allclose(q,expected,rtol=0,atol=1e-15)
+method=json.loads((root/'final_answer/method.json').read_text())
+assert list(method)==['method'] and method['method']=='DESeq2'
+print('all output invariants passed')
+print('counts_shape',counts.shape,'de_shape',de.shape,'sample_columns',len(counts.columns)-1)
+print('count_range',int(values.min()),int(values.max()),'p_range',float(p.min()),float(p.max()),'fdr_range',float(q.min()),float(q.max()))
+PY"

@@ -1,0 +1,26 @@
+/usr/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+meta=pd.read_csv('/workspace/pseudobulk_metadata.tsv',sep='\\t')
+df=pd.read_csv('/workspace/pseudobulk_counts_raw_all.tsv',sep='\\t',index_col=0)
+samples=meta['sample'].values
+N=len(samples); M=np.median(meta['total_counts']); S=int(np.ceil(10+0.7*(N-10)))
+thr=10/M*1e6
+cpm=df.values / meta['total_counts'].values * 1e6
+keep=((cpm>=thr).sum(axis=1)>=S)&(df.values.sum(axis=1)>=1000)
+counts=df.loc[keep,samples].copy()
+counts.columns.name='sample'
+counts.index=[x.split('_ENSG')[0] for x in counts.index]
+counts=counts.astype(int)
+# metadata aligned
+meta2=meta.set_index('sample').loc[samples].copy()
+meta2['disease']=pd.Categorical(meta2['disease'], categories=['COVID-19','normal'], ordered=False)
+meta2['cell_type']=pd.Categorical(meta2['cell_type'])
+meta2['individual']=pd.Categorical(meta2['individual'])
+print(counts.shape, meta2.shape)
+print(meta2.dtypes)
+dds=DeseqDataSet(counts=counts, metadata=meta2, design='~ disease + cell_type', quiet=False)
+print(dds.obsm['design_matrix'].head())
+print(dds.obsm['design_matrix'].columns.tolist())
+print('shape',dds.obsm['design_matrix'].shape, 'rank', np.linalg.matrix_rank(dds.obsm['design_matrix'].values.astype(float)))
+PY"

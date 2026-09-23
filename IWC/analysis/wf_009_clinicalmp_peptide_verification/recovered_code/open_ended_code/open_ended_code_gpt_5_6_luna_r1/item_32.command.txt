@@ -1,0 +1,50 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+import gzip, re, os, collections
+cand=[x.strip().upper() for x in open('data/inputs/distinct_peptides_for_pepquery/Distinct_Peptides_for_PepQuery.tabular') if x.strip()]
+cs=set(cand)
+
+def fasta_records(path, gz=False):
+    op=gzip.open if gz else open
+    header=None; seq=[]
+    with op(path,'rt',errors='replace') as f:
+      for line in f:
+        line=line.rstrip('\\n\\r')
+        if line.startswith('>'):
+          if header is not None: yield header,''.join(seq)
+          header=line[1:]; seq=[]
+        else: seq.append(line.strip())
+      if header is not None: yield header,''.join(seq)
+
+def digest(seq):
+  # fully tryptic peptides, up to 2 missed cleavages; cleavage after K/R unless followed by P
+  cuts=[0]
+  for i,a in enumerate(seq[:-1]):
+    if a in 'KR' and seq[i+1] "'!= '"'P': cuts.append(i+1)
+  cuts.append(len(seq))
+  out=[]
+  for s in range(len(cuts)-1):
+    for missed in range(3):
+      e=s+missed+1
+      if e>=len(cuts): break
+      p=seq[cuts[s]:cuts[e]]
+      out.append((p,missed,s,cuts[s],cuts[e]))
+  return out
+hits=collections.defaultdict(list); proteins=0; peptides=0
+for h,s in fasta_records('data/inputs/human_uniprot_isoforms_fasta/stream',True):
+    proteins+=1
+    for p,missed,st,a,b in digest(s):
+      if p in cs:
+       hits[p].append((h,missed,a,b))
+      peptides+=1
+print('human proteins',proteins,'digested peptide instances',peptides,'candidate hits',len(hits))
+for path in ['data/inputs/crap/Contaminants%28cRAP%29-Protein-Database.fasta']:
+ for h,s in fasta_records(path):
+  proteins+=1
+  for p,missed,st,a,b in digest(s):
+   if p in cs: hits[p].append((h,missed,a,b))
+print('human+cRAP candidate hits',len(hits),'instances',sum(len(x) for x in hits.values()))
+for p in cand:
+ if p in hits:
+  print(p, len(hits[p]))
+  for h,m,a,b in hits[p][:5]: print(' ',m,h[:120])
+PY"

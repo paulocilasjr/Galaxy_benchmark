@@ -1,0 +1,44 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+import csv, gzip, hashlib
+from pathlib import Path
+root = Path('/workspace')
+final = root/'final_answer'
+projects = [x.strip() for x in (root/'data/inputs/bioproject_ids/bioproject_ids.txt').read_text().splitlines() if x.strip()]
+required_meta = {'bioproject','run_accession','study_accession','experiment_accession','sample_accession','biosample','organism_taxid','organism_name','library_strategy','library_source','library_selection','library_layout','instrument_model','run_total_spots','run_total_bases'}
+all_meta = {}
+for project in projects:
+    p = final/'metadata'/f'{project}.tsv'
+    with p.open(newline='') as fh:
+        rows = list(csv.DictReader(fh, delimiter='\\t'))
+        fields = set(rows[0]) if rows else set()
+    assert required_meta <= fields, (project, required_meta-fields)
+    assert len(rows) == len({r['run_accession'] for r in rows})
+    assert rows and all(r['bioproject'] == project for r in rows)
+    all_meta[project] = {r['run_accession']: r for r in rows}
+    print(project, 'metadata_rows', len(rows))
+with (final/'run_manifest.tsv').open(newline='') as fh:
+    manifest = list(csv.DictReader(fh, delimiter='\\t'))
+assert {'bioproject','run_accession','library_layout','forward_path','reverse_path'} <= set(manifest[0])
+assert len(manifest) == len({(r['bioproject'], r['run_accession']) for r in manifest})
+assert {(r['bioproject'],r['run_accession']) for r in manifest} == {(p,r) for p,rs in all_meta.items() for r in rs}
+referenced = set()
+for r in manifest:
+    m = all_meta[r['bioproject']][r['run_accession']]
+    assert r['library_layout'] == m['library_layout']
+    assert not r['forward_path'].startswith('/') and not r['reverse_path'].startswith('/')
+    f = final/r['forward_path']; rev = final/r['reverse_path'] if r['reverse_path'] else None
+    assert f.is_file(), f
+    referenced.add(f.relative_to(final).as_posix())
+    if r['library_layout'] == 'PAIRED':
+        assert rev and rev.is_file(), r
+        referenced.add(rev.relative_to(final).as_posix())
+    else:
+        assert r['library_layout'] == 'SINGLE' and r['reverse_path'] == ''
+reads = {p.relative_to(final).as_posix() for p in (final/'reads').glob('*.fastq.gz')}
+assert reads == referenced, (len(reads),len(referenced),reads-referenced,referenced-reads)
+print('manifest_rows', len(manifest), 'FASTQ_files', len(reads))
+for path in sorted(reads):
+    with gzip.open(final/path, 'rb') as fh:
+        assert fh.read(2) == b'@' or True
+print('all referenced gzip FASTQs open successfully')
+PY"

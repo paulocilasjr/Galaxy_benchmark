@@ -1,0 +1,39 @@
+/usr/bin/bash -c "/opt/conda/bin/python3 - <<'PY'
+import subprocess, re, collections
+# use samtools view from system
+bam='/workspace/analysis/mito_ref_polish.bam'
+out=subprocess.check_output(['samtools','view',bam], text=True)
+ins=collections.Counter(); dels=collections.Counter(); counts=collections.Counter()
+for line in out.splitlines():
+    p=line.split('\\t')
+    if len(p)<11: continue
+    flag=int(p[1]); cigar=p[5]; pos=int(p[3])
+    if flag & 4: continue
+    if flag & 2048: continue
+    refpos=pos-1
+    for m in re.finditer(r'(\\d+)([MIDNSHP=X])', cigar):
+        n=int(m.group(1)); op=m.group(2)
+        if op in 'MDN=X': refpos+=n
+        elif op=='I':
+            ins[(refpos,n)] += 1
+        elif op=='S':
+            pass
+    # count primary coverage rough? no
+for (pos,n),c in ins.most_common(30):
+    if c>=10:
+        print('ins at ref 1-based',pos+1,'len',n,'reads',c)
+# deletions are represented by D; count positions where D occurs
+for line in out.splitlines():
+    p=line.split('\\t')
+    if len(p)<11: continue
+    flag=int(p[1]); cigar=p[5]; pos=int(p[3])
+    if flag & 4 or flag & 2048: continue
+    refpos=pos-1
+    for m in re.finditer(r'(\\d+)([MIDNSHP=X])', cigar):
+        n=int(m.group(1)); op=m.group(2)
+        if op=='D': dels[(refpos,n)] += 1; refpos+=n
+        elif op in 'M=NX': refpos+=n
+for (pos,n),c in dels.most_common(30):
+    if c>=10:
+        print('del at ref 1-based',pos+1,'len',n,'reads',c)
+PY"

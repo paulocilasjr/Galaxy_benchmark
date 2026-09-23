@@ -1,0 +1,31 @@
+/usr/bin/bash -lc "set -euo pipefail
+F=/workspace/final_answer/filtered_forward.fastqsanger.gz
+R=/workspace/final_answer/filtered_reverse.fastqsanger.gz
+RM=/workspace/work/filter/remove_proper_pair_qnames.txt
+mkdir -p /workspace/work/filter/validation
+{
+  printf 'validation_utc=%s\\n' \""'$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '"'final_answer_files:\\n'
+  find /workspace/final_answer -maxdepth 1 -type f -printf '%f\\t%s bytes\\n' | LC_ALL=C sort
+  printf 'gzip_test:\\n'
+  gzip -t \""'$F" "$R" && printf '"'OK\\n'
+  printf 'record_counts:\\n'
+  printf 'input_forward\\t'; gzip -dc /workspace/data/inputs/short_reads/pair/forward/forward.fastqsanger.gz | awk 'END{print NR/4}'
+  printf 'input_reverse\\t'; gzip -dc /workspace/data/inputs/short_reads/pair/reverse/reverse.fastqsanger.gz | awk 'END{print NR/4}'
+  printf 'removed_proper_pairs\\t'; wc -l < \""'$RM"
+  printf '"'filtered_forward\\t'; gzip -dc \""'$F" | awk '"'END{print NR/4}'
+  printf 'filtered_reverse\\t'; gzip -dc \""'$R" | awk '"'END{print NR/4}'
+  printf 'filter_forward_log\\t'; tr '\\n' ' ' < /workspace/run_trace/filter_forward.stderr.log; printf '\\n'
+  printf 'filter_reverse_log\\t'; tr '\\n' ' ' < /workspace/run_trace/filter_reverse.stderr.log; printf '\\n'
+  printf 'method_json\\t'; perl -MJSON::PP -0777 -ne 'my "'$x=decode_json($_); die unless keys(%$x)==1 && $x->{aligner} eq "BWA"; print "OK'"\\n\"' /workspace/final_answer/method.json
+} > /workspace/run_trace/validation_summary.txt
+
+gzip -dc \""'$F" | awk '"'NR%4==1{sub(/"'^@/,""); split($0,a,/ /); print a[1]}'"' > /workspace/work/filter/validation/filtered_forward.qnames
+gzip -dc \""'$R" | awk '"'NR%4==1{sub(/"'^@/,""); split($0,a,/ /); print a[1]}'"' > /workspace/work/filter/validation/filtered_reverse.qnames
+diff -q /workspace/work/filter/validation/filtered_forward.qnames /workspace/work/filter/validation/filtered_reverse.qnames >> /workspace/run_trace/validation_summary.txt
+LC_ALL=C sort /workspace/work/filter/validation/filtered_forward.qnames > /workspace/work/filter/validation/filtered_forward.qnames.sorted
+intersection_count="'$(comm -12 /workspace/work/filter/validation/filtered_forward.qnames.sorted "$RM" | wc -l)
+printf '"'retained_removed_intersection\\t%s\\n' \""'$intersection_count" >> /workspace/run_trace/validation_summary.txt
+md5sum "$F" "$R" /workspace/final_answer/method.json > /workspace/run_trace/final_md5sums.txt
+cat /workspace/run_trace/validation_summary.txt
+cat /workspace/run_trace/final_md5sums.txt'

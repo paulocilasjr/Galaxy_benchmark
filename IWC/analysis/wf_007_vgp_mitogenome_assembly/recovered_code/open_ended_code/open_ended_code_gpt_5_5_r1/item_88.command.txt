@@ -1,0 +1,38 @@
+/usr/bin/bash -lc "ls /workspace/tools/mitoenv/bin/*g++* /workspace/tools/mitoenv/bin/*c++* 2>/dev/null | sed -n '1,50p'
+/workspace/tools/mitoenv/bin/aarch64-conda-linux-gnu-c++ -O3 -std=c++17 -I/workspace/tools/mitoenv/include work/scripts/select_reads_by_kmers.cpp -L/workspace/tools/mitoenv/lib -Wl,-rpath,/workspace/tools/mitoenv/lib -lz -o work/scripts/select_reads_by_kmers > work/logs/compile_selector.log 2>&1
+/workspace/tools/mitoenv/bin/python - <<'PY'
+import json, pathlib
+entries=[
+{
+ 'stage':'compiler_install',
+ 'status':'success',
+ 'tool_or_command':'micromamba install -p tools/mitoenv -c conda-forge cxx-compiler zlib',
+ 'effective_parameters':{'prefix':'tools/mitoenv','packages':['cxx-compiler','zlib']},
+ 'inputs':[],
+ 'outputs':['tools/mitoenv/bin/aarch64-conda-linux-gnu-c++','tools/mitoenv/include/zlib.h'],
+ 'validation':{'compiler_exists':pathlib.Path('tools/mitoenv/bin/aarch64-conda-linux-gnu-c++').exists()}
+},
+{
+ 'stage':'dump_highcopy_kmers_ci1000',
+ 'status':'success',
+ 'tool_or_command':'tools/mitoenv/bin/kmc_dump -ci1000 work/kmc/err13917223.k31m6 work/kmc/highcopy_ci1000.kmers',
+ 'effective_parameters':{'min_kmer_count':1000,'k':31},
+ 'inputs':['work/kmc/err13917223.k31m6.kmc_pre','work/kmc/err13917223.k31m6.kmc_suf'],
+ 'outputs':['work/kmc/highcopy_ci1000.kmers','work/logs/kmc_dump_ci1000.log'],
+ 'validation':{'dumped_kmers':sum(1 for _ in open('work/kmc/highcopy_ci1000.kmers'))}
+},
+{
+ 'stage':'compile_highcopy_read_selector',
+ 'status':'success' if pathlib.Path('work/scripts/select_reads_by_kmers').exists() else 'failed',
+ 'tool_or_command':'tools/mitoenv/bin/aarch64-conda-linux-gnu-c++ -O3 -std=c++17 -I tools/mitoenv/include work/scripts/select_reads_by_kmers.cpp -L tools/mitoenv/lib -lz -o work/scripts/select_reads_by_kmers',
+ 'effective_parameters':{'optimization':'O3','language_standard':'C++17','zlib':True},
+ 'inputs':['work/scripts/select_reads_by_kmers.cpp'],
+ 'outputs':['work/scripts/select_reads_by_kmers','work/logs/compile_selector.log'],
+ 'validation':{'binary_exists':pathlib.Path('work/scripts/select_reads_by_kmers').exists(),'compile_log':pathlib.Path('work/logs/compile_selector.log').read_text(errors='replace')[-500:]}
+}
+]
+with pathlib.Path('run_trace/analysis_steps.jsonl').open('a') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, sort_keys=True)+\"\\n\")
+PY
+sed -n '1,120p' work/logs/compile_selector.log"

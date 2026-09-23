@@ -1,0 +1,67 @@
+/usr/bin/bash -c "cat > /workspace/run_pseudobulk_de_explore.py <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp, math, json
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+data_path='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+a=ad.read_h5ad(data_path)
+counts=a.layers['counts'].tocsr().astype(np.float64)
+obs=a.obs.copy()
+# group info
+grouped=obs.groupby(['individual','cell_type'], observed=False).size().rename('ncells').reset_index()
+ret=grouped[grouped.ncells>=10].reset_index(drop=True)
+samples=[]
+arrays=[]
+for r in ret.itertuples(index=False):
+    idx=np.where((obs['individual']==r.individual)&(obs['cell_type']==r.cell_type))[0]
+    arr=np.asarray(counts[idx].sum(axis=0)).ravel().astype(np.int64)
+    col=(str(r.individual)+'_'+str(r.cell_type)).replace(' ','_').replace('-','_')
+    samples.append(col)
+    arrays.append(arr)
+mat=np.vstack(arrays)
+tot=mat.sum(axis=1)
+N=mat.shape[0]
+M=float(np.median(tot))
+S=math.ceil(10+0.7*(N-10))
+thr_cpm=10.0/M*1_000_000
+cpm=mat/tot[:,None]*1_000_000
+pass_samples=(cpm>=thr_cpm).sum(axis=0)
+summed=mat.sum(axis=0)
+keep=np.where((pass_samples>=S)&(summed>=1000))[0]
+mat=mat[:,keep]
+genes=a.var.index[keep].astype(str).tolist()
+counts_df=pd.DataFrame(mat, index=genes, columns=samples).astype(int)
+# metadata: disease by individual prefix
+individuals=ret['individual'].astype(str).tolist()
+disease=['normal' if x.startswith('Control') else 'COVID-19' for x in individuals]
+meta=pd.DataFrame({'sample':samples,'cell_type':ret['cell_type'].astype(str).tolist(),'disease':disease})
+meta['disease']=pd.Categorical(meta['disease'], categories=['COVID-19','normal'])
+# cell_type categories maybe first unique; pydeseq2 supports factors
+meta['cell_type']=pd.Categorical(meta['cell_type'])
+print('counts', counts_df.shape, 'meta', meta.shape)
+print(meta.head())
+print('categories disease', meta.disease.cat.categories.tolist())
+print('any zero-sum genes', (counts_df.sum(axis=1)==0).sum())
+print('counts dtype', counts_df.values.dtype)
+# run pydeseq2
+dds=DeseqDataSet(counts=counts_df, metadata=meta, design_factors='disease + cell_type', quiet=False)
+dds.deseq2()
+stat=DeseqStats(dds, contrast=['disease','normal','COVID-19'], cooks_filter=False, independent_filter=False, n_cpus=1)
+stat.summary()
+res=stat.results_df.copy()
+print('results shape', res.shape, 'cols', list(res.columns))
+print(res.head())
+print('nonfinite lfc', (~np.isfinite(res.log2FoldChange)).sum(), 'nonfinite padj', (~np.isfinite(res.padj)).sum(), 'nonfinite p', (~np.isfinite(res.pvalue)).sum())
+print(res.describe())
+# BH own pvalues
+p=res.pvalue.to_numpy(float)
+rank=np.argsort(p, kind='mergesort')
+n=len(p)
+bh=np.empty(n)
+# assign same p ranks cumulative max
+sorted_p=p[rank]
+bh_sorted=(sorted_p*n/np.arange(1,n+1))[::-1]
+# This formula backwards wrong; do correct below in final. For explore, print min p
+print('min p', np.nanmin(p), 'max finite p', np.nanmax(p))
+PY
+python /workspace/run_pseudobulk_de_explore.py"

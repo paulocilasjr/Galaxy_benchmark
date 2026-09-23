@@ -1,0 +1,31 @@
+/usr/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+paths = {
+ 'SRR5085167':'/workspace/data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat',
+ 'SRR5085168':'/workspace/data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat',
+ 'SRR5085169':'/workspace/data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat',
+ 'SRR5085170':'/workspace/data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat',
+}
+dfs=[]
+for k,p in paths.items():
+    df=pd.read_csv(p, sep='\\t')
+    df=df.rename(columns={df.columns[1]:k})
+    dfs.append(df.set_index('Geneid'))
+counts_genes=dfs[0].join(dfs[1:], how='outer')
+keep=(counts_genes>=10).sum(axis=1)>=2
+counts_f=counts_genes[keep]
+counts=counts_f.T
+meta=pd.DataFrame({'condition':['reference','reference','changed','changed']}, index=counts.index)
+print(counts.shape, meta.shape)
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+dds = DeseqDataSet(counts=counts, metadata=meta, design='~condition', ref_level=['reference'], quiet=False)
+dds.deseq2()
+print('dds done')
+stat = DeseqStats(dds, contrast=['condition','changed','reference'], cooks_filter=False, independent_filter=False, quiet=False)
+stat.summary()
+print(stat.results_df.shape)
+print(stat.results_df.head())
+print(stat.results_df[['log2FoldChange','pvalue']].describe())
+print('na', stat.results_df.isna().sum())
+PY"

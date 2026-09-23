@@ -1,0 +1,57 @@
+/usr/bin/bash -lc "/opt/conda/bin/python3.11 -u - <<'PY'
+import h5py, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+p='data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad'
+def decarr(a): return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a],dtype=object)
+with h5py.File(p,'r') as f:
+    ctcat=decarr(f['obs/cell_type/categories'][()]); ct=ctcat[f['obs/cell_type/codes'][()]]
+    dcat=decarr(f['obs/disease/categories'][()]); disease=dcat[f['obs/disease/codes'][()]]
+    icat=decarr(f['obs/individual/categories'][()]); ind=icat[f['obs/individual/codes'][()]]
+    genes=decarr(f['var/gene_symbol'][()])
+    dat=f['layers/counts/data'][()].astype(np.int64)
+    idx=f['layers/counts/indices'][()]
+    ip=f['layers/counts/indptr'][()]
+    X=csr_matrix((dat,idx,ip),shape=(len(ind),len(genes)))
+meta=pd.DataFrame({'individual':ind,'cell_type':ct,'disease':disease})
+meta['key']=meta['individual']+'\\x1f'+meta['cell_type']
+counts=meta.groupby('key',sort=False).size()
+keepkeys=counts[counts>=10].index.tolist()
+key_to_id={k:i for i,k in enumerate(keepkeys)}
+meta['gid']=meta['key'].map(key_to_id)
+mask=meta['gid'].notna().to_numpy()
+# Sum rowwise group
+PB=np.zeros((len(keepkeys), X.shape[1]),dtype=np.int64)
+for gi,k in enumerate(keepkeys):
+    PB[gi]=np.asarray(X[meta['gid'].to_numpy()==gi].sum(axis=0)).ravel()
+col=[]; md=[]
+for k in keepkeys:
+    ii,cc=k.split('\\x1f')
+    col.append(ii.replace(' ','_').replace('-','_')+'_'+cc.replace(' ','_').replace('-','_'))
+    md.append({'individual':ii,'cell_type':cc,'disease':meta.loc[meta.key==k,'disease'].iloc[0]})
+metadata=pd.DataFrame(md,index=col)
+print('PB',PB.shape,'sum',PB.sum(),'N',len(col))
+N=PB.shape[0]; M=np.median(PB.sum(axis=1)); S=int(np.ceil(10+0.7*(N-10))); thr=10/M*1e6
+cpm=PB/PB.sum(axis=1,keepdims=True)*1e6
+good=(np.sum(cpm>=thr,axis=0)>=S)&(PB.sum(axis=0)>=1000)
+print('M',M,'S',S,'threshold',thr,'genes',good.sum())
+# first good genes
+good_idx=np.flatnonzero(good)
+subidx=good_idx[:500]
+# Ensure no all-zero across subset (none by sum)
+counts_df=pd.DataFrame(PB[:,subidx],index=col,columns=genes[subidx]).astype(int)
+metadata['disease']=pd.Categorical(metadata['disease'],categories=['COVID-19','normal'])
+metadata['cell_type']=pd.Categorical(metadata['cell_type'],categories=sorted(metadata['cell_type'].unique()))
+print(metadata)
+print(counts_df.dtypes.iloc[0],counts_df.sum().head())
+print('init')
+dds=DeseqDataSet(counts=counts_df,metadata=metadata,design='~ cell_type + disease',quiet=False,n_cpus=1,refit_cooks=False,low_memory=False)
+print('dds init okay',dds.design_matrix.shape,dds.design_matrix.columns)
+dds.deseq2()
+print('dds complete',dds.varm.keys())
+stat=DeseqStats(dds,contrast=['disease','normal','COVID-19'],cooks_filter=False,independent_filter=False,quiet=False,n_cpus=1)
+stat.summary()
+print(stat.results_df.head())
+print('nan',stat.results_df.isna().sum())
+PY"

@@ -1,0 +1,82 @@
+/usr/bin/bash -lc "set -euo pipefail
+gzip -t /workspace/final_answer/trimmed_forward.fastqsanger.gz /workspace/final_answer/trimmed_reverse.fastqsanger.gz
+python3 - <<'PY' | tee /workspace/run_trace/validation.log
+import gzip
+from itertools import zip_longest
+from pathlib import Path
+
+r1 = Path('/workspace/final_answer/trimmed_forward.fastqsanger.gz')
+r2 = Path('/workspace/final_answer/trimmed_reverse.fastqsanger.gz')
+
+def records(path):
+    with gzip.open(path, 'rt') as fh:
+        rec_no = 0
+        while True:
+            h = fh.readline().rstrip('\\n')
+            if not h:
+                return
+            rec_no += 1
+            s = fh.readline().rstrip('\\n')
+            p = fh.readline().rstrip('\\n')
+            q = fh.readline().rstrip('\\n')
+            if not h.startswith('@') or not p.startswith('+') or len(s) "'!= len(q):
+                raise SystemExit(f'"'malformed FASTQ record {rec_no} in {path}')
+            yield h, s, q
+
+def norm_id(h):
+    token = h.split()[0]
+    if token.startswith('@'):
+        token = token[1:]
+    if token.endswith('/1') or token.endswith('/2'):
+        token = token[:-2]
+    return token
+
+count = 0
+min1 = min2 = None
+max1 = max2 = 0
+max_n1 = max_n2 = 0
+max_low1 = max_low2 = 0.0
+viol = []
+for a, b in zip_longest(records(r1), records(r2)):
+    if a is None or b is None:
+        viol.append('mate_count_mismatch')
+        break
+    count += 1
+    h1, s1, q1 = a
+    h2, s2, q2 = b
+    if norm_id(h1) "'!= norm_id(h2):
+        viol.append(f'"'pair_id_mismatch at pair {count}: {h1} vs {h2}')
+        break
+    for mate, seq, qual in ((1, s1, q1), (2, s2, q2)):
+        n_count = seq.upper().count('N')
+        low = sum((ord(ch)-33) < 20 for ch in qual)
+        low_pct = 100.0 * low / len(qual) if qual else 100.0
+        if len(seq) < 15 or n_count > 5 or low_pct > 40.0:
+            viol.append(f'filter_violation pair={count} mate={mate} len={len(seq)} n={n_count} low_pct={low_pct:.6f}')
+            break
+    if viol:
+        break
+    min1 = len(s1) if min1 is None else min(min1, len(s1))
+    min2 = len(s2) if min2 is None else min(min2, len(s2))
+    max1 = max(max1, len(s1)); max2 = max(max2, len(s2))
+    n1 = s1.upper().count('N'); n2 = s2.upper().count('N')
+    max_n1 = max(max_n1, n1); max_n2 = max(max_n2, n2)
+    low1 = 100.0 * sum((ord(ch)-33) < 20 for ch in q1) / len(q1)
+    low2 = 100.0 * sum((ord(ch)-33) < 20 for ch in q2) / len(q2)
+    max_low1 = max(max_low1, low1); max_low2 = max(max_low2, low2)
+
+if viol:
+    print('validation=FAILED')
+    for v in viol:
+        print(v)
+    raise SystemExit(1)
+
+print('validation=PASSED')
+print(f'retained_pairs={count}')
+print(f'forward_len_min={min1} forward_len_max={max1}')
+print(f'reverse_len_min={min2} reverse_len_max={max2}')
+print(f'forward_max_N={max_n1} reverse_max_N={max_n2}')
+print(f'forward_max_lowq_percent={max_low1:.6f}')
+print(f'reverse_max_lowq_percent={max_low2:.6f}')
+PY
+find /workspace/final_answer -maxdepth 1 -type f -printf '%f\\t%s bytes\\n' | sort | tee /workspace/run_trace/final_files.log"

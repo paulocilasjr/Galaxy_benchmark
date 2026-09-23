@@ -1,0 +1,61 @@
+/usr/bin/bash -lc "/workspace/tools/mitoenv/bin/python - <<'PY'
+from pathlib import Path
+from collections import defaultdict,Counter,deque
+# load unitig metadata from fasta headers
+meta={}
+for line in Path('work/kmc/unitigs_ci300_cx600.fasta').open():
+    if line.startswith('>'):
+        parts=line[1:].split()
+        uid=parts[0]
+        d={}
+        for p in parts[1:]:
+            if '=' in p:
+                k,v=p.split('=',1); d[k]=v
+        meta[uid]=d
+# parse alignments
+byread=defaultdict(list)
+for line in Path('work/reads/raw_vs_unitigs_ci300_cx600.paf').open():
+    f=line.split('\\t')
+    if len(f)<12: continue
+    q,ql,qs,qe,strand,t,tl,ts,te,match,alen,mapq=f[:12]
+    ql=int(ql); qs=int(qs); qe=int(qe); tl=int(tl); ts=int(ts); te=int(te); match=int(match); alen=int(alen); mapq=int(mapq)
+    ident=match/alen if alen else 0
+    if alen>=500 and ident>=0.97 and mapq>=20:
+        byread[q].append((qs,qe,strand,t,tl,ts,te,alen,ident))
+# cooccurrence for reads with >=2 unitigs
+edges=Counter(); directed=Counter(); reads_multi=0
+for r,als in byread.items():
+    # keep best aln per target to avoid duplicates
+    best={}
+    for a in als:
+        if a[3] not in best or a[7]>best[a[3]][7]: best[a[3]]=a
+    als=sorted(best.values())
+    if len(als)>=2: reads_multi+=1
+    units=[a[3] for a in als]
+    for i,u in enumerate(units):
+        for v in units[i+1:]: edges[tuple(sorted((u,v)))] +=1
+    for a,b in zip(als,als[1:]): directed[(a[3],b[3],a[2],b[2])] +=1
+# components
+adj=defaultdict(set)
+for (u,v),c in edges.items():
+    if c>=3:
+        adj[u].add(v); adj[v].add(u)
+seen=set(); comps=[]
+for u in adj:
+    if u in seen: continue
+    q=deque([u]); seen.add(u); comp=[]
+    while q:
+        x=q.popleft(); comp.append(x)
+        for y in adj[x]:
+            if y not in seen: seen.add(y); q.append(y)
+    comps.append(comp)
+print('reads_with_alignments',len(byread),'reads_multi_unitig',reads_multi)
+print('components c>=3')
+for comp in sorted(comps, key=len, reverse=True):
+    print('comp',len(comp), 'sum_len',sum(int(meta[u]['length']) for u in comp), sorted(comp, key=lambda x:int(x.split('_')[1])))
+print('top cooccur edges')
+for (u,v),c in edges.most_common(80):
+    print(u,v,c, 'len',meta[u]['length'],meta[v]['length'])
+print('top directed adjacent')
+for k,c in directed.most_common(80): print(k,c)
+PY"

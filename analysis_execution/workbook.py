@@ -26,6 +26,8 @@ KNOWN = {
     "compbio": "compbio",
     "compbiobench": "compbio",
     "compbiobench v1": "compbio",
+    "iwc-workflowbench": "iwc",
+    "iwc workflowbench": "iwc",
     "iwc": "iwc",
 }
 

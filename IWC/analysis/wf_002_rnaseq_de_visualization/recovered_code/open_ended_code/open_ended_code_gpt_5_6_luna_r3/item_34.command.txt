@@ -1,0 +1,40 @@
+/usr/bin/bash -lc "/opt/conda/bin/python3.11 - <<'PY'
+import csv, json, math
+files = [
+ 'data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat',
+ 'data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat',
+ 'data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat',
+ 'data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat',
+]
+counts=[]
+for f in files:
+    with open(f, newline='') as h:
+        reader=csv.reader(h, delimiter='\\t')
+        header=next(reader)
+        counts.append(dict(reader))
+ids=list(counts[0])
+keep=[g for g in ids if sum(int(x[g]) >= 10 for x in counts) >= 2]
+with open('final_answer/differential_expression.tsv', newline='') as h:
+    reader=csv.DictReader(h, delimiter='\\t')
+    out=list(reader)
+assert reader.fieldnames == ['gene_id','log2_fold_change','p_value','fdr']
+assert [r['gene_id'] for r in out] == keep
+p=[float(r['p_value']) for r in out]
+fdr=[float(r['fdr']) for r in out]
+assert all(math.isfinite(float(r['log2_fold_change'])) for r in out)
+assert all(0 <= x <= 1 and math.isfinite(x) for x in p+fdr)
+# BH, matching R's p.adjust definition (ties handled by stable rank order but values are same)
+order=sorted(range(len(p)), key=lambda i: p[i])
+bh=[None]*len(p)
+run=1.0
+for rank, i in reversed(list(enumerate(order, start=1))):
+    run=min(run, p[i]*len(p)/rank)
+    bh[i]=min(run,1.0)
+maxdiff=max(abs(a-b) for a,b in zip(fdr,bh))
+assert maxdiff < 2e-14, maxdiff
+with open('final_answer/method.json') as h:
+    method=json.load(h)
+assert method == {'method':'DESeq2'}
+print(f'validated rows={len(out)} columns={reader.fieldnames} max_bh_abs_diff={maxdiff:.3g} lfc_finite=True p_bounds=True fdr_bounds=True method={method[\"method\"]}')
+print('p_min=',min(p),'fdr_min=',min(fdr),'lfc_min=',min(float(r['log2_fold_change']) for r in out),'lfc_max=',max(float(r['log2_fold_change']) for r in out))
+PY"

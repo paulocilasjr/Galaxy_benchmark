@@ -1,0 +1,566 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "8ed5425b",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:23:20.271002Z",
+     "iopub.status.busy": "2026-08-28T23:23:20.270842Z",
+     "iopub.status.idle": "2026-08-28T23:23:23.387249Z",
+     "shell.execute_reply": "2026-08-28T23:23:23.386674Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "starting pseudobulk notebook\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "imports ok\n"
+     ]
+    }
+   ],
+   "source": [
+    "import sys, os, subprocess, math\n",
+    "print('starting pseudobulk notebook')\n",
+    "subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet', 'h5py'], check=False)\n",
+    "import h5py\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "from scipy.sparse import csr_matrix\n",
+    "from galaxy_ie_helpers import get, put\n",
+    "print('imports ok')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "f7db4423",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:23:23.388996Z",
+     "iopub.status.busy": "2026-08-28T23:23:23.388736Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.107993Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.107276Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "downloaded /import/1 548946128\n"
+     ]
+    }
+   ],
+   "source": [
+    "h5_path = get(1)\n",
+    "print('downloaded', h5_path, os.path.getsize(h5_path))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "e6511d8c",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.109917Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.109735Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.173265Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.172622Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "n_obs 4903 n_vars 19090\n",
+      "individual categories ['Control #1', 'Control #2', 'Control #3', 'SARS-CoV2 pos Mild', 'SARS-CoV2 pos Severe #1', 'SARS-CoV2 pos Severe #2', 'SARS-CoV2 pos Severe #3']\n",
+      "disease categories ['COVID-19', 'normal']\n",
+      "cell type categories ['B cell', 'T cell', 'erythroid lineage cell', 'monocyte', 'neutrophil', 'platelet']\n"
+     ]
+    }
+   ],
+   "source": [
+    "def decode_obj(a):\n",
+    "    return [x.decode('utf-8') if isinstance(x, bytes) else str(x) for x in a]\n",
+    "\n",
+    "with h5py.File(h5_path, 'r') as f:\n",
+    "    n_obs = f['layers/counts/indptr'].shape[0] - 1\n",
+    "    n_vars = f['layers/counts/indices'].shape[0] if False else None\n",
+    "    # Read categories and codes\n",
+    "    def read_cat(name):\n",
+    "        cats = decode_obj(f[f'obs/{name}/categories'][:])\n",
+    "        codes = f[f'obs/{name}/codes'][:]\n",
+    "        vals = np.array(cats, dtype=object)[codes]\n",
+    "        return cats, vals\n",
+    "    individual_cats, individual = read_cat('individual')\n",
+    "    disease_cats, disease = read_cat('disease')\n",
+    "    cell_type_cats, cell_type = read_cat('cell_type')\n",
+    "    gene_symbols = decode_obj(f['var/gene_symbol'][:])\n",
+    "    data = f['layers/counts/data'][:]\n",
+    "    indices = f['layers/counts/indices'][:]\n",
+    "    indptr = f['layers/counts/indptr'][:]\n",
+    "\n",
+    "print('n_obs', n_obs, 'n_vars', len(gene_symbols))\n",
+    "print('individual categories', individual_cats)\n",
+    "print('disease categories', disease_cats)\n",
+    "print('cell type categories', cell_type_cats)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "f406c504",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.174892Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.174721Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.178554Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.178012Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "counts matrix (4903, 19090) 10062946\n"
+     ]
+    }
+   ],
+   "source": [
+    "C = csr_matrix((data, indices, indptr), shape=(len(individual), len(gene_symbols)))\n",
+    "print('counts matrix', C.shape, C.nnz)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "bc73135c",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.180130Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.179968Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.187350Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.186846Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "total individual-cell-type combinations 39\n",
+      "retained 34\n",
+      "dropped 5\n",
+      "drop Control #1|||erythroid lineage cell 2\n",
+      "drop Control #2|||platelet 4\n",
+      "drop SARS-CoV2 pos Mild|||platelet 7\n",
+      "drop SARS-CoV2 pos Severe #3|||monocyte 5\n",
+      "drop SARS-CoV2 pos Severe #3|||platelet 1\n"
+     ]
+    }
+   ],
+   "source": [
+    "def sanitize(s):\n",
+    "    return s.replace(' ', '_').replace('-', '_')\n",
+    "\n",
+    "keys = np.array([f'{a}|||{b}' for a, b in zip(individual, cell_type)], dtype=object)\n",
+    "uniq_keys, group_idx = np.unique(keys, return_inverse=True)\n",
+    "cell_counts = np.bincount(group_idx)\n",
+    "keep = cell_counts >= 10\n",
+    "keep_rows = np.where(keep)[0]\n",
+    "print('total individual-cell-type combinations', len(uniq_keys))\n",
+    "print('retained', int(keep.sum()))\n",
+    "print('dropped', int((~keep).sum()))\n",
+    "for i in np.where(~keep)[0]:\n",
+    "    print('drop', uniq_keys[i], int(cell_counts[i]))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "20142941",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.188864Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.188700Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.245057Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.244435Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "pseudobulk matrix (34, 19090)\n"
+     ]
+    }
+   ],
+   "source": [
+    "G = csr_matrix((np.ones(len(group_idx), dtype=np.float64), (group_idx, np.arange(len(group_idx)))),\n",
+    "               shape=(len(uniq_keys), len(individual)))\n",
+    "P = (G[keep_rows, :] @ C).toarray().astype(np.int64)\n",
+    "print('pseudobulk matrix', P.shape)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "36df64e6",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.246600Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.246411Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.258164Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.257644Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "                                            sample               individual               cell_type     cell_type_sanitized   disease\n",
+      "0                                Control_#1_B_cell               Control #1                  B cell                  B_cell    normal\n",
+      "1                                Control_#1_T_cell               Control #1                  T cell                  T_cell    normal\n",
+      "2                              Control_#1_monocyte               Control #1                monocyte                monocyte    normal\n",
+      "3                            Control_#1_neutrophil               Control #1              neutrophil              neutrophil    normal\n",
+      "4                              Control_#1_platelet               Control #1                platelet                platelet    normal\n",
+      "5                                Control_#2_B_cell               Control #2                  B cell                  B_cell    normal\n",
+      "6                                Control_#2_T_cell               Control #2                  T cell                  T_cell    normal\n",
+      "7                              Control_#2_monocyte               Control #2                monocyte                monocyte    normal\n",
+      "8                            Control_#2_neutrophil               Control #2              neutrophil              neutrophil    normal\n",
+      "9                                Control_#3_B_cell               Control #3                  B cell                  B_cell    normal\n",
+      "10                               Control_#3_T_cell               Control #3                  T cell                  T_cell    normal\n",
+      "11               Control_#3_erythroid_lineage_cell               Control #3  erythroid lineage cell  erythroid_lineage_cell    normal\n",
+      "12                             Control_#3_monocyte               Control #3                monocyte                monocyte    normal\n",
+      "13                           Control_#3_neutrophil               Control #3              neutrophil              neutrophil    normal\n",
+      "14                             Control_#3_platelet               Control #3                platelet                platelet    normal\n",
+      "15                       SARS_CoV2_pos_Mild_B_cell       SARS-CoV2 pos Mild                  B cell                  B_cell  COVID-19\n",
+      "16                       SARS_CoV2_pos_Mild_T_cell       SARS-CoV2 pos Mild                  T cell                  T_cell  COVID-19\n",
+      "17       SARS_CoV2_pos_Mild_erythroid_lineage_cell       SARS-CoV2 pos Mild  erythroid lineage cell  erythroid_lineage_cell  COVID-19\n",
+      "18                     SARS_CoV2_pos_Mild_monocyte       SARS-CoV2 pos Mild                monocyte                monocyte  COVID-19\n",
+      "19                   SARS_CoV2_pos_Mild_neutrophil       SARS-CoV2 pos Mild              neutrophil              neutrophil  COVID-19\n",
+      "20                  SARS_CoV2_pos_Severe_#1_B_cell  SARS-CoV2 pos Severe #1                  B cell                  B_cell  COVID-19\n",
+      "21                  SARS_CoV2_pos_Severe_#1_T_cell  SARS-CoV2 pos Severe #1                  T cell                  T_cell  COVID-19\n",
+      "22  SARS_CoV2_pos_Severe_#1_erythroid_lineage_cell  SARS-CoV2 pos Severe #1  erythroid lineage cell  erythroid_lineage_cell  COVID-19\n",
+      "23                SARS_CoV2_pos_Severe_#1_monocyte  SARS-CoV2 pos Severe #1                monocyte                monocyte  COVID-19\n",
+      "24              SARS_CoV2_pos_Severe_#1_neutrophil  SARS-CoV2 pos Severe #1              neutrophil              neutrophil  COVID-19\n",
+      "25                SARS_CoV2_pos_Severe_#1_platelet  SARS-CoV2 pos Severe #1                platelet                platelet  COVID-19\n",
+      "26                  SARS_CoV2_pos_Severe_#2_B_cell  SARS-CoV2 pos Severe #2                  B cell                  B_cell  COVID-19\n",
+      "27                  SARS_CoV2_pos_Severe_#2_T_cell  SARS-CoV2 pos Severe #2                  T cell                  T_cell  COVID-19\n",
+      "28  SARS_CoV2_pos_Severe_#2_erythroid_lineage_cell  SARS-CoV2 pos Severe #2  erythroid lineage cell  erythroid_lineage_cell  COVID-19\n",
+      "29                SARS_CoV2_pos_Severe_#2_monocyte  SARS-CoV2 pos Severe #2                monocyte                monocyte  COVID-19\n",
+      "30              SARS_CoV2_pos_Severe_#2_neutrophil  SARS-CoV2 pos Severe #2              neutrophil              neutrophil  COVID-19\n",
+      "31                SARS_CoV2_pos_Severe_#2_platelet  SARS-CoV2 pos Severe #2                platelet                platelet  COVID-19\n",
+      "32                  SARS_CoV2_pos_Severe_#3_B_cell  SARS-CoV2 pos Severe #3                  B cell                  B_cell  COVID-19\n",
+      "33                  SARS_CoV2_pos_Severe_#3_T_cell  SARS-CoV2 pos Severe #3                  T cell                  T_cell  COVID-19\n"
+     ]
+    }
+   ],
+   "source": [
+    "sample_meta = []\n",
+    "for row_i, key_i in enumerate(keep_rows):\n",
+    "    key = uniq_keys[key_i]\n",
+    "    ind_raw, ct_raw = key.split('|||')\n",
+    "    mask = keys == key\n",
+    "    dis = disease[mask][0]\n",
+    "    sample_meta.append({\n",
+    "        'sample': f'{sanitize(ind_raw)}_{sanitize(ct_raw)}',\n",
+    "        'individual': ind_raw,\n",
+    "        'cell_type': ct_raw,\n",
+    "        'cell_type_sanitized': sanitize(ct_raw),\n",
+    "        'disease': dis\n",
+    "    })\n",
+    "meta = pd.DataFrame(sample_meta)\n",
+    "print(meta.to_string())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "9c7d2cb5",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.259651Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.259481Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.268191Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.267693Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "N 34 M 556360.0 S 27\n",
+      "threshold cpm 17.97397368610252 genes pass cpm 1438 pass sum 4423 kept genes 1429\n"
+     ]
+    }
+   ],
+   "source": [
+    "totals = P.sum(axis=1)\n",
+    "N = int(P.shape[0])\n",
+    "M = float(np.median(totals))\n",
+    "S = int(math.ceil(10 + 0.7 * (N - 10)))\n",
+    "print('N', N, 'M', M, 'S', S)\n",
+    "cpm = (P.astype(np.float64) / totals[:, None]) * 1_000_000.0\n",
+    "thr = (10.0 / M) * 1_000_000.0\n",
+    "pass_cpm = (cpm >= thr).sum(axis=0) >= S\n",
+    "sum_counts = P.sum(axis=0)\n",
+    "pass_sum = sum_counts >= 1000\n",
+    "keep_genes = np.where(pass_cpm & pass_sum)[0]\n",
+    "print('threshold cpm', thr, 'genes pass cpm', int(pass_cpm.sum()), 'pass sum', int(pass_sum.sum()), 'kept genes', len(keep_genes))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "63654a19",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.269734Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.269542Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.287195Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.286693Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "wrote pseudobulk_counts.tsv (1429, 35)\n"
+     ]
+    }
+   ],
+   "source": [
+    "gene_col = np.array([gene_symbols[i] for i in keep_genes], dtype=object)\n",
+    "# Build final matrix with gene as first column\n",
+    "final_counts = pd.DataFrame(P[:, keep_genes].T, columns=meta['sample'].tolist())\n",
+    "final_counts.insert(0, 'gene', gene_col)\n",
+    "final_counts.to_csv('pseudobulk_counts.tsv', sep='\\t', index=False)\n",
+    "print('wrote pseudobulk_counts.tsv', final_counts.shape)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "a5472901",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.288699Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.288513Z",
+     "iopub.status.idle": "2026-08-28T23:24:02.555646Z",
+     "shell.execute_reply": "2026-08-28T23:24:02.555129Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "wrote 34 sample count files and sample_sheet.tsv\n",
+      "                                            sample   disease               cell_type\n",
+      "0                                Control_#1_B_cell    normal                  B_cell\n",
+      "1                                Control_#1_T_cell    normal                  T_cell\n",
+      "2                              Control_#1_monocyte    normal                monocyte\n",
+      "3                            Control_#1_neutrophil    normal              neutrophil\n",
+      "4                              Control_#1_platelet    normal                platelet\n",
+      "5                                Control_#2_B_cell    normal                  B_cell\n",
+      "6                                Control_#2_T_cell    normal                  T_cell\n",
+      "7                              Control_#2_monocyte    normal                monocyte\n",
+      "8                            Control_#2_neutrophil    normal              neutrophil\n",
+      "9                                Control_#3_B_cell    normal                  B_cell\n",
+      "10                               Control_#3_T_cell    normal                  T_cell\n",
+      "11               Control_#3_erythroid_lineage_cell    normal  erythroid_lineage_cell\n",
+      "12                             Control_#3_monocyte    normal                monocyte\n",
+      "13                           Control_#3_neutrophil    normal              neutrophil\n",
+      "14                             Control_#3_platelet    normal                platelet\n",
+      "15                       SARS_CoV2_pos_Mild_B_cell  COVID-19                  B_cell\n",
+      "16                       SARS_CoV2_pos_Mild_T_cell  COVID-19                  T_cell\n",
+      "17       SARS_CoV2_pos_Mild_erythroid_lineage_cell  COVID-19  erythroid_lineage_cell\n",
+      "18                     SARS_CoV2_pos_Mild_monocyte  COVID-19                monocyte\n",
+      "19                   SARS_CoV2_pos_Mild_neutrophil  COVID-19              neutrophil\n",
+      "20                  SARS_CoV2_pos_Severe_#1_B_cell  COVID-19                  B_cell\n",
+      "21                  SARS_CoV2_pos_Severe_#1_T_cell  COVID-19                  T_cell\n",
+      "22  SARS_CoV2_pos_Severe_#1_erythroid_lineage_cell  COVID-19  erythroid_lineage_cell\n",
+      "23                SARS_CoV2_pos_Severe_#1_monocyte  COVID-19                monocyte\n",
+      "24              SARS_CoV2_pos_Severe_#1_neutrophil  COVID-19              neutrophil\n",
+      "25                SARS_CoV2_pos_Severe_#1_platelet  COVID-19                platelet\n",
+      "26                  SARS_CoV2_pos_Severe_#2_B_cell  COVID-19                  B_cell\n",
+      "27                  SARS_CoV2_pos_Severe_#2_T_cell  COVID-19                  T_cell\n",
+      "28  SARS_CoV2_pos_Severe_#2_erythroid_lineage_cell  COVID-19  erythroid_lineage_cell\n",
+      "29                SARS_CoV2_pos_Severe_#2_monocyte  COVID-19                monocyte\n",
+      "30              SARS_CoV2_pos_Severe_#2_neutrophil  COVID-19              neutrophil\n",
+      "31                SARS_CoV2_pos_Severe_#2_platelet  COVID-19                platelet\n",
+      "32                  SARS_CoV2_pos_Severe_#3_B_cell  COVID-19                  B_cell\n",
+      "33                  SARS_CoV2_pos_Severe_#3_T_cell  COVID-19                  T_cell\n"
+     ]
+    }
+   ],
+   "source": [
+    "os.makedirs('deseq_counts', exist_ok=True)\n",
+    "count_files = []\n",
+    "for j, sample_id in enumerate(meta['sample']):\n",
+    "    fn = f'deseq_counts/{j}_{sample_id}.tsv'\n",
+    "    df = pd.DataFrame({'gene': gene_col, sample_id: P[:, keep_genes][j, :]})\n",
+    "    df.to_csv(fn, sep='\\t', index=False)\n",
+    "    count_files.append(fn)\n",
+    "\n",
+    "sample_sheet = meta[['sample', 'disease', 'cell_type_sanitized']].rename(columns={'cell_type_sanitized': 'cell_type'})\n",
+    "sample_sheet.to_csv('sample_sheet.tsv', sep='\\t', index=False)\n",
+    "print('wrote', len(count_files), 'sample count files and sample_sheet.tsv')\n",
+    "print(sample_sheet.to_string())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "7afd4a1c",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:24:02.557292Z",
+     "iopub.status.busy": "2026-08-28T23:24:02.557126Z",
+     "iopub.status.idle": "2026-08-28T23:26:13.312783Z",
+     "shell.execute_reply": "2026-08-28T23:26:13.312192Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "uploaded pseudobulk_counts, sample_sheet, and 34 count files\n"
+     ]
+    }
+   ],
+   "source": [
+    "put('pseudobulk_counts.tsv', file_type='tabular')\n",
+    "put('sample_sheet.tsv', file_type='tabular')\n",
+    "put(count_files, file_type='tabular')\n",
+    "print('uploaded pseudobulk_counts, sample_sheet, and', len(count_files), 'count files')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "ae8cbb00",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-08-28T23:26:13.314381Z",
+     "iopub.status.busy": "2026-08-28T23:26:13.314216Z",
+     "iopub.status.idle": "2026-08-28T23:26:14.518743Z",
+     "shell.execute_reply": "2026-08-28T23:26:14.518213Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "1 f9cad7b01a472135d96f70053b2cc7b3 https://zenodo.org/records/13929549/files/Source%20AnnData%20file.h5ad h5ad\n",
+      "2 f9cad7b01a472135dea4906a222462bf Inspect AnnData on dataset 1: General information txt\n",
+      "3 f9cad7b01a472135c42b9e703cbc61d4 Inspect AnnData on dataset 1: Key-indexed observations annotation (obs) tabular\n",
+      "4 f9cad7b01a47213592dcd1195e35f138 Inspect AnnData on dataset 1: Key-indexed annotation of variables/features (var) tabular\n",
+      "5 f9cad7b01a472135b0b6dae9253ea1d8 AnnData Operations on dataset 1: @DESCRIPTION@ AnnData h5ad\n",
+      "6 f9cad7b01a47213569e9ab51be6580e2 Export AnnData on dataset 5: Matrix table (X) tabular\n",
+      "7 f9cad7b01a4721350cf941bacc165e7e Export AnnData on dataset 5: Key-indexed one-dimensional observations annotation (obs) tabular\n",
+      "8 f9cad7b01a472135956e14f5ddf7a917 Export AnnData on dataset 5: Key-indexed multi-dimensional observations annotation (obsm) tabular\n",
+      "9 f9cad7b01a472135a3adb2d0da038624 Export AnnData on dataset 5: Key-indexed one-dimensional variables annotation (var) tabular\n",
+      "10 f9cad7b01a4721351c75298dffcd3167 Export AnnData on dataset 5: Key-indexed multi-dimensional variables annotation (varm) tabular\n",
+      "11 f9cad7b01a472135b86770dba6abe367 Inspect AnnData on dataset 5: Key-indexed observations annotation (X) tabular\n",
+      "12 f9cad7b01a4721355f335024903ac919 test_inspect.ipynb ipynb\n",
+      "13 7b58343d71f7ca61 JupyTool output collection None\n",
+      "14 f9cad7b01a472135329ebc1a2e95c208 Executed JupyTool Notebook ipynb\n",
+      "15 f9cad7b01a4721355f257fc78ccaf310 Interactive JupyterLab Notebook on dataset 12 data\n",
+      "16 f9cad7b01a472135e8f1d5c1929479a2 test_r.ipynb ipynb\n",
+      "17 573c5b1147ea1e1b JupyTool output collection None\n",
+      "18 f9cad7b01a47213576b29195b5041429 Executed JupyTool Notebook ipynb\n",
+      "19 f9cad7b01a472135eef1fda12a8f1710 Interactive JupyterLab Notebook on dataset 16 data\n",
+      "22 cf721b9a72a9fa36 dataset 3 and 4 (as list) None\n",
+      "23 f9cad7b01a47213505775af5531b368d pseudobulk_and_upload.ipynb ipynb\n",
+      "24 dc8e7cd762f8caa5 JupyTool output collection None\n",
+      "25 f9cad7b01a47213538f2c6a07e75e0ac Executed JupyTool Notebook ipynb\n",
+      "26 f9cad7b01a4721350646caf4ccdfe763 Interactive JupyterLab Notebook on dataset 23 data\n",
+      "27 f9cad7b01a472135cde392d774699150 pseudobulk_counts.tsv tabular\n",
+      "28 f9cad7b01a472135809d9929bc5f6c32 sample_sheet.tsv tabular\n",
+      "29 f9cad7b01a472135a2ecd0e852f6ca7f 0_Control_#1_B_cell.tsv tabular\n",
+      "30 f9cad7b01a472135b70f234113caa656 1_Control_#1_T_cell.tsv tabular\n",
+      "31 f9cad7b01a47213520e555ec92591ab6 2_Control_#1_monocyte.tsv tabular\n",
+      "32 f9cad7b01a47213593c5cc8cb139a0b4 3_Control_#1_neutrophil.tsv tabular\n",
+      "33 f9cad7b01a472135f987895c4ad7c36d 4_Control_#1_platelet.tsv tabular\n",
+      "34 f9cad7b01a472135fd39e9a3de49019a 5_Control_#2_B_cell.tsv tabular\n",
+      "35 f9cad7b01a472135395fee5fbf45a0b1 6_Control_#2_T_cell.tsv tabular\n",
+      "36 f9cad7b01a472135114aebc89bade71a 7_Control_#2_monocyte.tsv tabular\n",
+      "37 f9cad7b01a472135e581d9ab6d56506a 8_Control_#2_neutrophil.tsv tabular\n",
+      "38 f9cad7b01a472135a1b2b39419c042b5 9_Control_#3_B_cell.tsv tabular\n",
+      "39 f9cad7b01a47213594a693103ddcf7b7 10_Control_#3_T_cell.tsv tabular\n",
+      "40 f9cad7b01a4721352e9751ebdcdc3030 11_Control_#3_erythroid_lineage_cell.tsv tabular\n",
+      "41 f9cad7b01a472135c35a9a03dd7bdcdc 12_Control_#3_monocyte.tsv tabular\n",
+      "42 f9cad7b01a472135db665fa3c34d53da 13_Control_#3_neutrophil.tsv tabular\n",
+      "43 f9cad7b01a4721353b15f9ccf87ba86d 14_Control_#3_platelet.tsv tabular\n",
+      "44 f9cad7b01a47213548c969c3b2489e1f 15_SARS_CoV2_pos_Mild_B_cell.tsv tabular\n",
+      "45 f9cad7b01a472135cb0161898800a18d 16_SARS_CoV2_pos_Mild_T_cell.tsv tabular\n",
+      "46 f9cad7b01a4721351cedfd0dcd4e038f 17_SARS_CoV2_pos_Mild_erythroid_lineage_cell.tsv tabular\n",
+      "47 f9cad7b01a47213571291ab225a4a57d 18_SARS_CoV2_pos_Mild_monocyte.tsv tabular\n",
+      "48 f9cad7b01a4721359e11503e90cdcd2e 19_SARS_CoV2_pos_Mild_neutrophil.tsv tabular\n",
+      "49 f9cad7b01a4721358937f4c3bcdd2d09 20_SARS_CoV2_pos_Severe_#1_B_cell.tsv tabular\n",
+      "50 f9cad7b01a47213564b14530399ab07c 21_SARS_CoV2_pos_Severe_#1_T_cell.tsv tabular\n",
+      "51 f9cad7b01a472135fe1ea53e6afe64f6 22_SARS_CoV2_pos_Severe_#1_erythroid_lineage_cell.tsv tabular\n",
+      "52 f9cad7b01a472135f32ca45513c0bc73 23_SARS_CoV2_pos_Severe_#1_monocyte.tsv tabular\n",
+      "53 f9cad7b01a47213549e314c114eca16e 24_SARS_CoV2_pos_Severe_#1_neutrophil.tsv tabular\n",
+      "54 f9cad7b01a472135243264912d63d08a 25_SARS_CoV2_pos_Severe_#1_platelet.tsv tabular\n",
+      "55 f9cad7b01a47213549ac91f9ce48bd68 26_SARS_CoV2_pos_Severe_#2_B_cell.tsv tabular\n",
+      "56 f9cad7b01a472135597898659d111f43 27_SARS_CoV2_pos_Severe_#2_T_cell.tsv tabular\n",
+      "57 f9cad7b01a472135f2bc3343476bd11f 28_SARS_CoV2_pos_Severe_#2_erythroid_lineage_cell.tsv tabular\n",
+      "58 f9cad7b01a472135ffb482c9118b26fc 29_SARS_CoV2_pos_Severe_#2_monocyte.tsv tabular\n",
+      "59 f9cad7b01a472135fac28462ecd1abd3 30_SARS_CoV2_pos_Severe_#2_neutrophil.tsv tabular\n",
+      "60 f9cad7b01a47213593fdc2ae69f433f8 31_SARS_CoV2_pos_Severe_#2_platelet.tsv tabular\n",
+      "61 f9cad7b01a472135be0e8f4f26823598 32_SARS_CoV2_pos_Severe_#3_B_cell.tsv tabular\n",
+      "62 f9cad7b01a47213570698287df9021fe 33_SARS_CoV2_pos_Severe_#3_T_cell.tsv tabular\n"
+     ]
+    }
+   ],
+   "source": [
+    "from galaxy_ie_helpers import get_user_history\n",
+    "hist = get_user_history()\n",
+    "for ds in hist:\n",
+    "    print(ds.get('hid'), ds.get('id'), ds.get('name'), ds.get('extension'))"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.11"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

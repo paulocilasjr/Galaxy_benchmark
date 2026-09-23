@@ -1,0 +1,45 @@
+/usr/bin/bash -lc "/opt/conda/bin/python -u - <<'PY'
+import sys,re,os,bisect,math
+sys.path.insert(0,'.')
+from work.fragment_score import theoretical_ions,score_variant,AA,H2O,PROTON,TMT,CAM,OX
+path='data/inputs/tandem_mass_spectrometry_ms_ms_datasets/ptrc_skubitz_plex2_f15_9aug19_rage_rep_19_06_08_mgf/ptrc_skubitz_plex2_f15_9aug19_rage_rep_19_06_08_mgf.mgf'
+target='PTRC_Skubitz_Plex2_F15_9Aug19_Rage_Rep-19-06-08.raw.thermo.22028.22028.3'
+with open(path) as f:
+ title=None;peaks=[];mz=None;ch=None
+ for line in f:
+  if line.startswith('BEGIN IONS'):title=None;peaks=[];mz=ch=None
+  elif line.startswith('TITLE='):title=line.rstrip()[6:]
+  elif line.startswith('PEPMASS='):mz=float(line.split('=',1)[1].split()[0])
+  elif line.startswith('CHARGE='):ch=int(re.search(r'\\d+',line).group())
+  elif line and (line[0].isdigit() or line[0]=='.'):
+   a=line.split();peaks.append((float(a[0]),float(a[1])))
+  elif line.startswith('END IONS') and title==target:
+   peaks=sorted(peaks);ms=[x[0] for x in peaks]
+   print('mz',mz,'charge',ch,'peaks',len(peaks),'top',sorted(peaks,key=lambda x:x[1],reverse=True)[:10])
+   seq='GIYPSSANFTTDLHSLGQYIQEGLR'
+   # get ions with label TMT via custom and unmodified b
+   for name,addN in [('TMT',TMT),('none',0)]:
+    for fc in [1,2,3]:
+     ions=[];pre=0;tot=sum(AA[a] for a in seq)+H2O
+     for i,a in enumerate(seq[:-1]):
+      pre+=AA[a]
+      # no K/C/M
+      for z in range(1,fc+1):
+       ions.append(((pre+addN+z*PROTON)/z,f'b{i+1}"'^{z}'"'))
+       suf=tot-pre
+       ions.append(((suf+H2O+z*PROTON)/z,f'y{len(seq)-i-1}"'^{z}'"'))
+     # matches under tol .6 and .05
+     for tol in [.6,.05]:
+      mt=[]
+      for t,l in ions:
+       ii=bisect.bisect_left(ms,t)
+       cand=[]
+       for j in range(max(0,ii-2),min(len(ms),ii+3)):
+        cand.append((abs(ms[j]-t),j))
+       if cand and min(x[0] for x in cand)<=tol:
+        er,j=min(cand);mt.append((er,l,t,peaks[j][0],peaks[j][1]))
+      print(name,'fc',fc,'tol',tol,'count',len(mt),'errors',sorted(round(x[0],4) for x in mt)[:20])
+   # print all peaks 100-2000
+   print('all', ' '.join(f'{x:.4f}' for x,_ in peaks))
+   break
+PY"

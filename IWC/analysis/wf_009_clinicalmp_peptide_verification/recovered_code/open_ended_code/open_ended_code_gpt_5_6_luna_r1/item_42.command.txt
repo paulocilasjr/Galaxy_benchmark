@@ -1,0 +1,35 @@
+/usr/bin/bash -lc "/opt/conda/bin/python -u - <<'PY'
+import sys, re, os, bisect
+sys.path.insert(0,'.')
+from work.fragment_score import theoretical_ions
+path='data/inputs/tandem_mass_spectrometry_ms_ms_datasets/ptrc_skubitz_plex2_f10_9aug19_rage_rep_19_06_08_mgf/ptrc_skubitz_plex2_f10_9aug19_rage_rep_19_06_08_mgf.mgf'
+target='PTRC_Skubitz_Plex2_F10_9Aug19_Rage_Rep-19-06-08.raw.thermo.13571.13571.3'
+with open(path) as f:
+  title=None; peaks=[]; mz=None; ch=None
+  for line in f:
+   if line.startswith('BEGIN IONS'): title=None;peaks=[];mz=None;ch=None
+   elif line.startswith('TITLE='): title=line.rstrip()[6:]
+   elif line.startswith('PEPMASS='): mz=float(line.split('=',1)[1].split()[0])
+   elif line.startswith('CHARGE='): ch=int(re.search(r'\\d+',line).group())
+   elif line and (line[0].isdigit() or line[0]=='.'):
+    a=line.split(); peaks.append((float(a[0]),float(a[1])))
+   elif line.startswith('END IONS') and title==target:
+    print(title,'pepmass',mz,'charge',ch,'peaks',len(peaks),flush=True)
+    sp=sorted(peaks); ms=[x[0] for x in sp]
+    for seq in ['ADVTVATAADK','TTTGAQGAQVK']:
+     print('\\n'+seq)
+     best=None
+     for placement,ions in theoretical_ions(seq,0,min(3,ch)):
+      matches=[]
+      for t,l in ions:
+       i=bisect.bisect_left(ms,t)
+       near=[]
+       for j in range(max(0,i-2),min(len(sp),i+3)):
+        near.append((abs(sp[j][0]-t),j,sp[j]))
+       if near and min(x[0] for x in near)<=0.6:
+        er,j,pk=min(near);matches.append((er,l,t,pk[0],pk[1]))
+      if best is None or len(matches)>best[0]:best=(len(matches),placement,matches)
+     print('matches',best[0],'placement',best[1])
+     for er,l,t,pm,inten in sorted(best[2],key=lambda x:x[0]): print(f'{l:8s} theo {t:9.4f} obs {pm:9.4f} err {er:6.4f} int {inten:.0f}')
+    break
+PY"

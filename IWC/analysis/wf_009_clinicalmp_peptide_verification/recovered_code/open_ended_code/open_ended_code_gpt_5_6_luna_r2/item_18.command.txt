@@ -1,0 +1,58 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+from pathlib import Path
+import csv, re, itertools, math, bisect, collections, json, time
+# constants
+AA={'A':71.037113805,'R':156.10111105,'N':114.04292747,'D':115.026943065,'C':103.009184505,'E':129.042592635,'Q':128.05857754,'G':57.021463735,'H':137.058911875,'I':113.084064015,'L':113.084064015,'K':128.09496305,'M':131.040484645,'F':147.068413945,'P':97.052763875,'S':87.032028435,'T':101.047678505,'W':186.07931298,'Y':163.063328575,'V':99.068413945}
+H2O=18.010564684; TMT=229.162932; CAM=57.021463735; OX=15.99491462; PROTON=1.007276466621
+D=[x[0].strip().upper() for x in csv.reader(open('data/inputs/distinct_peptides_for_pepquery/Distinct_Peptides_for_PepQuery.tabular'),delimiter='\\t') if x]
+# variants; include 0..all Ox as variable
+vars=[]
+for s in D:
+ base=H2O+sum(AA[a] for a in s)+TMT+s.count('K')*TMT+s.count('C')*CAM
+ nm=s.count('M')
+ masses=[(base+k*OX, k) for k in range(nm+1)]
+ for mass,k in masses:
+  for z in range(2,7):
+   vars.append((mass/z+PROTON,z,s,k))
+vars.sort()
+mzs=[v[0] for v in vars]
+# find all candidate target in tolerance relative observed
+matches=[]
+counts=collections.Counter(); filecounts=collections.Counter(); candcounts=collections.Counter();
+files=sorted(Path('data/inputs/tandem_mass_spectrometry_ms_ms_datasets').glob('*/*.mgf'))
+for path in files:
+ t=time.time(); n=0; ions=0; inions=False; rec={}
+ with path.open('r',errors='replace') as f:
+  for line in f:
+   if line.startswith('BEGIN IONS'):
+    n+=1; rec={}; inions=True
+   elif inions and line.startswith('TITLE='): rec['title']=line.rstrip('\\n')[6:]
+   elif inions and line.startswith('RTINSECONDS='): rec['rt']=line.rstrip('\\n').split('=',1)[1]
+   elif inions and line.startswith('PEPMASS='): rec['pm']=float(line.split('=',1)[1].split()[0])
+   elif inions and line.startswith('CHARGE='):
+    try: rec['z']=int(line.split('=',1)[1].strip().rstrip('+').rstrip('-'))
+    except: rec['z']=None
+   elif inions and line.startswith('END IONS'):
+    inions=False
+    if 'pm' in rec and rec.get('z') in range(2,7):
+     obs=rec['pm']; tol=obs*10e-6
+     lo=bisect.bisect_left(mzs,obs-tol); hi=bisect.bisect_right(mzs,obs+tol)
+     for target in vars[lo:hi]:
+      err_ppm=(obs-target[0])/target[0]*1e6
+      # target tuple mz,z,seq,k, same z guaranteed by target filter? filter target[1]==rec z
+      if target[1]"'!=rec['"'z']: continue
+      matches.append((target[2],target[3],rec['z'],path.name,rec.get('title',''),obs,target[0],err_ppm,rec.get('rt','')))
+      counts[target[2]]+=1;filecounts[path.name]+=1;candcounts[(target[2],target[3])]+=1
+ print(path.name, n,'precursor matches so far',len(matches),'sec',round(time.time()-t,1))
+print('TOTAL matches',len(matches),'unique spectra',len(set((m[0],m[1],m[2],m[3],m[4]) for m in matches)))
+print('candidates with precursor matches',len(counts))
+for s in D:
+ if s in counts:
+  print(s, 'matches',counts[s], 'variants',[(k,candcounts[(s,k)]) for k in range(s.count('M')+1)], 'bestppm',min(abs(m[7]) for m in matches if m[0]==s))
+print('--- NO MATCH',len([s for s in D if s not in counts]))
+print(' '.join(s for s in D if s not in counts))
+# save lightweight matches for next step outside final
+with open('/tmp/precursor_matches.tsv','w') as out:
+ out.write('peptide\\tox_count\\tcharge\\tfile\\ttitle\\tobserved_mz\\ttheoretical_mz\\terror_ppm\\trt\\n')
+ for m in matches: out.write('\\t'.join(map(str,m))+'\\n')
+PY"

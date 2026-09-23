@@ -1,0 +1,21 @@
+/usr/bin/bash -lc 'PATH=/workspace/tools/mitoenv/bin:$PATH /workspace/tools/mitoenv/bin/minimap2 -x map-hifi -t4 work/kmc/unitigs_ci300_cx1000.fasta work/reads/highcopy_ci5000_min5000.fasta > work/reads/reads_vs_unitigs_ci300_cx1000.paf 2> work/logs/reads_vs_unitigs_ci300_cx1000.log
+/workspace/tools/mitoenv/bin/python - <<'"'PY'
+from pathlib import Path
+from collections import defaultdict
+paf=Path('work/reads/reads_vs_unitigs_ci300_cx1000.paf')
+byread=defaultdict(lambda: [0,0,set(),[]])
+for line in paf.open():
+    f=line.split('\\t')
+    if len(f)<12: continue
+    q,ql,qs,qe,strand,t,tl,ts,te,match,alen,mapq=f[:12]
+    # q is read because minimap2 ref target first, query second in PAF q fields? Actually PAF: query=input reads, target=ref unitigs
+    ql=int(ql); qs=int(qs); qe=int(qe); tl=int(tl); ts=int(ts); te=int(te); match=int(match); alen=int(alen)
+    ident=match/alen if alen else 0
+    if ident>=0.98 and alen>=500:
+        d=byread[q]
+        d[0]+=alen; d[1]+=1; d[2].add(t); d[3].append((qs,qe,t,ts,te,strand,ident,alen))
+print('reads with anchor alignments',len(byread))
+for r,d in sorted(byread.items(), key=lambda x:(len(x[1][2]),x[1][0]), reverse=True)[:50]:
+    print(r,'aligned_bases',d[0],'n_aln',d[1],'unitigs',len(d[2]),'ids',','.join(sorted(d[2])[:12]))
+    print('  spans', sorted(d[3])[:8])
+PY"

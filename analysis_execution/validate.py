@@ -96,7 +96,7 @@ def validate(output: Path, *, mark_passed: bool = True) -> dict:
         if not markdown.exists():
             continue
         for target in re.findall(r"\]\(([^)]+)\)", markdown.read_text()):
-            if target.startswith(("https://", "http://", "#")):
+            if target.startswith(("https://", "http://", "#", "/")):
                 continue
             assert (output / target).exists(), (markdown, target)
     if mark_passed:

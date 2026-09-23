@@ -1,0 +1,39 @@
+/usr/bin/bash -lc "micromamba run -p /workspace/run_trace/de_env python - <<'PY'
+from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+root=Path('/workspace')
+out=root/'final_answer/differential_expression.tsv'
+df=pd.read_csv(out, sep='\\t')
+print('columns', df.columns.tolist())
+print('rows', len(df))
+print('unique_gene_ids', df['gene_id'].nunique())
+print('finite_lfc', np.isfinite(df['log2_fold_change']).all())
+for col in ['p_value','fdr']:
+    vals=df[col].to_numpy(float)
+    print(col, 'min', vals.min(), 'max', vals.max(), 'valid', np.isfinite(vals).all() and ((vals>=0)&(vals<=1)).all())
+# recompute retained count and exact ID set/order from inputs
+sample_paths=[
+('SRR5085169', root/'data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat'),
+('SRR5085170', root/'data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat'),
+('SRR5085167', root/'data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat'),
+('SRR5085168', root/'data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat'),
+]
+merged=None
+for sample,path in sample_paths:
+    x=pd.read_csv(path, sep='\\t', dtype={'Geneid':str})
+    merged=x if merged is None else merged.merge(x,on='Geneid',how='inner',validate='one_to_one')
+counts=merged.set_index('Geneid')[[s for s,_ in sample_paths]]
+retained=counts.index[(counts>=10).sum(axis=1)>=2]
+print('retained_recomputed', len(retained))
+print('ids_match_retained_order', retained.equals(pd.Index(df['gene_id'].astype(str))))
+# validate BH values match recomputation
+p=df['p_value'].to_numpy(float)
+order=np.argsort(p)
+r=p[order]*len(p)/np.arange(1,len(p)+1)
+r=np.minimum.accumulate(r[::-1])[::-1]
+adj=np.empty_like(r); adj[order]=np.clip(r,0,1)
+print('bh_match_max_abs_diff', np.max(np.abs(adj-df['fdr'].to_numpy(float))))
+print('final_files', sorted(str(p.relative_to(root)) for p in (root/'final_answer').iterdir() if p.is_file()))
+PY"

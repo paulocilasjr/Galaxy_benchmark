@@ -1,0 +1,29 @@
+/usr/bin/bash -lc "micromamba run -n pepquery python3 - <<'PY'
+from pathlib import Path
+import gzip,re
+paths=['data/inputs/human_uniprot_isoforms_fasta/stream','data/inputs/crap/Contaminants%28cRAP%29-Protein-Database.fasta']
+seen_acc=set(); seen_seq=set(); dup_acc=0; dup_seq=0; written=0
+for path in paths:
+    with gzip.open(path,'rt',errors='replace') if Path(path).read_bytes()[:2]==b'\\x1f\\x8b' else open(path) as f:
+        seq=''; header=None; acc=None
+        def flush():
+            global dup_acc,dup_seq,written
+            if header is None: return
+            if acc in seen_acc:
+                dup_acc+=1; return
+            if seq in seen_seq:
+                dup_seq+=1; return
+            seen_acc.add(acc); seen_seq.add(seq); written+=1
+        for raw in f:
+            line=raw.rstrip('\\n').rstrip('\\r')
+            if line.startswith('>'):
+                flush()
+                header=line
+                m=re.search(r'"'^>([''^ ]+).*$'"', header)
+                acc=m.group(1) if m else header[1:].split()[0]
+                seq=''
+            else:
+                seq += line.strip()
+        flush()
+print('written',written,'dup_acc',dup_acc,'dup_seq',dup_seq)
+PY"

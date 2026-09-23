@@ -1,0 +1,32 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+import csv,gzip,re
+from pathlib import Path
+final=list(csv.DictReader(open('final_answer/verified_peptides.tsv'),delimiter='\\t'))
+peps=sorted({r['peptide'] for r in final})
+# confirm each final peptide has mapping in reports after same accession normalization
+print('rows',len(final),'peptides',len(peps))
+print('duplicate rows',len(final)-len({(r['peptide'],r['protein_id']) for r in final}))
+# Inspect exact sequence presence in human/crap without full digestion just substring, as a guardrail.
+forbidden=[]
+paths=['data/inputs/crap/Contaminants%28cRAP%29-Protein-Database.fasta']
+# skip gz human full substring per peptide is expensive; this is a targeted streaming set membership-ish check.
+seqset=set(peps)
+current=''
+def check_seq(seq):
+    for p in list(seqset):
+        if p in seq:
+            forbidden.append(p)
+for path in ['data/inputs/human_uniprot_isoforms_fasta/stream','data/inputs/crap/Contaminants%28cRAP%29-Protein-Database.fasta']:
+    op=gzip.open if open(path,'rb').read(2)==b'\\x1f\\x8b' else open
+    with op(path,'rt',errors='replace') as f:
+        parts=[]
+        for line in f:
+            line=line.strip()
+            if not line: continue
+            if line.startswith('>'):
+                if parts: check_seq(''.join(parts))
+                parts=[]
+            else: parts.append(line.upper())
+        if parts: check_seq(''.join(parts))
+print('final peptides found as substrings in human/crap',len(set(forbidden)), sorted(set(forbidden))[:20])
+PY"

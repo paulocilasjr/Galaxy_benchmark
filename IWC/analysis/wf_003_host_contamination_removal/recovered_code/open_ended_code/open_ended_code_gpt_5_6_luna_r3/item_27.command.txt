@@ -1,0 +1,31 @@
+/usr/bin/bash -lc "set -o pipefail
+F=/workspace/final_answer/filtered_forward.fastqsanger.gz
+R=/workspace/final_answer/filtered_reverse.fastqsanger.gz
+IF=/workspace/data/inputs/short_reads/pair/forward/forward.fastqsanger.gz
+IR=/workspace/data/inputs/short_reads/pair/reverse/reverse.fastqsanger.gz
+printf '%s\\n' '--- gzip integrity ---'
+gzip -t \""'$F" "$R" && echo OK
+printf '"'%s\\n' '--- record counts ---'
+fc="'$(gzip -cd "$F" | awk '"'END{print NR/4}')
+rc="'$(gzip -cd "$R" | awk '"'END{print NR/4}')
+ic="'$(gzip -cd "$IF" | awk '"'END{print NR/4}')
+printf 'input_forward=%s input_reverse=%s output_forward=%s output_reverse=%s\\n' \""'$ic" "$(gzip -cd "$IR" | awk '"'END{print NR/4}')\" \""'$fc" "$rc"
+test "$fc" -eq "$rc"
+printf '"'%s\\n' '--- FASTQ line/length checks ---'
+for x in \""'$F" "$R"; do
+  gzip -cd "$x" | awk '"'NR%4==2{s="'$0} NR%4==0{if(length(s)!=length($0)) bad++} END{if(NR%4!=0 || bad){printf "%s invalid: records=%d bad_lengths=%d'"\\n\",ARGV[1],NR/4,bad+0; exit 1} printf \"%s valid: records=%d\\n\",ARGV[1],NR/4}' \""'$x"
+done
+printf '"'%s\\n' '--- mate identifier synchronization ---'
+paste <(gzip -cd \""'$F" | awk '"'NR%4==1{x="'$0; sub(/''^@/,"",x); split(x,a,/ /); print a[1]}'"') <(gzip -cd \""'$R" | awk '"'NR%4==1{x="'$0; sub(/''^@/,"",x); split(x,a,/ /); print a[1]}'"') | awk 'BEGIN{bad=0} "'$1!=$2{bad++; if(bad<=3) print "mismatch",NR,$1,$2} END{printf "identifier_mismatches=%d'"\\n\",bad; exit bad"'!=0}'"'
+printf '%s\\n' '--- exact retained-record preservation: forward ---'
+awk '
+NR==FNR { r=(FNR-1)%4; if(r==0){h="'$0; input[h]=1; order[h]=++n} else if(r==1) seq[h]=$0; else if(r==2) plus[h]=$0; else qual[h]=$0; next }
+{ r=(FNR-1)%4; if(r==0){h=$0; seen[h]++; if(!(h in input)) missing++; if((h in order) && order[h]<last) reordered++; last=order[h]} else if(r==1 && $0!=seq[h]) diff++; else if(r==2 && $0!=plus[h]) diff++; else if(r==3 && $0!=qual[h]) diff++ }
+END{printf "missing=%d changed_lines=%d duplicate_headers=%d out_of_order=%d'"\\n\",missing+0,diff+0,dup+0,0+reordered; exit (missing+diff+reordered)"'!=0}'"' <(gzip -cd \""'$IF") <(gzip -cd "$F")
+printf '"'%s\\n' '--- exact retained-record preservation: reverse ---'
+awk '
+NR==FNR { r=(FNR-1)%4; if(r==0){h="'$0; input[h]=1; order[h]=++n} else if(r==1) seq[h]=$0; else if(r==2) plus[h]=$0; else qual[h]=$0; next }
+{ r=(FNR-1)%4; if(r==0){h=$0; seen[h]++; if(!(h in input)) missing++; if((h in order) && order[h]<last) reordered++; last=order[h]} else if(r==1 && $0!=seq[h]) diff++; else if(r==2 && $0!=plus[h]) diff++; else if(r==3 && $0!=qual[h]) diff++ }
+END{printf "missing=%d changed_lines=%d duplicate_headers=%d out_of_order=%d'"\\n\",missing+0,diff+0,dup+0,0+reordered; exit (missing+diff+reordered)"'!=0}'"' <(gzip -cd \""'$IR") <(gzip -cd "$R")
+printf '"'%s\\n' '--- output hashes ---'
+md5sum \""'$F" "$R" /workspace/final_answer/method.json'
