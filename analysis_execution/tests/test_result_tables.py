@@ -54,8 +54,8 @@ class GeneratedReportTest(unittest.TestCase):
         cls.manifest = json.loads((ROOT / 'BixBench50_CompBio_analysis/source_manifest.json').read_text())
         cls.report = (ROOT / 'Result_table.md').read_text()
 
-    def test_three_sections_and_tables_render_the_saved_values(self):
-        self.assertEqual(len(re.findall(r'^## ', self.report, re.M)), 3)
+    def test_four_sections_and_tables_render_the_saved_values(self):
+        self.assertEqual(len(re.findall(r'^## ', self.report, re.M)), 4)
         self.assertEqual(len(re.findall(r'^### Table ', self.report, re.M)), len(self.data['tables']))
         for key, table in self.data['tables'].items():
             section = self.report.split(f'### Table {key}. ', 1)[1].split('\n### ', 1)[0]
@@ -118,6 +118,34 @@ class GeneratedReportTest(unittest.TestCase):
         shell = next(x for x in self.data['results']['deep']['shell_comparisons'] if x['benchmark']=='BixBench50')
         self.assertEqual(len(shell['pairs']),200)
         self.assertNotRegex(self.report,r'\bG\b')
+
+    def test_iwc_comparisons_use_explicit_matched_populations(self):
+        comparisons = {v['model']: v for v in self.data['results']['iwc']['comparisons']}
+        for model, row in zip((*builder.MODELS['IWC'], 'all'), self.data['tables']['I1']['rows']):
+            expected = comparisons[model]['common_nine']
+            count = 108 if model == 'all' else 27
+            self.assertEqual(int(row[1].split(';')[0]), count)
+            self.assertEqual(int(row[2].split(';')[0]), count)
+            self.assertIn(builder.fmt(expected['galaxy'], 4), row[1])
+            self.assertIn(builder.fmt(expected['open_ended_code'], 4), row[2])
+            self.assertEqual(row[-1], builder.ci(expected, 4))
+        for row in self.data['tables']['I2']['rows']:
+            self.assertEqual(row[2], '9/9')
+        iwc = self.data['tables']['X20']['rows'][-1]
+        self.assertIn('81 runs', iwc[1])
+        self.assertIn('1/81', iwc[-1])
+        self.assertIn('3/81', iwc[-1])
+
+    def test_claims_do_not_upgrade_detection_or_continuous_scores(self):
+        for label in ('I1', 'I2', 'I11', 'I13', 'X20'):
+            table = self.data['tables'][label]
+            self.assertNotIn('>=0.99', json.dumps(table))
+        for row in self.data['tables']['X12']['rows']:
+            if row[0] == 'IWC':
+                self.assertEqual(row[4], 'Not applicable (no detected requests)')
+        for phrase in ('native wrappers were sufficient', 'completed through catalog wrappers alone',
+                       'The environment gap stays small in every benchmark', 'Runs failing the endpoint'):
+            self.assertNotIn(phrase, self.report)
 
 
 if __name__ == '__main__':

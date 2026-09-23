@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 import gzip
 import hashlib
 import json
+from pathlib import Path
 import re
 import statistics as st
 
@@ -23,6 +24,13 @@ SOFTWARE_PATTERNS = {
     'scanpy': r'\bscanpy\b',
     'datamash': r'\bdatamash\b',
     'bwa': r'\bbwa\b',
+    # Families added for the Galaxy-workflow-derived IWC tasks.
+    'fastp': r'\bfastp\b',
+    'bowtie2': r'\bbowtie2\b',
+    'minimap2': r'\bminimap2\b',
+    'macs': r'\bmacs[23]?\b',
+    'edger': r'\bedger\b',
+    'dada2': r'\bdada2\b',
 }
 
 ERROR_RULES = [
@@ -44,6 +52,22 @@ ERROR_RULES = [
      'The exported matrix did not fit the expected table representation; inspect matrix presence/type and export mode.'),
     ('CompBio', 'deseq2', 'No residual degrees of freedom', r'same number of samples and coefficients',
      'Model design could not estimate dispersion; validate replication and design rank before fitting.'),
+    ('IWC', 'fastp', 'No retained stdout/stderr', r'\A\s*\Z',
+     'This family has the largest observed IWC error count, but no retained stdout/stderr for those jobs; this is not an exposure-adjusted tool-quality ranking or proof that no diagnostic existed.'),
+    ('IWC', 'edger', 'Contrast names a missing factor level', r"object '[^']+' not found.*makeContrasts",
+     'Contrast strings did not match design-level names; validate contrast levels against the factor encoding before launch.'),
+    ('IWC', 'edger', 'Count-matrix header/column mismatch', r'more columns than column names',
+     'The count matrix did not match the wrapper table contract; validate header and delimiter.'),
+    ('IWC', 'deseq2', 'Missing factor-list element', r'factor_list\[\[1\]\].*subscript out of bounds',
+     'Same signature as BixBench50: factor configuration absent or misbound; the message does not identify the responsible layer.'),
+    ('IWC', 'mitohifi', 'Empty NCBI Entrez query', r'Empty term and query_key',
+     'The reference lookup received an empty species/accession term; validate lookup parameters before launch.'),
+    ('IWC', 'dada2_mergePairs', 'Mismatched dereplication and denoising objects', r'Non-corresponding derep-class and dada-class',
+     'Forward/reverse or sample pairing was inconsistent between steps; validate collection pairing and order.'),
+    ('IWC', 'decoupler_pseudobulk', 'Unset numeric filter threshold', r"np\.clip\(min_cells|NoneType' and 'float",
+     'A threshold parameter reached arithmetic as None; supply explicit numeric filter values.'),
+    ('IWC', 'pepquery2', 'Protein FM-index mapping exception', r'FMIndex',
+     'Java exception in protein-database mapping; retained text does not identify the input cause; check database format and size.'),
 ]
 
 
@@ -59,6 +83,14 @@ def object_value(value):
     return {}
 
 
+def task_prompt(evidence, original, row):
+    """IWC prompts differ by environment, so its evidence has no task-level prompt; use the run's archived prompt."""
+    if evidence['task'].get('prompt'):
+        return evidence['task']['prompt']
+    artifact = next(a for a in original['artifacts'] if a.get('original_name') == 'prompt.txt')
+    return (Path(__file__).resolve().parents[1] / row['evidence']).parent.joinpath(artifact['local_path']).read_text()
+
+
 def enrich_run(evidence, original, row):
     events = original['events']
     calls = [e for e in events if e['execution_location'] != 'galaxy_job']
@@ -70,7 +102,7 @@ def enrich_run(evidence, original, row):
     shell_events = [e for e in calls if e.get('tool') == 'shell']
     known_exits = [e['exit_code'] for e in shell_events if isinstance(e.get('exit_code'), int)]
     row.update({
-        'prompt_words': len(re.findall(r'\b\w+\b', evidence['task']['prompt'])),
+        'prompt_words': len(re.findall(r'\b\w+\b', task_prompt(evidence, original, row))),
         'prompt_sha256': next((a.get('sha256') for a in original['artifacts'] if a.get('original_name') == 'prompt.txt'), None),
         'shell_calls': original['derived_metrics'].get('completed_shell_calls') if observed else None,
         'has_nonzero_shell': int(any(x != 0 for x in known_exits)) if observed and known_exits else None,
@@ -197,6 +229,8 @@ def compute(builder, runs, cells, jobs):
                             r['model_metadata'].get('reasoning_setting') for r in v) and
                             len({(r['model_metadata']['verified_runtime_id'],r['model_metadata']['reasoning_setting']) for r in v})==1]
             out['udt'].append({'benchmark':benchmark,'model':model,'listed_runs':len(rs),
+                'helper_exposed_runs':sum('run_galaxy_udt_and_wait' in r['galaxy_helpers_exposed'] for r in rs if r['galaxy_helpers_exposed'] is not None),
+                'helper_exposure_recorded_runs':sum(r['galaxy_helpers_exposed'] is not None for r in rs),
                 'transcripts':sum(r['udt_requested'] is not None for r in rs),
                 'request_runs':sum(r['udt_requested'] is True for r in rs),
                 'request_tasks':sorted({r['task'] for r in rs if r['udt_requested']}),
@@ -256,7 +290,7 @@ def render(builder, benchmark, table, runs, cells, jobs, results):
                 rows.append([env[cond],builder.task_link(benchmark,task),
                              f"Galaxy {int(tasks[task]['galaxy'])}/15; open-ended code {int(tasks[task]['open_ended_code'])}/15",
                              'Version-dependent relative composition variability; see B13'])
-        table('B11','Model capacity: tasks accepted in only one execution condition',
+        table('B11','Tasks with evaluator acceptance in only one condition',
               ['Exclusive condition','Task','Observed acceptance','Explanation supported by the archive'],rows,
               'Exact rule: at least one accepted replicate across the five configurations in one condition and zero across all 15 runs in the other. '
               'Galaxy-only: zero tasks. Open-ended-code-only: one task, bix-45-q1. This is a task-level set comparison, not a test of superiority. '
@@ -356,7 +390,7 @@ def performance_panel(builder,benchmark,table,runs,cells,label):
                          builder.frac(sum(r['has_error'] for r in errors),len(errors)) if errors else 'Not applicable',
                          builder.frac(sum(r['has_nonzero_shell'] for r in shells),len(shells)),
                          f"{builder.fmt(st.median(tokens)/1e6,3)}; {len(tokens)}/{len(rs)}"])
-    table(label,'Model comparison: capacity, consistency, operational burden and cost',
+    table(label,'Configuration outcomes, repeatability, operational markers and tokens',
           ['Configuration','Environment','Accepted runs','Tasks with all accepted' if benchmark=='BixBench50' else 'Tasks with identical answer text',
            'Runs with Galaxy job error','Runs with nonzero shell exit','Median input tokens (millions); coverage'],rows,
           'Each task contributes three runs/configuration/environment. Accepted-answer reliability is used for BixBench; '
@@ -378,15 +412,17 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
                 def present(r):
                     return any(family in t.lower() for t in r['galaxy_full_tool_ids'] if 'toolshed' in t) if cond=='galaxy' else family in r['software_command_indicators']
                 counts.append(frac(sum(present(r) for r in rs),len(rs)))
-        rows.append(['DESeq2 / PyDESeq2' if family=='deseq2' else family,*counts])
+        rows.append([{'deseq2':'DESeq2 / PyDESeq2','macs':'MACS2 / MACS3','edger':'edgeR'}.get(family,family),*counts])
     table('X9','Common software families: installed Galaxy wrappers versus code-command indicators',
-          ['Software family','BixBench Galaxy','BixBench open-ended code','CompBio Galaxy','CompBio open-ended code'],rows,
-          'Three shared GPT configurations. Galaxy counts runs whose retained jobs name a Tool Shed wrapper from the family; '
+          ['Software family','BixBench Galaxy','BixBench open-ended code','CompBio Galaxy','CompBio open-ended code','IWC Galaxy','IWC open-ended code'],rows,
+          'Three shared GPT configurations. The last six families were added for IWC workflows; earlier rows are unchanged. '
+          'Galaxy counts runs whose retained jobs name a Tool Shed wrapper from the family; '
           'open-ended code uses a declared command-name codebook, including PyDESeq2 as a DESeq2-family implementation. '
           'This inventory codebook is separate from the unchanged path-fingerprint vocabulary; shared family labels do not imply equivalent implementations or versions. '
           'Denominators require detailed histories or retrieved transcripts, respectively. '
           'Indicators are nonexclusive and their visibility differs: libraries inside custom tools can be hidden, and a command mention is not a verified invocation. '
-          'This answers which families are observable in both conditions; it is not a fair count of equivalent scientific operations or proof of absent software.')
+          'This answers which families are observable in both conditions; it is not a fair count of equivalent scientific operations or proof of absent software. '
+          'Workflow-derived task origin motivates checking tool coverage, but does not establish that every required tool/version was available on the recorded server.')
     rows=[]
     for x in deep['shell_comparisons']:
         pairs=x['pairs'];n=3*len(pairs)
@@ -411,10 +447,11 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
           'These exploratory, unadjusted associations cannot establish that task complexity causes errors. Independent difficulty labels, budgets and attempt-level chronology are needed.')
     rows=[]
     for x in deep['udt']:
-        n=50 if x['benchmark']=='BixBench50' else 100
+        n=builder.TASKS[x['benchmark']]
         rows.append([x['benchmark'],builder.LABELS.get(x['model'],'All configurations'),
                      frac(x['request_runs'],x['transcripts']),frac(len(x['request_tasks']),n),
-                     f"{x['job_linked_runs']}/{x['request_runs']}",len(x['job_linked_tasks']),x['success_linked_runs']])
+                     f"{x['job_linked_runs']}/{x['request_runs']}" if x['request_runs'] else 'Not applicable (no detected requests)',
+                     len(x['job_linked_tasks']),x['success_linked_runs']])
     table('X12','User-defined tools: explicit requests, tasks reached and linked execution',
           ['Benchmark','Configuration','Requesting runs / retrieved transcripts','Tasks with request','Runs with linked job / requesting runs','Tasks with linked job','Runs with linked successful job'],rows,
           'An explicit request is a run_galaxy_udt_and_wait event. Linked execution requires a declared GalaxyUserTool identifier matching a retained Galaxy job tool ID '
@@ -422,6 +459,7 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
           'Requests alone do not prove submission or execution; unobserved requests are unknown. Four YAML-string representations are not parsed and remain linkage gaps. '
           'Jobs invoked through other interfaces can be missed; these are lower-bound detections, not an exhaustive custom-tool inventory. '
           'The proposed 30-40% claim depends on its denominator: task coverage, run use and confirmed execution are not interchangeable. '
+          'IWC has zero detected named-helper requests and the helper is absent from its 120 recorded lists; alternative interfaces and unparsed/missing events are not excluded (X19). '
           'Official [user-defined tool documentation](https://galaxyproject.org/tools/user-defined-tools/) describes this capability and recommends existing published tools when suitable.')
     rows=[]
     for x in deep['udt']:
@@ -433,7 +471,8 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
           'One cell is one task/configuration; all three transcripts must be present. The three usage categories partition cells. '
           'Same prompt means identical archived prompt-file hashes; the stricter subset additionally requires a single verified runtime ID and reasoning setting. '
           'Variation is compatible with stochastic or context-dependent choice, not proof of randomness: input provenance, tool catalogs, prior state, '
-          'campaign selection and services were not controlled. Missing runtime metadata is not treated as verified agreement.')
+          'campaign selection and services were not controlled. Missing runtime metadata is not treated as verified agreement. '
+          'IWC runtime and reasoning come from invocation records; its all-zero cells describe this detector under different recorded helper lists, not a stable agent preference.')
     features=[('search_galaxy_tools','Tool discovery'),('inspect_galaxy_tool','Parameter/schema inspection'),
               ('inspect_galaxy_history','History inspection'),('run_galaxy_tool_and_wait','Ordinary-tool submission requests'),
               ('run_galaxy_udt_and_wait','User-defined-tool submission requests'),('wait_for_galaxy_jobs','Explicit waiting/status requests')]
@@ -444,10 +483,11 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
             rs=[r for r in runs if r['benchmark']==benchmark and r['condition']=='galaxy' and r['coverage']['agent_transcript']=='retrieved']
             values.append(frac(sum(r['interface_calls'].get(event,0)>0 for r in rs),len(rs)))
         rows.append([description,*values])
-    table('X14','Workbench capabilities visibly exercised by agents',['Recorded interface operation','BixBench runs','CompBio runs'],rows,
+    table('X14','Workbench capabilities visibly exercised by agents',['Recorded interface operation','BixBench runs','CompBio runs','IWC runs'],rows,
           'All Galaxy configurations with retrieved transcripts; nonexclusive run-level counts of named calls. A completed helper call does not by itself prove '
           'job success or scientific validity. History creation/copying is not universally measured by these named helpers; it is documented in selected traces '
-          'and must not be inferred for every run from a linked history. These counts support feature use, not improved human readability.')
+          'and must not be inferred for every run from a linked history. These counts support feature use, not improved human readability. '
+          'IWC user-defined-tool detections are zero and that helper is absent from recorded lists; this association does not establish why custom code was or was not used.')
     table('X15','Why choose a user-defined tool? Distinguishing capability gaps from interface friction',
           ['Case and configuration','Observed evidence','Classification / inference','What it does not establish'],[
           [builder.task_link('BixBench50','bix-11-q1')+'; GPT-5.5 Galaxy replicate 1',
@@ -456,7 +496,7 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
            'Not evidence that Galaxy lacked a treeness tool'],
           [builder.task_link('BixBench50','bix-11-q1')+'; GPT-5.5 Galaxy replicate 2',
            'Accepted answer, two retained PhyKIT jobs, no explicit user-defined-tool request',
-           'Counterexample to task-wide necessity of a user-defined tool',
+           'Accepted run without a detected named-helper request; custom-tool necessity remains unresolved',
            'Does not show the same interface state or catalog across replicates'],
           [builder.task_link('BixBench50','bix-11-q1')+'; GPT-5.5 Galaxy replicate 3',
            'Native PhyKIT found; agent chooses a custom tool for archive handling, group medians and final difference',
@@ -467,13 +507,13 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
            'Agent-reported exposed-wrapper gap; unverified catalog absence',
            'No exhaustive contemporaneous catalog or alternative-workflow adjudication']],
           'Purposive mechanism cases, not percentages of all custom-tool use. `results.deep.case_sources` retains exact trace paths, hashes and line-numbered '
-          'agent statements. The native-only treeness counterexample is verified from task evidence. '
+          'agent statements. The treeness counterexample establishes accepted output with retained PhyKIT jobs and no detected named UDT request, not an exhaustive native-only execution chain. '
           'To distinguish necessity from choice prospectively, snapshot catalog/search results, record rejected alternatives and parameter errors, '
           'then compare repeated matched tasks with a fixed tool catalog and an independently validated native workflow. '
           'The current archive cannot estimate the fraction used because no suitable Galaxy tool existed.')
     # Restrict to identical submitted text and observable path variation, avoiding a correctness shortcut.
     rows=[]
-    for benchmark in builder.FOLDERS:
+    for benchmark in ('BixBench50','CompBio'):
         for cond in builder.CONDITIONS:
             selected=[c for c in cells if c['benchmark']==benchmark and c['condition']==cond and c['eligible']]
             identical=[c for c in selected if c['answer_distinct']==1]
@@ -485,14 +525,20 @@ def cross_tables(builder,table,runs,cells,jobs,deep):
           'All benchmark-specific paired configurations; three observed nonempty fingerprints are required. Answer identity uses exact archived submitted text '
           'after outer whitespace removal; it does not merge numerically close strings. Path variation means tool-ID/command-token sets differ, '
           'not independently adjudicated biological algorithms. BixBench can confirm acceptance; CompBio cannot confirm validity. '
-          'The counts support multiple observed execution routes to the same answer, with these measurement limits.')
-    table('X17','Testing the five motivating observations',
+          'The counts support multiple observed execution routes to the same answer, with these measurement limits. '
+          'IWC is excluded: its final chat message is not the scored artifact; declared routes versus continuous agreement are in I12.')
+    table('X17','Testing the six motivating observations',
           ['Proposed observation','Evidence-based verdict','Supporting tables / unresolved experiment'],[
           ['Agents can operate core Galaxy features','Supported for recorded discovery, inspection and submission requests; successful jobs separately observed','X14; B4/C3. Universal history creation and Galaxy-only execution still require event attribution'],
-          ['Different approaches produce the same valid result','Supported for different recorded paths and identical accepted BixBench answers; biological method equivalence unadjudicated','X16; B6. CompBio item-level validity remains unavailable'],
+          ['Different approaches produce the same valid result','Observed for different fingerprints and identical evaluator-accepted BixBench text; independent scientific validity and biological-method equivalence remain unassessed','X16; B6. CompBio item-level validity remains unavailable'],
           ['Custom tools fill missing Galaxy capabilities in 30-40% of tasks','Not supported as a task-rate or necessity claim; request/task/execution denominators differ','X12-X15. Native capability, parameter binding and workflow composition are distinct explanations'],
           ['Wrong outlier answers reflect missing knowledge and technical mistakes','Cannot quantify from this archive; item-level correctness and independent error adjudication are absent','C10. Observed diagnostic choices contradict a blanket claim that agents found no useful analysis'],
-          ['Galaxy makes human validation easier','Plausible interface benefit; not measured in these benchmark records','X7. Randomized blinded reconstruction-time, error and agreement study required']],
+          ['Galaxy makes human validation easier','Plausible interface benefit; not measured in these benchmark records','X7. Randomized blinded reconstruction-time, error and agreement study required'],
+          ['On Galaxy-designed tasks, user-defined tools are rarely needed and Galaxy results are consistent and high',
+           'Not established as a combined claim. High median IWC agreement and zero detected named-helper requests are observations, not proof of native-tool sufficiency or lack of need for custom code. '
+           'The nine-task contrasts depend on configuration and low-scoring tasks; two change sign under task omission and Luna reverses with conflicted host-removal scores. '
+           'Continuous replicate dispersion is reported without a correctness threshold',
+           'I1-I4, I11, X19-X20. A matched IWC arm with the helper exposed would test whether agents choose native tools when both are available']],
           'These verdicts evaluate the motivating statements, not a prespecified hypothesis set. All statistical intervals are exploratory. '
           'Model capacity, workbench functionality, operational friction, scientific correctness and execution cost remain separate endpoints.')
     rows=[]
