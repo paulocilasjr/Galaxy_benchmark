@@ -37,7 +37,8 @@ ENVS = ['open_ended_code', 'galaxy']  # reference condition first, everywhere
 ENV_COLOR = {'open_ended_code': CODE, 'galaxy': GALAXY}
 ENV_TINT = {'open_ended_code': '#F6DCCB', 'galaxy': '#CFE3F1'}
 ENV_MARKER = {'open_ended_code': 's', 'galaxy': 'o'}
-ENV_LABEL = {'open_ended_code': 'Open-ended code', 'galaxy': 'Galaxy'}
+ENV_LABEL = {'open_ended_code': 'Open-ended code', 'galaxy': 'Galaxy'}  # short row labels under an 'execution condition' heading
+ENV_LABEL_LONG = {'open_ended_code': 'Open-ended code condition', 'galaxy': 'Galaxy condition'}
 
 BENCH = ['BixBench50', 'CompBio', 'IWC']
 BENCH_LABEL = {'BixBench50': 'BixBench-Verified-50', 'CompBio': 'CompBioBench', 'IWC': 'IWC'}
@@ -46,8 +47,8 @@ BENCH_2L = {'BixBench50': 'BixBench-\nVerified-50', 'CompBio': 'CompBioBench', '
 CONFIGS = ['GPT-5.5', 'GPT-5.6 Sol', 'GPT-5.6 Luna', 'DeepSeek V4 Pro']
 SUPERSEDED = 'DeepSeek V4 Pro (Claude Code, superseded)'
 CFG_LABEL = {c: c for c in CONFIGS}
-CFG_LABEL.update({SUPERSEDED: 'DeepSeek V4 Pro,\nClaude Code harness\n(superseded)', 'DeepSeek V4 Pro (Codex)': 'DeepSeek V4 Pro',
-                  'GPT-6 Astra': 'GPT-6 Astra'})
+CFG_LABEL.update({'DeepSeek V4 Pro': 'DeepSeek V4 Pro (Codex)', 'DeepSeek V4 Pro (Codex)': 'DeepSeek V4 Pro (Codex)',
+                  SUPERSEDED: 'DeepSeek V4 Pro (Claude\nCode, superseded)', 'GPT-6 Astra': 'GPT-6 Astra'})
 
 INK, INK2 = '#1a1a1a', '#555555'
 GRID, LIGHT = '#e4e3df', '#f2f1ee'
@@ -90,13 +91,13 @@ def grid_y(ax):
 def env_handles(ms=3.8, which=ENVS):
     """Legend handles for the two environments, open-ended code first."""
     from matplotlib.lines import Line2D
-    return [Line2D([], [], marker=ENV_MARKER[e], ls='', mfc=ENV_COLOR[e], mec='white', mew=0.4, ms=ms, label=ENV_LABEL[e])
+    return [Line2D([], [], marker=ENV_MARKER[e], ls='', mfc=ENV_COLOR[e], mec='white', mew=0.4, ms=ms, label=ENV_LABEL_LONG[e])
             for e in which]
 
 
 def env_patches(which=ENVS):
     from matplotlib.patches import Patch
-    return [Patch(fc=ENV_COLOR[e], label=ENV_LABEL[e]) for e in which]
+    return [Patch(fc=ENV_COLOR[e], label=ENV_LABEL_LONG[e]) for e in which]
 
 
 def enforce_min_font(fig, minimum=5.0):
