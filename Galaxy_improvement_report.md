@@ -68,7 +68,7 @@ Shell commands in Galaxy runs were scanned for BioBlend and raw-REST use. Reject
 - Galaxy histories were snapshotted after the runs.
 - Replicate labels are not matched seeds.
 - The parameter-mismatch and bypass statistics cover the Codex-harness traces (1,908 Galaxy runs); the Claude Code harness renders results differently.
-- Adjudications marked `unresolved` or `mixed` (33 of 246) are best-supported explanations, not proofs.
+- Adjudications marked `unresolved` or `mixed` (32 of 246) are best-supported explanations, not proofs.
 
 Scripts and derived tables: [analysis_reports/galaxy_improvement_20260924/v2_trace_friction/](analysis_reports/galaxy_improvement_20260924/v2_trace_friction/README.md).
 
@@ -134,7 +134,7 @@ Primary / secondary counts over all 246 rejected BixBench runs and the 8 IWC run
 
 ᵃ Local tooling friction (R setup, assembler dependencies), not Galaxy.
 
-Confidence across the 246 BixBench adjudications: 157 high, 56 moderate, 20 mixed, 13 unresolved. The full ledger is in Appendix A.
+Confidence across the 246 BixBench adjudications: 159 high, 55 moderate, 20 mixed, 12 unresolved. The full ledger is in Appendix A.
 
 **Interpretation.**
 - **What the Galaxy failures mostly are:** failures of the benchmark (task specification or grading) or of the model's reasoning, which occur identically in code.
@@ -385,7 +385,7 @@ Across the corpus, the 214 "invalid dataset id" errors named 215 IDs: 173 had al
 **B2 and UDTs, failing blind.**
 - **UDT outcome:** of 4,960 UDT calls, only 2,509 (51%) returned `ok`; 2,011 failed, 133 failed at creation, and 307 had other non-ok statuses.
 - **No diagnostic:** 1,298 UDT job failures, plus 80 ordinary-tool failures, occurred in phase `pre_execution_or_command_rendering` with no stderr or job message returned.
-- **Blind retries:** after a no-text failure, the agent's next call resubmitted identical inputs 769 times, and 615 of those failed again.
+- **Blind retries:** after a no-text failure, the agent's next call resubmitted identical inputs 784 times, and 615 of those failed again.
 - **Probe tools:** agents built throwaway probe UDTs (`animal-pis-udt-preflight-v1`, `render_probe_v1`, `udt-render-preflight-busco-v1`) to bisect template rendering. There were 1,859 such calls in 517 of the 808 CompBio runs that used UDTs. The bundled `galaxy-udt-authoring` skill had to teach this pattern ("use one only when a cheap probe resolves a concrete uncertainty about the selected container, import, command rendering, binding, or output creation"), because Galaxy offers no dry run.
 - **Schema errors** are raw pydantic output, e.g. `"Unable to extract tag using discriminator 'type' in ('body', 'representation', 'outputs', 0)"` (bix-12-q4 DeepSeek-Claude Code r1 L10640).
 - **Dependency failures:** `"Error in library(DESeq2) : there is no package called 'DESeq2'"` (bix-49-q4 Sol r2 L61; bix-53-q5 Sol r2 L86), in containers the agent chose without any capability check.
@@ -434,7 +434,7 @@ Priorities reflect demonstrated effect on correctness first, then on cost. "Evid
 | 1 | **Strict tool-state validation** (Galaxy server). Reject unknown or unbound keys and invalid select values instead of substituting defaults. Every job-creation response should include an *effective-parameters diff* (requested vs resolved). Apply the typed parameter models to API submissions in strict mode. | 4,352 substitution/drop events; 916 executed silently; bix-35-q1 rejection; `hg38`→`apiMel4` | 0 executed jobs whose resolved state differs from the request without an explicit error |
 | 2 | **Unambiguous conditional binding** (server + tool-schema API). The selector *value* should choose the branch. Validate or deprecate `__current_case__` in API payloads. For each tool and branch, publish a JSON Schema and one valid example payload in the 21.01 format. | 220 A3 errors; the 12-attempt unzip case; `__current_case__: 0` selecting the wrong branch in bix-35-q1 | Binding attempts per successful submission ≈ 1 on the replay |
 | 3 | **Tool schemas without a history** (server `/api/tools/{id}/build`, MCP). Return the schema with history-dependent options omitted, or default to the user's working history. Replace "History unavailable" with an actionable message. | 1,340 A1 failures in 511+ runs; 182 BioBlend schema bypasses | A1 = 0 |
-| 4 | **Always return a diagnostic** (job API). Pre-execution failures (template rendering, container resolution, dependency load, dispatch) should return a structured `{phase, message, excerpt}`. `wait` and `show_job` should include stderr, job messages and exit code. | 1,829 no-text failures; 1,298 UDT pre-execution failures; 769 blind identical resubmissions (615 failed again); 1,859 probe-UDT calls | No-text failure share → 0; probe-UDT calls → 0 |
+| 4 | **Always return a diagnostic** (job API). Pre-execution failures (template rendering, container resolution, dependency load, dispatch) should return a structured `{phase, message, excerpt}`. `wait` and `show_job` should include stderr, job messages and exit code. | 1,829 no-text failures; 1,298 UDT pre-execution failures; 784 blind identical resubmissions (615 failed again); 1,859 probe-UDT calls | No-text failure share → 0; probe-UDT calls → 0 |
 | 5 | **UDT dry run and lint** (UDT API). Validate the representation with human-readable errors and an example. Render the command against placeholder inputs. Check that the container contains the requested executables and libraries (e.g. `R -e 'library(DESeq2)'`, `python -c 'import scipy'`). Report dispatch health. | 51% UDT `ok` rate; 137 schema errors; 79 missing dependencies; bix-31-q2 undispatched jobs; bix-16-q1 COX17 | UDT first-attempt `ok` rate; 0 undispatched jobs |
 | 6 | **Surface software versions and output semantics** (tool metadata, search/inspect results). Show underlying package versions (`<requirements>`) and output column meanings in search and inspect results. Allow selection of pinned versions where several are installed. Add wrapper tests for multi-statistic outputs. | bix-45-q1 (0/15 Galaxy accepted); bix-28-q3 (variance reported as the metric) | Version visible without reading tool XML; wrapper output labelled per statistic |
 | 7 | **Close API gaps agents fill with BioBlend** (API/MCP). Add history copy with an ID map (old → new dataset IDs), streamed full-dataset download, and resumable job waits keyed by job ID. | Copy 537/600; download 580/600; raw POST submissions in 268 runs bypassing validation; polling in 386 runs | Share of Galaxy-track shell commands that are Galaxy API calls (currently 26–39%) |
@@ -517,7 +517,7 @@ Runs are labelled track (G = Galaxy, C = code), configuration and replicate. DS-
 | bix-45-q1 | C DS-ClaudeCode r1, r2 | 4.0287e-55 | Restricted to orthologs shared by both groups | RIGOR / SPEC | moderate |
 | bix-46-q4 | G DS-Codex r2 | none | Turn ended during web search for the published log2FC value | HARNESS / – | high |
 | bix-49-q4 | C DS-ClaudeCode r2, r3 | 2100 | Estimator difference (2106 and 2118 both accepted elsewhere) | RIGOR / SPEC | unresolved |
-| bix-51-q8 | G DS-ClaudeCode r3 | −0.0271 | Estimator defaults (penalized fit) shrank the coefficient | RIGOR / KNOWLEDGE | moderate |
+| bix-51-q8 | G DS-ClaudeCode r3 | −0.0271 | Defined the outcome as treatment arm (41 treated vs 39 controls) instead of PR vs SD/PD response | RIGOR / KNOWLEDGE | high |
 | bix-52-q2 | G Luna r3 | 9.51e-08 | Join / denominator scope | RIGOR / – | unresolved |
 | bix-52-q7 | G Sol r3; G Luna r2 | 19160 | Off-by-one: header row counted | RIGOR / – | high |
 | bix-52-q7 | G Luna r3 | 539 | Reported the retained complement instead of removed rows | RIGOR / – | high |
@@ -526,7 +526,7 @@ Runs are labelled track (G = Galaxy, C = code), configuration and replicate. DS-
 | bix-53-q5 | C DS-ClaudeCode r3 | 10.0% | Percent given where a fraction (0.1) was requested; same value | CONTRACT / EVALUATOR | high |
 | bix-54-q7 | 28 runs: every run except G DS-Codex r1 and C DS-Codex r2 (both accepted) | 178,984; 180,771 | Reference requires excluding pure-strain-98 rows, documented only in the original capsule; accepted runs retrieved benchmark source | SPEC / RIGOR | high |
 | bix-55-q1 | C Sol r1; C Luna r3; C DS-ClaudeCode r2 | 100; 64 | BUSCO version / pipeline or completeness-intersection difference | RIGOR / SPEC | mixed |
-| bix-61-q2 | G DS-ClaudeCode r1 | 20.5045 | Upstream mapping / input difference | RIGOR / – | unresolved |
+| bix-61-q2 | G DS-ClaudeCode r1 | 20.5045 | Re-trimmed the raw subsample FASTQs with Trimmomatic instead of mapping the supplied trimmed reads | RIGOR / – | high |
 | bix-61-q5 | all 30 runs | 2.56 | Ts/Tv on the supplied raw GATK callset (48,234/18,865); reference presumably filtered; no filter-sensitivity check | SPEC / RIGOR | high |
 | wf_003 host removal | G Luna r1, r3 | 0.273 | BWA-MEM output (20,899 retained) scored against the Bowtie2 route (72,867); matches the BWA route (20,896) | EVALUATOR / SPEC | high |
 | wf_005 amplicon | C GPT-5.5 r1, r3 | 0.000 | Sample IDs from lowercased directory slugs instead of manifest identifiers | CONTRACT / – (r3: PLATFORMᵃ) | high |
@@ -544,3 +544,121 @@ Runs are labelled track (G = Galaxy, C = code), configuration and replicate. DS-
 - **Prior audit:** [report](analysis_reports/galaxy_improvement_20260924/Galaxy_improvement_report.v1_prior_audit.md), [failure dossiers](analysis_reports/galaxy_improvement_20260924/failure_dossiers.md), [independent checks](analysis_reports/galaxy_improvement_20260924/independent_checks.json) (mitochondrial reference comparison, BH recomputation, amplicon headers, cryptic-exon junctions).
 - **Source archives:** trace, evaluator and Galaxy snapshot paths follow `<benchmark>/analysis/<task>/source_snapshots/huggingface_traces/files/<run_id>/`. Line numbers (`Lnnn`) refer to the decompressed primary event log in that directory (`agent_workspace/run_trace/` or, for GPT-5.5 BixBench runs, `run_trace/`).
 - **Aggregate tables** referenced for token ratios and job states: [Result_table.md](Result_table.md) (B7, C6, I9, X5, X6, X18).
+
+## Addendum: replicate variability, or why a model that can solve a task still fails it
+
+*Added 25 September 2026. Scripts: [variability.py](analysis_reports/galaxy_improvement_20260924/v2_trace_friction/variability.py) and the mechanism scripts listed in Appendix B.*
+
+**Question.** When a model gets a task right in one replicate and wrong in another, the capability is present but not reliable. What causes the divergence? Which model is least consistent, and why? Is Galaxy more or less stable than open-ended code, and is the source of the instability the same in both tracks?
+
+**Definitions.**
+- A *cell* is one task × configuration × track, with three replicates.
+- A cell is *mixed* when:
+  - **BixBench:** 1 or 2 of 3 replicates are accepted;
+  - **CompBio:** 1 or 2 of 3 match a strong (≥ 20/25) consensus answer;
+  - **IWC:** the within-cell score range exceeds 0.05.
+- Mixed cells are the direct measure of "can, but does not reliably".
+- For every rejected replicate in a BixBench mixed cell, the trace was compared with its accepted sibling(s) to find what separated them. This *divergence mechanism* is distinct from the root-cause categories of §3: it names what differed between replicates, not why the answer was wrong.
+
+### V1. How much replicate variability, by model and track
+
+| Configuration | BixBench mixed cells, Galaxy / code (of 50) | CompBio mixed cells, Galaxy / code (of 82) | IWC variable cells, Galaxy / code (of 10) |
+|---|---:|---:|---:|
+| GPT-5.5 | 1 / 1 | 3 / 8 | 2 / 4 (of 9) |
+| GPT-5.6 Sol | 2 / 4 | 4 / 3 | 1 / 2 |
+| GPT-5.6 Luna | 5 / 8 | 6 / 10 | 2 / 2 |
+| DeepSeek V4 Pro (Codex) | 7 / 6 | 9 / 14 | 0 / 3 |
+| DeepSeek V4 Pro (Claude Code, superseded) | **13 / 14** | n/a | n/a |
+| **All** | **28 / 33** | **22 / 35** | **5 / 11** |
+
+The CompBio and IWC DeepSeek rows are the Codex harness (V4 Pro 0813 for CompBio). In BixBench, all-rejected cells (0/3) are also fewer in Galaxy (25) than in code (30), and all-accepted cells are more numerous (197 vs 187).
+
+**Galaxy is the more stable condition in all three benchmarks:** fewer mixed cells in BixBench (28 vs 33), CompBio (22 vs 35) and IWC (5 vs 11).
+
+**The least consistent models:**
+- **DeepSeek, both harnesses.** DeepSeek via the superseded Claude Code harness is mixed in 26% of BixBench Galaxy cells (13/50) and 28% of code cells. DeepSeek via Codex is the least consistent in CompBio in both tracks (9 and 14 mixed cells).
+- **GPT-5.6 Luna** is next (5 and 8 BixBench, 6 and 10 CompBio).
+- **GPT-5.5 and Sol** are the most stable (1–4 mixed cells per benchmark and track).
+- **IWC exception:** on the workflow-derived IWC tasks, DeepSeek-Codex has no variable Galaxy cell but three in code.
+
+### V2. What separated the accepted and the rejected replicate
+
+| Divergence mechanism | Galaxy (36 rejected replicates in 28 mixed cells) | Code (45 in 33) | Examples (task, configuration, replicate) |
+|---|---:|---:|---|
+| **Platform trap hit by this replicate only** | **6** | 0 | bix-28-q3 Sol r1 alone asked for non-verbose `long_branch_score` and received the variance; bix-35-q1 DS-ClaudeCode r1 alone used flat keys and silently ran the default metric; bix-31-q2 DS-Codex r2/r3 UDT jobs never dispatched, while r1's pydeseq2 UDT ran; bix-16-q1 DS-Codex r1 chose a container without SciPy; bix-34-q5 DS-ClaudeCode r3 UDT output parsing failed until the budget ran out |
+| **Environment or package-version drift** | 0 | **7** | bix-43-q2 Sol r1 installed pydeseq2 0.4.12 (5.831, accepted) while r2/r3 used 0.5.4 (5.840, rejected); bix-55-q1 Sol r1 installed BUSCO 5.7.1 (100) while r2 matched the supplied 5.8.0 outputs (101); bix-45-q1 Luna r1/r3 used PhyKIT 2.0.3 while r2 used the current release. Luna bix-43-q2 r1/r3 and bix-55-q1 r3 are probable, with the same values as the verified Sol cases |
+| **Convention or definition applied differently** | 13 | 11 | bix-16-q1: essentiality as −Chronos in the accepted replicates, raw Chronos in the CCND1 replicates (both tracks); bix-51-q8 DS-ClaudeCode r3 used treatment arm as the outcome; bix-61-q2 DS-ClaudeCode r1 re-trimmed the raw FASTQs instead of mapping the supplied trimmed reads; bix-30-q3 code replicates chose the paper's Student t-test instead of Welch |
+| **Self-implemented method diverged (script in code, UDT in Galaxy)** | 5 | **23** | bix-12-q2/q5/q6 code: hand-written parsimony-informative-site counters that treat gaps as states (all Galaxy replicates used the PhyKIT wrapper); bix-27-q5 own PCA scope; bix-35-q2 own gene population; Galaxy: bix-12-q4 DS-ClaudeCode r1/r2 own UDT, bix-43-q2 DS-ClaudeCode r2 seven pydeseq2 UDT revisions |
+| **Final-step slip** | 6 | 1 | bix-52-q7: Sol r3 and Luna r2 counted the header (19,160); Luna r3 reported the complement (539); bix-16-q1 Luna r2 applied `sort -k3,3n` to scientific notation; bix-14-q1 Luna r2 submitted 0 |
+| **No answer** | 3 | 1 | DS-Codex bix-26-q5 r1, bix-27-q5 r1 and bix-46-q4 r2 ended their turns mid-investigation |
+| **Benchmark-source lookup asymmetry** | 3 | 2 | bix-54-q7 and bix-26-q5: the only accepted DS-Codex replicate retrieved benchmark source data; its siblings, which analysed honestly, failed |
+
+Four observations locate the variability more precisely.
+
+1. **In Galaxy, replicates diverge at a decision inside the same route, not by taking different routes.**
+   - In most Galaxy mixed cells, accepted and rejected replicates ran the same wrapper: `featurewise_correlation` for all three Luna and all three DS-ClaudeCode bix-16-q1 replicates; `phykit_metrics` in bix-28-q3 and bix-35-q1; `Filter1`/`wc_gnu` in bix-52-q7; `bwa_mem` in bix-61-q2.
+   - Tool-set agreement is actually *higher* in Galaxy mixed cells (mean Jaccard 0.488; 28% identical toolsets) than in all-accepted cells (0.413; 15%) ([Result_table.md](Result_table.md), Table B6).
+   - The outcome turns on a parameter or interpretation step within the route: a sign, a verbosity flag, a branch key, a header line, an outcome column.
+2. **Visible friction does not separate the replicates.**
+   - Within Galaxy mixed cells, the rejected replicate had more failed MCP calls in only 9 of 28 cells, and fewer in 11.
+   - Rejected replicates did consume more effort: median 31 vs 23.5 shell calls, and more input tokens in 17 of 28 cells. This reflects looping and early termination, not error-prone execution.
+   - The platform events that split replicates are the silent ones: substituted defaults, wrapper output semantics, undispatched jobs. They appear only in the replicate that happened to take the optional path that triggers them.
+3. **Platform traps look stochastic because an optional choice triggers them.** Only one of three Sol replicates asked for the non-verbose output (bix-28-q3). Only one DS-ClaudeCode replicate used flat parameter keys (bix-35-q1).
+
+   The IWC peptide-verification task shows the same pattern through catalog multiplicity:
+
+   | IWC peptide-verification replicates | PepQuery wrapper | Score |
+   |---|---|---:|
+   | GPT-5.5 r2, Sol r3, Luna r2, Luna r3 | legacy `pepquery/1.6.2` (Luna r3 also ran `pepquery2`) | 0.868–0.908 |
+   | All replicates that used only `pepquery2/2.0.2` | `pepquery2/2.0.2` | 0.982–1.000 |
+
+   The version a replicate finds first in search decides the score.
+4. **Skill uptake partly explains convention divergence.**
+   - Within Galaxy mixed cells, accepted replicates read the relevant domain skill (e.g. `crispr-dependency-correlation`, `phylogenetics-tree-metrics`, `expression-matrix-pca`) in 26 of 40 cases (65%), rejected replicates in 14 of 29 (48%). The code-track figures are 56% vs 44%.
+   - The effect is sharpest where the skill states the decisive convention. On bix-16-q1 in Galaxy, both accepted DeepSeek replicates read the CRISPR skill that prescribes −gene effect, and all three DeepSeek replicates that answered CCND1 did not.
+
+### V3. Why DeepSeek and Luna are the inconsistent ones
+
+**DeepSeek (both harnesses): variability from inconsistent process, not from the platform.**
+- **Lower skill uptake.** It reads the relevant domain skill in 44% (Claude Code harness) and 55% (Codex harness) of Galaxy runs, versus 74–79% for GPT-5.5, Sol and Luna. On convention-sensitive tasks this makes the definition used vary by replicate: 15 of its 27 Galaxy divergences are convention or self-implementation mechanisms.
+- **Unstable interface mode (DS-Codex).** In 51 of 150 BixBench Galaxy runs, DeepSeek-Codex scripted the MCP core library from the shell (`import galaxy_execute_mcp_core`) instead of calling the MCP tools; no other configuration did so more than twice. Acceptance is similar either way (41/51 vs 82/99), but these runs are over-represented among its mixed-cell replicates (13 of 21, versus 34% of all its runs). The same task is therefore attempted through different interfaces from replicate to replicate.
+- **Stopping and lookups (DS-Codex).** Three of its seven Galaxy mixed cells come from a replicate that ended its turn without an answer. In two more, the only accepted replicate retrieved benchmark source files.
+- **Platform traps.** DeepSeek accounts for 5 of the 6 platform-trap divergences (bix-16-q1, bix-31-q2 ×2, bix-34-q5, bix-35-q1). Its trajectories use more UDTs and more free-form payloads, which exposes them to silent defaults, UDT dispatch failures and missing container dependencies.
+- **The superseded Claude Code harness** adds the most self-implemented variants: 15 of its 22 code-track divergences are hand-written reimplementations.
+
+**GPT-5.6 Luna: longest trajectories, most late-stage slips.**
+- **Trajectory length.** Luna runs at maximum reasoning and has by far the longest Galaxy trajectories: median 35 MCP calls and 5.0 M input tokens per BixBench run, versus 8–15 calls and 1.2–1.6 M tokens for GPT-5.5 and Sol. More exploration creates more branch points.
+- **Where it fails.** Four of its six Galaxy divergences are final-step slips made after long, otherwise correct analyses (bix-52-q7 r2/r3, bix-16-q1 r2, bix-14-q1 r2). Its IWC and CompBio divergences are route picks: the legacy PepQuery wrapper in two peptide replicates, and generic enrichment in all three characterize-response replicates (§4.7).
+- **Code track.** Luna reads domain skills in only 27% of code runs, and its code divergences are dominated by version drift and self-implementation.
+
+**GPT-5.5 and Sol are stable** because their trajectories are short and direct, they read the relevant skill in 74–90% of runs, and they rarely re-implement named methods. Their few divergences are single slips or single platform traps.
+
+### V4. Galaxy vs open-ended code: which is more stable, and is the source the same?
+
+**Stability.** Galaxy has fewer mixed cells in every benchmark (28 vs 33, 22 vs 35, 5 vs 11) and fewer all-wrong BixBench cells (25 vs 30). Galaxy is the more stable condition. The typical IWC cell is near-identical in both tracks (median within-cell range 0.0001 in Galaxy, 0.0000 in code), so the IWC difference lies in how often a cell has an outlying replicate, not in everyday noise.
+
+**The sources differ.** They overlap only in the model-driven mechanisms.
+
+| Source of replicate variability | Galaxy | Open-ended code | Why |
+|---|---|---|---|
+| Self-implementation and environment drift | 5 of 36 (14%) | **30 of 45 (67%)** | In code, each replicate writes its own parser or statistic and installs whatever package versions it chooses: pydeseq2 0.4.12 vs 0.5.4, BUSCO 5.7.1 vs 5.8.0, PhyKIT 2.0.3 vs 2.4.1. Galaxy wrappers fix both the implementation and the version. In Galaxy, self-implementation arises only when an agent writes a UDT. |
+| Platform traps and catalog multiplicity | **6 of 36 (17%)**, plus the IWC PepQuery split | 0 | These are Galaxy-specific: silent defaults, wrapper output semantics, undispatched UDTs, and several versions of the same tool in the catalog. |
+| Convention application and final-step slips | 19 of 36 (53%) | 12 of 45 (27%) | These are model behaviours shared by both tracks. The same DeepSeek configurations answer CCND1 on bix-16-q1 in both tracks, and the bix-24-q2 direction inversion occurs in both. Their larger *share* in Galaxy reflects the removal of the code-only sources, not more of these errors (19 vs 12 replicates). |
+| No answer and benchmark lookups | 6 | 3 | Harness and model behaviour, concentrated in DeepSeek-Codex. |
+
+**Consequences.**
+- **Pinning cuts both ways.** Galaxy's stability comes largely from wrapper pinning: one implementation, one version, one output format. This produces stable-right cells, e.g. bix-55-q1 (15/15 answered 101), bix-12-q2/q5/q6 (every Galaxy replicate correct), and bix-43-q2 (11/15 answered 5.8124). The same mechanism produces stable-wrong cells when the pinned version differs from the reference: bix-45-q1 (0/15, identical p-value in every run) and bix-26-q5 (13/15 answered 2).
+- **Where replicates are free, variance appears.** Galaxy variance appears where agents escape the pinning (UDTs), hit an unguarded interface path (defaults, verbosity, branch index), or face a choice the catalog leaves open (two PepQuery versions).
+- **The shared root is model-level.** Inconsistent application of domain conventions and last-step arithmetic occurs in both conditions. Neither platform addresses it; skill routing and answer-time invariant checks do.
+
+### V5. What would make Galaxy replicates more consistent
+
+1. **Remove the silent paths.** Strict validation with an effective-parameter diff, unambiguous branch selection, and labelled wrapper outputs (§7, recommendations 1, 2 and 6). These address the bix-28-q3 and bix-35-q1 platform-trap divergences.
+2. **Make UDT execution predictable.** A dispatch-health, dependency and output-parsing preflight (§7, recommendations 4 and 5) addresses the other four platform-trap divergences: bix-31-q2 r2/r3, bix-34-q5 and bix-16-q1 COX17.
+3. **Curate the catalog.** Mark superseded wrappers (e.g. `pepquery/1.6.2` alongside `pepquery2/2.0.2`) as deprecated, rank the current version first in search, and show versions in search results. This removes the IWC peptide split.
+4. **Route skills automatically (agent harness).** Surface the relevant domain skill from task keywords rather than relying on the model to open it. The gap is widest for DeepSeek (44–55% uptake vs 74–79%) and is associated with replicate divergence on convention tasks.
+5. **Use the same interface every time (harness).** Expose one supported way to drive Galaxy and block ad-hoc imports of the MCP core, so replicates of the same task use the same interface.
+6. **Add answer-time invariants and a finish guard (harness).** Check that a median lies within its data, flag zero or empty filter results, require that header rows be excluded from counts, and do not end a turn without an answer. These address the final-step slips and early terminations, which account for 9 of the 36 Galaxy divergences.
+7. **For the code track, pin the environment** (lockfile or container per task) to remove the version-drift source that has no counterpart in Galaxy.
+
+*Limits.* Mechanisms are assigned from trace review of the failing and passing replicates; classifications for bix-22-q1, bix-16-q3 and bix-52-q2 rest on unresolved root causes (Appendix A). CompBio mixed cells use the consensus proxy. IWC counts use a 0.05 range threshold. Replicates are not seed-matched, so "variability" here means run-to-run divergence under the same prompt, model and harness, not controlled sampling noise.

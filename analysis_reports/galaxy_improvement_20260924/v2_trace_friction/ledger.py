@@ -57,7 +57,7 @@ R = {
                (lambda s: True, 'SPEC', 'RIGOR', 'Used current PhyKIT without checking version sensitivity (successful code runs matched the version to the input archive date)', 'high')],
  'bix-46-q4': [(lambda s: True, 'HARNESS', '-', 'No answer: turn ended during web search for the published log2FC value', 'high')],
  'bix-49-q4': [(lambda s: True, 'RIGOR', 'SPEC', 'Unresolved estimator difference (2100 vs 2106/2118, both accepted elsewhere)', 'unresolved')],
- 'bix-51-q8': [(lambda s: True, 'RIGOR', 'KNOWLEDGE', 'Estimator defaults (penalized/regularized fit) shrank the age coefficient', 'moderate')],
+ 'bix-51-q8': [(lambda s: True, 'RIGOR', 'KNOWLEDGE', 'Defined the response outcome as treatment arm (41 treated vs 39 controls) instead of PR vs SD/PD', 'high')],
  'bix-52-q2': [(lambda s: True, 'RIGOR', '-', 'Unresolved join / denominator scope', 'unresolved')],
  'bix-52-q7': [(lambda s: missing(s), 'HARNESS', '-', 'No answer: stopped after resolving an input filename mismatch', 'high'),
                (lambda s: s['answer'] == '539', 'RIGOR', '-', 'Reported the complement (retained rows) instead of removed rows', 'high'),
@@ -66,7 +66,7 @@ R = {
  'bix-53-q5': [(lambda s: True, 'CONTRACT', 'EVALUATOR', 'Answered 10.0% where a fraction (0.1) was requested; same value', 'high')],
  'bix-54-q7': [(lambda s: True, 'SPEC', 'RIGOR', 'Reference requires excluding pure-strain-98 rows, documented only in the original capsule; both accepted runs retrieved benchmark source material', 'high')],
  'bix-55-q1': [(lambda s: True, 'RIGOR', 'SPEC', 'BUSCO version/pipeline or completeness-intersection difference', 'mixed')],
- 'bix-61-q2': [(lambda s: True, 'RIGOR', '-', 'Unresolved upstream mapping / input difference', 'unresolved')],
+ 'bix-61-q2': [(lambda s: True, 'RIGOR', '-', 'Re-trimmed the raw subsample FASTQs with Trimmomatic instead of mapping the supplied trimmed reads', 'high')],
  'bix-61-q5': [(lambda s: True, 'SPEC', 'RIGOR', 'All runs computed Ts/Tv on the supplied raw GATK callset (48,234/18,865 = 2.557); reference presumably filtered; no run tested filter sensitivity', 'high')],
 }
 
