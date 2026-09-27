@@ -123,10 +123,9 @@ def ed1():
             if p['execution_condition'] == env:
                 dot(ax, p['reported_benchmark_score'], p['proxy_score'], env, filled=p['official'], ms=3.8)
     ax.plot([78, 100], [78, 100], color=INK2, lw=0.5, ls=(0, (2, 2)))
-    ax.text(96.5, 97.8, 'Identity', fontsize=5.0, color=INK2, rotation=45, ha='center', va='bottom')
     mae = st.mean(abs(p['proxy_score'] - p['reported_benchmark_score']) for p in pts)
     bias = st.mean(p['proxy_score'] - p['reported_benchmark_score'] for p in pts)
-    ax.text(0.03, 0.97, f'{len(pts)} reported benchmark scores with retained answers\nMean absolute error {mae:.1f}; mean bias +{bias:.1f}',
+    ax.text(0.03, 0.97, f'{len(pts)} reported benchmark scores with retained answers\nMean absolute error {mae:.1f}; mean bias +{bias:.1f}; dashed line: identity',
             transform=ax.transAxes, va='top', fontsize=5.2)
     ax.set_xlim(78, 99); ax.set_ylim(78, 99); ax.set_xticks(range(80, 100, 5)); ax.set_yticks(range(80, 100, 5))
     ax.set_xlabel('Reported benchmark score (answers credited, of 100)')
@@ -194,7 +193,7 @@ def ed2():
                 if r['value'] is not None:
                     dot(ax, -math.log10(r['value']), i + off + (k - 1) * 0.07, env, filled=r['accepted'], ms=3.4)
     ax.axvline(-math.log10(ref), color=INK, lw=0.6, ls=(0, (3, 2))); ax.axvline(-math.log10(cur), color=INK2, lw=0.5, ls=(0, (1, 1.5)))
-    ax.text(-math.log10(ref) + 0.07, -0.72, 'Accepted reference, 7.70 × $10^{-54}$\n(reproduced by PhyKIT 2.0.3)', fontsize=5.0, va='center')
+    ax.text(-math.log10(ref) + 0.07, -0.72, 'Reference answer, 7.70 × $10^{-54}$\n(reproduced by PhyKIT 2.0.3)', fontsize=5.0, va='center')
     ax.text(-math.log10(cur) + 0.07, -0.72, 'Current PhyKIT\nrelease and the\nGalaxy tool,\n1.52 × $10^{-56}$', fontsize=5.0, va='center', ha='left')
     ax.set_yticks(range(len(CFG5))); ax.set_yticklabels([CFG_ROW[c] for c in CFG5], fontsize=5.1); ax.set_ylim(len(CFG5) - 0.5, -1.35)
     ax.set_xlim(52.5, 57.4); ax.set_xlabel('Submitted P value, $-\\log_{10}$ (Mann–Whitney test of relative composition\nvariability, animals versus fungi)')
@@ -383,9 +382,9 @@ def ed3():
            ('Serve tool descriptions without\nrequiring an analysis history', '1,340 failures', 'No failures of this kind'),
            ('Return an error message for every\nGalaxy job error', '1,829 failures without a\nmessage; 784 identical retries', 'Failures without a\nmessage = 0; no probe\ntools needed'),
            ('Check user-defined tools before they\nrun (trial run, software, dispatch)', 'Half of user-defined-tool\ncalls failed; 79 missing software', 'First-attempt success\nrate'),
-           ('Show software versions and what each\noutput statistic means', 'bix-45-q1 (0 of 15 scored correct);\nbix-28-q3 (a variance read\nas a median)', 'Version visible in\nsearch and inspection')]
+           ('Show software versions and what each\noutput statistic means', 'bix-45-q1: 0 of 15 scored\ncorrect; bix-28-q3: a variance\nread as a median', 'Version visible in\nsearch and inspection')]
     xs = [0.0, 0.42, 0.74]
-    for x, h in zip(xs, ['Change to Galaxy or the Galaxy interface', 'Evidence in the execution traces', 'Measure of success']):
+    for x, h in zip(xs, ['Change to Galaxy', 'Evidence in execution traces', 'Measure of success']):
         axt.text(x, 0.97, h, fontsize=5.3, fontweight='bold', va='top', transform=axt.transAxes)
     axt.plot([0, 1], [0.925, 0.925], color=INK, lw=0.5, transform=axt.transAxes)
     for k, row in enumerate(tbl):
@@ -476,7 +475,7 @@ def ed5():
     rows, ticks, labs = [], [], []
     y = 0
     for r in D['ed5a']:
-        head = 'Three model configurations, pooled' if r['config'].startswith('All three') else r['config']
+        head = 'Pooled (three model\nconfigurations)' if r['config'].startswith('All three') else r['config']
         ax.text(-0.03, y, head, fontsize=5.4, fontweight='bold', va='center', ha='right', transform=ax.get_yaxis_transform())
         y += 1
         for k, b in enumerate(BENCH):

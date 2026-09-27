@@ -250,7 +250,7 @@ def fig2():
         'BixBench50': dict(x0=0.165, title='BixBench-Verified-50: similar accuracy\nin both execution conditions',
                            sub=f"Pooled accuracy: open-ended code {pooled['BixBench50']['open_ended_code']:.1f}%, Galaxy {pooled['BixBench50']['galaxy']:.1f}%",
                            dlab='Condition difference in accuracy\n(percentage points)', dlim=(-10, 23), dt=[-10, 0, 10, 20], nd=1),
-        'CompBio': dict(x0=0.45, title='CompBioBench: similar reported benchmark\nscores in both execution conditions',
+        'CompBio': dict(x0=0.45, title='CompBioBench: similar reported\nbenchmark scores in both conditions',
                         sub=f"Pooled mean: open-ended code {pooled['CompBio']['open_ended_code']:.1f}, Galaxy {pooled['CompBio']['galaxy']:.1f} of 100",
                         dlab='Condition difference in reported benchmark\nscore (of 100; open points: no interval)', dlim=(-4, 4), dt=[-4, -2, 0, 2, 4], nd=1),
         'IWC': dict(x0=0.735, title='IWC: equal or higher mean output\nagreement in the Galaxy condition',
@@ -365,9 +365,9 @@ def fig2():
         ax.text(left + 1.5, y, f'{n} runs', va='center', fontsize=5.2, color=INK2)
     ax.set_yticks(ypos); ax.set_yticklabels([b[0] for b in bars], fontsize=5.3); ax.set_ylim(3.95, -0.55)
     ax.set_xlim(0, 150); ax.set_xlabel('Scored-incorrect runs'); grid_x(ax)
-    ax.text(100, 2.9, f"A platform or tool defect was the primary or\nsecondary cause in {e['galaxy']['platform_any']} of {e['galaxy']['n']} scored-incorrect\n"
-            f"Galaxy-condition runs ({100 * e['galaxy']['platform_any'] / e['galaxy']['n']:.0f}%) and in none of the\nopen-ended code condition runs",
-            fontsize=5.2, va='center', fontweight='bold')
+    fig.text(0.023, 0.306, f"A platform or tool defect was the primary or secondary cause in {e['galaxy']['platform_any']} of {e['galaxy']['n']} "
+             f"scored-incorrect Galaxy-condition runs ({100 * e['galaxy']['platform_any'] / e['galaxy']['n']:.0f}%) and in none of the "
+             f"{e['open_ended_code']['n']} scored-incorrect open-ended code condition runs.", fontsize=5.4, va='top', fontweight='bold')
     axl2 = fig.add_axes([0.72, 0.045, 0.27, 0.235]); axl2.axis('off')
     for k, (c, name, col) in enumerate(CAUSES):
         yk = 0.93 - k * 0.118
@@ -688,9 +688,9 @@ def fig4():
     ax.set_yticks([0, 1]); ax.set_yticklabels([ENV_LABEL[e] for e in ENVS]); ax.set_ylim(1.5, -0.5); ax.set_xlim(0, 100)
     ax.set_xlabel('Scored-incorrect replicate runs in split replicate sets (%)'); grid_x(ax)
     trap = 100 * md['galaxy'].get('V1', 0) / sum(md['galaxy'].values())
-    fig.text(0.023, 0.19, f"Divergence mechanism: a hand-written method or software-version difference in {share['open_ended_code']:.0f}% of open-ended code condition runs "
-             f"and {share['galaxy']:.0f}% of Galaxy-condition runs; a Galaxy interface trap in {trap:.0f}% of Galaxy-condition runs and none in the open-ended code condition.",
-             fontsize=5.3)
+    fig.text(0.023, 0.197, f"Divergence mechanism: a hand-written method or software-version difference in {share['open_ended_code']:.0f}% of open-ended code condition runs "
+             f"and {share['galaxy']:.0f}% of Galaxy-condition runs;\na Galaxy interface trap in {trap:.0f}% of Galaxy-condition runs and none in the open-ended code condition.",
+             fontsize=5.3, va='top')
     axl = fig.add_axes([0.745, 0.02, 0.25, 0.15]); axl.axis('off')
     for k, (key, name, col) in enumerate(MECH):
         yk = 0.95 - k * 0.14
