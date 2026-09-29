@@ -1,221 +1,173 @@
 # Manuscript material for Nature Methods submission
 
-This folder holds every display item, supplementary file, Source Data workbook and statement that the draft Results call for. Each file is generated from the archived evidence by the scripts in `scripts/`, so every number traces back to a run, trace line or archive table.
+This folder holds every display item, supplementary file, Source Data workbook and statement that the Results text (`Results_section_final`) calls for. Every figure number, Extended Data number, Supplementary Table number and Supplementary Note number matches a call-out in that text. Each file is generated from the archived evidence by the scripts in `scripts/`, so every number traces back to a run, trace line or archive table.
 
 ## 1. Design rules applied to every figure and table
 
 1. **The open-ended code condition is the reference condition and always comes first.** This holds for panel order (Fig. 1a before 1b), row order, legends, table columns and Source Data columns. Every condition difference is Galaxy − open-ended code.
 2. **Colour has one meaning.** Vermillion (#D55E00) is the open-ended code condition and blue (#0072B2) the Galaxy condition, everywhere. Panels that show only Galaxy-condition runs use Galaxy blue. Benchmarks are never colour-coded; panels and labels separate them.
 3. **Colour-vision safety.** The colours come from the Okabe–Ito palette, which Nature Methods itself recommended (Wong, *Nat. Methods* **8**, 441; 2011). Execution condition is also encoded by shape (squares for open-ended code, circles for Galaxy), so it survives greyscale printing. Every category palette carries direct counts or labels as a second cue.
-4. **No abbreviations.** Terms such as G/C, pp, CI, MCP, UDT, CC*, MAE, DE, QC, AMR and r1 are spelled out or replaced by plain descriptions. An automated audit of all figure text found none remaining.
-5. **Related results share one plot type.** Fig. 2a–c show only the Galaxy-minus-open-ended-code difference for each benchmark, with identical layout and rows; pooled score levels are given under each panel title.
-6. **One vocabulary everywhere.** Every figure, legend, table, data file and statement uses the official terms in `glossary/` (see §4). Retired wording such as environment, triplicate, mixed cell, accepted/rejected run, aggregate score, MCP call and domain-analysis tool no longer appears; an automated audit of all figure text and table headers found none.
-7. **Every panel title states its finding** (for example "The Galaxy condition had fewer split replicate sets than the open-ended code condition in every benchmark"). Axis labels say what is measured and in which unit; interval types and reference lines are named on the panel.
+4. **No abbreviations.** Terms such as G/C, pp, CI, MCP, UDT, CC*, MAE, DE, QC, AMR and r1 are spelled out or replaced by plain descriptions in all figure text.
+5. **Related results share one plot type.** Fig. 2a, c and d use the same layout: replicate runs and mean on the left, condition difference with its interval on the right, with identical rows. Fig. 3a repeats one small-multiple layout for the three benchmarks.
+6. **One vocabulary everywhere.** Every figure, legend, table, data file and statement uses the official terms in `glossary/` (see §5).
+7. **Every panel title states its finding** (for example "BixBench-Verified-50: the Galaxy condition had more unanimous and fewer split replicate sets"). Axis labels say what is measured and in which unit; interval types and reference lines are named on the panel. Text is black or grey, never coloured.
 
 ## 2. What is here
 
 | Folder | Contents | Submit? |
 |---|---|---|
 | `figures/` | `Fig1.pdf` … `Fig5.pdf`: vector PDFs with editable, embedded TrueType text; 183 mm wide and 112–170 mm tall. `previews/` holds 300-dpi PNGs. | PDFs: yes |
-| `extended_data/` | `ED_Fig1.tif` … `ED_Fig5.tif` (300 dpi, RGB, LZW) plus the same figures as `.eps`; 179 mm wide and ≤165 mm tall. `previews/` holds PNGs. | TIFF (or EPS): yes |
-| `legends/` | `Figure_legends.md` / `.docx`: legends for all ten figures. In the .docx each legend is one paragraph, in journal style. | Paste into the manuscript |
-| `supplementary/` | `Supplementary_Information.pdf`: Supplementary Notes 1–9 and legends for all tables and data files. | Yes |
+| `extended_data/` | `ED_Fig1.tif` … `ED_Fig8.tif` (300 dpi, RGB, LZW, under 350 kB each) plus the same figures as `.eps`; 179 mm wide and 72–120 mm tall. `previews/` holds PNGs. | TIFF (or EPS): yes |
+| `legends/` | `Figure_legends.md` / `.docx`: legends for all 13 figures. In the .docx each legend is one paragraph, in journal style. | Paste into the manuscript |
+| `supplementary/` | `Supplementary_Information.pdf`: glossary, Supplementary Notes 1–9 and legends for all tables and data files. | Yes |
 | | `Supplementary_Tables.xlsx`: Supplementary Tables 1–67, plus index and glossary sheets. | Yes |
 | | `Supplementary_Data_1_run_summaries.xlsx`: 4,240 runs. | Yes |
 | | `Supplementary_Data_2_failed_Galaxy_interface_calls.xlsx`: 7,389 calls. | Yes |
 | | `Supplementary_Data_3_parameter_substitutions.xlsx`: 2,085 calls. | Yes |
-| | `Supplementary_Table_crosswalk.csv`: maps each Supplementary Table number to its archive ID. | Authors only |
-| `source_data/` | `Source_Data_Fig1–5.xlsx` and `Source_Data_ED_Fig1–5.xlsx`, one sheet per panel. | Yes |
+| | `Supplementary_Table_crosswalk.csv`: each Supplementary Table number with its archive ID, where the Results cite it, and a proposed number in citation order. | Authors only |
+| `source_data/` | `Source_Data_Fig1–5.xlsx` and `Source_Data_ED_Fig1–8.xlsx`, one sheet per panel. | Yes |
 | | `figure_data.json` and `derived/` are build intermediates; `derived/` contains local file paths. | No |
-| `glossary/` | `Glossary.md` / `.xlsx` / `.docx`: the 59 official terms, with status (original, sharpened or new), definition, example and retired wording. Also embedded in the Supplementary Information and the Supplementary Tables workbook. | Yes, via the Supplementary Information |
+| `glossary/` | `Glossary.md` / `.xlsx` / `.docx`: the 68 official terms, with status (original, sharpened or new), definition, example and retired wording. Also embedded in the Supplementary Information and the Supplementary Tables workbook. | Yes, via the Supplementary Information |
 | `qa/cvd/` | Every figure simulated under protanopia, deuteranopia, tritanopia and greyscale, for checking. | No |
 | `statements/` | Data availability, Code availability and Reporting Summary notes (.md and .docx). Placeholders are marked `[Authors: …]`. | Paste into the manuscript and forms |
 | `scripts/` | Generators and `requirements.txt` (see §8). | Via the code repository |
 
-## 3. Call-out map: the draft's text to figures and tables
+The per-case evidence behind Fig. 5 and Supplementary Table 14 is `individual_error_analysis.md` at the repository root.
 
-**Main-figure titles.** Each title opens that figure's legend, as Nature Methods requires, and is also stored as the PDF's title metadata. The image itself carries no title. Edit the titles in `scripts/figure_titles.json` and in the legends.
+## 3. Call-out map: the Results text to figures and tables
+
+**Main-figure titles.** Each title opens that figure's legend, as Nature Methods requires, and is also stored as the PDF's title metadata. The image itself carries no title. Titles for Figs. 2–5 are the Results section headings, with "configurations" written as "model configurations" in Fig. 4 to follow the glossary. Edit the titles in `scripts/figure_titles.json` and in the legends.
 
 - **Fig. 1** | Study design: the same model configurations perform each task in the open-ended code condition and in the Galaxy condition.
-- **Fig. 2** | Performance is similar in the two execution conditions, and most scored-incorrect runs were not caused by Galaxy.
-- **Fig. 3** | Agents use Galaxy as a structured analysis workbench whose records reveal input errors, parameter errors and parameter substitution.
-- **Fig. 4** | Tool-set fingerprints vary by model configuration and benchmark; the Galaxy condition has fewer split replicate sets, and they split for different reasons.
-- **Fig. 5** | The Galaxy condition raises input-token usage, mostly for finding and inspecting tools, in exchange for an inspectable analysis record.
+- **Fig. 2** | Galaxy-mediated execution preserves benchmark performance.
+- **Fig. 3** | Model configurations achieve similar performance through different Galaxy strategies.
+- **Fig. 4** | Replicate agreement separates model configurations that run-level accuracy conflates.
+- **Fig. 5** | Trace-level analysis distinguishes benchmark artifacts from platform and agent failures.
 
-
-| Call-out | File, panel | Finding shown | Data source |
+| Call-out in the Results | File, panel | Finding shown | Supporting tables |
 |---|---|---|---|
-| Fig. 1a | `Fig1.pdf` a | Open-ended code condition, the reference condition | — |
-| Fig. 1b | `Fig1.pdf` b | Galaxy condition (Galaxy-mediated execution) and what its record contains | — |
-| Fig. 1c | `Fig1.pdf` c | Run populations: three benchmarks, five model configurations; endpoint of each benchmark | Supp. Table 1 |
-| Fig. 2a | `Fig2.pdf` a | Similar accuracy: condition difference with 95% interval, per model configuration | Supp. Table 2 |
-| Fig. 2b | `Fig2.pdf` b | Similar reported benchmark scores: condition difference (no interval available) | Supp. Tables 5–6 |
-| Fig. 2c | `Fig2.pdf` c | Equal or higher mean output agreement in the Galaxy condition | Supp. Table 7 |
-| Fig. 2d | `Fig2.pdf` d | Near-perfect output agreement on most IWC tasks; cause of every run below 0.5 | Supp. Tables 9, 18 |
-| Fig. 2e | `Fig2.pdf` e | Galaxy was not the cause of most scored-incorrect runs (implicated in 22 of 111) | Supp. Table 14 |
-| Fig. 3a | `Fig3.pdf` a | Every core workbench operation was used, per benchmark | Supp. Table 20 |
-| Fig. 3b | `Fig3.pdf` b | The workflow-derived benchmark relied more on domain tools (28%, 40%, 69% of Galaxy analysis jobs) | Supp. Tables 11, 21–23 |
-| Fig. 3c | `Fig3.pdf` c | User-defined-tool use depends on the model configuration | Supp. Tables 24, 27 |
-| Fig. 3d | `Fig3.pdf` d | Galaxy job errors point to inputs and parameters | Supp. Table 32 |
-| Fig. 3e | `Fig3.pdf` e | Parameter substitution in 16–30% of tool-run calls | Supp. Table 37; Supp. Data 3 |
-| Fig. 4a | `Fig4.pdf` a | Open-ended code condition runs spread across more command-line software | Supp. Table 39 |
-| Fig. 4b | `Fig4.pdf` b | Galaxy tool-set similarity is highest on the workflow-derived benchmark | Supp. Tables 41–43 |
-| Fig. 4c | `Fig4.pdf` c | Fewer split replicate sets in the Galaxy condition in every benchmark (33/28, 35/22, 11/5) | Supp. Table 44 |
-| Fig. 4d | `Fig4.pdf` d | Divergence mechanisms differ: hand-written method or version difference 67% vs 14%; Galaxy interface trap 0% vs 17% | Supp. Table 48 |
-| Fig. 5a | `Fig5.pdf` a | Input-token ratio 4–5 on platform-neutral benchmarks, 1.9 on IWC | Supp. Tables 49–51 |
-| Fig. 5b | `Fig5.pdf` b | About half of Galaxy interface calls are tool search and inspection | Supp. Table 53 |
-| Fig. 5c | `Fig5.pdf` c | Higher input-token usage did not mean higher accuracy (model differences) | Supp. Table 54 |
-| Fig. 5d | `Fig5.pdf` d | Six findings recoverable from the Galaxy record; 67% → 14% | Supp. Tables 16, 18, 37, 48 |
-| Extended Data Fig. 1a–d (new) | `ED_Fig1.tif` | Archive; audit pipeline; consensus-proxy validation (mean absolute error 2.6); consensus support per task | Supp. Table 6 |
-| Extended Data Fig. 2a | `ED_Fig2.tif` a | Tool-set similarity highest on IWC in both execution conditions | Supp. Table 10 |
-| Extended Data Fig. 2b | `ED_Fig2.tif` b | bix-45-q1: every Galaxy run returned the current-PhyKIT value | Supp. Tables 15–16 |
-| Extended Data Fig. 2c | `ED_Fig2.tif` c | bix-43-q2: the same value scored correct or incorrect depending on the verifier mode | Supp. Table 17 |
-| Extended Data Fig. 2d | `ED_Fig2.tif` d | Low IWC output agreement re-examined against independent references | Supp. Tables 13, 18 |
-| Extended Data Fig. 3a | `ED_Fig3.tif` a | User-defined tools often failed without an error message; 784 identical retries | Supp. Table 28 |
-| Extended Data Fig. 3b | `ED_Fig3.tif` b | Failed Galaxy interface calls by cause, per 1,000 calls | Supp. Table 34 |
-| Extended Data Fig. 3c | `ED_Fig3.tif` c | Tools with the most parameter substitution | Supp. Table 37 |
-| Extended Data Fig. 3d | `ED_Fig3.tif` d | Engineering targets with evidence and measures | Supp. Table 38 |
-| Extended Data Fig. 4a | `ED_Fig4.tif` a | Repeatability categories by model configuration | Supp. Table 44 |
-| Extended Data Fig. 4b | `ED_Fig4.tif` b | Prompt length and workload did not consistently predict operational errors | Supp. Table 45 |
-| Extended Data Fig. 5a | `ED_Fig5.tif` a | Input-token ratio lowest on IWC for every model configuration | Supp. Table 52 |
-| Extended Data Fig. 5b | `ED_Fig5.tif` b | Direct Galaxy API calls, by operation | Supp. Table 53 |
+| Fig. 1a | `Fig1.pdf` a | Open-ended code condition: model configuration and agent harness in an unrestricted shell | — |
+| Fig. 1b | `Fig1.pdf` b | Galaxy condition: the Galaxy interface (tool search, parameter descriptions, history inspection, job submission and monitoring, user-defined tools) | — |
+| Fig. 1c | `Fig1.pdf` c | Three benchmarks, five model configurations, three replicate runs; endpoint of each benchmark | Supp. Table 1 |
+| Extended Data Fig. 1 | `ED_Fig1.tif` a, b | Archive (4,240 runs, 4,228 traces, 23,080 Galaxy analysis jobs, 69,812 Galaxy interface calls) and audit pipeline | Supp. Notes 1, 2; Supp. Data 1 |
+| Fig. 2a | `Fig2.pdf` a | IWC mean output agreement 0.940 → 0.980, +0.040 (0.010 to 0.078); medians per model configuration | Supp. Table 7 |
+| Fig. 2b | `Fig2.pdf` b | IWC per task; six tasks at ≥0.998; notes 1–4 give every run below 0.5 | Supp. Tables 9, 18 |
+| Extended Data Fig. 3 | `ED_Fig3.tif` a, b | IWC sensitivity: 0.040 → 0.004 without zero-scored tasks; Sol and Luna change sign when leaving one task out; every run below 0.5 | Supp. Tables 12, 18 |
+| Fig. 2c | `Fig2.pdf` c | BixBench-Verified-50: 519/600 versus 511/600, +1.3 (−3.5 to 6.3); per model configuration +2.0, +2.0, 0.0, +1.3; Claude Code +10.7 | Supp. Tables 2–4 |
+| Fig. 2d | `Fig2.pdf` d | CompBioBench: 86.9 versus 86.7; +0.3, +0.7, 0.0, 0.0 (archived reported benchmark scores) | Supp. Tables 5, 61 |
+| Extended Data Fig. 2 | `ED_Fig2.tif` a, b | Consensus proxy: mean absolute error 2.6; 82 strong-consensus tasks; 33 versus 40 deviations | Supp. Table 6 |
+| Section 1, answer consistency | — | 62 versus 58 of 100 tasks with one distinct answer across all 12 runs | Supp. Table 60a |
+| Fig. 3a | `Fig3.pdf` a | Galaxy-condition performance by model configuration: IWC 0.999/0.991/0.954/0.937; BixBench-Verified-50 89.3/88.7/86.0/82.0 (Claude Code 80.0); CompBioBench 86.7/91.7/85.0/84.3 | Supp. Tables 55, 58, 61 |
+| Fig. 3b | `Fig3.pdf` b | User-defined-tool requests: BixBench-Verified-50 67/35/39/9%; CompBioBench 88/80/61/43% | Supp. Table 24 |
+| Extended Data Fig. 4 | `ED_Fig4.tif` a, b | Domain-skill uptake; DeepSeek V4 Pro (Codex) imported the interface library in 31 of 150 runs | Supp. Table 20 |
+| Fig. 3c | `Fig3.pdf` c | Median input-token usage per run, IWC 2.35/4.23/6.34/10.2 million; BixBench-Verified-50 1.19/1.56/3.52/5.03; CompBioBench 1.73/3.75/8.48/10.2 | Supp. Table 49 |
+| Extended Data Fig. 6 | `ED_Fig6.tif` a, b | Input-token usage versus performance; ratios 1.33/4.08/3.44 and model differences −0.7/−3.3/−7.3 versus GPT-5.5 | Supp. Tables 49, 54 |
+| Fig. 4a | `Fig4.pdf` a | BixBench-Verified-50: 197 versus 187 sets at 3/3, 28 versus 33 split, 25 versus 30 at 0/3 | Supp. Table 56 |
+| Fig. 4b | `Fig4.pdf` b | CompBioBench: one distinct answer in 333 versus 321 of 400 sets | Supp. Tables 44d, 60 |
+| Section 3, IWC within-set ranges | — | Median within-set ranges 0.0000/0.0011/0.0022/0.0047 (all ten tasks); 5 versus 11 split sets | Supp. Table 8a |
+| Fig. 4c | `Fig4.pdf` c | Divergence mechanisms: Galaxy 13, 6 and 6 of 36; open-ended code 30 of 45 hand-written method or software version | Supp. Table 48 |
+| Extended Data Fig. 5 | `ED_Fig5.tif` a, b | Divergence mechanisms by model configuration; the five split IWC Galaxy-condition sets | Supp. Tables 8, 48 |
+| Fig. 4d | `Fig4.pdf` d | Run-level versus unanimous accuracy; −1.3 (GPT-5.5), −6.0 (DeepSeek V4 Pro), −16.0 (Claude Code); range 9.3 → 24.0 points | Supp. Table 56a,b |
+| Section 3, tool-set fingerprints | — | Identical Galaxy tool-set fingerprints in 43.5% of 0/3 and 15.3% of 3/3 sets | Supp. Table 47 |
+| Fig. 5a | `Fig5.pdf` a | 93 task cases: 30 reference or evaluator (6, 4, 20), 52 agent analysis, 8 Galaxy, 3 other; Galaxy contributed in 14 | Supp. Table 14a–c |
+| Extended Data Fig. 8 | `ED_Fig8.tif` a–c | Answer retrieval (26 task cases), local computation (15 correct CompBioBench answers), cross-run copying (2 runs) | Supp. Table 14b,d |
+| Fig. 5b | `Fig5.pdf` b | bix-35-q1: 15/15 versus 14/15; 7 of 15 Galaxy histories with a substituted job; six recovered | — |
+| Extended Data Fig. 7 | `ED_Fig7.tif` a, b | bix-35-q1: the metric each PhyKIT job executed; request shapes | — |
+| Fig. 5c | `Fig5.pdf` c | contaminated-rna-q1: 12/13 versus 9/12; core_nt did not complete in three runs; 8,793 Hydra reads; 195 Epstein–Barr virus reads | — |
 
-## 4. Edits the draft text needs
+## 4. Where the Results text and the archive disagree
 
-Items 1–17 are factual or call-out corrections checked against the archive. Items 18–20 keep the text consistent with the redesigned figures.
+Every number in the Results text was checked against the archive. The items below need an edit or a decision. Everything else matched, including 519/511, +2.0/+2.0/0.0/+1.3, 197/187, 28/33, 25/30, 333/321, 62/58, 43.5%/15.3%, the input-token medians and ratios, and the task-audit counts (93; 30 = 6 + 4 + 20; 52; 8; 14; 26; 15; 2).
 
-| # | Location in the draft | Current text | Change to | Evidence |
+| # | Where | Text says | Archive shows | Suggested change |
 |---|---|---|---|---|
-| 1 | Design paragraph; editorial note 1 | "21,880 recorded Galaxy jobs" | "23,080 recorded Galaxy analysis jobs" (5,042 + 16,686 + 1,352, excluding data uploads) | Extended Data Fig. 1a |
-| 2 | Design paragraph, after "69,812 recorded MCP calls" | — | add "(Extended Data Fig. 1a,b)" | Extended Data Fig. 1 is new; without it the Extended Data numbering starts at 2 |
-| 3 | Section 1, first paragraph | "a median Galaxy score of 1.000 for every configuration" | "a median Galaxy score of 1.000 for three of four configurations (0.998 for Luna)" | Supp. Table 7 |
-| 4 | Section 1, consensus-proxy sentence | — | add "(Extended Data Fig. 1c,d and Supplementary Table 6)" | New validation panel and table |
-| 5 | Section 1, third paragraph | "(Fig. 2e and Supplementary failure ledger)" | "(Fig. 2e and Supplementary Table 14)" | Ledger is Supp. Table 14 |
-| 6 | Section 1, bix-45-q1 sentence | "(Extended Data Fig. 2b,c and Supplementary Tables B12 and B13)" | "(Extended Data Fig. 2b and Supplementary Tables 15 and 16)" | Panel c is bix-43-q2 |
-| 7 | Section 1, bix-43-q2 clause | "(Supplementary Table B8)" | "(Extended Data Fig. 2c and Supplementary Table 17)" | Panel c shows this case |
-| 8 | Section 2, failure-count sentence | "3,454 before any job existed and 3,677 afterwards" | add "; 258 matched no cause" | The three groups sum to 7,389 (Supp. Table 34) |
-| 9 | Section 2, taxonomy sentence | "(Extended Data Fig. 3b and Supplementary Table X5)" | "(Extended Data Fig. 3b and Supplementary Table 34)" | X5 (now Supp. Table 33) lists error-message indicators, not the causes |
-| 10 | Section 2 | "Installed-wrapper errors usually retained stderr (85.5% in BixBench)" | "BixBench error jobs usually retained an error message (85.5%; Supplementary Table 33)" | Supp. Table 33 covers all BixBench error jobs, not installed wrappers only |
-| 11 | Section 2, Section 4, editorial note 8 | "769 blind identical resubmissions" | "784" (615 of which failed again) | 769 was a partial count; Supp. Table 28 |
-| 12 | Section 3, first paragraph | "GPT-5.5 doing so six to seven times more often than DeepSeek (Fig. 4a)" | "about seven times more often than DeepSeek in BixBench (66.7% versus 9.3%) and twice as often in CompBioBench (88.3% versus 43.3%) (Fig. 3c)" | Supp. Table 24. Cite Fig. 4a on the preceding BWA/minimap2 sentence instead: "(Fig. 4a and Supplementary Table 39)" |
-| 13 | Section 3, identical-answers sentence | "(Fig. 4d and Supplementary Table X16)" | "(Supplementary Table 46)"; add "(Fig. 4d and Supplementary Table 48)" to the sentence beginning "Quantitatively, self-implementation…" | Fig. 4d shows divergence mechanisms |
-| 14 | Section 4, discovery sentence | "(Fig. 5b and Extended Data Fig. 5b)" | "(Fig. 5b and Supplementary Table 53)"; add "(Extended Data Fig. 5b)" after "580 of 600" | Extended Data Fig. 5b shows direct calls to Galaxy's programming interface |
-| 15 | Section 4, third paragraph | "median input was 2.2 million tokens in accepted Galaxy runs and 2.8 million in rejected ones" | add "after excluding the four tasks that failed in nearly every run (2.20 versus 1.95 million across all runs)" | Recomputed from per-run usage |
-| 16 | Call-out plan, Fig. 5d | "five reconstructed findings" | "six" | Text and figure list six |
-| 17 | Every "Supplementary Table B…/C…/I…/X…" | archive IDs | sequential numbers (see §5) | Nature numbers supplementary items in citation order |
-| 18 | Design paragraph | "(Fig. 1a)" after the Galaxy interface; "(Fig. 1b)" after open-ended code | swap to "(Fig. 1b)" and "(Fig. 1a)"; better still, introduce the reference condition first | Fig. 1 now shows open-ended code in panel a |
-| 19 | Throughout | "mixed cell(s)"; "MCP calls"; "non-utility Tool Shed jobs"; "rejected runs"; "recorded Galaxy jobs" | "split replicate set(s)"; "Galaxy interface calls"; "jobs run with domain tools"; "scored-incorrect runs" (keep "rejected" only for the evaluator's action); "Galaxy analysis jobs" | Glossary (§4a); the figures and tables use these terms |
-| 20 | Wherever paired values are reported | e.g. "86.5% … against 85.2% under open-ended code" | optionally report the open-ended code condition first | Matches the figure order and the reference role of the open-ended code condition |
+| 1 | Introduction, endpoints | "the returned benchmark score from the official leaderboard" | The figures and tables use the archived scores. The archive labels 10 of the 24 paired scores as predicted. Two differ from the leaderboard: GPT-5.6 Sol Galaxy replicate run 3 (archive 91, leaderboard 92) and DeepSeek V4 Pro Galaxy replicate run 1 (83 versus 84). | Either say "reported benchmark scores as archived", or switch to leaderboard values. The leaderboard values change the text: Galaxy mean 87.1 (not 86.9); differences +0.3, +1.0, 0.0, +0.3; Sol 92.0 and DeepSeek V4 Pro 84.7 in Section 2. Tell me which and I will regenerate. |
+| 2 | Section 1, IWC | "Median Galaxy-condition output agreement was 1.000 for every model configuration" | 1.000 for three model configurations; GPT-5.6 Luna 0.998 (nine tasks) | "…1.000 for three of four model configurations and 0.998 for GPT-5.6 Luna" (Supp. Table 7a) |
+| 3 | Section 1, BixBench-Verified-50 | "nine of 250 task–configuration pairs were solved only in Galaxy and four only in open-ended code" | The 250 pairs include the superseded Claude Code harness, but the paragraph is about the four Codex model configurations. For those four the counts are 5 and 3 of 200. | Say which population is meant (Supp. Table 3a lists both) |
+| 4 | Section 1, closing paragraph | "the only condition difference whose interval excluded zero occurred on the benchmark derived from Galaxy workflows" | The superseded Claude Code harness on BixBench-Verified-50, +10.7 (1.4 to 21.2), also excludes zero | Add "among the Codex model configurations" |
+| 5 | Section 1, BixBench-Verified-50 | "every interval included zero" | GPT-5.5's interval is 0.00 to 5.30, so zero is its lower bound | Optional: "no interval excluded zero" |
+| 6 | Section 2, IWC | "installed Galaxy tools, which supplied 69% of recorded analysis jobs" | 69.2% (935 of 1,352) is the share of Galaxy analysis jobs run with domain tools. IWC had no user-defined tools, so installed tools ran essentially every job. | "…in which domain tools accounted for 69% of Galaxy analysis jobs (Supplementary Table 11)" |
+| 7 | Section 2, user-defined tools | "on CompBioBench the same ordering held" | Sol and Luna swap places: BixBench-Verified-50 Luna 39% > Sol 35%; CompBioBench Sol 80% > Luna 61% | "GPT-5.5 was again the highest and DeepSeek V4 Pro the lowest" |
+| 8 | Section 2, domain skill | "in 44% to 55% of Galaxy-condition runs compared with 74% to 79%" | 55% is the Codex harness and 44% the superseded Claude Code harness. Denominator: 114 runs on the 38 BixBench-Verified-50 tasks with a relevant skill. In the open-ended code condition GPT-5.6 Luna (27%) was lower than DeepSeek V4 Pro (Codex, 41%). | "…55% (Codex harness) and 44% (Claude Code harness) of Galaxy-condition runs on the 38 BixBench-Verified-50 tasks with a relevant skill" (Supp. Table 20a) |
+| 9 | Section 2, interface library | "In 51 of its 150 … runs" | 31 runs imported or called the interface library in shell code; 16 more only read its source. The 51 could not be reproduced. | "31" (Supp. Table 20b; Extended Data Fig. 4b) |
+| 10 | Section 2 | "achieved an 80.0% score" | — | "80.0% accuracy" (glossary) |
+| 11 | Section 3, definitions | Success on CompBioBench is "a match to the strong-consensus answer", but the result reported is one distinct answer (333/321), a consistency measure | By the consensus definition, 22 Galaxy-condition versus 35 open-ended code sets are split | Add the consensus-based split counts (Supp. Table 44b), or define answer consistency where it is used |
+| 12 | Section 3 | "more unanimous sets and fewer split sets … in all three benchmarks" | Unanimous categories are not defined for IWC (continuous endpoint). Fewer split sets holds in all three. | "fewer split sets" |
+| 13 | Section 3, IWC | Median within-set ranges 0.0000/0.0011/0.0022/0.0047 "(Supplementary Table 8)" | These are all-ten-task values; the archived Table 8 uses nine tasks (0.0000/0.0022/0.0044/0.0035). Table 8a now also holds the ten-task values. | Add "across all ten tasks" |
+| 14 | Section 3, the five split IWC sets | "Amplicon denoising split on truncation lengths not stated in the task" | Amplicon denoising split only in the open-ended code condition. The five Galaxy sets are: peptide verification (three), mitochondrial genome assembly and host-read removal (a score conflict). | Replace amplicon denoising with host-read removal, or state that it split in the open-ended code condition (Extended Data Fig. 5b) |
+| 15 | Section 3, PepQuery | "runs using only PepQuery2 2.0.2 reached 0.982 to 1.000" | GPT-5.6 Luna replicate run 3 used PepQuery2 and scored 0.900, because its unrestricted-modification search returned no sequences | Add the exception |
+| 16 | Section 3, divergence | "scored-incorrect replicates on the platform-neutral benchmarks" | Divergence mechanisms were assigned on BixBench-Verified-50 only | "on BixBench-Verified-50" |
+| 17 | Section 3, unanimous accuracy | "78.8% … 74.8%, a condition difference of 4.0 percentage points, compared with 1.3 points at the run level" | 78.8/74.8 pool all five model configurations; 1.3 pools four. Same five: run level +3.2 → unanimous +4.0. Four Codex: +1.3 → +3.0. | Compare like with like (Fig. 4d note; Supp. Table 56b) |
+| 18 | Section 3, closing | "25 Galaxy-condition replicate sets never produced a correct answer … These tasks were therefore not resolved by changing model configuration" | The 25 sets span 7 distinct tasks. Only 3 (bix-45-q1, bix-53-q2, bix-61-q5) are 0/3 for all five model configurations. | "…including three tasks that no model configuration solved" |
+| 19 | Section 4, integrity | "integrity problems affecting both conditions" | Local computation and cross-run copying are Galaxy-condition problems by definition. The execution condition of each retrieval run was not tabulated. | Drop "affecting both conditions", or I tabulate retrieval by condition |
+| 20 | Section 4, contaminated-rna-q1 | "Each run then fell back to a narrower installed database … Epstein–Barr virus at 195 reads" | Two runs used standard-16 and answered Epstein–Barr virus. GPT-5.6 Luna replicate run 1 used a mitochondrion-only BLAST search and answered *Artemia franciscana*. | "Two runs fell back to … ; the third searched mitochondrial sequences only" |
+| 21 | Section 4, contaminated-rna-q1 | "Agents in open-ended code … did not encounter this constraint" | The one failing open-ended code run (DeepSeek V4 Pro, replicate run 1) built its own database of human, mouse, rat and Epstein–Barr virus only, and answered rat | "…the one failing open-ended code run built a database that also lacked cnidarians" |
+| 22 | Extended Data order | First citations run ED 1, 3, 2, 4, 6, 5, 8, 7 | Nature requires Extended Data to be cited in numerical order | Swap the numbers of ED 2/3, 5/6 and 7/8 in the text and I will rename the files, or reorder the call-outs |
+| 23 | Supplementary Table order | First citations run 1, 7, 9, 12, 18, 2, 3, 4, 5, 6, 60, 55, … | 24 of 67 tables are cited, not in numerical order; 43 are uncited | Renumber using the last column of `Supplementary_Table_crosswalk.csv`, and cite or drop the uncited tables (§6) |
+| 24 | Supplementary Notes | Notes 1, 2, 8 and 9 are cited | Notes 3–7 are not cited | Cite Note 7 at the consensus-proxy sentence and Note 6 at the audit paragraph; cite Notes 3–5 in Methods or drop them |
 
-**Not re-derived by these scripts.** These draft numbers come from the prior audit and are consistent with the report:
-- the benchmark-integrity counts (38 runs, 29 accepted, 37 from one configuration);
-- 12 versus 8 tasks for failed-call differences;
-- 93/213/41 candidate recovery episodes.
+## 5. Glossary
 
-### 4a. Glossary: what was adopted, sharpened and added
+The authoritative glossary is `glossary/Glossary.md` (also `.xlsx` and `.docx`), generated from `scripts/glossary.py`. It holds 68 terms: 36 adopted as supplied, 6 sharpened and 26 new.
 
-The authoritative glossary is `glossary/Glossary.md` (also `.xlsx` and `.docx`), generated from `scripts/glossary.py`. It holds 59 terms: 36 adopted as supplied, 6 sharpened and 17 new.
+Terms added for the new Results text:
+- *Replicate agreement* (the Section 3 umbrella: outcome repeatability or answer consistency);
+- *Run-level accuracy; unanimous accuracy*;
+- *Task case* and *primary cause category* (C1–C8) for the task-level audit;
+- *Integrity flag*, *benchmark-answer retrieval*, *local computation (Galaxy condition)* and *cross-run output reuse*;
+- *Interface-binding failure* (bix-35-q1).
 
-**Sharpened entries**
-- **Model configuration.** The supplied entry allowed "model" as shorthand when the harness is constant. The agent harness differs between configurations here, so the configuration is always named in full, including "DeepSeek V4 Pro (Codex)".
-- **Performance.** Now explicitly forbids "accuracy" as the umbrella term. Accuracy applies only to BixBench-Verified-50.
-- **Accuracy.** States that runs without an answer count as scored incorrect.
-- **Execution condition.** States that the open-ended code condition is the reference and is shown first.
-- **Replicate set.** Adds the unanimous/split classification; "cell" appears only once, in Methods.
-- **Galaxy job error.** Tied to Galaxy analysis jobs, so upload jobs are excluded.
+The run-level *primary cause; secondary cause* now says it applies to the failure ledger. Earlier additions (benchmark, platform-neutral and workflow-derived benchmark, agent harness, split replicate set, scored-correct and scored-incorrect run, consensus proxy, Galaxy interface call, direct Galaxy API call, analysis history, Galaxy analysis job, probe tool, parameter substitution, adjudication confidence, divergence mechanism, verifier mode) are unchanged.
 
-**New terms the paper needed**
-- *Study structure:* benchmark; platform-neutral benchmark; workflow-derived benchmark; agent harness; split replicate set.
-- *Outcomes:* scored-correct run and scored-incorrect run; consensus proxy.
-- *Galaxy records:* Galaxy interface call; direct Galaxy API call; analysis history; Galaxy analysis job; probe tool; parameter substitution.
-- *Adjudication:* primary and secondary cause; adjudication confidence; divergence mechanism; verifier mode.
+Wording in the Results that differs from the glossary: "configuration" or "configurations" → "model configuration(s)"; "replicates" → "replicate runs"; "rejected run" → "scored-incorrect run" (keep "rejected" for the evaluator's action); "returned benchmark score" → "reported benchmark score"; "UDTs" and "MCP" are defined at first use and should not reappear as abbreviations in figures.
 
-**Most load-bearing additions**
-- *Scored-incorrect run:* the supplied glossary defined accuracy but not its complement.
-- *Split replicate set:* the 1–2/3 repeatability category carries a whole Results section but had no short name, so the drafts invented "mixed cell".
+## 6. Supplementary Table numbering
 
-**Every generated file was rewritten to the glossary.**
-- Figure and legend text: every panel title, axis label, legend entry and note. An automated audit of all figure text finds no retired term.
-- Supplementary Tables:
-  - new tables rewritten throughout;
-  - archive tables: titles, headers and legends mapped to official terms, with cell values unchanged;
-  - the Glossary sheet replaced by the full table.
-- Supplementary Data column names, for example `model_configuration`, `execution_condition`, `replicate_run`, `scored_correct`, `output_agreement` and `input_token_usage`.
-- Supplementary Data 2 renamed to `Supplementary_Data_2_failed_Galaxy_interface_calls.xlsx`.
-- Supplementary Information: a glossary section and all nine notes.
-- Source Data sheet and column names.
-- The three statements.
-- The main-figure titles. Fig. 2's title now says "performance", because it spans all three endpoints.
+The Results text already cites Supplementary Table numbers, so the numbering was kept and each cited table was given the content the text quotes. Blocks were added (marked a, b, … in each sheet, with the archived table kept as the last block):
 
-**Wording to change in the manuscript text if it is not already done**
-- "environment" → "execution condition";
-- "configuration" or "model" → "model configuration";
-- "replicate" → "replicate run";
-- "accepted/rejected run" → "scored-correct/scored-incorrect run";
-- "mixed cell" → "split replicate set";
-- "aggregate score" → "reported benchmark score";
-- "agreement" (IWC) → "output agreement";
-- "MCP call" → "Galaxy interface call";
-- "non-fetch job" → "Galaxy analysis job";
-- "domain-analysis or non-utility tool" → "domain tool";
-- "token overhead" → "input-token ratio";
-- "path" (for tool sets) → "tool-set fingerprint";
-- "BioBlend or REST bypass" → "direct Galaxy API call".
+| Table | Added | Text it supports |
+|---|---|---|
+| 3 | Task–model-configuration pairs scored correct in one condition only (9/4 of 250; 5/3 of 200) | Section 1 |
+| 7 | Median and mean output agreement per model configuration, nine and ten tasks | Section 1, Fig. 2a |
+| 8 | Within-set output-agreement ranges on all ten tasks; split sets | Section 3 |
+| 14 | Rebuilt as the task-level audit: primary cause by benchmark, flags, all 93 task cases, integrity problems; the run-level failure ledger kept as block e | Section 4, Fig. 5a |
+| 20 | Domain-skill uptake; interface-library scripting | Section 2, Extended Data Fig. 4 |
+| 44 | Distinct answers per CompBioBench replicate set, with totals (333/321) | Section 3, Fig. 4b |
+| 49 | Median input-token usage by benchmark, model configuration and condition | Section 2, Fig. 3c |
+| 56 | Run-level and unanimous accuracy, per model configuration and pooled | Section 3, Fig. 4a,d |
+| 60 | Tasks with one distinct answer across all 12 runs (62/58) | Section 1 |
+| 61 | Reported benchmark scores by model configuration, with archive labels | Sections 1 and 2 |
 
-## 5. Supplementary Table numbering
+**Cited:** 1–9, 12, 14, 18, 20, 24, 44, 47–49, 54–56, 58, 60, 61 (24 tables). **Not cited in the Results** (43): 10, 11, 13, 15–17, 19, 21–23, 25–43, 45, 46, 50–53, 57, 59, 62–67. The index sheet marks them. Cite them in Methods or delete them before submission.
 
-Tables are numbered in order of first citation. Archive IDs map to numbers as follows (NEW = introduced by this audit):
+**Citation-order renumbering**, if required (current → proposed): 1→1 · 7→2 · 9→3 · 12→4 · 18→5 · 2→6 · 3→7 · 4→8 · 5→9 · 6→10 · 60→11 · 55→12 · 58→13 · 61→14 · 24→15 · 20→16 · 49→17 · 54→18 · 56→19 · 44→20 · 8→21 · 48→22 · 47→23 · 14→24; uncited tables follow as 25–67. To apply it, edit `ORDER`/`UNCITED` in `scripts/make_supplement.py`, rerun it and update the text citations.
 
-X1 → 1 · B1 → 2 · B10 → 3 · B11 → 4 · C1 → 5 · NEW consensus proxy → 6 · I1 → 7 · I2 → 8 · I3 → 9 · X3 → 10 · X19 → 11 · I4 → 12 · I6 → 13 · NEW failure ledger → 14 · B12 → 15 · B13 → 16 · B8 → 17 · I5 → 18 · C4 → 19 · X14 → 20 · B9 → 21 · C8 → 22 · I10 → 23 · X12 → 24 · X13 → 25 · X15 → 26 · I11 → 27 · NEW user-defined-tool reliability → 28 · B4 → 29 · C3 → 30 · I7 → 31 · X18 → 32 · X5 → 33 · NEW causes of failed Galaxy interface calls → 34 · X10 → 35 · C7 → 36 · NEW parameter substitution → 37 · X7 → 38 · X9 → 39 · I12 → 40 · B5 → 41 · C5 → 42 · I8 → 43 · NEW split replicate sets → 44 · X11 → 45 · X16 → 46 · B6 → 47 · NEW divergence mechanisms → 48 · B7 → 49 · C6 → 50 · I9 → 51 · X2 → 52 · NEW tool search burden and direct Galaxy API calls → 53 · B15 → 54 · I13 → 55.
+**How the archive tables were adapted.** Execution-condition columns and rows are reordered so that the open-ended code condition comes first. Titles, headers and legends use the official terms, and benchmark short names are spelled out. Cell values are otherwise as archived.
 
-**Twelve archive tables are not cited by the draft.** They are appended as 56–67: B2, B3, B14, B16, C2, C9, C10, X4, X6, X8, X17 and X20. Cite them at the location suggested in the index sheet or delete them.
+## 7. Nature Methods and accessibility compliance
 
-**How the archive tables were adapted.**
-- Execution-condition columns and rows are reordered so that the open-ended code condition comes first; titles, headers and legends use the official terms.
-- Benchmark short names are spelled out.
-- A glossary sheet defines remaining technical terms.
-- Cell values are otherwise as archived.
+**Checked against the Nature Portfolio figure guide (research-figure-guide.nature.com, checked 25 September 2026):**
+- **Main figures.** 183 mm wide, 112–170 mm tall; vector PDF with editable, embedded TrueType text; RGB.
+- **Extended Data.** 179 mm wide, 72–120 mm tall (limit 180 × 170 mm); TIFF at 300 dpi, RGB with no alpha, each under 350 kB; EPS also supplied. Eight items, against a limit of 10.
+- **Text.** Arial at 5–7 pt, with 8 pt bold lowercase panel labels; a script raises any smaller text to 5 pt. No figure text is coloured; condition is carried by the adjacent marker.
+- **Source Data.** One workbook per figure, one sheet per panel, with open-ended code columns first.
 
-To renumber after editing the text, change `ORDER` and `UNCITED` in `scripts/make_supplement.py` and rerun it.
+**Colour-vision accessibility.** Palettes come from the Okabe–Ito set. The execution-condition pair stays separable under protanopia (ΔE 21.9). Every figure is simulated under protanopia, deuteranopia, tritanopia and greyscale in `qa/cvd/` (Machado 2009 matrices); execution conditions stay separable through colour and shape, and categories through colour plus printed counts. The one weak pair (bluish green versus reddish purple) is never placed side by side.
 
-## 6. Nature Methods and accessibility compliance
-
-**Verified against the Nature Portfolio figure guide (research-figure-guide.nature.com, checked 25 September 2026):**
-- **Main figures.** 183 mm wide, ≤170 mm tall; vector PDF with editable, embedded TrueType text; RGB.
-- **Extended Data.** 179 mm × ≤165 mm (limit 180 × 170 mm); TIFF at 300 dpi, RGB with no alpha, under 1 MB each; EPS also supplied. Five items, against a limit of 10.
-- **Text.** Arial at 5–7 pt, with 8 pt bold lowercase panel labels; a script audit found no text outside these sizes. Text is black or grey, never coloured.
-- **Source Data.** One workbook per figure, one sheet per panel, with open-ended-code columns first.
-
-**Colour-vision accessibility:**
-- **Palette check.** Palettes were checked with a simulation-based validator:
-  - execution-condition pair: ΔE 21.9 under protanopia and 31.2 under normal vision;
-  - cause and mechanism palettes: neighbouring colours all ΔE ≥ 9.6 under deuteranopia.
-- **Colour pairs kept apart.** The one weak pair (bluish green versus reddish purple, ΔE 7.6) is never placed side by side.
-- **Visual simulation.** Every figure was simulated under protanopia, deuteranopia, tritanopia and greyscale (`qa/cvd/`, Machado 2009 matrices). Execution conditions stay separable in all four through colour and shape; categories through colour plus printed counts.
-
-**To confirm on the current Nature Methods author pages** (behind a login when checked):
-- the display-item limit;
-- the legend word limit (legends here run 75–209 words);
-- the Supplementary Table format;
-- the Reporting Summary template;
-- the data and code citation style.
-
-## 7. The two open choices in the draft
-
-- **Heading of Section 3.** Recommendation: "Galaxy changes the sources of agent variability". Fig. 4c,d state this directly.
-- **The superseded Claude Code harness.** Recommendation: keep it as the scaffold-dependence contrast. It is visually separated in every figure; justify it in one Methods sentence (same model, different harness, BixBench only, excluded from pooled estimates).
+**To confirm on the current Nature Methods author pages:** the display-item limit, the legend word limit, the Supplementary Table format, the Reporting Summary template and the data and code citation style.
 
 ## 8. Reproducing everything
 
 From the repository root, with Python 3.12 and `pip install -r manuscript_material/scripts/requirements.txt`:
 
 ```bash
-python manuscript_material/scripts/build_data.py       # ~10 s: assembles every panel's data from the archive
+python manuscript_material/scripts/build_data.py       # assembles every panel's data from the archive and individual_error_analysis.md
 python manuscript_material/scripts/fig_main.py         # Figs. 1-5 + Source Data
-python manuscript_material/scripts/fig_ed.py           # Extended Data Figs. 1-5 + Source Data
+python manuscript_material/scripts/fig_ed.py           # Extended Data Figs. 1-8 + Source Data
 python manuscript_material/scripts/make_supplement.py  # Supplementary Tables, Data 1-3, Supplementary Information PDF
+python manuscript_material/scripts/glossary.py         # glossary/ (.md, .xlsx, .docx)
 python manuscript_material/scripts/md_to_docx.py       # legends and statements as .docx
 python manuscript_material/scripts/cvd_check.py        # colour-vision simulations for checking (qa/cvd/)
 ```
 
-No agent code is executed, no Galaxy server is contacted and no score is regraded.
+No agent code is executed, no Galaxy server is contacted, no score is regraded and no file under `ground_truth/` is read.

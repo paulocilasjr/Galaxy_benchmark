@@ -265,13 +265,15 @@ scan = dict(runtool_status=collections.defaultdict(collections.Counter), mismatc
             failed_phase=collections.Counter(), after_notext=collections.Counter(), probe=collections.Counter(),
             bypass=collections.defaultdict(collections.Counter), codex_runs=collections.Counter(),
             inspected=collections.Counter(), inspected_never_run=collections.Counter(), searches=collections.defaultdict(list),
-            api_shell=collections.Counter(), api_shell_core=collections.Counter(), all_shell=collections.Counter())
+            api_shell=collections.Counter(), api_shell_core=collections.Counter(), all_shell=collections.Counter(),
+            core_library=collections.defaultdict(list), core_library_read_only=collections.defaultdict(list))
+CORE_IMPORT = re.compile(r'import\s+galaxy_execute_mcp_core|from\s+galaxy_execute_mcp_core|galaxy_execute_mcp_core\.\w+\(')
 for s in SUMS:
     if s['condition'] != 'galaxy' or not s.get('trace') or 'claude' in s['trace']:
         continue
     b = s['benchmark']
     scan['codex_runs'][b] += 1
-    calls, hits, inspected, ran, nsearch, probe_hit = [], set(), set(), set(), 0, 0
+    calls, hits, inspected, ran, nsearch, probe_hit, core_hit, core_read = [], set(), set(), set(), 0, 0, False, False
     for line in opener(s['trace']):
         if '"item.completed"' not in line:
             continue
@@ -282,6 +284,10 @@ for s in SUMS:
         if it.get('type') == 'command_execution':
             cmd = it.get('command', '')
             scan['all_shell'][b] += 1
+            if CORE_IMPORT.search(cmd):  # the Galaxy interface's own library imported into a shell script
+                core_hit = True
+            elif 'galaxy_execute_mcp_core' in cmd:
+                core_read = True
             if re.search(r'bioblend|GalaxyInstance|usegalaxy\.org/api|/api/(histories|datasets|jobs|tools)', cmd):
                 scan['api_shell_core'][b] += 1  # definition used in the improvement report (shell_galaxy.py)
             if re.search(r'bioblend|GalaxyInstance|/api/', cmd):
@@ -344,6 +350,11 @@ for s in SUMS:
     scan['inspected_never_run'][b] += len(inspected - ran)
     scan['searches'][b].append(nsearch)
 
+    if core_hit:
+        scan['core_library'][(b, CFG[s['model']])].append(f"{s['task']}|{s['run_id']}")
+    elif core_read:
+        scan['core_library_read_only'][(b, CFG[s['model']])].append(f"{s['task']}|{s['run_id']}")
+
 ser = lambda c: {('|'.join(map(str, k)) if isinstance(k, tuple) else str(k)): v for k, v in c.items()}
 D['scan'] = dict(
     codex_galaxy_runs=dict(scan['codex_runs']),
@@ -359,6 +370,8 @@ D['scan'] = dict(
     api_shell=dict(scan['api_shell']), api_shell_core=dict(scan['api_shell_core']), all_shell=dict(scan['all_shell']),
     inspected=dict(scan['inspected']), inspected_never_run=dict(scan['inspected_never_run']),
     searches={b: dict(median=st.median(v), max=max(v)) for b, v in scan['searches'].items()},
+    core_library={f'{b}|{c}': v for (b, c), v in scan['core_library'].items()},
+    core_library_read_only={f'{b}|{c}': v for (b, c), v in scan['core_library_read_only'].items()},
 )
 
 # ---------------------------------------------------------------- Figure 5b: per-run discovery shares
@@ -420,6 +433,185 @@ for s in BX:
         u[0] += REL[s['task']] in READ[(s['task'], s['run_id'])]
 D['skill_uptake'] = {f'{k[0]}|{k[1]}': v for k, v in up.items()}
 D['skill_relevant_tasks'] = sum(1 for v in REL.values() if v)
+
+# =====================================================================================================
+# Panels introduced for the restructured Results (execution condition -> model configuration -> replicate
+# agreement -> trace-level analysis). Every value below is recomputed from the archive, not typed in.
+# =====================================================================================================
+
+# ---- IWC medians and means per model configuration, nine matched tasks and all ten tasks (Fig. 2a, Fig. 3a)
+iwc = collections.defaultdict(list)
+for p in D['fig2d']:
+    if p['score'] is not None:
+        iwc[(p['config'], p['condition'], p['task_label'] != 'Host-read removal')].append(p['score'])
+D['iwc_levels'] = {f'{c}|{e}': dict(nine_median=st.median(iwc[(c, e, True)]), nine_mean=st.mean(iwc[(c, e, True)]),
+                                    ten_median=st.median(iwc[(c, e, True)] + iwc[(c, e, False)]),
+                                    ten_mean=st.mean(iwc[(c, e, True)] + iwc[(c, e, False)]),
+                                    ten_n=len(iwc[(c, e, True)] + iwc[(c, e, False)]))
+                   for c in ORDER[:4] for e in ('galaxy', 'open_ended_code')}
+D['iwc_replicate_means_ten'] = {}
+rep10 = collections.defaultdict(list)
+for p in D['fig2d']:
+    if p['score'] is not None:
+        rep10[(p['config'], p['condition'], p['replicate'])].append(p['score'])
+D['iwc_replicate_means_ten'] = {f'{c}|{e}|{r}': st.mean(v) for (c, e, r), v in rep10.items()}
+
+# ---- IWC sensitivity of the condition difference (I4): leave-one-task-out and zero-scored-run removal (Extended Data Fig. 3)
+def _num(x):
+    m = re.findall(NUM, x)
+    return [float(v) for v in m]
+
+
+D['iwc_sensitivity'] = []
+for r in rows('I4'):
+    lo, hi = _num(r[2])[:2]
+    D['iwc_sensitivity'].append(dict(config=r[0].replace(' (Codex, IWC)', ''), nine=_num(r[1])[0], loto_low=lo, loto_high=hi,
+                                     sign_stable=r[3].strip().startswith('Yes'), no_zero=_num(r[4])[0], no_zero_removed=int(_num(r[4])[1]),
+                                     with_host=_num(r[5])[0]))
+
+# ---- BixBench run-level and unanimous accuracy per model configuration and condition (Fig. 4a,d)
+acc = collections.defaultdict(lambda: [0, 0])
+for r in RUNS:
+    if r['benchmark'] == 'BixBench50':
+        a = acc[(CFG[r['model']], r['condition'])]
+        a[0] += r['score'] == 1
+        a[1] += 1
+D['bix_accuracy'] = {f'{c}|{e}': dict(correct=v[0], runs=v[1], run_level=100 * v[0] / v[1],
+                                      unanimous=100 * D['fig4c_cells'][f'BixBench50|{e}|{c}']['all'] / 50,
+                                      all=D['fig4c_cells'][f'BixBench50|{e}|{c}']['all'],
+                                      split=D['fig4c_cells'][f'BixBench50|{e}|{c}'].get('mixed', 0),
+                                      none=D['fig4c_cells'][f'BixBench50|{e}|{c}']['none'])
+                     for (c, e), v in acc.items()}
+
+# ---- CompBio answer consistency: distinct answers per replicate set (C2) and across all 12 runs (Fig. 4b)
+cbr_p = [r for r in RUNS if r['benchmark'] == 'CompBio' and r['model'] != 'codex_gpt_6_astra']
+distinct = collections.defaultdict(collections.Counter)
+by_set = collections.defaultdict(set)
+for r in cbr_p:
+    by_set[(CFG[r['model']], r['condition'], r['task'])].add(norm(r['answer']))
+for (c, e, t), s in by_set.items():
+    distinct[f'{c}|{e}'][len(s)] += 1
+D['compbio_distinct'] = {k: dict(v) for k, v in distinct.items()}
+D['compbio_single_answer_all12'] = {e: sum(1 for t in {r['task'] for r in cbr_p}
+                                           if len({norm(r['answer']) for r in cbr_p if r['task'] == t and r['condition'] == e}) == 1)
+                                    for e in ('galaxy', 'open_ended_code')}
+
+# ---- CompBio reported benchmark scores per model configuration (Fig. 2d, Fig. 3a)
+cbs = collections.defaultdict(list)
+for p in D['fig2b']:
+    cbs[f"{p['config']}|{p['condition']}"].append(p['score'])
+D['compbio_scores'] = {k: dict(mean=st.mean(v), replicates=v) for k, v in cbs.items()}
+
+# ---- input-token usage per run, by benchmark, model configuration and condition (Fig. 3c)
+tok = collections.defaultdict(list)
+for s in SUMS:
+    if s.get('input_tokens') and s['model'] != 'codex_gpt_6_astra':
+        tok[(s['benchmark'], CFG[s['model']], s['condition'])].append(s['input_tokens'])
+D['input_tokens'] = {f'{b}|{c}|{e}': dict(median=st.median(v), n=len(v), q1=float(sorted(v)[len(v) // 4]), q3=float(sorted(v)[(3 * len(v)) // 4]))
+                     for (b, c, e), v in tok.items()}
+D['input_tokens_runs'] = {f'{b}|{c}|{e}': v for (b, c, e), v in tok.items() if e == 'galaxy'}
+
+# ---- the interface's core library scripted from the shell: BixBench accuracy of those runs (Extended Data Fig. 4)
+core = D['scan']['core_library']
+D['core_library_accuracy'] = {}
+for c in ORDER[:4]:
+    ids = set(core.get(f'BixBench50|{c}', []))
+    read = set(D['scan']['core_library_read_only'].get(f'BixBench50|{c}', []))
+    runs_c = [s for s in SUMS if s['benchmark'] == 'BixBench50' and s['condition'] == 'galaxy' and CFG[s['model']] == c]
+    key = lambda s: f"{s['task']}|{s['run_id']}"
+    D['core_library_accuracy'][c] = dict(runs=len(runs_c), scripted=len(ids), read_only=len(read),
+                                         scripted_correct=sum(1 for s in runs_c if key(s) in ids and s['score'] == 1),
+                                         other_correct=sum(1 for s in runs_c if key(s) not in ids and s['score'] == 1))
+
+# ---- divergence mechanisms by model configuration (Extended Data Fig. 5)
+inv_sh = {v: k for k, v in ns['SH'].items()} if 'SH' in ns else {}
+div_cfg = collections.defaultdict(collections.Counter)
+for env, table in (('galaxy', ns['G']), ('open_ended_code', ns['C'])):
+    for key, mech in table.items():
+        cfg = CFG.get(inv_sh.get(key[1], key[1]), key[1])
+        div_cfg[f'{env}|{cfg}'][mech] += 1
+D['divergence_by_config'] = {k: dict(v) for k, v in div_cfg.items()}
+
+# ---- task-level audit (Fig. 5a, Extended Data Fig. 8): parsed from individual_error_analysis.md in the repository root
+IEA = os.path.join(ROOT, 'individual_error_analysis.md')
+cases = []
+section = None
+for line in open(IEA):
+    m = re.match(r'^### (BixBench-50|CompBioBench|IWC workflows) index', line)
+    if m:
+        section = {'BixBench-50': 'BixBench50', 'CompBioBench': 'CompBio', 'IWC workflows': 'IWC'}[m.group(1)]
+        continue
+    if line.startswith('## ') and not line.startswith('## Index'):
+        section = None
+    if section and line.startswith('| [') :
+        cells_ = [c.strip() for c in line.strip().strip('|').split('|')]
+        task = re.match(r'\[([^\]]+)\]', cells_[0]).group(1)
+        cases.append(dict(benchmark=section, task=task, galaxy=cells_[1], code=cells_[2], category=cells_[3], finding=cells_[4],
+                          tags=[t.strip() for t in cells_[5].split(',') if t.strip()]))
+assert len(cases) == 93, len(cases)
+D['task_cases'] = cases
+CATS = {}
+for line in open(IEA):
+    m = re.match(r'^\| (C\d)\. (.+?) \|', line)
+    if m:
+        CATS[m.group(1)] = m.group(2)
+D['task_case_categories'] = CATS
+
+# ---- integrity problems (Extended Data Fig. 8): run-level lists transcribed from the task entries of individual_error_analysis.md
+D['integrity'] = dict(
+    local_fallback_correct=[  # correct Galaxy-condition CompBioBench answers whose decisive computation ran in the local shell
+        ('atac-tn5-shift-q1', 'GPT-5.5', 2), ('atac-tn5-shift-q1', 'GPT-5.5', 3), ('borzoi-rnaseq-q1', 'GPT-5.5', 3),
+        ('borzoi-rnaseq-q1', 'DeepSeek V4 Pro', 1), ('extract-rna-secondary-structure-q1', 'GPT-5.5', 2),
+        ('extract-rna-secondary-structure-q1', 'GPT-5.5', 3), ('extract-rna-secondary-structure-q1', 'GPT-5.6 Luna', 1),
+        ('huggingface-entropy-q1', 'GPT-5.5', 2), ('huggingface-entropy-q1', 'GPT-5.5', 3), ('saluki-setup-optimize-q1', 'GPT-5.5', 3),
+        ('saluki-setup-optimize-q1', 'DeepSeek V4 Pro', 2), ('tissue-fibroblast-q1', 'GPT-5.5', 3), ('tissue-fibroblast-q1', 'GPT-5.6 Luna', 1),
+        ('finding-geo-q1', 'GPT-5.5', 2), ('hic-differential-loop-q1', 'GPT-5.5', 1)],
+    local_fallback_incorrect=[('encode-atac-pipeline-q1', 'GPT-5.5', 2), ('encode-atac-pipeline-q1', 'GPT-5.5', 3), ('overexpress-tf-q1', 'GPT-5.5', 2)],
+    cross_run=[('encode-atac-pipeline-q1', 'GPT-5.6 Luna', 1, 'copied 13636 from the answer file of an earlier pilot history (incorrect)'),
+               ('saluki-setup-optimize-q1', 'GPT-5.6 Luna', 3, 'read the outputs of two other runs through the jobs API (correct)')],
+    # auditor classification of the 26 tasks tagged benchmark-answer-retrieval
+    retrieval={'Benchmark answer, key or another agent\'s answer obtained': [
+                   'bix-12-q6', 'bix-26-q5', 'bix-30-q3', 'bix-54-q7', '1000G-retrieve-genotype-q1', 'atac-doublet-q1', 'contaminated-rna-q2',
+                   'hic-differential-loop-q1', 'reverse-search-gwas-q1', 'tissue-fibroblast-q1'],
+               'Source paper, dataset or workflow settings that fix the answer': [
+                   'protein-shape-q1', 'characterize-response-q1', 'covid-patient-q1', 'wf_007_vgp_mitogenome_assembly',
+                   'wf_009_clinicalmp_peptide_verification'],
+               'Attempted; nothing usable obtained': [
+                   'bix-16-q3', 'bix-32-q2', 'bix-53-q5', 'atac-tn5-shift-q1', 'deg-simple-q2', 'gene-pair-ordering-fraction-q1', 'histone-chip-q1',
+                   'lung-cancer-sc-q1', 'phase-chain-q1', 'saluki-setup-optimize-q1', 'variant-status-q1']})
+_tagged = {c['task'] for c in cases if 'benchmark-answer-retrieval' in c['tags']}
+_listed = {t for v in D['integrity']['retrieval'].values() for t in v}
+assert _tagged == _listed, (_tagged ^ _listed)
+
+# ---- bix-35-q1: metric actually executed by every PhyKIT job in every Galaxy-condition run (Fig. 5b, Extended Data Fig. 7)
+b35 = []
+tdir = os.path.join(ROOT, 'BixBench_50', 'analysis', 'bix-35-q1')
+ev = json.load(open(os.path.join(tdir, 'history_analysis_evidence.json')))
+for r in ev['runs']:
+    if r['condition'] != 'galaxy':
+        continue
+    hist = [x.replace('src_galaxy_', '') for x in r['source_ids'] if x.startswith('src_galaxy_')]
+    jobs_ = []
+    for h in hist:
+        for jf in sorted(os.listdir(os.path.join(tdir, 'source_snapshots', 'galaxy', h, 'jobs'))) if os.path.isdir(os.path.join(tdir, 'source_snapshots', 'galaxy', h, 'jobs')) else []:
+            j = json.load(open(os.path.join(tdir, 'source_snapshots', 'galaxy', h, 'jobs', jf)))
+            if 'phykit_metrics' in (j.get('tool_id') or ''):
+                m = re.search(r"--metric '([^']+)'", j.get('command_line') or '')
+                jobs_.append(dict(job=j['id'], state=j['state'], metric=m.group(1) if m else None, created=j.get('create_time')))
+    rr = [x for x in RUNS if x['benchmark'] == 'BixBench50' and x['task'] == 'bix-35-q1' and x['run_id'] == r['run_id']][0]
+    b35.append(dict(run=r['run_id'], config=CFG[rr['model']], replicate=rr['replicate'], answer=rr['answer'], correct=rr['score'] == 1,
+                    jobs=sorted(jobs_, key=lambda j: j['created'] or '')))
+D['bix35'] = b35
+
+# ---- contaminated-rna-q1: what each Galaxy-condition run's classification database could contain (Fig. 5c)
+cr = [x for x in RUNS if x['benchmark'] == 'CompBio' and x['task'] == 'contaminated-rna-q1']
+D['contaminated_rna_q1'] = dict(
+    runs=[dict(config=CFG[x['model']], condition=x['condition'], replicate=x['replicate'], answer=x['answer'],
+               correct=(x['answer'] or '').strip().lower() == 'hydra vulgaris') for x in cr],
+    failures={'GPT-5.5|3': 'core_nt job finished with empty classification datasets; fell back to standard-16',
+              'GPT-5.6 Luna|2': 'core_nt job ran for hours on one thread and was cancelled; fell back to standard-16',
+              'GPT-5.6 Luna|1': 'core_nt job and nucleotide BLAST reached the four-hour wall-time limit; fell back to a mitochondrion-only BLAST'},
+    hydra_reads=8793, ebv_reads=195, total_reads=96053)
 
 json.dump(D, open(OUT, 'w'), indent=1, default=lambda o: dict(o) if isinstance(o, collections.Counter) else str(o))
 print('wrote', OUT, os.path.getsize(OUT) // 1024, 'KB')

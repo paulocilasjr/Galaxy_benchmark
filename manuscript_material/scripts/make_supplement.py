@@ -49,6 +49,9 @@ CAUSE_NAME = {'SPEC': 'Task under-specified or reference ambiguous', 'RIGOR': 'S
               'PLATFORM': 'Platform or tool defect', 'HARNESS': 'No answer submitted', 'CONTRACT': 'Output format violated'}
 RUN_CFG = {'GPT-5.5': 'GPT-5.5', 'Sol': 'GPT-5.6 Sol', 'Luna': 'GPT-5.6 Luna', 'DS-Codex': 'DeepSeek V4 Pro (Codex)',
            'DS-ClaudeCode': 'DeepSeek V4 Pro (Claude Code, superseded)'}
+CFG4 = ['GPT-5.5', 'GPT-5.6 Sol', 'GPT-5.6 Luna', 'DeepSeek V4 Pro']  # figure_data.json keys of the four Codex model configurations
+CFG5 = CFG4 + ['DeepSeek V4 Pro (Claude Code, superseded)']
+CFG_OUT = lambda c: 'DeepSeek V4 Pro (Codex)' if c == 'DeepSeek V4 Pro' else c
 
 
 def load_block(path, start, end):
@@ -78,7 +81,37 @@ def clean(s, limit=2000):
 # =====================================================================================================
 # New tables produced by this audit (terminology follows scripts/glossary.py)
 # =====================================================================================================
+CASE_FLAGS = [('galaxy-platform-defect', 'Galaxy platform, wrapper or server behaviour contributed (primary or secondary cause)'),
+              ('benchmark-answer-retrieval', 'Benchmark answers or answer-fixing sources retrieved online, or retrieval attempted'),
+              ('local-fallback-in-galaxy', 'A Galaxy-condition answer was computed in the local shell and only staged into Galaxy'),
+              ('cross-run-output-reuse', 'An answer was copied from another run through the shared Galaxy account'),
+              ('reference-questionable', 'The reference, or the lab working reference, is questionable')]
+
+
 def t_ledger():
+    cases = D['task_cases']
+    cat = D['task_case_categories']
+    bn = {b: BLABEL[b] for b in BENCH}
+    summ = []
+    for k in sorted(cat):
+        n = {b: sum(1 for c in cases if c['benchmark'] == b and c['category'] == k) for b in BENCH}
+        summ.append({'Code': k, 'Primary cause': cat[k], **{bn[b]: n[b] for b in BENCH}, 'All benchmarks': sum(n.values())})
+    summ.append({'Code': 'All', 'Primary cause': 'Audited task cases', **{bn[b]: sum(1 for c in cases if c['benchmark'] == b) for b in BENCH},
+                 'All benchmarks': len(cases)})
+    flags = [{'Flag': lab, 'Tag in individual_error_analysis.md': tag,
+              **{bn[b]: sum(1 for c in cases if c['benchmark'] == b and tag in c['tags']) for b in BENCH},
+              'All benchmarks': sum(1 for c in cases if tag in c['tags'])} for tag, lab in CASE_FLAGS]
+    each = pd.DataFrame([{'Benchmark': bn[c['benchmark']], 'Task': c['task'], 'Open-ended code condition runs correct': c['code'],
+                          'Galaxy-condition runs correct': c['galaxy'], 'Primary cause code': c['category'], 'Primary cause': cat[c['category']],
+                          'Finding': clean(c['finding'], 400), 'Tags (secondary causes and flags)': ', '.join(c['tags'])} for c in cases])
+    it = D['integrity']
+    integ = [{'Integrity problem': 'Benchmark-answer retrieval', 'Class': k, 'Task': t, 'Model configuration': '', 'Replicate run': '',
+              'Outcome': ''} for k, ts in it['retrieval'].items() for t in ts]
+    integ += [{'Integrity problem': 'Local computation in the Galaxy condition (CompBioBench)', 'Class': 'User-defined-tool execution unavailable on the server',
+               'Task': t, 'Model configuration': CFG_OUT(c), 'Replicate run': r, 'Outcome': outcome}
+              for outcome, lst in (('scored correct', it['local_fallback_correct']), ('scored incorrect', it['local_fallback_incorrect'])) for t, c, r in lst]
+    integ += [{'Integrity problem': 'Cross-run output reuse', 'Class': 'Shared Galaxy account', 'Task': t, 'Model configuration': CFG_OUT(c),
+               'Replicate run': r, 'Outcome': w} for t, c, r, w in it['cross_run']]
     rows = []
     for x in sorted(LEDGER, key=lambda x: (x['b'], x['task'], ENV_ORDER[x['cond']], x['run'])):
         _, cfg, rep_ = x['run'].split(' ')
@@ -86,7 +119,11 @@ def t_ledger():
                      'Execution condition': ENV[x['cond']], 'Model configuration': RUN_CFG[cfg], 'Replicate run': int(rep_[1:]),
                      'Submitted answer or output agreement': clean(x['ans'], 300), 'Decision point that determined the outcome': clean(x['d']),
                      'Primary cause': CAUSE_NAME[x['p']], 'Secondary cause': CAUSE_NAME.get(x['s'], ''), 'Adjudication confidence': x['c']})
-    return [('', pd.DataFrame(rows))]
+    return [('a | Primary cause of each audited task case (Fig. 5a)', pd.DataFrame(summ)),
+            ('b | Cross-cutting flags recorded in addition to the primary cause (task cases)', pd.DataFrame(flags)),
+            ('c | Every audited task case', each),
+            ('d | Integrity problems (Extended Data Fig. 8)', pd.DataFrame(integ)),
+            ('e | Run-level failure ledger: every scored-incorrect BixBench-Verified-50 run and every IWC run with output agreement below 0.5', pd.DataFrame(rows))]
 
 
 def t_proxy():
@@ -234,7 +271,7 @@ def t_substitution():
           ('STAR-Fusion', 'singlePaired|sPaired', 'paired', 'single'), ('Unzip', 'extract_options|target', 'all_regex', 'all'),
           ('DESeq2', 'factorLevel', 'DMSO', 'FactorLevel')]
     c = pd.DataFrame(ex, columns=['Tool', 'Parameter path', 'Value requested by the agent', 'Value Galaxy resolved'])
-    return [('a | By benchmark', a), ('b | By tool', b_), ('c | Examples shown in Fig. 3e', c)]
+    return [('a | By benchmark', a), ('b | By tool', b_), ('c | Examples', c)]
 
 
 def t_mixed():
@@ -242,13 +279,26 @@ def t_mixed():
     for key, v in D['fig4c_cells'].items():
         b, env, cfg = key.split('|')
         rows.append({'Benchmark': BLABEL[b], 'Execution condition': ENV[env], 'Model configuration': CFG.get(cfg, cfg) if cfg != 'DeepSeek V4 Pro' else 'DeepSeek V4 Pro (Codex)',
-                     'Unanimous, all replicate runs succeeded': v.get('all'), 'Split replicate sets': v.get('mixed', 0),
+                     'Replicate sets': v.get('cells') or sum(v.get(k, 0) for k in ('all', 'mixed', 'none')),
+                     'Unanimous, all replicate runs succeeded': v.get('all'), 'Split replicate sets': D['fig4c'][f'{b}|{env}'].get(cfg, 0),
                      'Unanimous, no replicate run succeeded': v.get('none')})
     order = {c: i for i, c in enumerate(['GPT-5.5', 'GPT-5.6 Sol', 'GPT-5.6 Luna', 'DeepSeek V4 Pro (Codex)', 'DeepSeek V4 Pro (Claude Code, superseded)'])}
     bord = {BLABEL[b]: i for i, b in enumerate(BENCH)}
     df = pd.DataFrame(rows).sort_values(['Benchmark', 'Execution condition', 'Model configuration'],
                                         key=lambda c: c.map(order) if c.name == 'Model configuration' else (c.map(ENV_ORDER) if c.name == 'Execution condition' else c.map(bord)))
-    tot = df.groupby(['Benchmark', 'Execution condition'], sort=False)['Split replicate sets'].sum().reset_index()
+    tot = df.groupby(['Benchmark', 'Execution condition'], sort=False)[['Replicate sets', 'Unanimous, all replicate runs succeeded', 'Split replicate sets',
+                                                                        'Unanimous, no replicate run succeeded']].sum(min_count=1).reset_index()
+    dist = []
+    for c in CFG4:
+        for env in ENV:
+            v = D['compbio_distinct'][f'{c}|{env}']
+            dist.append({'Model configuration': CFG_OUT(c), 'Execution condition': ENV[env], 'Replicate sets (tasks)': sum(v.values()),
+                         'One distinct answer across the three replicate runs': v.get('1', 0), 'Two distinct answers': v.get('2', 0),
+                         'Three distinct answers': v.get('3', 0)})
+    dist = pd.DataFrame(dist)
+    dist = pd.concat([dist, pd.DataFrame([{'Model configuration': 'All four model configurations', 'Execution condition': ENV[env],
+                                           **{k: int(dist.loc[dist['Execution condition'] == ENV[env], k].sum()) for k in dist.columns[2:]}}
+                                          for env in ENV])], ignore_index=True)
     defs = pd.DataFrame([
         {'Benchmark': 'BixBench-Verified-50', 'Replicate sets per model configuration': 50,
          'Split when': '1 or 2 of 3 replicate runs were scored correct (repeatability category 1–2/3)',
@@ -258,7 +308,8 @@ def t_mixed():
          'Unanimous when': '3 of 3 or 0 of 3 matched'},
         {'Benchmark': 'IWC', 'Replicate sets per model configuration': '9–10 (tasks scored for that model configuration)',
          'Split when': 'the three output-agreement values ranged by more than 0.05', 'Unanimous when': 'not defined for a continuous endpoint'}])
-    return [('a | Definitions', defs), ('b | Totals', tot), ('c | By model configuration', df)]
+    return [('a | Definitions', defs), ('b | Totals', tot), ('c | By model configuration', df),
+            ('d | CompBioBench: distinct answers per replicate set, all 100 tasks (Fig. 4b)', dist)]
 
 
 def t_divergence():
@@ -303,6 +354,156 @@ def t_discovery():
     return [('', pd.DataFrame(rows).set_index('Benchmark').T.reset_index().rename(columns={'index': 'Measure'}))]
 
 
+# =====================================================================================================
+# Blocks added to archive tables so that each table cited in the Results holds the numbers the text quotes
+# =====================================================================================================
+def x_exclusive_pairs():
+    got = collections.defaultdict(collections.Counter)
+    for s in SUMS:
+        if s['benchmark'] == 'BixBench50':
+            got[(s['task'], s['model'])][s['condition']] += s.get('score') == 1
+    rows = []
+    for (task, m), v in sorted(got.items()):
+        for only, other in (('open_ended_code', 'galaxy'), ('galaxy', 'open_ended_code')):
+            if v[only] and not v[other]:
+                rows.append({'Scored correct only in': ENV[only], 'Task': task, 'Model configuration': CFG[m],
+                             'Open-ended code condition runs scored correct (of 3)': v['open_ended_code'],
+                             'Galaxy-condition runs scored correct (of 3)': v['galaxy']})
+    df = pd.DataFrame(rows)
+    df = df.iloc[sorted(range(len(df)), key=lambda i: (ENV_ORDER[df['Scored correct only in'][i]], df['Task'][i]))].reset_index(drop=True)
+    codex = ~df['Model configuration'].str.contains('superseded')
+    only = lambda env, mask: int(((df['Scored correct only in'] == ENV[env]) & mask).sum())
+    summ = pd.DataFrame([{'Model configurations': lab, 'Task–model-configuration pairs': n,
+                          'Scored correct only in the open-ended code condition': only('open_ended_code', mask),
+                          'Scored correct only in the Galaxy condition': only('galaxy', mask)}
+                         for lab, n, mask in [('All five, including the superseded Claude Code agent harness', 5 * 50, pd.Series(True, index=df.index)),
+                                              ('Four Codex model configurations', 4 * 50, codex)]])
+    return [('a | Task–model-configuration pairs scored correct in one execution condition only', summ), ('b | Every such pair', df)]
+
+
+def x_iwc_levels():
+    rows = []
+    for c in CFG4:
+        for env in ENV:
+            v = D['iwc_levels'][f'{c}|{env}']
+            rows.append({'Model configuration': CFG_OUT(c), 'Execution condition': ENV[env],
+                         'Median output agreement, nine matched tasks': round(v['nine_median'], 3),
+                         'Mean output agreement, nine matched tasks': round(v['nine_mean'], 3),
+                         'Median output agreement, all ten tasks': round(v['ten_median'], 3),
+                         'Mean output agreement, all ten tasks': round(v['ten_mean'], 3), 'Scored runs, all ten tasks': v['ten_n']})
+    return [('a | Output agreement by model configuration (Fig. 2a)', pd.DataFrame(rows))]
+
+
+def x_iwc_dispersion():
+    t = T['I13']
+    j = t['headers'].index('Within-cell range: median (Q1-Q3); evaluable cells')
+    rows = []
+    for r in t['rows']:
+        cfg = 'DeepSeek V4 Pro (Codex)' if r[0].startswith('DeepSeek') else r[0]
+        env = 'galaxy' if r[1] == 'Galaxy' else 'open_ended_code'
+        med, rest = r[j].split(' (', 1)
+        iqr, cells = rest.split('); ')
+        key = f"IWC|{env}|{'DeepSeek V4 Pro' if cfg.startswith('DeepSeek') else cfg}"
+        rows.append({'Model configuration': cfg, 'Execution condition': ENV[env], 'Replicate sets (tasks)': int(cells.split()[0]),
+                     'Within-set output-agreement range, median': float(med), 'Within-set range, first to third quartile': iqr,
+                     'Split replicate sets (range above 0.05)': D['fig4c'][key.rsplit('|', 1)[0]].get(key.rsplit('|', 1)[1], 0)})
+    df = pd.DataFrame(rows)
+    df = df.iloc[sorted(range(len(df)), key=lambda i: (ENV_ORDER[df['Execution condition'][i]], i))].reset_index(drop=True)
+    return [('a | Within-set output-agreement range on all ten tasks (values as in Supplementary Table 55)', df)]
+
+
+def x_skills():
+    up = D['skill_uptake']
+    a = pd.DataFrame([{'Model configuration': CFG_OUT(c), 'Execution condition': ENV[env], 'Runs on tasks with a relevant domain skill': up[f'{c}|{env}'][1],
+                       'Runs that opened the relevant domain skill': up[f'{c}|{env}'][0],
+                       'Share (%)': round(100 * up[f'{c}|{env}'][0] / up[f'{c}|{env}'][1], 1)} for c in CFG5 for env in ENV])
+    ca = D['core_library_accuracy']
+    b = pd.DataFrame([{'Model configuration': CFG_OUT(c), 'Galaxy-condition runs (Codex execution traces)': r['runs'],
+                       'Runs importing the Galaxy interface library in a shell script': r['scripted'],
+                       'Runs that only read the library source code': r['read_only'],
+                       'Scored correct, runs importing the library': r['scripted_correct'],
+                       'Scored correct, all other runs': r['other_correct']} for c, r in ca.items()])
+    return [(f"a | Domain-skill uptake, BixBench-Verified-50 ({D['skill_relevant_tasks']} tasks with a relevant domain skill; Extended Data Fig. 4a)", a),
+            ('b | Galaxy interface library driven from the shell, BixBench-Verified-50 Galaxy condition (Extended Data Fig. 4b)', b)]
+
+
+def x_tokens():
+    rows = []
+    for b in BENCH:
+        for c in CFG5 + ['GPT-6 Astra']:
+            for env in ENV:
+                v = D['input_tokens'].get(f'{b}|{c}|{env}')
+                if v:
+                    rows.append({'Benchmark': BLABEL[b], 'Model configuration': CFG_OUT(c), 'Execution condition': ENV[env],
+                                 'Runs with recorded input-token usage': v['n'], 'Median input-token usage per run (millions)': round(v['median'] / 1e6, 2),
+                                 'First quartile (millions)': round(v['q1'] / 1e6, 2), 'Third quartile (millions)': round(v['q3'] / 1e6, 2)})
+    return [('a | Median input-token usage per run by benchmark, model configuration and execution condition (Fig. 3c)', pd.DataFrame(rows))]
+
+
+def x_bix_unanimous():
+    ba = D['bix_accuracy']
+    rows = [{'Model configuration': CFG_OUT(c), 'Execution condition': ENV[env], 'Runs scored correct': ba[f'{c}|{env}']['correct'], 'Runs': ba[f'{c}|{env}']['runs'],
+             'Run-level accuracy (%)': round(ba[f'{c}|{env}']['run_level'], 1),
+             'Unanimous accuracy (%; tasks with 3/3 replicate runs scored correct)': round(ba[f'{c}|{env}']['unanimous'], 1),
+             'Unanimous − run-level (percentage points)': round(ba[f'{c}|{env}']['unanimous'] - ba[f'{c}|{env}']['run_level'], 1)}
+            for c in CFG5 for env in ENV]
+    pool = []
+    for lab, cs in (('Four Codex model configurations', CFG4), ('All five model configurations', CFG5)):
+        acc = {env: (100 * sum(ba[f'{c}|{env}']['correct'] for c in cs) / sum(ba[f'{c}|{env}']['runs'] for c in cs),
+                     100 * sum(ba[f'{c}|{env}']['all'] for c in cs) / (50 * len(cs))) for env in ENV}
+        pool.append({'Model configurations': lab,
+                     'Run-level accuracy, open-ended code / Galaxy (%)': f"{acc['open_ended_code'][0]:.1f} / {acc['galaxy'][0]:.1f}",
+                     'Run-level condition difference (percentage points)': round(acc['galaxy'][0] - acc['open_ended_code'][0], 1),
+                     'Unanimous accuracy, open-ended code / Galaxy (%)': f"{acc['open_ended_code'][1]:.1f} / {acc['galaxy'][1]:.1f}",
+                     'Unanimous condition difference (percentage points)': round(acc['galaxy'][1] - acc['open_ended_code'][1], 1)})
+    return [('a | Run-level and unanimous accuracy by model configuration (Fig. 4d)', pd.DataFrame(rows)),
+            ('b | Pooled over model configurations', pd.DataFrame(pool))]
+
+
+def x_compbio_all12():
+    rows = [{'Execution condition': ENV[env], 'Tasks': 100,
+             'Tasks with a single distinct answer across all 12 runs (four model configurations × three replicate runs)': D['compbio_single_answer_all12'][env],
+             'Replicate sets with a single distinct answer, summed over the four model configurations (of 400; Supplementary Table 44d)':
+                 sum(D['compbio_distinct'][f'{c}|{env}'].get('1', 0) for c in CFG4)} for env in ENV]
+    return [('a | Answer consistency across all 12 runs of an execution condition', pd.DataFrame(rows))]
+
+
+def x_compbio_scores():
+    cb = json.load(open(os.path.join(ROOT, 'CompBio', 'compBio_overview_audit.json')))['score_vectors']
+    label = collections.defaultdict(list)
+    for v in sorted(cb, key=lambda v: v['replicate']):
+        label[(CFG.get(v['model'], v['model']), v['condition'])].append(v['score_type'])
+    rows = []
+    for c in CFG4:
+        for env in ENV:
+            v = D['compbio_scores'][f'{c}|{env}']
+            rows.append({'Model configuration': CFG_OUT(c), 'Execution condition': ENV[env],
+                         'Reported benchmark score, replicate runs 1 / 2 / 3 (of 100)': ' / '.join(str(x) for x in v['replicates']),
+                         'Archive label, replicate runs 1 / 2 / 3': ' / '.join(label[(CFG_OUT(c), env)]), 'Mean (of 100)': round(v['mean'], 1)})
+    df = pd.DataFrame(rows)
+    diff = pd.DataFrame([{'Model configuration': CFG_OUT(c),
+                          'Condition difference, Galaxy − open-ended code (points of 100)': round(D['compbio_scores'][f'{c}|galaxy']['mean'] - D['compbio_scores'][f'{c}|open_ended_code']['mean'], 1)}
+                         for c in CFG4])
+    return [('a | Reported benchmark scores by model configuration (Fig. 2d, Fig. 3a)', df), ('b | Condition difference by model configuration', diff)]
+
+
+EXTRA = {  # archive ID -> (blocks placed before the archived table, sentence added to the legend)
+    'B10': (x_exclusive_pairs, 'Blocks a and b list the task–model-configuration pairs with at least one run scored correct in one execution condition and '
+                               'none in the other; the 250 pairs cited in the Results include the superseded Claude Code agent harness.'),
+    'I1': (x_iwc_levels, 'Block a gives the median and mean output agreement per model configuration on the nine matched tasks and on all ten tasks.'),
+    'I2': (x_iwc_dispersion, 'Block a gives within-set output-agreement ranges on all ten tasks, the values quoted in the Results; the archived table '
+                             'below uses the nine matched tasks.'),
+    'X14': (x_skills, 'Block a: a domain skill is relevant to a task when scored-correct runs of that task opened it (read its SKILL.md); uptake counts '
+                      'runs on those tasks that opened it. Block b: a run imports the Galaxy interface library when a shell command imports or calls '
+                      'galaxy_execute_mcp_core; runs that only printed or searched its source are counted separately.'),
+    'B7': (x_tokens, 'Block a gives medians for every benchmark; the archived table below gives the BixBench-Verified-50 input-token ratio.'),
+    'B2': (x_bix_unanimous, 'Unanimous accuracy is the share of tasks whose three replicate runs were all scored correct (Supplementary Note 8).'),
+    'C2': (x_compbio_all12, 'Answers are normalized (lower case, whitespace removed) before counting distinct answers.'),
+    'C9': (x_compbio_scores, 'Reported benchmark scores as archived in CompBio/compBio_overview_audit.json; the archive label states whether each score '
+                             'is official or predicted.'),
+}
+
+
 MECH_NAME = {'V1': 'Galaxy interface trap (silent default, output semantics or job not dispatched)',
              'V3': 'Different software version installed', 'V4': 'Domain convention or definition applied differently',
              'V5': 'Hand-written method instead of the library method (script, or user-defined tool in the Galaxy condition)',
@@ -310,8 +511,15 @@ MECH_NAME = {'V1': 'Galaxy interface trap (silent default, output semantics or j
              'V8': 'Answer retrieved from benchmark source files'}
 
 NEW = {
-    'NEW-ledger': ('Failure ledger: every scored-incorrect BixBench-Verified-50 run and every IWC run with output agreement below 0.5', t_ledger,
-                   'One row per run: 246 scored-incorrect BixBench-Verified-50 runs (135 open-ended code condition, 111 Galaxy condition) and 8 IWC runs '
+    'NEW-ledger': ('Task-level audit: primary cause of each of the 93 audited task cases, integrity flags and the run-level failure ledger', t_ledger,
+                   'Blocks a–d: every task with at least one wrong, scored-incorrect or low-scoring run (33 of 50 BixBench-Verified-50 tasks, 53 of 100 '
+                   'CompBioBench tasks and 6 of 10 IWC workflows), plus the IWC RNA-seq differential-expression workflow, whose near-perfect output '
+                   'agreement conceals a changed significant-gene set: 93 task cases. Each case has one primary cause (C1–C8, block a); secondary '
+                   'causes and cross-cutting flags are recorded as tags (blocks b, c). A flag does not imply that an affected answer is wrong. '
+                   'CompBioBench correctness is a match to the score-inferred answer key, or to the score-predicted answer where none is inferred '
+                   '(Supplementary Note 6). The full per-case analyses, with trace line references, are in individual_error_analysis.md. Tasks '
+                   'without a case had no wrong answer in any run and were not audited for local computation or answer retrieval.\n'
+                   'Block e, one row per run: 246 scored-incorrect BixBench-Verified-50 runs (135 open-ended code condition, 111 Galaxy condition) and 8 IWC runs '
                    'with output agreement below 0.5. Primary and secondary causes: task under-specified or reference ambiguous (the reference depends '
                    'on a choice the question does not state); statistical or reasoning error (weak evidence relied on, thresholds or invariants ignored, '
                    'wrong denominator); evaluator rejected a correct answer (or the run has a score conflict); missing domain knowledge; platform or '
@@ -354,7 +562,8 @@ NEW = {
                       'or any /api/ path. The provided analysis history exists only in BixBench-Verified-50.'),
 }
 
-# Order of first citation in the draft Results; NEW-* are tables introduced by this audit.
+# Fixed table numbering (first-citation order of the previous draft, which the Results text now cites by number); NEW-* are tables
+# introduced by this audit. The descriptions are historical and are not written to any output; see RESULTS_CITE for current call-outs.
 ORDER = [
     ('X1', 'Design paragraph: benchmarks analysed separately'),
     ('B1', 'Section 1: BixBench accuracy (Fig. 2a)'), ('B10', 'Section 1: task coverage'), ('B11', 'Section 1: tasks scored correct in one condition only'),
@@ -392,6 +601,26 @@ UNCITED = [('B2', 'Suggest Section 3 (outcome repeatability), beside B5'), ('B3'
            ('C10', 'Suggest Methods or limitations (biomedical-knowledge outlier)'), ('X4', 'Suggest Section 4 (run-level burden)'),
            ('X6', 'Suggest Section 2 (where Galaxy job errors concentrate)'), ('X8', 'Suggest Discussion (claim strength)'),
            ('X17', 'Suggest Discussion (six motivating observations)'), ('X20', 'Suggest design paragraph, beside X1')]
+
+
+# Where the Results text (Results_section_final) cites each Supplementary Table number. Numbering is fixed by ORDER + UNCITED
+# because the text already cites these numbers; PROPOSED gives a renumbering in order of first citation.
+RESULTS_CITE = {
+    1: 'Introduction: endpoints analysed separately',
+    7: 'Section 1: IWC output agreement (Fig. 2a)', 9: 'Section 1: IWC per task (Fig. 2b)',
+    12: 'Section 1: IWC sensitivity to zero-scored runs (Extended Data Fig. 3a)', 18: 'Section 1: IWC runs scoring zero (Extended Data Fig. 3b)',
+    2: 'Section 1: BixBench-Verified-50 accuracy (Fig. 2c)', 3: 'Section 1: task coverage; pairs scored correct in one condition only',
+    4: 'Section 1: task scored correct in one condition only', 5: 'Section 1: CompBioBench reported benchmark scores (Fig. 2d)',
+    6: 'Section 1: consensus proxy (Extended Data Fig. 2)', 60: 'Section 1: CompBioBench single distinct answer across all 12 runs',
+    55: 'Section 2: IWC output agreement by model configuration (Fig. 3a)', 58: 'Section 2: BixBench-Verified-50 accuracy by model configuration (Fig. 3a)',
+    61: 'Section 2: CompBioBench reported benchmark scores by model configuration (Fig. 3a)', 24: 'Section 2: user-defined-tool requests (Fig. 3b)',
+    20: 'Section 2: domain-skill uptake and interface-library scripting (Extended Data Fig. 4)', 49: 'Section 2: median input-token usage (Fig. 3c)',
+    54: 'Section 2: input-token usage and model difference versus GPT-5.5 (Extended Data Fig. 6b)',
+    56: 'Section 3: BixBench-Verified-50 repeatability categories (Fig. 4a,d)', 44: 'Section 3: CompBioBench single distinct answer per replicate set (Fig. 4b)',
+    8: 'Section 3: IWC within-set output-agreement ranges', 48: 'Section 3: divergence mechanisms (Fig. 4c; Extended Data Fig. 5a)',
+    47: 'Section 3: identical tool-set fingerprints in 0/3 and 3/3 replicate sets', 14: 'Section 4: primary causes of 93 task cases (Fig. 5a; Extended Data Fig. 8)',
+}
+CITE_ORDER = [1, 7, 9, 12, 18, 2, 3, 4, 5, 6, 60, 55, 58, 61, 24, 20, 49, 54, 56, 44, 8, 48, 47, 14]
 
 
 def xref(text):
@@ -547,29 +776,40 @@ def build_tables():
     wb = Workbook()
     idx = wb.active
     idx.title = 'Index'
-    entries = [(tid, cite, 'cited') for tid, cite in ORDER] + [(tid, cite, 'not cited in current draft') for tid, cite in UNCITED]
+    entries = [tid for tid, _ in ORDER + UNCITED]
+    proposed = {n: k for k, n in enumerate(CITE_ORDER + [n for n in range(1, len(entries) + 1) if n not in CITE_ORDER], 1)}
     cross = []
     legends = []
-    for n, (tid, cite, status) in enumerate(entries, 1):
+    for n, tid in enumerate(entries, 1):
         if tid.startswith('NEW'):
             title, fn, legend = NEW[tid]
             blocks = fn()
         else:
             title, legend = glossary_terms(expand_names(clean(T[tid]['title'])), tid), glossary_terms(expand_names(xref(T[tid]['legend'])), tid)
             blocks = archive_blocks(tid)
+            if tid in EXTRA:
+                fn, note = EXTRA[tid]
+                extra = fn()
+                letter = chr(ord('a') + len(extra))
+                blocks = extra + [(f'{letter} | As archived (archive table {tid})', blocks[0][1])]
+                legend = note + '\n' + legend
         write_sheet(wb, f'Supplementary Table {n}', n, title, tid, blocks, legend)
         nrows = sum(len(df) for _, df in blocks)
         cross.append({'Supplementary Table': n, 'Archive ID': tid if not tid.startswith('NEW') else 'new (this audit)',
-                      'Internal key': tid, 'Title': title, 'Rows': nrows, 'First cited (draft Results)': cite, 'Status': status})
+                      'Internal key': tid, 'Title': title, 'Rows': nrows, 'Cited in Results': RESULTS_CITE.get(n, ''),
+                      'Status': 'cited' if n in RESULTS_CITE else 'not cited in Results',
+                      'Proposed number (order of first citation)': proposed[n]})
         legends.append((n, title, legend, tid))
+    assert set(RESULTS_CITE) == set(CITE_ORDER)
     heads = list(cross[0].keys())
     idx['A1'] = 'Supplementary Tables: index and crosswalk to archive table identifiers'
     idx['A1'].font = Font(bold=True, size=12)
-    idx['A2'] = ('Tables are numbered in order of first citation in the draft Results. Tables marked "not cited" should be cited at the '
-                 'suggested location or removed before submission; renumber by editing ORDER in scripts/make_supplement.py. Terminology follows '
-                 'the Glossary sheet; archived cell values are unchanged.')
+    idx['A2'] = (f'Table numbers match the citations in the Results text: {len(RESULTS_CITE)} of {len(cross)} tables are cited there. Tables marked '
+                 '"not cited in Results" should be cited in the Methods or removed before submission. The last column gives a renumbering in order '
+                 'of first citation, if the journal requires it (edit CITE_ORDER in scripts/make_supplement.py, then update the text citations). '
+                 'Terminology follows the Glossary sheet; archived cell values are unchanged.')
     idx['A2'].alignment = Alignment(wrap_text=True)
-    idx.merge_cells('A2:G2')
+    idx.merge_cells('A2:H2')
     idx.row_dimensions[2].height = 42
     for j, h in enumerate(heads, 1):
         c = idx.cell(4, j, h)
@@ -579,7 +819,7 @@ def build_tables():
             c = idx.cell(i, j, row[h])
             c.font = Font(size=9, color='9C3D00' if row['Status'] != 'cited' else '000000')
             c.alignment = Alignment(wrap_text=True, vertical='top')
-    for j, w in enumerate([10, 12, 16, 60, 7, 60, 22], 1):
+    for j, w in enumerate([10, 12, 16, 60, 7, 60, 20, 14], 1):
         idx.column_dimensions[get_column_letter(j)].width = w
     idx.freeze_panes = 'A5'
     gl = wb.create_sheet('Glossary', 1)
@@ -729,8 +969,8 @@ def build_pdf(legends, n_calls, n_subst):
             ' (provided as Supplementary_Tables.xlsx) and legends for Supplementary Data 1–3 (provided as separate Excel files).'),
           Spacer(1, 6), P('<b>Contents</b>'), P('Glossary of official terms', small)]
     notes = ['Evidence archive and scope', 'Execution-trace extraction, call classes and direct Galaxy API calls', 'Causes of failed Galaxy interface calls',
-             'Parameter substitution', 'User-defined tool reliability', 'Failure adjudication protocol', 'CompBioBench consensus proxy',
-             'Outcome repeatability: split replicate sets and divergence mechanisms', 'Statistical analysis and limitations']
+             'Parameter substitution', 'User-defined tool reliability', 'Failure adjudication: task-level audit and run-level failure ledger',
+             'CompBioBench consensus proxy', 'Replicate agreement: repeatability categories, unanimous accuracy and divergence mechanisms', 'Statistical analysis and limitations']
     for i, n in enumerate(notes, 1):
         S.append(P(f'Supplementary Note {i}. {n}', small))
     S.append(P('Supplementary Table legends; Supplementary Data legends', small))
@@ -771,7 +1011,7 @@ def build_pdf(legends, n_calls, n_subst):
             'failure summary, validation errors and parameter provenance. Calls were grouped as <i>tool search and inspection</i> (search_galaxy_tools, '
             'inspect_galaxy_tool), <i>analysis-history inspection</i> (history and archive inspection), <i>tool runs and jobs</i> (run_galaxy_tool_and_wait, '
             'run_galaxy_udt_and_wait, job waits) and shell commands. Input-token usage is recorded per run and cannot be attributed to individual calls, '
-            'so the number of characters each call returned to the agent is used as a proxy for context consumed (Fig. 5b).'),
+            f'so the number of characters each call returned to the agent is used as a proxy for context consumed (Supplementary Table {TABLE_NO["NEW-discovery"]}).'),
           P('A shell command in a Galaxy-condition run is a direct Galaxy API call when it uses the BioBlend library or calls the Galaxy histories, '
             'datasets, jobs or tools API. Commands referencing BioBlend or any /api/ path were matched against five operations: copying the provided '
             'analysis history (copy_history, /copy), downloading datasets (download_dataset, /display, /download), reading tool parameter descriptions '
@@ -792,7 +1032,7 @@ def build_pdf(legends, n_calls, n_subst):
             f'Table {TABLE_NO["NEW-taxonomy"]}). Causes A1–A8 occurred before any job was created ({pre:,} calls); B1–B5 are failures of a created job, '
             f'that is Galaxy job errors ({post:,}); {unc} calls matched no rule and are reported as unclassified. Rule order resolves overlaps; for '
             'example, a missing analysis history is assigned A1 even when the message also contains a validation keyword. Each cause maps onto an '
-            'interface change (Extended Data Fig. 3d).'),
+            f'interface change (Supplementary Table {TABLE_NO["X7"]}).'),
           table(tax_rows, [12, 50, 108])]
     # ---- Note 4
     S += [P('Supplementary Note 4. Parameter substitution', h2),
@@ -801,9 +1041,11 @@ def build_pdf(legends, n_calls, n_subst):
             'when the benchmark\'s check blocked submission, and <i>parameter_mismatch</i>, when the job executed. A value is <i>replaced</i> when a '
             'requested value was changed (for example max → count) and <i>dropped</i> when a requested parameter is absent from the resolved state, '
             'typically because it was placed under a conditional option or repeat that Galaxy did not select. Parameter substitution occurred in 4,352 '
-            f'tool-run calls: 3,436 blocked and 916 executed (Fig. 3e; Supplementary Table {TABLE_NO["NEW-substitution"]}). Supplementary Data 3 lists '
+            f'tool-run calls: 3,436 blocked and 916 executed (Supplementary Table {TABLE_NO["NEW-substitution"]}). Supplementary Data 3 lists '
             f'the first replaced value of each call with a replaced value ({n_subst:,} calls). Whether a substitution changed a scientific result was '
-            'established only for the adjudicated runs in the failure ledger.')]
+            'established only for the audited task cases and the adjudicated runs in the failure ledger. In bix-35-q1, the metric parameter of the '
+            'PhyKIT wrapper was executed with the default value (total tree length) in 7 of the 15 Galaxy-condition analysis histories; the executed '
+            'metric of every PhyKIT job was read from the command line of its archived Galaxy job record (Fig. 5b; Extended Data Fig. 7).')]
     # ---- Note 5
     S += [P('Supplementary Note 5. User-defined tool reliability', h2),
           P('Every run_galaxy_udt_and_wait call returns a structured status (ok, failed, udt_creation_failed or none). For each Galaxy job error, the '
@@ -811,8 +1053,9 @@ def build_pdf(legends, n_calls, n_subst):
             'returned. A Galaxy job error with no error message was followed to the next tool-run call of the same run, which was classed as an '
             'identical request when its tool inputs or user-defined-tool definition were byte-identical after key sorting, and otherwise as changed. '
             'Probe tools were identified by identifiers containing probe, preflight, render, smoke, diagnos(tic) or sanity. Of the calls that followed a '
-            'Galaxy job error with no error message, 784 resubmitted an identical request and 615 of those failed again (Extended Data Fig. 3a; '
-            f'Supplementary Table {TABLE_NO["NEW-udt"]}).')]
+            'Galaxy job error with no error message, 784 resubmitted an identical request and 615 of those failed again (Supplementary Table '
+            f'{TABLE_NO["NEW-udt"]}). When user-defined-tool execution was unavailable on the server, some agents computed the answer in the local '
+            'shell and staged it into Galaxy; these runs are listed in Supplementary Table ' + str(TABLE_NO['NEW-ledger']) + 'd and Extended Data Fig. 8b.')]
     # ---- Note 6
     cat_rows = [['Cause', 'Definition', 'Open-ended code condition, primary / secondary (n = 135)', 'Galaxy condition, primary / secondary (n = 111)']]
     cdef = {'SPEC': 'The question is under-specified, or the reference depends on a choice the question does not state',
@@ -823,8 +1066,46 @@ def build_pdf(legends, n_calls, n_subst):
     for k, v in cdef.items():
         cat_rows.append([CAUSE_NAME[k], v, f'{fe["open_ended_code"]["primary"].get(k, 0)} / {fe["open_ended_code"]["secondary"].get(k, 0)}',
                          f'{fe["galaxy"]["primary"].get(k, 0)} / {fe["galaxy"]["secondary"].get(k, 0)}'])
-    S += [P('Supplementary Note 6. Failure adjudication protocol', h2),
-          P('Every scored-incorrect BixBench-Verified-50 run (246: 135 open-ended code condition, 111 Galaxy condition) and every IWC run with output '
+    cases = D['task_cases']
+    ncat = lambda k, b=None: sum(1 for c in cases if c['category'] == k and (b is None or c['benchmark'] == b))
+    nflag = lambda tag: sum(1 for c in cases if tag in c['tags'])
+    it = D['integrity']
+    case_rows = [['Code', 'Primary cause', 'BixBench-<br/>Verified-50', 'CompBio-<br/>Bench', 'IWC', 'All']]
+    case_rows += [[k, v, ncat(k, 'BixBench50'), ncat(k, 'CompBio'), ncat(k, 'IWC'), ncat(k)] for k, v in sorted(D['task_case_categories'].items())]
+    case_rows.append(['', 'All task cases', *[sum(1 for c in cases if c['benchmark'] == b) for b in BENCH], len(cases)])
+    r_key, r_src, r_none = (len(v) for v in it['retrieval'].values())  # classes in the order of Extended Data Fig. 8a
+    S += [P('Supplementary Note 6. Failure adjudication: task-level audit and run-level failure ledger', h2),
+          P('<b>Task-level audit.</b> The audit covers every task with at least one wrong, scored-incorrect or low-scoring run: 33 of 50 '
+            'BixBench-Verified-50 tasks (at least one run scored incorrect), 53 of 100 CompBioBench tasks (at least one answer differing from the '
+            'reference) and 6 of 10 IWC workflows (at least one run below 0.95 or unscored), plus the IWC RNA-seq differential-expression workflow, whose '
+            f'runs all scored at least 0.99 although the significant-gene set changed: {len(cases)} task cases drawn from 160 tasks and 4,240 runs. For '
+            'each case, the execution traces of all its runs were read to identify the decision that produced each wrong value, what the correct runs '
+            'did differently and whether the finding changes how the score should be read. No agent code was rerun, no Galaxy job was submitted and no '
+            'ground-truth file was opened; where a case recomputes a statistic, it does so from a table the agent had already submitted.'),
+          P('Each task case received one primary cause, chosen for its main interpretive issue, so that each task is counted once (Fig. 5a; '
+            f'Supplementary Table {TABLE_NO["NEW-ledger"]}a,c). Codes C1–C3 place the primary cause with the benchmark ({ncat("C1") + ncat("C2") + ncat("C3")} '
+            f'cases), C4 with Galaxy platform, wrapper or server behaviour ({ncat("C4")}) and C5 with the agent analysis ({ncat("C5")}). Secondary causes '
+            f'and cross-cutting flags are recorded as tags (Supplementary Table {TABLE_NO["NEW-ledger"]}b): Galaxy contributed as a primary or secondary '
+            f'cause in {nflag("galaxy-platform-defect")} cases. Integrity flags apply to both execution conditions: benchmark-answer retrieval '
+            f'({nflag("benchmark-answer-retrieval")} task cases; in {r_key} the benchmark answer, '
+            f'the key or another agent\'s answer was obtained, in {r_src} a source that '
+            f'fixes the answer, and in {r_none} nothing usable), local computation in the Galaxy condition '
+            f'({len(it["local_fallback_correct"])} scored-correct and {len(it["local_fallback_incorrect"])} scored-incorrect CompBioBench runs computed in '
+            f'the local shell after user-defined-tool execution became unavailable on the server) and cross-run output reuse ({len(it["cross_run"])} runs '
+            'that read answers left by other runs on the shared Galaxy account; Extended Data Fig. 8). A flag does not imply that the affected answer is '
+            'wrong. Tasks without a case had no wrong answer in any run and were not audited for local computation or answer retrieval.'),
+          table(case_rows, [13, 95, 20, 20, 10, 10]), Spacer(1, 5),
+          P('<b>References used by the audit.</b> BixBench-Verified-50 uses the archived evaluator verdict of each run, and IWC the archived output '
+            'agreement; where a case states that an answer should have been scored correct, that is an auditor judgement, not a regrade. CompBioBench '
+            'archives no item-level key. The audit therefore scores a CompBioBench answer as correct when it matches the answer key inferred from the '
+            'official leaderboard scores of the 25 submitted answer vectors (54 items uniquely determined) or, where no unique answer exists, the '
+            'score-predicted answer (46 items), both from the laboratory results repository (goeckslab/galaxy-agent-benchmark, commit bdc00429f559). An '
+            'independent integer program over the archived answer vectors recovered the same unique answer for 53 of the 54 inferred items; the '
+            'exception is the regulatory-overlap item, whose archived answers read "Proximal enhancer" where the submitted vectors read "pELS" (the '
+            'substitution reproduces the advertised submission hashes byte for byte). The laboratory working reference differs from the inferred key '
+            'in five tasks, which are flagged as reference-questionable. This key is distinct from the consensus proxy (Supplementary Note 7), which is '
+            'used only for condition-level comparisons.'),
+          P('<b>Run-level failure ledger.</b> Every scored-incorrect BixBench-Verified-50 run (246: 135 open-ended code condition, 111 Galaxy condition) and every IWC run with output '
             'agreement below 0.5 (8) was read call by call. For each, we identified the decision point: the step at which the evidence the agent acted on '
             'diverged from what the reference required, and whether that evidence was sufficient. Scored-incorrect runs were contrasted with '
             'scored-correct runs of the same task, using the same model configuration where one succeeded. Final answers were checked against independent '
@@ -839,34 +1120,50 @@ def build_pdf(legends, n_calls, n_subst):
             'reproduction, independent reference comparison or contrast with a scored-correct sibling; <b>moderate</b> (55), the decisive step is '
             'identified but only partly verified; <b>mixed</b> (20), several contributing causes are present and the primary assignment is a judgement; '
             '<b>unresolved</b> (12), no decisive step could be isolated and the cause is the best-supported explanation. Mixed and unresolved assignments '
-            '(32 of 246) are not proofs. The failure ledger (Supplementary Table ' + str(TABLE_NO['NEW-ledger']) + ') records the decision point for every '
+            '(32 of 246) are not proofs. The failure ledger (Supplementary Table ' + str(TABLE_NO['NEW-ledger']) + 'e) records the decision point for every '
             'run. For IWC, the two Galaxy-condition host-removal runs with a score conflict (evaluator 0.273, run record 0.9999 and 1.0) were '
             're-examined: the submitted BWA-MEM output kept 20,899 read pairs, matching the BWA-route reference (20,896) rather than the Bowtie2-route '
-            'reference (72,867) against which it was scored; the IWC archive itself does not adjudicate these score conflicts (Extended Data Fig. 2d).')]
+            'reference (72,867) against which it was scored; the IWC archive itself does not adjudicate these score conflicts (Extended Data Fig. 3b).')]
     # ---- Note 7
     S += [P('Supplementary Note 7. CompBioBench consensus proxy', h2),
           P('CompBioBench archives 22 reported benchmark scores but no per-run grades or references, so per-task correctness cannot be observed. '
             'Answers were normalized (lower case, whitespace removed) and the most common answer across the 25 runs of each task was taken as the '
             'consensus answer. For the 22 reported benchmark scores with retained answers, the number of answers matching the consensus reproduces the '
-            'reported score with a mean absolute error of 2.6 of 100 and a mean bias of +2.0 (Extended Data Fig. 1c). On the 82 tasks where at least 20 '
-            'of 25 runs agree, a deviating answer is treated as a <i>probable</i> failure; this yields 40 open-ended code condition and 33 Galaxy-condition '
+            'reported score with a mean absolute error of 2.6 of 100 and a mean bias of +2.0 (Extended Data Fig. 2a). On the 82 tasks where at least 20 '
+            'of 25 runs agree (Extended Data Fig. 2b), a deviating answer is treated as a <i>probable</i> failure; this yields 40 open-ended code condition and 33 Galaxy-condition '
             'deviations (GPT-6 Astra excluded). The 18 contested tasks are not used. Re-fitting individual answers to the reported scores was rejected '
             'because it over-fits (22 constraints, 100 unknowns). The consensus proxy is labelled as such wherever it appears and supports no per-task '
             'accuracy claim.')]
     # ---- Note 8
-    S += [P('Supplementary Note 8. Outcome repeatability: split replicate sets and divergence mechanisms', h2),
-          P('A replicate set is the replicate runs of one task × model configuration × execution condition (the "cell" of the data table). A replicate set '
-            'is <i>split</i> when its replicate runs disagree in outcome: 1 or 2 of 3 BixBench-Verified-50 replicate runs scored correct (repeatability '
-            'category 1–2/3); 1 or 2 of 3 CompBioBench replicate runs match the consensus answer (82 strong-consensus tasks); or the within-set range of '
-            'IWC output agreement exceeds 0.05. For every scored-incorrect replicate run in a split BixBench-Verified-50 replicate set, the execution trace '
+    pool = x_bix_unanimous()[1][1]
+    dd = {r['Model configurations']: (r['Run-level condition difference (percentage points)'], r['Unanimous condition difference (percentage points)'])
+          for _, r in pool.iterrows()}
+    S += [P('Supplementary Note 8. Replicate agreement: repeatability categories, unanimous accuracy and divergence mechanisms', h2),
+          P('A replicate set is the three replicate runs of one task × model configuration × execution condition. Each set is classified as '
+            '<i>unanimous success</i> (3 of 3 replicate runs succeed), <i>split</i> (1 or 2 of 3) or <i>no success</i> (0 of 3). A replicate run succeeds '
+            'when it is scored correct (BixBench-Verified-50) or matches the consensus answer (CompBioBench, 82 strong-consensus tasks; Supplementary '
+            'Note 7). IWC output agreement is continuous, so an IWC set is split when the within-set range of output agreement exceeds 0.05, and the '
+            'unanimous categories are not defined (Supplementary Tables ' + str(TABLE_NO['NEW-mixed']) + ' and ' + str(TABLE_NO['I2']) + '). CompBioBench answer '
+            'consistency is also reported without reference to any answer: the number of distinct normalized answers (lower case, whitespace removed) '
+            'among the three replicate runs of a set (Fig. 4b; Supplementary Table ' + str(TABLE_NO['NEW-mixed']) + 'd) and among all 12 runs of a task in one '
+            'execution condition (Supplementary Table ' + str(TABLE_NO['C2']) + 'a).'),
+          P('<i>Unanimous accuracy</i> is the share of BixBench-Verified-50 tasks whose three replicate runs were all scored correct, per model '
+            'configuration and execution condition; <i>run-level accuracy</i> is the share of runs scored correct (Fig. 4d; Supplementary Table '
+            + str(TABLE_NO['B2']) + 'a). A condition difference compares the two measures only when both pool the same model configurations: for the four '
+            f'Codex model configurations the condition difference is {dd["Four Codex model configurations"][0]:+.1f} percentage points at the run level and '
+            f'{dd["Four Codex model configurations"][1]:+.1f} for unanimous accuracy; for all five, including the superseded Claude Code agent harness, '
+            f'{dd["All five model configurations"][0]:+.1f} and {dd["All five model configurations"][1]:+.1f} (Supplementary Table ' + str(TABLE_NO['B2']) + 'b).'),
+          P('For every scored-incorrect replicate run in a split BixBench-Verified-50 replicate set, the execution trace '
             'was compared with those of the scored-correct sibling(s) to identify the divergence mechanism: <b>Galaxy interface trap</b>, an optional '
             'interface path taken by this replicate run only produced a silent default, a different output semantics or an undispatched job; '
             '<b>different software version installed</b>; <b>domain convention or definition applied differently</b>; <b>hand-written method instead of '
             'the library method</b> (a script, or a user-defined tool in the Galaxy condition); <b>error in the final step</b> (sorting, counting, units) '
             'after an otherwise correct analysis; <b>no answer submitted</b>; and <b>answer retrieved from benchmark source files</b>, when the only '
-            'scored-correct replicate run retrieved benchmark source data. A divergence mechanism describes what differed between replicate runs and is '
-            'distinct from the primary cause (Note 6). Replicate labels are not matched random seeds, so outcome repeatability means run-to-run agreement '
-            'under the same prompt and model configuration.')]
+            'scored-correct replicate run retrieved benchmark source data (Fig. 4c; Extended Data Fig. 5a; Supplementary Table '
+            + str(TABLE_NO['NEW-divergence']) + '). Divergence mechanisms were assigned on BixBench-Verified-50 only, the benchmark with a per-run verdict; the five '
+            'split IWC Galaxy-condition sets were examined individually (Extended Data Fig. 5b). A divergence mechanism describes what differed between '
+            'replicate runs and is distinct from the primary cause (Note 6). Replicate labels are not matched random seeds, so replicate agreement means '
+            'run-to-run agreement under the same prompt and model configuration.')]
     # ---- Note 9
     S += [P('Supplementary Note 9. Statistical analysis and limitations', h2),
           P('Unless stated otherwise, intervals are exploratory 95% percentile cluster-bootstrap intervals with 20,000 resamples (seed 20260922; '
@@ -881,8 +1178,11 @@ def build_pdf(legends, n_calls, n_subst):
             'bootstrap resamples with ties re-ranked within each resample.'),
           P('<b>Limitations.</b> Benchmarks differ in task selection, prompts, execution budgets, exposed interfaces and endpoints, so cross-benchmark '
             'contrasts are descriptive. The IWC estimates rest on nine or ten task clusters. The superseded Claude Code model configuration ran '
-            'BixBench-Verified-50 only. Analysis histories were snapshotted after the runs. Adjudication was performed by execution-trace review, and 32 '
-            'of 246 assignments are mixed or unresolved. Candidate recoveries were not adjudicated, and the open-ended code condition has no equivalent '
+            'BixBench-Verified-50 only. Reasoning settings and execution budgets were not matched across model configurations, so model comparisons are '
+            'observational. Analysis histories were snapshotted after the runs. Adjudication was performed by execution-trace review, and 32 '
+            'of 246 run-level assignments are mixed or unresolved. The task-level audit assigns one primary cause per task case, a judgement where '
+            'several causes contribute; tasks without a wrong answer were not audited for local computation or answer retrieval, so their '
+            'Galaxy-condition successes are not certified as execution within Galaxy. Candidate recoveries were not adjudicated, and the open-ended code condition has no equivalent '
             'job-level record. Nonzero shell exits are an operational marker, not a scientific failure rate. Human review time, reconstruction accuracy '
             'and monetary cost were not measured.')]
     S.append(PageBreak())

@@ -23,13 +23,13 @@ These notes pre-fill the answers that the archive supports. The Reporting Summar
   - All 4,240 runs are retained, including runs without an answer, which count as scored incorrect.
   - Twelve CompBioBench runs have no execution trace. They are counted in the reported benchmark scores but not in the trace-level analyses.
 - **Interface-level statistics use Codex execution traces only (1,908 Galaxy-condition runs).** These are parameter substitution, user-defined-tool status and direct Galaxy API calls. The superseded Claude Code agent harness records tool results in a different structure.
-- **CompBioBench task-level analyses use the 82 strong-consensus tasks.** The consensus proxy is explained in Supplementary Note 7.
+- **CompBioBench consensus-proxy analyses (probable failures, split replicate sets) use the 82 strong-consensus tasks.** The consensus proxy is explained in Supplementary Note 7. The task-level audit instead uses the answer key inferred from the official leaderboard scores (Supplementary Note 6).
 - **The IWC condition difference uses the nine tasks scored in both execution conditions.** Host removal is excluded because of null scores and score conflicts (Supplementary Table 7).
 
 ## Randomization and blinding
 
-- **Randomization.** Not applicable. Execution conditions were assigned by design, and every model configuration ran every task in both execution conditions.
-- **Blinding.** Adjudication was not blinded to execution condition, because execution traces reveal it. Adjudicators read BixBench reference values only from the evaluator records of completed runs, and assigned an adjudication confidence to limit over-interpretation (Supplementary Note 6).
+- **Randomization.** Not applicable. Execution conditions were assigned by design, and every model configuration ran every task of its benchmarks in both execution conditions (GPT-6 Astra ran CompBioBench in the open-ended code condition only).
+- **Blinding.** Adjudication was not blinded to execution condition, because execution traces reveal it. Adjudicators read BixBench reference values only from the evaluator records of completed runs, and assigned an adjudication confidence to limit over-interpretation (Supplementary Note 6). The task-level audit read every run of each task case, in both execution conditions, and opened no file of the benchmark ground truth.
 
 ## Software
 

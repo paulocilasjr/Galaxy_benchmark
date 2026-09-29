@@ -9,6 +9,8 @@ The trace-level audit is in `analysis_reports/galaxy_improvement_20260924/v2_tra
 - the failure ledger;
 - the divergence-mechanism analysis of split replicate sets.
 
+The task-level audit of the 93 task cases, with the evidence for each case cited by trace file and line, is `individual_error_analysis.md` at the repository root.
+
 The cross-benchmark statistics and archive tables are in `BixBench50_CompBio_analysis/`. The bootstrap uses 20,000 resamples with seed 20260922 (Python 3.12.13, NumPy 2.4.1).
 
 Figure, table and supplement generation is in `manuscript_material/scripts/`:
