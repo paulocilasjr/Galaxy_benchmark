@@ -1,6 +1,43 @@
 # Individual Task Error Analysis
 
-Retrospective review of the preserved `BixBench_50`, `CompBio`, and `IWC` results, 2026-09-27. The initial screen covered the answer/outcome inventories for 50 BixBench tasks, 100 CompBio tasks, and 10 IWC tasks: 4,240 run records. The 20 cases below received additional inspection of relevant evaluator files, original traces, recovered commands, or Galaxy jobs. This is a selected set of explained anomalies, not a claim that every error in those records has been adjudicated.
+This review examines **20 selected task-level anomalies** from an archive of **160 tasks and 4,240 run records**. The cases show how final scores are affected by answer wording, reference choices, analytical decisions, and execution provenance. Understanding those mechanisms changes how the results should be interpreted: a rejected answer may express the correct scientific result, while an accepted answer may depend on local computation or prior access to a reference solution.
+
+Among the selected cases, **five concern equivalent answer representations**, **four concern scoring policies or reference mismatches**, and **four demonstrate incorrect computation, tool parameters, or biological output**. The remaining cases concern sample identity, analysis specifications, provenance, or differences hidden by an aggregate score. Concrete examples include all 30 answers to a BixBench task being rejected despite stating the reference direction, a Galaxy retry silently running the wrong metric, and an independently verified error in Benjamini-Hochberg adjustment. The two supplied examples are also confirmed: the reference-matching ENCODE ATAC result was computed locally, and the cCRE class labels describe the same overlapping element.
+
+The tables provide a guide to the detailed cases below. Each case explains the observed result, identifies the supporting trace or evaluator evidence, and recommends how to treat the finding. Confirmed mechanisms and unresolved adjudications remain explicitly distinguished.
+
+**Task Coverage**
+
+| Benchmark | Directory | Tasks present | Tasks analyzed in detail here | Archived run records |
+|---|---|---:|---:|---:|
+| BixBench-50 | `BixBench_50` | 50 | 8 | 1,500 |
+| CompBio | `CompBio` | 100 | 6 | 2,500 |
+| IWC | `IWC` | 10 | 6 | 240 |
+| **Total** | | **160** | **20** | **4,240** |
+
+"Tasks present" counts the task packages under each directory's `analysis/` folder. All 160 tasks were screened through their answer/outcome inventories; the 20 selected cases received additional inspection of relevant evaluator files, original traces, recovered commands, or Galaxy jobs. The other 140 tasks are not classified as error-free. These selected cases do not estimate benchmark-wide error prevalence.
+
+**Error and Interpretation Categories**
+
+The unit counted below is a **task case, not an individual failed run**. Each case has one primary category, chosen for its main interpretive issue, so every case is counted exactly once. Categories include evaluation and provenance problems as well as agent errors; assignment does not imply that every affected answer is wrong or that a suspected reference mismatch has been resolved.
+
+| Primary category | BixBench-50 | CompBio | IWC | Total tasks | Detailed cases |
+|---|---:|---:|---:|---:|---|
+| Equivalent answers expressed differently: labels, genotypes, coordinates, wording, or units | 2 | 3 | 0 | **5** | [2](#2-compbio-annotate-variant-regulatory-overlap-q1), [3](#3-compbio-1000g-retrieve-genotype-q1), [5](#5-compbio-align-one-sequence-to-reference-q1), [8](#8-bixbench-bix-53-q2), [9](#9-bixbench-bix-53-q5) |
+| Scoring policy or reference mismatch, including unresolved conflicts | 2 | 0 | 2 | **4** | [7](#7-bixbench-bix-43-q2), [12](#12-bixbench-bix-61-q5), [18](#18-iwc-wf_003_host_contamination_removal), [19](#19-iwc-wf_006_atacseq_chromatin_accessibility) |
+| Analysis specification differences: software version or observation selection | 2 | 0 | 0 | **2** | [10](#10-bixbench-bix-45-q1), [14](#14-bixbench-bix-27-q5) |
+| Sample identity mismatch: aliases or staged identifiers | 0 | 1 | 1 | **2** | [4](#4-compbio-afgr-1000g-intersect-atac-q1), [15](#15-iwc-wf_005_amplicon_dada2_pe_denoising) |
+| Incorrect computation or resolved tool parameters | 1 | 1 | 1 | **3** | [6](#6-compbio-compute-gccontent-promoter-q1), [13](#13-bixbench-bix-35-q1), [16](#16-iwc-wf_010_pseudobulk_scrna_de) |
+| Biological output mismatch despite a valid file | 0 | 0 | 1 | **1** | [17](#17-iwc-wf_007_vgp_mitogenome_assembly) |
+| Execution provenance and reference-answer exposure | 1 | 1 | 0 | **2** | [1](#1-compbio-encode-atac-pipeline-q1), [11](#11-bixbench-bix-54-q7) |
+| Aggregate score conceals a changed scientific decision | 0 | 0 | 1 | **1** | [20](#20-iwc-wf_002_rnaseq_de_visualization) |
+| **Total distinct task cases** | **8** | **6** | **6** | **20** | **Cases 1-20** |
+
+Some cases have secondary issues. Reference-answer exposure occurs in **two tasks, cases 3 and 11**; case 3 is counted primarily under equivalent genotype representations. Case 11 also involves observation-selection ambiguity, and case 5 involves an underspecified endpoint convention. These secondary issues remain in the detailed analyses without adding duplicate tasks to the table.
+
+**Scope and Evidence**
+
+Retrospective review of the preserved results, 2026-09-27. This is a selected set of explained anomalies, not a claim that every error in the archive has been adjudicated.
 
 Counts refer to archived run records. BixBench has 30 records per task, including the superseded DeepSeek/Claude Code configuration. CompBio has 24 records in its paired four-model comparison plus one unpaired GPT-6 Astra record. IWC has 24 records per task. CompBio item-level correctness scores are absent from the preserved evaluation files; its format-validation outputs do not establish correctness. The two user-supplied adjudications below are explicitly treated as ground truth. Other CompBio findings explain answer differences without manufacturing official pass/fail labels.
 
