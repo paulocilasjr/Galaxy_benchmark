@@ -9,9 +9,11 @@ import json
 import os
 import statistics as st
 import sys
+import textwrap
 
 import numpy as np
 import pandas as pd
+from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Patch, Rectangle
 
@@ -57,9 +59,9 @@ def arrow(ax, x0, y0, x1, y1, style='-|>'):
                                  transform=ax.transAxes, shrinkA=0, shrinkB=0))
 
 
-def dot(ax, x, y, env, filled=True, ms=3.6, z=3):
+def dot(ax, x, y, env, filled=True, ms=3.6, z=3, clip=True):
     ax.plot(x, y, ENV_MARKER[env], ms=ms, mfc=ENV_COLOR[env] if filled else 'white', mec=ENV_COLOR[env] if not filled else 'white',
-            mew=0.8 if not filled else 0.4, zorder=z, ls='')
+            mew=0.8 if not filled else 0.4, zorder=z, ls='', clip_on=clip)
 
 
 def direction_hint(ax, y, left='Open-ended\ncode higher', right='Galaxy\nhigher'):
@@ -404,15 +406,17 @@ def fig3():
     for s in (json.loads(l) for l in gzip.open(os.path.join(OUTDIR, 'source_data', 'derived', 'run_summaries.jsonl.gz'), 'rt')):
         if s['benchmark'] == 'BixBench50' and s['condition'] == 'galaxy':
             bxrep[(MODEL[s['model']], s['replicate'])].append(1 if s['score'] == 1 else 0)
-    panels = [('IWC', 'Mean output agreement over all ten tasks (0 to 1)', (0.90, 1.004), [0.9, 0.95, 1.0], ['0.90', '0.95', '1'],
-               {c: [rep_iwc[f'{c}|galaxy|{r}'] for r in (1, 2, 3)] for c in CONFIGS}, {c: D['iwc_levels'][f'{c}|galaxy']['ten_mean'] for c in CONFIGS}, 3),
-              ('BixBench50', 'Accuracy (% of runs scored correct)', (70, 95), [70, 80, 90], None,
-               {c: [100 * sum(bxrep[(c, r)]) / len(bxrep[(c, r)]) for r in (1, 2, 3)] for c in cfg5}, {c: bx[f'{c}|galaxy']['run_level'] for c in cfg5}, 1),
-              ('CompBio', 'Reported benchmark score (answers credited, of 100)', (80, 95), [80, 85, 90, 95], None,
-               {c: D['compbio_scores'][f'{c}|galaxy']['replicates'] for c in CONFIGS}, {c: D['compbio_scores'][f'{c}|galaxy']['mean'] for c in CONFIGS}, 1)]
+    # One percentage axis, 70 to 100, for all three benchmarks; IWC output agreement (0 to 1) is shown x 100.
+    panels = [('IWC', 'Mean output agreement over all ten tasks (%)',
+               {c: [100 * rep_iwc[f'{c}|galaxy|{r}'] for r in (1, 2, 3)] for c in CONFIGS}, {c: 100 * D['iwc_levels'][f'{c}|galaxy']['ten_mean'] for c in CONFIGS}),
+              ('BixBench50', 'Accuracy (% of runs scored correct)',
+               {c: [100 * sum(bxrep[(c, r)]) / len(bxrep[(c, r)]) for r in (1, 2, 3)] for c in cfg5}, {c: bx[f'{c}|galaxy']['run_level'] for c in cfg5}),
+              ('CompBio', 'Reported benchmark score (% of answers credited)',
+               {c: D['compbio_scores'][f'{c}|galaxy']['replicates'] for c in CONFIGS}, {c: D['compbio_scores'][f'{c}|galaxy']['mean'] for c in CONFIGS})]
+    xlim, xt = (70, 100), [70, 80, 90, 100]
     filled = {('CompBio', c): [p['official'] for p in D['fig2b'] if p['config'] == c and p['condition'] == 'galaxy'] for c in CONFIGS}
     rows_a = []
-    for k, (b, xl, xlim, xt, xtl, vals, means, nd) in enumerate(panels):
+    for k, (b, xl, vals, means) in enumerate(panels):
         ax = fig.add_axes([0.165 + k * 0.285, 0.70, 0.19, 0.215])
         for i, c in enumerate(cfg5):
             if i % 2 == 0:
@@ -421,16 +425,14 @@ def fig3():
                 ax.text(np.mean(xlim), i, 'Not run with this agent harness', fontsize=5.0, color=INK2, ha='center', va='center')
                 continue
             for j_, v in enumerate(vals[c]):
-                dot(ax, v, i, 'galaxy', ms=3.2, filled=filled.get((b, c), [True] * 3)[j_])
+                dot(ax, v, i, 'galaxy', ms=3.2, filled=filled.get((b, c), [True] * 3)[j_], clip=False)
             ax.plot([means[c]] * 2, [i - 0.28, i + 0.28], color=INK, lw=0.9, zorder=5)
-            ax.text(1.02, i, rnd(means[c], nd), transform=ax.get_yaxis_transform(), fontsize=5.0, va='center')
-            rows_a.append(dict(benchmark=BENCH_LABEL[b], model_configuration=CFG_LABEL[c], galaxy_condition_mean=round(means[c], 4),
+            ax.text(1.04, i, rnd(means[c], 1), transform=ax.get_yaxis_transform(), fontsize=5.0, va='center')
+            rows_a.append(dict(benchmark=BENCH_LABEL[b], model_configuration=CFG_LABEL[c], galaxy_condition_mean_percent=round(means[c], 2),
                                replicate_runs='; '.join(f'{v:.4g}' for v in vals[c])))
         ax.set_ylim(len(cfg5) - 0.5, -0.6); ax.set_yticks(range(len(cfg5)))
         ax.set_yticklabels([lab5[c] for c in cfg5] if k == 0 else [], fontsize=5.2)
         ax.set_xlim(*xlim); ax.set_xticks(xt); grid_x(ax)
-        if xtl:
-            ax.set_xticklabels(xtl)
         ax.set_xlabel(xl); ax.set_title(BENCH_LABEL[b], fontsize=5.6, fontweight='bold', loc='left')
     fig.text(0.165, 0.625, 'Symbols: replicate runs; tick and number: mean. IWC output agreement uses all ten tasks. CompBioBench: archived reported benchmark scores; open symbols are labelled predicted.',
              fontsize=5.0, color=INK2)
@@ -438,34 +440,38 @@ def fig3():
     # ---- b: user-defined-tool requests by model configuration
     ax = fig.add_axes([0.20, 0.09, 0.24, 0.42])
     panel_label(fig, 0.005, 0.585, 'b'); panel_title(fig, 0.005, 0.585, 'Model configurations differed most in whether\nthey wrote user-defined tools')
-    rows_ = [r for r in D['fig3c'] if r['benchmark'] in ('BixBench50', 'CompBio') and r['config'] != 'All configurations']
-    labels, req, yy, rowsb = [], [], [], []
+    # Benchmarks in the order of panel a. IWC runs were not offered user-defined tools, so their bars are 0 by design.
+    order3 = ['IWC', 'BixBench50', 'CompBio']
+    rows_ = [r for r in D['fig3c'] if r['config'] != 'All configurations']
+    labels, req, yy, rowsb, groups = [], [], [], [], []
     pos = 0
-    for b in ['BixBench50', 'CompBio']:
+    for b in order3:
+        y0 = pos
         for r in [r for r in rows_ if r['benchmark'] == b]:
             n, d = r['requesting']
-            cfg = r['config'].replace(' 0813 (Codex)', '').replace(' (Codex)', '')
+            cfg = r['config'].replace(' (Codex, IWC)', '').replace(' 0813 (Codex)', '').replace(' (Codex)', '')
             labels.append(CFG_LABEL.get(cfg, cfg).replace('\n', ' ') if cfg != SUPERSEDED else 'DeepSeek V4 Pro (Claude\nCode, superseded)')
             req.append(100 * n / d); yy.append(pos); pos += 1
-            rowsb.append(dict(benchmark=BENCH_LABEL[b], model_configuration=cfg, runs_requesting_a_user_defined_tool=n, galaxy_condition_runs_with_traces=d,
-                              percent=round(100 * n / d, 1)))
-        pos += 0.9
+            rowsb.append(dict(benchmark=BENCH_LABEL[b], model_configuration=cfg, user_defined_tools_offered='no' if b == 'IWC' else 'yes',
+                              runs_requesting_a_user_defined_tool=n, galaxy_condition_runs_with_traces=d, percent=round(100 * n / d, 1)))
+        groups.append((b, y0, pos - 1)); pos += 0.9
     ax.barh(yy, req, color=GALAXY, height=0.66)
     for y_, v in zip(yy, req):
         ax.text(v + 1.5, y_, f'{v:.0f}%', va='center', fontsize=5.0)
     ax.set_yticks(yy); ax.set_yticklabels(labels, fontsize=5.1); ax.set_xlim(0, 100)
     ax.set_xlabel('Galaxy-condition runs that requested a\nuser-defined tool (agent-written code run as a Galaxy job, %)'); grid_x(ax)
-    for b, i0, i1 in [('BixBench-Verified-50', yy[0], yy[4]), ('CompBioBench', yy[5], yy[8])]:
+    for b, i0, i1 in groups:
         ax.plot([-0.66, -0.66], [i0 - 0.3, i1 + 0.3], transform=ax.get_yaxis_transform(), color=INK2, lw=0.6, clip_on=False)
-        ax.text(-0.70, (i0 + i1) / 2, b, transform=ax.get_yaxis_transform(), rotation=90, va='center', ha='center', fontsize=5.2, fontweight='bold')
-    ax.set_ylim(yy[-1] + 1.4, -0.7)
-    ax.text(0.99, yy[-1] + 1.0, 'IWC: user-defined tools not offered (0 of 120 runs)', transform=ax.get_yaxis_transform(), fontsize=5.0, color=INK2, ha='right', va='center')
+        ax.text(-0.70, (i0 + i1) / 2, BENCH_LABEL[b], transform=ax.get_yaxis_transform(), rotation=90, va='center', ha='center', fontsize=5.2, fontweight='bold')
+    b, i0, i1 = groups[0]
+    ax.text(12, (i0 + i1) / 2, 'User-defined tools not offered\nfor IWC tasks (0 of 120 runs)', fontsize=5.0, color=INK2, ha='left', va='center')
+    ax.set_ylim(yy[-1] + 0.7, -0.7)
     sd['b_user_defined_tool_requests'] = pd.DataFrame(rowsb)
     # ---- c: input-token usage per Galaxy-condition run, by model configuration and benchmark
     panel_label(fig, 0.50, 0.585, 'c'); panel_title(fig, 0.50, 0.585, 'Input-token usage differed several-fold between model\nconfigurations and did not track performance')
     tr, tm = D['input_tokens_runs'], D['input_tokens']
     rowsc = []
-    for k, b in enumerate(BENCH):
+    for k, b in enumerate(order3):
         ax = fig.add_axes([0.66, 0.405 - k * 0.155, 0.27, 0.11])
         cl = CONFIGS + ([SUPERSEDED] if b == 'BixBench50' else [])
         for i, c in enumerate(cl):
@@ -510,71 +516,89 @@ def fig4():
     fig = plt.figure(figsize=(W_DOUBLE, 165 * MM))
     sd = {}
     bx = D['bix_accuracy']
-    # ---- a: BixBench repeatability categories
-    ax = fig.add_axes([0.155, 0.555, 0.31, 0.36])
-    panel_label(fig, 0.005, 0.995, 'a'); panel_title(fig, 0.005, 0.995, 'BixBench-Verified-50: the Galaxy condition had more\nunanimous and fewer split replicate sets')
-    rows, ys, labels = [], [], []
+    # ---- a-c: replicate agreement, one small multiple per benchmark on shared rows, in the order of Fig. 3a
+    ys, head = [], {}
     y = 0
     for cfg in CFG5:
-        ax.text(-0.03, y, ROW5[cfg], transform=ax.get_yaxis_transform(), ha='right', va='center', fontsize=5.2, fontweight='bold', linespacing=1.05)
-        y += 1
+        head[cfg] = y; y += 1
         for env in ENVS:
-            c = bx[f'{cfg}|{env}']
-            left = 0
-            for key, lab, col in [('all', '3/3 scored correct', NEUTRAL_LIGHT), ('split', 'Split (1–2/3)', ENV_COLOR[env]), ('none', '0/3 scored correct', NEUTRAL_DARK)]:
-                v = c[key]
-                ax.barh(y, v, left=left, color=col, height=0.72, ec='white', lw=0.5)
-                if v >= 3:
-                    ax.text(left + v / 2, y, str(v), ha='center', va='center', fontsize=5.0, color=INK if key == 'all' else 'white')
-                left += v
-                rows.append(dict(model_configuration=ROW5[cfg].replace('\n', ' '), execution_condition=ENV_LABEL_LONG[env], repeatability_category=lab, replicate_sets=v))
-            labels.append(ENV_LABEL[env]); ys.append(y); y += 1
+            ys.append((cfg, env, y)); y += 1
         y += 0.35
+    y_end = y
+    # Every panel orders its segments all runs succeed, split, no run succeeds; split is coloured by execution condition.
+    split2 = lambda lab: ((Patch(fc=ENV_COLOR['open_ended_code']), Patch(fc=ENV_COLOR['galaxy'])), lab)
+    cells4, split_iwc = D['fig4c_cells'], D['fig4c']
     tot = {e: {k: sum(bx[f'{c}|{e}'][k] for c in CFG5) for k in ('all', 'split', 'none')} for e in ENVS}
-    ax.set_yticks(ys); ax.set_yticklabels(labels, fontsize=5.0); ax.set_ylim(y + 0.1, -1.3); ax.set_xlim(0, 50); ax.set_xticks(range(0, 51, 10))
-    ax.set_xlabel('Replicate sets (of 50 tasks per model configuration)'); grid_x(ax)
-    ax.legend(handles=[Patch(fc=NEUTRAL_LIGHT, label='3/3 replicate runs scored correct'), Patch(fc=ENV_COLOR['open_ended_code'], label='Split, open-ended code'),
-                       Patch(fc=ENV_COLOR['galaxy'], label='Split, Galaxy'), Patch(fc=NEUTRAL_DARK, label='0/3 scored correct')],
-              loc='lower left', bbox_to_anchor=(-0.02, 1.0), ncol=2, fontsize=5.0)
-    fig.text(0.155, 0.500, f"All five model configurations, 250 replicate sets per condition: open-ended code {tot['open_ended_code']['all']} at 3/3,\n"
-             f"{tot['open_ended_code']['split']} split, {tot['open_ended_code']['none']} at 0/3; Galaxy {tot['galaxy']['all']}, {tot['galaxy']['split']} and "
-             f"{tot['galaxy']['none']} (0/3: 5 of 50 for every model configuration).", fontsize=5.0, color=INK2, va='top', linespacing=1.2)
-    sd['a_repeatability_categories'] = pd.DataFrame(rows)
-    # ---- b: CompBio distinct answers per replicate set
-    ax = fig.add_axes([0.66, 0.555, 0.30, 0.36])
-    panel_label(fig, 0.50, 0.995, 'b'); panel_title(fig, 0.50, 0.995, 'CompBioBench: Galaxy-condition replicate sets more\noften returned a single distinct answer')
-    cd = D['compbio_distinct']
-    rows, ys, labels = [], [], []
-    y = 0
-    for cfg in CONFIGS:
-        ax.text(-0.03, y, ROW5[cfg], transform=ax.get_yaxis_transform(), ha='right', va='center', fontsize=5.2, fontweight='bold')
-        y += 1
-        for env in ENVS:
-            c = {int(k): v for k, v in cd[f'{cfg}|{env}'].items()}
+    iwc_n = {e: sum(cells4[f'IWC|{e}|{c}']['cells'] for c in CONFIGS) for e in ENVS}
+    iwc_s = {e: sum(split_iwc[f'IWC|{e}'].values()) for e in ENVS}
+    cb = {e: {k: sum(cells4[f'CompBio|{e}|{c}'].get(k, 0) for c in CONFIGS) for k in ('cells', 'all', 'mixed', 'none')} for e in ENVS}
+
+    def segs(b, cfg, env):
+        if b == 'IWC':
+            n, s = cells4[f'IWC|{env}|{cfg}']['cells'], split_iwc[f'IWC|{env}'].get(cfg, 0)
+            return [('within', 'Range 0.05 or less', NEUTRAL_LIGHT, n - s), ('split', 'Split (range above 0.05)', ENV_COLOR[env], s),
+                    ('unscored', 'Not scored', 'white', 10 - n)]
+        if b == 'BixBench50':
+            c = bx[f'{cfg}|{env}']
+            return [('all', '3/3 scored correct', NEUTRAL_LIGHT, c['all']), ('split', 'Split (1–2/3)', ENV_COLOR[env], c['split']),
+                    ('none', '0/3 scored correct', NEUTRAL_DARK, c['none'])]
+        c = cells4[f'CompBio|{env}|{cfg}']
+        return [('all', '3/3 matched the consensus answer', NEUTRAL_LIGHT, c.get('all', 0)), ('split', 'Split (1–2/3)', ENV_COLOR[env], c.get('mixed', 0)),
+                ('none', '0/3 matched the consensus answer', NEUTRAL_DARK, c.get('none', 0))]
+
+    top = [('IWC', 'IWC: fewer replicate sets split in\nthe Galaxy condition', CONFIGS, 'of 10 tasks', 10, range(0, 11, 2), 1,
+            [(Patch(fc=NEUTRAL_LIGHT), 'Range 0.05 or less'), split2('Split (range above 0.05)'), (Patch(fc='white', ec=INK2, lw=0.4), 'Not scored')],
+            f"Split: the three output-agreement values ranged by more than 0.05; 3/3 and 0/3 are not defined for a continuous endpoint. "
+            f"Split sets: open-ended code {iwc_s['open_ended_code']} of {iwc_n['open_ended_code']}, Galaxy {iwc_s['galaxy']} of {iwc_n['galaxy']}.",
+            'a_iwc_split_replicate_sets'),
+           ('BixBench50', 'BixBench-Verified-50: the Galaxy\ncondition had more unanimous and\nfewer split replicate sets', CFG5, 'of 50 tasks', 50,
+            range(0, 51, 10), 3,
+            [(Patch(fc=NEUTRAL_LIGHT), '3/3 scored correct'), split2('Split (1–2/3)'), (Patch(fc=NEUTRAL_DARK), '0/3 scored correct')],
+            f"All five model configurations, 250 replicate sets per condition: open-ended code {tot['open_ended_code']['all']} at 3/3, "
+            f"{tot['open_ended_code']['split']} split, {tot['open_ended_code']['none']} at 0/3; Galaxy {tot['galaxy']['all']}, {tot['galaxy']['split']} and "
+            f"{tot['galaxy']['none']} (0/3: 5 of 50 for every model configuration).", 'b_repeatability_categories'),
+           ('CompBio', 'CompBioBench: fewer Galaxy-condition\nreplicate sets split on the\nconsensus answer', CONFIGS, f"of {cb['galaxy']['cells'] // 4} tasks", 82,
+            range(0, 81, 20), 4,
+            [(Patch(fc=NEUTRAL_LIGHT), '3/3 matched consensus'), split2('Split (1–2/3)'), (Patch(fc=NEUTRAL_DARK), '0/3 matched consensus')],
+            f"Success: the consensus answer, given by at least 20 of the 25 runs of a task ({cb['galaxy']['cells'] // 4} of 100 tasks). "
+            f"Open-ended code {cb['open_ended_code']['all']} at 3/3, {cb['open_ended_code']['mixed']} split, {cb['open_ended_code']['none']} at 0/3; "
+            f"Galaxy {cb['galaxy']['all']}, {cb['galaxy']['mixed']} and {cb['galaxy']['none']}.",
+            'c_consensus_repeatability')]
+    for k, (b, title, cfgs, per, xmax, xt, min_lab, handles, note, sheet) in enumerate(top):
+        x0 = 0.155 + k * 0.29
+        ax = fig.add_axes([x0, 0.55, 0.235, 0.355])
+        panel_label(fig, 0.005 if k == 0 else x0 - 0.035, 0.995, 'abc'[k]); panel_title(fig, 0.005 if k == 0 else x0 - 0.035, 0.995, title)
+        rows = []
+        for cfg, env, yy_ in ys:
+            if cfg not in cfgs:
+                continue
             left = 0
-            for k_, lab, col in [(1, 'One distinct answer', ENV_COLOR[env]), (2, 'Two distinct answers', NEUTRAL_LIGHT), (3, 'Three distinct answers', NEUTRAL_DARK)]:
-                v = c.get(k_, 0)
-                ax.barh(y, v, left=left, color=col, height=0.72, ec='white', lw=0.5)
-                if v >= 4:
-                    ax.text(left + v / 2, y, str(v), ha='center', va='center', fontsize=5.0, color='white' if k_ != 2 else INK)
+            for key, lab, col, v in segs(b, cfg, env):
+                if v:
+                    ax.barh(yy_, v, left=left, color=col, height=0.72, ec=INK2 if key == 'unscored' else 'white', lw=0.4 if key == 'unscored' else 0.5)
+                if v >= min_lab and key != 'unscored':
+                    ax.text(left + v / 2, yy_, str(v), ha='center', va='center', fontsize=5.0, color=INK if col == NEUTRAL_LIGHT else 'white')
                 left += v
-                rows.append(dict(model_configuration=ROW5[cfg], execution_condition=ENV_LABEL_LONG[env], distinct_answers=k_, replicate_sets=v))
-            labels.append(ENV_LABEL[env]); ys.append(y); y += 1
-        y += 0.35
-    one = {e: sum(int(cd[f'{c}|{e}'].get('1', 0)) for c in CONFIGS) for e in ENVS}
-    a12 = D['compbio_single_answer_all12']
-    ax.set_yticks(ys); ax.set_yticklabels(labels, fontsize=5.0); ax.set_ylim(y + 0.1, -1.3); ax.set_xlim(0, 100); ax.set_xticks(range(0, 101, 20))
-    ax.set_xlabel('Replicate sets (of 100 tasks per model configuration)'); grid_x(ax)
-    ax.legend(handles=[Patch(fc=ENV_COLOR['open_ended_code'], label='One answer, open-ended code'), Patch(fc=ENV_COLOR['galaxy'], label='One answer, Galaxy'),
-                       Patch(fc=NEUTRAL_LIGHT, label='Two distinct answers'), Patch(fc=NEUTRAL_DARK, label='Three distinct answers')],
-              loc='lower left', bbox_to_anchor=(-0.02, 1.0), ncol=2, fontsize=5.0)
-    fig.text(0.66, 0.500, f"One distinct answer in {one['open_ended_code']} of 400 open-ended code and {one['galaxy']} of 400\nGalaxy-condition replicate sets; "
-             f"across all 12 runs of a condition, in {a12['open_ended_code']}\nand {a12['galaxy']} of 100 tasks. Answer consistency, not correctness.",
-             fontsize=5.0, color=INK2, va='top', linespacing=1.2)
-    sd['b_distinct_answers'] = pd.DataFrame(rows)
-    # ---- c: divergence mechanisms
+                rows.append(dict(benchmark=BENCH_LABEL[b], model_configuration=ROW5[cfg].replace('\n', ' '), execution_condition=ENV_LABEL_LONG[env],
+                                 category=lab, replicate_sets=v))
+        for cfg in CFG5:
+            if k == 0:
+                ax.text(-0.03, head[cfg], ROW5[cfg], transform=ax.get_yaxis_transform(), ha='right', va='center', fontsize=5.2, fontweight='bold',
+                        linespacing=1.05)
+            if cfg not in cfgs:
+                ax.text(0.5, head[cfg] + 1.5, 'Not run with this agent harness', transform=ax.get_yaxis_transform(), ha='center', va='center',
+                        fontsize=5.0, color=INK2)
+        ax.set_yticks([v for *_, v in ys]); ax.set_yticklabels([ENV_LABEL[e] for _, e, _ in ys] if k == 0 else [], fontsize=5.0)
+        ax.set_ylim(y_end + 0.1, -1.3); ax.set_xlim(0, xmax); ax.set_xticks(xt)
+        ax.set_xlabel(f'Replicate sets\n({per} per model configuration)'); grid_x(ax)
+        handles = [handles[0], handles[2], handles[1]]  # two columns filled downwards: row 1 all succeed | split, row 2 none succeed
+        ax.legend(handles=[h for h, _ in handles], labels=[l for _, l in handles], handler_map={tuple: HandlerTuple(ndivide=None, pad=0)},
+                  handlelength=1.8, loc='lower left', bbox_to_anchor=(-0.02, 1.0), ncol=2, fontsize=5.0)
+        fig.text(x0, 0.487, textwrap.fill(note, 52), fontsize=5.0, color=INK2, va='top', linespacing=1.2)
+        sd[sheet] = pd.DataFrame(rows)
+    # ---- d: divergence mechanisms
     ax = fig.add_axes([0.155, 0.065, 0.33, 0.10])
-    panel_label(fig, 0.005, 0.425, 'c'); panel_title(fig, 0.005, 0.425, 'Replicate runs diverged for different reasons in the\ntwo conditions (BixBench-Verified-50)')
+    panel_label(fig, 0.005, 0.425, 'd'); panel_title(fig, 0.005, 0.425, 'Replicate runs diverged for different reasons in the\ntwo conditions (BixBench-Verified-50)')
     md = D['fig4d']
     rowsd, share = [], {}
     for i, env in enumerate(ENVS):
@@ -604,10 +628,10 @@ def fig4():
     fig.text(0.023, 0.382, f"Hand-written method or software-version difference: {share['open_ended_code'][0]} of {share['open_ended_code'][1]} open-ended code runs,\n"
              f"{share['galaxy'][0]} of {share['galaxy'][1]} Galaxy runs;\nGalaxy interface trap: {md['galaxy'].get('V1', 0)} of {share['galaxy'][1]} Galaxy runs.",
              fontsize=5.0, va='top', fontweight='bold', linespacing=1.2)
-    sd['c_divergence_mechanisms'] = pd.DataFrame(rowsd)
-    # ---- d: run-level versus unanimous accuracy
+    sd['d_divergence_mechanisms'] = pd.DataFrame(rowsd)
+    # ---- e: run-level versus unanimous accuracy
     ax = fig.add_axes([0.70, 0.065, 0.22, 0.255])
-    panel_label(fig, 0.50, 0.425, 'd'); panel_title(fig, 0.50, 0.425, 'Requiring all three replicate runs to succeed widened\ndifferences between model configurations')
+    panel_label(fig, 0.50, 0.425, 'e'); panel_title(fig, 0.50, 0.425, 'Requiring all three replicate runs to succeed widened\ndifferences between model configurations')
     rowse, ys, labs = [], [], []
     y = 0
     for cfg in CFG5:
@@ -632,7 +656,7 @@ def fig4():
              f"{signed(five['galaxy'][1] - five['open_ended_code'][1], 1)}, unanimous {signed(five['galaxy'][0] - five['open_ended_code'][0], 1)}.",
              fontsize=5.0, va='top', color=INK2, linespacing=1.2)
     ax.legend(handles=env_handles(ms=3.2), loc='upper left', fontsize=5.0)
-    sd['d_run_level_versus_unanimous'] = pd.DataFrame(rowse)
+    sd['e_run_level_versus_unanimous'] = pd.DataFrame(rowse)
     save_main(fig, 'Fig4', OUTDIR)
     source_data('Fig4', sd)
 
@@ -699,7 +723,7 @@ def fig5():
     box(axb, 0.52, 0.72, 0.44, 0.12, 'Galaxy binds the nested conditional\nand silently runs the default metric,\n"total tree length"; job state: ok', fc=LIGHT, ec=INK2, fs=5.3)
     arrow(axb, 0.405, 0.78, 0.52, 0.78)
     axb.text(0.74, 0.69, f'{n_sub} of 15 Galaxy histories contain such a job', ha='center', va='top', fontsize=5.2, fontweight='bold', transform=axb.transAxes)
-    box(axb, 0.045, 0.40, 0.42, 0.17, 'Six runs: the harness compared requested\nwith resolved parameters, flagged the\nmismatch, and the agent resubmitted;\n'
+    box(axb, 0.045, 0.40, 0.42, 0.17, 'Six runs: the Galaxy interface compared\nrequested with resolved parameters, flagged\nthe mismatch, and the agent resubmitted;\n'
         'the answer 0.0471 was scored correct', fc='white', ec=GALAXY, fs=5.1)
     box(axb, 0.54, 0.40, 0.42, 0.17, 'One run (DeepSeek V4 Pro, Claude Code):\nthe selector key was removed from the\npayload, so nothing was compared and\n'
         f'no mismatch was flagged; answer {fail["answer"]}', fc='white', ec=OI_BLACK, lw=0.9, fs=5.1)

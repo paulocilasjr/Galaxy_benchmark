@@ -92,12 +92,14 @@ def t_ledger():
     cases = D['task_cases']
     cat = D['task_case_categories']
     bn = {b: BLABEL[b] for b in BENCH}
+    wrong = lambda c: sum(int(c[k].split('/')[1]) - int(c[k].split('/')[0]) for k in ('galaxy', 'code'))
     summ = []
     for k in sorted(cat):
         n = {b: sum(1 for c in cases if c['benchmark'] == b and c['category'] == k) for b in BENCH}
-        summ.append({'Code': k, 'Primary cause': cat[k], **{bn[b]: n[b] for b in BENCH}, 'All benchmarks': sum(n.values())})
+        summ.append({'Code': k, 'Primary cause': cat[k], **{bn[b]: n[b] for b in BENCH}, 'All benchmarks': sum(n.values()),
+                     'Wrong, scored-incorrect or low-scoring runs in these task cases': sum(wrong(c) for c in cases if c['category'] == k)})
     summ.append({'Code': 'All', 'Primary cause': 'Audited task cases', **{bn[b]: sum(1 for c in cases if c['benchmark'] == b) for b in BENCH},
-                 'All benchmarks': len(cases)})
+                 'All benchmarks': len(cases), 'Wrong, scored-incorrect or low-scoring runs in these task cases': sum(wrong(c) for c in cases)})
     flags = [{'Flag': lab, 'Tag in individual_error_analysis.md': tag,
               **{bn[b]: sum(1 for c in cases if c['benchmark'] == b and tag in c['tags']) for b in BENCH},
               'All benchmarks': sum(1 for c in cases if tag in c['tags'])} for tag, lab in CASE_FLAGS]
@@ -281,7 +283,7 @@ def t_mixed():
         rows.append({'Benchmark': BLABEL[b], 'Execution condition': ENV[env], 'Model configuration': CFG.get(cfg, cfg) if cfg != 'DeepSeek V4 Pro' else 'DeepSeek V4 Pro (Codex)',
                      'Replicate sets': v.get('cells') or sum(v.get(k, 0) for k in ('all', 'mixed', 'none')),
                      'Unanimous, all replicate runs succeeded': v.get('all'), 'Split replicate sets': D['fig4c'][f'{b}|{env}'].get(cfg, 0),
-                     'Unanimous, no replicate run succeeded': v.get('none')})
+                     'Unanimous, no replicate run succeeded': v.get('none', 0) if 'all' in v else None})  # not defined for IWC
     order = {c: i for i, c in enumerate(['GPT-5.5', 'GPT-5.6 Sol', 'GPT-5.6 Luna', 'DeepSeek V4 Pro (Codex)', 'DeepSeek V4 Pro (Claude Code, superseded)'])}
     bord = {BLABEL[b]: i for i, b in enumerate(BENCH)}
     df = pd.DataFrame(rows).sort_values(['Benchmark', 'Execution condition', 'Model configuration'],
@@ -309,7 +311,7 @@ def t_mixed():
         {'Benchmark': 'IWC', 'Replicate sets per model configuration': '9–10 (tasks scored for that model configuration)',
          'Split when': 'the three output-agreement values ranged by more than 0.05', 'Unanimous when': 'not defined for a continuous endpoint'}])
     return [('a | Definitions', defs), ('b | Totals', tot), ('c | By model configuration', df),
-            ('d | CompBioBench: distinct answers per replicate set, all 100 tasks (Fig. 4b)', dist)]
+            ('d | CompBioBench: distinct answers per replicate set, all 100 tasks', dist)]
 
 
 def t_divergence():
@@ -456,8 +458,20 @@ def x_bix_unanimous():
                      'Run-level condition difference (percentage points)': round(acc['galaxy'][0] - acc['open_ended_code'][0], 1),
                      'Unanimous accuracy, open-ended code / Galaxy (%)': f"{acc['open_ended_code'][1]:.1f} / {acc['galaxy'][1]:.1f}",
                      'Unanimous condition difference (percentage points)': round(acc['galaxy'][1] - acc['open_ended_code'][1], 1)})
-    return [('a | Run-level and unanimous accuracy by model configuration (Fig. 4d)', pd.DataFrame(rows)),
-            ('b | Pooled over model configurations', pd.DataFrame(pool))]
+    none = collections.defaultdict(lambda: collections.defaultdict(list))
+    got = collections.defaultdict(int)
+    for s in SUMS:
+        if s['benchmark'] == 'BixBench50':
+            got[(s['task'], s['model'], s['condition'])] += s.get('score') == 1
+    for (task, m, env), v in got.items():
+        if v == 0:
+            none[env][task].append(CFG[m])
+    zero = pd.DataFrame([{'Execution condition': ENV[env], 'Task': t, 'Model configurations with 0/3 replicate runs scored correct (of 5)': len(cs),
+                          'Model configurations': '; '.join(sorted(cs))}
+                         for env in ENV for t, cs in sorted(none[env].items(), key=lambda kv: (-len(kv[1]), kv[0]))])
+    return [('a | Run-level and unanimous accuracy by model configuration (Fig. 4e)', pd.DataFrame(rows)),
+            ('b | Pooled over model configurations', pd.DataFrame(pool)),
+            ('c | Tasks with no replicate run scored correct (0/3), by execution condition', zero)]
 
 
 def x_compbio_all12():
@@ -613,14 +627,16 @@ RESULTS_CITE = {
     4: 'Section 1: task scored correct in one condition only', 5: 'Section 1: CompBioBench reported benchmark scores (Fig. 2d)',
     6: 'Section 1: consensus proxy (Extended Data Fig. 2)', 60: 'Section 1: CompBioBench single distinct answer across all 12 runs',
     55: 'Section 2: IWC output agreement by model configuration (Fig. 3a)', 58: 'Section 2: BixBench-Verified-50 accuracy by model configuration (Fig. 3a)',
-    61: 'Section 2: CompBioBench reported benchmark scores by model configuration (Fig. 3a)', 24: 'Section 2: user-defined-tool requests (Fig. 3b)',
+    61: 'Section 2: CompBioBench reported benchmark scores by model configuration (Fig. 3a)',
+    11: 'Section 2: domain-tool share of IWC Galaxy analysis jobs (added by Results_text_edits.md, edit 5)',
+    24: 'Section 2: user-defined-tool requests (Fig. 3b)',
     20: 'Section 2: domain-skill uptake and interface-library scripting (Extended Data Fig. 4)', 49: 'Section 2: median input-token usage (Fig. 3c)',
     54: 'Section 2: input-token usage and model difference versus GPT-5.5 (Extended Data Fig. 6b)',
-    56: 'Section 3: BixBench-Verified-50 repeatability categories (Fig. 4a,d)', 44: 'Section 3: CompBioBench single distinct answer per replicate set (Fig. 4b)',
-    8: 'Section 3: IWC within-set output-agreement ranges', 48: 'Section 3: divergence mechanisms (Fig. 4c; Extended Data Fig. 5a)',
+    56: 'Section 3: BixBench-Verified-50 repeatability categories (Fig. 4b,e)', 44: 'Section 3: CompBioBench split replicate sets on the consensus answer (Fig. 4c) and single distinct answer per replicate set',
+    8: 'Section 3: IWC split sets (Fig. 4a; first cited there by Results_text_edits.md, section C) and within-set output-agreement ranges', 48: 'Section 3: divergence mechanisms (Fig. 4d; Extended Data Fig. 5a)',
     47: 'Section 3: identical tool-set fingerprints in 0/3 and 3/3 replicate sets', 14: 'Section 4: primary causes of 93 task cases (Fig. 5a; Extended Data Fig. 8)',
 }
-CITE_ORDER = [1, 7, 9, 12, 18, 2, 3, 4, 5, 6, 60, 55, 58, 61, 24, 20, 49, 54, 56, 44, 8, 48, 47, 14]
+CITE_ORDER = [1, 7, 9, 12, 18, 2, 3, 4, 5, 6, 60, 55, 58, 61, 11, 24, 20, 49, 54, 8, 56, 44, 48, 47, 14]
 
 
 def xref(text):
@@ -1140,15 +1156,15 @@ def build_pdf(legends, n_calls, n_subst):
           for _, r in pool.iterrows()}
     S += [P('Supplementary Note 8. Replicate agreement: repeatability categories, unanimous accuracy and divergence mechanisms', h2),
           P('A replicate set is the three replicate runs of one task × model configuration × execution condition. Each set is classified as '
-            '<i>unanimous success</i> (3 of 3 replicate runs succeed), <i>split</i> (1 or 2 of 3) or <i>no success</i> (0 of 3). A replicate run succeeds '
+            '<i>unanimous success</i> (3 of 3 replicate runs succeed), <i>split</i> (1 or 2 of 3) or <i>no success</i> (0 of 3), in that order in Fig. 4a–c. A replicate run succeeds '
             'when it is scored correct (BixBench-Verified-50) or matches the consensus answer (CompBioBench, 82 strong-consensus tasks; Supplementary '
             'Note 7). IWC output agreement is continuous, so an IWC set is split when the within-set range of output agreement exceeds 0.05, and the '
-            'unanimous categories are not defined (Supplementary Tables ' + str(TABLE_NO['NEW-mixed']) + ' and ' + str(TABLE_NO['I2']) + '). CompBioBench answer '
+            'unanimous categories are not defined (Fig. 4a; Supplementary Tables ' + str(TABLE_NO['NEW-mixed']) + ' and ' + str(TABLE_NO['I2']) + '). CompBioBench answer '
             'consistency is also reported without reference to any answer: the number of distinct normalized answers (lower case, whitespace removed) '
-            'among the three replicate runs of a set (Fig. 4b; Supplementary Table ' + str(TABLE_NO['NEW-mixed']) + 'd) and among all 12 runs of a task in one '
+            'among the three replicate runs of a set (Supplementary Table ' + str(TABLE_NO['NEW-mixed']) + 'd) and among all 12 runs of a task in one '
             'execution condition (Supplementary Table ' + str(TABLE_NO['C2']) + 'a).'),
           P('<i>Unanimous accuracy</i> is the share of BixBench-Verified-50 tasks whose three replicate runs were all scored correct, per model '
-            'configuration and execution condition; <i>run-level accuracy</i> is the share of runs scored correct (Fig. 4d; Supplementary Table '
+            'configuration and execution condition; <i>run-level accuracy</i> is the share of runs scored correct (Fig. 4e; Supplementary Table '
             + str(TABLE_NO['B2']) + 'a). A condition difference compares the two measures only when both pool the same model configurations: for the four '
             f'Codex model configurations the condition difference is {dd["Four Codex model configurations"][0]:+.1f} percentage points at the run level and '
             f'{dd["Four Codex model configurations"][1]:+.1f} for unanimous accuracy; for all five, including the superseded Claude Code agent harness, '
@@ -1159,7 +1175,7 @@ def build_pdf(legends, n_calls, n_subst):
             '<b>different software version installed</b>; <b>domain convention or definition applied differently</b>; <b>hand-written method instead of '
             'the library method</b> (a script, or a user-defined tool in the Galaxy condition); <b>error in the final step</b> (sorting, counting, units) '
             'after an otherwise correct analysis; <b>no answer submitted</b>; and <b>answer retrieved from benchmark source files</b>, when the only '
-            'scored-correct replicate run retrieved benchmark source data (Fig. 4c; Extended Data Fig. 5a; Supplementary Table '
+            'scored-correct replicate run retrieved benchmark source data (Fig. 4d; Extended Data Fig. 5a; Supplementary Table '
             + str(TABLE_NO['NEW-divergence']) + '). Divergence mechanisms were assigned on BixBench-Verified-50 only, the benchmark with a per-run verdict; the five '
             'split IWC Galaxy-condition sets were examined individually (Extended Data Fig. 5b). A divergence mechanism describes what differed between '
             'replicate runs and is distinct from the primary cause (Note 6). Replicate labels are not matched random seeds, so replicate agreement means '

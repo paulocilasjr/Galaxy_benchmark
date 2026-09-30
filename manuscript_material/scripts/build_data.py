@@ -139,7 +139,7 @@ for b, t in [('BixBench50', 'B5'), ('CompBio', 'C5'), ('IWC', 'I8')]:
 D['fig4b_code'] = {b: [dict(config=r[1], jaccard=float(r[6])) for r in rows(t) if r[0] == 'Open-ended code']
                    for b, t in [('BixBench50', 'B5'), ('CompBio', 'C5'), ('IWC', 'I8')]}
 
-# ---------------------------------------------------------------- Figure 4c / ED Fig. 4a: mixed cells
+# ---------------------------------------------------------------- Figure 4a-c: replicate sets (split, unanimous)
 def cells(bench):
     c = collections.defaultdict(list)
     for r in RUNS:
@@ -167,6 +167,7 @@ for (cond, cfg, task), rs in cells('CompBio').items():
         continue
     k = sum(norm(r['answer']) == modal[task] for r in rs)
     comp[('CompBio', cond, cfg)]['cells'] += 1
+    comp[('CompBio', cond, cfg)]['all' if k == len(rs) else ('none' if k == 0 else 'mixed')] += 1
     if 0 < k < len(rs):
         mixed[('CompBio', cond)][cfg] += 1
 for (cond, cfg, task), rs in cells('IWC').items():
@@ -469,7 +470,7 @@ for r in rows('I4'):
                                      sign_stable=r[3].strip().startswith('Yes'), no_zero=_num(r[4])[0], no_zero_removed=int(_num(r[4])[1]),
                                      with_host=_num(r[5])[0]))
 
-# ---- BixBench run-level and unanimous accuracy per model configuration and condition (Fig. 4a,d)
+# ---- BixBench run-level and unanimous accuracy per model configuration and condition (Fig. 4b,e)
 acc = collections.defaultdict(lambda: [0, 0])
 for r in RUNS:
     if r['benchmark'] == 'BixBench50':
@@ -483,7 +484,7 @@ D['bix_accuracy'] = {f'{c}|{e}': dict(correct=v[0], runs=v[1], run_level=100 * v
                                       none=D['fig4c_cells'][f'BixBench50|{e}|{c}']['none'])
                      for (c, e), v in acc.items()}
 
-# ---- CompBio answer consistency: distinct answers per replicate set (C2) and across all 12 runs (Fig. 4b)
+# ---- CompBio answer consistency: distinct answers per replicate set (C2) and across all 12 runs (Fig. 4c)
 cbr_p = [r for r in RUNS if r['benchmark'] == 'CompBio' and r['model'] != 'codex_gpt_6_astra']
 distinct = collections.defaultdict(collections.Counter)
 by_set = collections.defaultdict(set)

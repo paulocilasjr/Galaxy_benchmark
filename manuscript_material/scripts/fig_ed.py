@@ -425,7 +425,7 @@ def ed7():
         axt.text(0.60, y, b, fontsize=5.1 if k else 5.2, fontweight='bold' if k == 0 else 'normal', va='top', transform=axt.transAxes)
         if k == 0:
             axt.plot([0, 1], [y - 0.05, y - 0.05], color=INK, lw=0.5, transform=axt.transAxes)
-    axt.text(0.0, 0.30, 'Every job returned the state "ok". The harness compared requested with\nresolved parameters and flagged a mismatch whenever the request named\n'
+    axt.text(0.0, 0.30, 'Every job returned the state "ok". The Galaxy interface compared requested\nwith resolved parameters and flagged a mismatch whenever the request named\n'
              'the metric; six runs resubmitted and were scored correct. The failing run\nremoved the selector key, so there was nothing to compare and no flag\nwas raised.\n\n'
              'Source: command lines of the archived Galaxy job records (--metric);\nrequest shapes from the execution traces (individual_error_analysis.md,\nbix-35-q1).',
              fontsize=5.0, va='top', transform=axt.transAxes, color=INK2, linespacing=1.2)
