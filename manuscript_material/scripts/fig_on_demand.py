@@ -1,12 +1,15 @@
-"""On-demand BixBench-Verified-50 figures (not part of the submitted display items) and their Source Data.
+"""On-demand figures (not part of the submitted display items) and their Source Data.
 
-Run from the repository root:  python manuscript_material/scripts/fig_on_demand.py
+Run from the repository root:  COMPBIO_KEY_DIR=<folder> python manuscript_material/scripts/fig_on_demand.py
 Writes to manuscript_material/on_demand/:
   OD_Fig1  primary cause of every scored-incorrect run, by how many of the three replicate runs were scored incorrect
   OD_Fig2  unanimous accuracy (3/3 replicate runs scored correct) per model configuration, open-ended code then Galaxy
   OD_Fig3  input-token usage per run, scored-correct versus scored-incorrect, per model configuration and condition
-Inputs are the archived files build_data.py reads (analysis.json, the failure ledger, run_summaries.jsonl.gz);
-figure_data.json is not changed. All five BixBench model configurations are pooled where pooling is needed, as in Fig. 4b.
+  OD_Fig4  majority-vote accuracy per model configuration and condition: pooled (a) and by benchmark (b)
+Figs 1-3 use BixBench-Verified-50 only. Inputs are the archived files build_data.py reads (analysis.json, the failure
+ledger, run_summaries.jsonl.gz); figure_data.json is not changed. All five BixBench model configurations are pooled where
+pooling is needed, as in Fig. 4b. Fig. 4 also grades CompBioBench runs against the lab's score-inferred answer key, read
+from COMPBIO_KEY_DIR (kept outside this repository so that agents run from it cannot read the key).
 """
 import collections
 import gzip
@@ -21,8 +24,8 @@ import pandas as pd
 from matplotlib.patches import Patch
 
 sys.path.insert(0, os.path.dirname(__file__))
-from style import (CFG_LABEL, CONFIGS, ENV_COLOR, ENV_LABEL, ENV_LABEL_LONG, ENV_TINT, ENVS, INK, INK2, MM, SUPERSEDED,  # noqa: E402
-                   W_DOUBLE, enforce_min_font, grid_x, grid_y, panel_label, panel_title, plt)
+from style import (CFG_LABEL, CONFIGS, ENV_COLOR, ENV_LABEL, ENV_LABEL_LONG, ENV_MARKER, ENV_TINT, ENVS, INK, INK2, MM,  # noqa: E402
+                   SUPERSEDED, W_DOUBLE, enforce_min_font, grid_x, grid_y, panel_label, panel_title, plt)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 OUT = os.path.join(ROOT, 'manuscript_material', 'on_demand')
@@ -357,6 +360,201 @@ def od_fig3(seed=7):
     return pair, within
 
 
+# =====================================================================================================
+KEY_DIR = os.environ.get('COMPBIO_KEY_DIR')
+KEY_SHA = {'score_inferred_answers.tsv': '959dd3f2', 'compbiobench_results_score_predicted_answers.tsv': '57a6a92d',
+           'paper_site_runs_lab.json': '055cfb18'}  # SHA-256 prefixes recorded in individual_error_analysis.md
+MODEL_ALL = dict(MODEL, codex_deepseek_v4_pro_0813='DeepSeek V4 Pro', codex_deepseek_v4_pro='DeepSeek V4 Pro')
+BENCH3 = [('BixBench50', 'BixBench-Verified-50'), ('CompBio', 'CompBioBench'), ('IWC', 'IWC')]
+IWC_UNMATCHED = 'wf_003_host_contamination_removal'  # not scored for GPT-5.5 open-ended code: nine matched tasks, as in Fig. 2a
+LAB_SHORT = {'GPT-5.5': 'GPT-5.5', 'Sol': 'GPT-5.6 Sol', 'Luna': 'GPT-5.6 Luna', 'DeepSeek-v4-pro-0813': 'DeepSeek V4 Pro'}
+
+
+def compbio_key():
+    """Score-inferred answers (54 tasks) over score-predicted answers (46 tasks), genome-coords-q1 = E."""
+    import csv
+    import hashlib
+    if not KEY_DIR:
+        raise SystemExit('Set COMPBIO_KEY_DIR to the folder that holds the lab CompBioBench key files (see on_demand/README.md).')
+    for f, pre in KEY_SHA.items():
+        h = hashlib.sha256(open(os.path.join(KEY_DIR, f), 'rb').read()).hexdigest()
+        assert h.startswith(pre), (f, h)
+    read = lambda f: {r['question_id']: r['answer'] for r in csv.DictReader(open(os.path.join(KEY_DIR, f)), delimiter='\t')}
+    key = read('compbiobench_results_score_predicted_answers.tsv')
+    key.update(read('score_inferred_answers.tsv'))
+    key['genome-coords-q1'] = 'E'  # the only value that reproduces all 25 official scores (individual_error_analysis.md, check 3)
+    assert len(key) == 100
+    return key
+
+
+def answer_id(a):
+    """Answer identity for finding a majority: trimmed, case- and space-insensitive; numbers compared to 10 significant digits."""
+    a = (a or '').strip().lower().replace(' ', '')
+    try:
+        return f"{float(a.rstrip('%')):.10g}"
+    except ValueError:
+        return a
+
+
+def majority_sets():
+    key = compbio_key()
+    grade = lambda r: float((r['answer'] or '').replace('Proximal enhancer,EH38E1957012', 'pELS,EH38E1957012').strip() == key[r['task']])
+    reps = collections.defaultdict(list)
+    for r in A['runs']:
+        if r['model'] == 'codex_gpt_6_astra' or (r['benchmark'] == 'IWC' and r['task'] == IWC_UNMATCHED):
+            continue  # GPT-6 Astra has one unpaired run per task, so no replicate set
+        b = r['benchmark']
+        score = float(r['score'] == 1) if b == 'BixBench50' else (grade(r) if b == 'CompBio' else r['score'])
+        reps[(b, MODEL_ALL[r['model']], r['condition'], r['task'])].append(
+            dict(answer=r['answer'], score=score, replicate=r['replicate'], cluster=r['cluster'] if b == 'BixBench50' else r['task']))
+    # the per-run CompBioBench grades must reproduce every official replicate score in the lab results file
+    lab = json.load(open(os.path.join(KEY_DIR, 'paper_site_runs_lab.json')))
+    checked = 0
+    for m in lab['models']:
+        if m['short'] not in LAB_SHORT:
+            continue
+        for c, v in m['conditions'].items():
+            env = 'galaxy' if c == 'galaxy' else 'open_ended_code'
+            for rep in v['replicates']:
+                got = sum(x['score'] for (b, cfg, e, t), rs in reps.items() if b == 'CompBio' and cfg == LAB_SHORT[m['short']] and e == env
+                          for x in rs if x['replicate'] == int(rep['id'][1:]))
+                assert got == rep['official_score'], (m['short'], c, rep['id'], got, rep['official_score'])
+                checked += 1
+    assert checked == 24
+    out = {}
+    for k, rs in reps.items():
+        sc = [x['score'] for x in rs]
+        assert len(rs) == 3 and None not in sc, k
+        if k[0] == 'IWC':  # continuous endpoint: the median of three is the majority value (for 0/1 scores it is the majority vote)
+            out[k] = dict(run_level=float(np.mean(sc)), majority=float(np.median(sc)), outcome='', correct_runs=None, cluster=rs[0]['cluster'], scores=sc)
+            continue
+        cls = collections.Counter('CORRECT' if x['score'] == 1 else answer_id(x['answer']) for x in rs)
+        top, n = cls.most_common(1)[0]
+        outcome = ('Majority answer correct' if top == 'CORRECT' else 'Majority answer incorrect') if n >= 2 else 'No majority (three different answers)'
+        k_ = int(sum(sc))
+        assert (outcome == 'Majority answer correct') == (k_ >= 2)  # one reference answer: majority correct <=> at least 2 of 3 correct
+        out[k] = dict(run_level=k_ / 3, majority=float(k_ >= 2), outcome=outcome, correct_runs=k_, cluster=rs[0]['cluster'], scores=sc)
+    return out
+
+
+def od_fig4(n_boot=20000, seed=20260929):
+    """Majority-vote accuracy per model configuration and condition; a pooled over the two benchmarks with one reference answer, b per benchmark."""
+    M = majority_sets()
+    level = lambda b, cfg, e, f: 100 * np.mean([v[f] for (bb, c, ee, t), v in M.items() if bb in b and c == cfg and ee == e])
+    POOL = ('BixBench50', 'CompBio')
+    rng = np.random.default_rng(seed)
+
+    def diff_ci(benches, cfg):
+        """Galaxy - open-ended code, majority vote; stratified cluster bootstrap (source capsules for BixBench, tasks otherwise)."""
+        per = []
+        for b in benches:
+            cl = collections.defaultdict(lambda: np.zeros(3))
+            for (bb, c, e, t), v in M.items():
+                if bb == b and c == cfg:
+                    cl[v['cluster']] += [v['majority'] * (e == 'galaxy'), v['majority'] * (e == 'open_ended_code'), 0.5]
+            per.append(np.array(list(cl.values())))
+        tot = sum(p.sum(0) for p in per)
+        est = 100 * (tot[0] - tot[1]) / tot[2]
+        sums = sum(p[rng.integers(0, len(p), size=(n_boot, len(p)))].sum(1) for p in per)
+        d = 100 * (sums[:, 0] - sums[:, 1]) / sums[:, 2]
+        return est, *np.percentile(d, [2.5, 97.5])
+
+    def dumbbell(ax, y, run, maj, env):
+        ax.plot([run, maj], [y, y], color=ENV_COLOR[env], lw=0.9, zorder=2, solid_capstyle='butt')
+        ax.plot(run, y, ENV_MARKER[env], ms=3.4, mfc='white', mec=ENV_COLOR[env], mew=0.9, zorder=3, clip_on=False)
+        ax.plot(maj, y, ENV_MARKER[env], ms=3.4, mfc=ENV_COLOR[env], mec='white', mew=0.4, zorder=4, clip_on=False)
+
+    fig = plt.figure(figsize=(W_DOUBLE, 150 * MM))
+    rows_a, rows_b, gains = [], [], collections.defaultdict(list)
+    # ---- a: pooled BixBench-Verified-50 and CompBioBench, the four model configurations that ran both
+    ax = fig.add_axes([0.175, 0.625, 0.33, 0.215])
+    for i, cfg in enumerate(CONFIGS):
+        for env, dy in zip(ENVS, (-0.17, 0.17)):
+            run, maj = level(POOL, cfg, env, 'run_level'), level(POOL, cfg, env, 'majority')
+            dumbbell(ax, i + dy, run, maj, env)
+            gains[env].append(maj - run)
+            ax.text(1.03, i + dy, f'{maj:.1f} ({signed(maj - run)})', transform=ax.get_yaxis_transform(), fontsize=5.0, va='center')
+            n = sum(1 for (b, c, e, t) in M if b in POOL and c == cfg and e == env)
+            rows_a.append(dict(model_configuration=ROW[cfg].replace('\n', ' '), execution_condition=ENV_LABEL_LONG[env], tasks=n,
+                               run_level_accuracy=round(run, 2), majority_vote_accuracy=round(maj, 2), change_points=round(maj - run, 2)))
+        est, lo, hi = diff_ci(POOL, cfg)
+        ax.text(1.36, i, f'{signed(est)}\n({signed(lo)} to {signed(hi)})', transform=ax.get_yaxis_transform(), fontsize=5.0, va='center', linespacing=1.15)
+        rows_a[-1].update(majority_difference_galaxy_minus_open_ended_code=round(est, 2), ci95_low=round(lo, 2), ci95_high=round(hi, 2))
+    ax.text(1.03, -0.55, 'Majority vote, %\n(change from\nsingle run)', transform=ax.get_yaxis_transform(), fontsize=5.0, fontweight='bold', va='bottom', linespacing=1.15)
+    ax.text(1.36, -0.55, 'Galaxy − open-ended\ncode, majority vote,\npoints (95% CI)', transform=ax.get_yaxis_transform(), fontsize=5.0, fontweight='bold',
+            va='bottom', linespacing=1.15)
+    ax.set_yticks(range(len(CONFIGS))); ax.set_yticklabels([ROW[c] for c in CONFIGS], fontsize=5.3); ax.tick_params(axis='y', length=0)
+    ax.set_ylim(len(CONFIGS) - 0.5, -0.55); ax.set_xlim(80, 95); ax.set_xticks(range(80, 96, 5)); grid_x(ax)
+    ax.set_xlabel('Accuracy (% of 150 tasks: 50 BixBench-Verified-50 and 100 CompBioBench)')
+    assert np.mean(gains['open_ended_code']) > np.mean(gains['galaxy'])
+    panel_label(fig, 0.005, 0.99, 'a')
+    panel_title(fig, 0.005, 0.99, 'Majority voting raised accuracy more in the open-ended code condition than in the Galaxy condition\n'
+                                   '(BixBench-Verified-50 and CompBioBench pooled)')
+    split = {e: collections.Counter(v['correct_runs'] for (b, c, ee, t), v in M.items() if b in POOL and c in CONFIGS and ee == e) for e in ENVS}
+    assert split['open_ended_code'][2] - split['open_ended_code'][1] > split['galaxy'][2] - split['galaxy'][1]
+    fig.text(0.023, 0.935, f"Change from single run: open-ended code {signed(min(gains['open_ended_code']))} to {signed(max(gains['open_ended_code']))} points, "
+                           f"Galaxy {signed(min(gains['galaxy']))} to {signed(max(gains['galaxy']))}. Majority voting changes accuracy only through split replicate sets: "
+                           f"it gains 1/3 of a task for each set with 2 of 3 runs\ncorrect and loses 1/3 for each with 1 of 3. Open-ended code split sets mostly had "
+                           f"2 of 3 correct ({split['open_ended_code'][2]} versus {split['open_ended_code'][1]}); Galaxy split sets were balanced "
+                           f"({split['galaxy'][2]} versus {split['galaxy'][1]}), so majority voting gained little there.",
+             fontsize=5.0, color=INK2, va='top', linespacing=1.3)
+    from matplotlib.lines import Line2D
+    handles = [Line2D([], [], marker=ENV_MARKER[e], ls='-', color=ENV_COLOR[e], lw=0.9, mfc=f, mec=ENV_COLOR[e] if f == 'white' else 'white', mew=0.9 if f == 'white' else 0.4,
+                      ms=3.4, label=f"{ENV_LABEL_LONG[e]}, {lab}") for e in ENVS for f, lab in (('white', 'single run (run-level accuracy)'), (ENV_COLOR[e], 'majority vote'))]
+    fig.legend(handles=[Line2D([], [], marker=ENV_MARKER[e], ls='', mfc=f, mec=ENV_COLOR[e] if f == 'white' else 'white', mew=0.9 if f == 'white' else 0.4, ms=3.6,
+                               label=f"{ENV_LABEL[e]}: {lab}") for e in ENVS for f, lab in (('white', 'single run (run-level)'), (ENV_COLOR[e], 'majority vote'))],
+               loc='upper left', bbox_to_anchor=(0.79, 0.85), ncol=1, fontsize=5.2, handletextpad=0.5, labelspacing=0.8)
+    fig.text(0.795, 0.735, textwrap.fill('Majority vote: the answer given by at least two of the three replicate runs of a task; a task whose three runs gave '
+                                         'three different answers has no majority and counts as incorrect. With one reference answer per task, the majority '
+                                         'answer is correct exactly when at least two replicate runs are scored correct.', 46),
+             fontsize=5.0, color=INK2, va='top', linespacing=1.25)
+    # ---- b: per benchmark, all model configurations that ran it
+    panel_label(fig, 0.005, 0.545, 'b')
+    fig.text(0.023, 0.544, 'Per benchmark, majority voting raised open-ended code accuracy on CompBioBench for every model configuration;\n'
+                           'elsewhere the change depended on the model configuration', fontsize=6.5, fontweight='bold', va='top', linespacing=1.15)
+    x0s, w = [0.175, 0.47, 0.765], 0.19
+    for k, (b, bl) in enumerate(BENCH3):
+        ax = fig.add_axes([x0s[k], 0.19, w, 0.27])
+        for i, cfg in enumerate(CFG5):
+            if not any(bb == b and c == cfg for (bb, c, e, t) in M):
+                ax.text(0.5, i, 'Not run with this agent harness', transform=ax.get_yaxis_transform(), ha='center', va='center', fontsize=5.0, color=INK2)
+                continue
+            for env, dy in zip(ENVS, (-0.17, 0.17)):
+                run, maj = level((b,), cfg, env, 'run_level'), level((b,), cfg, env, 'majority')
+                dumbbell(ax, i + dy, run, maj, env)
+                ax.text(1.03, i + dy, signed(maj - run), transform=ax.get_yaxis_transform(), fontsize=5.0, va='center')
+                cnt = collections.Counter(v['outcome'] for (bb, c, e, t), v in M.items() if bb == b and c == cfg and e == env)
+                rows_b.append(dict(benchmark=bl, model_configuration=ROW[cfg].replace('\n', ' '), execution_condition=ENV_LABEL_LONG[env],
+                                   tasks=sum(cnt.values()), run_level=round(run, 2), majority_vote=round(maj, 2), change_points=round(maj - run, 2),
+                                   **({} if b == 'IWC' else {o: cnt.get(o, 0) for o in ('Majority answer correct', 'Majority answer incorrect',
+                                                                                       'No majority (three different answers)')})))
+            est, lo, hi = diff_ci((b,), cfg)
+            rows_b[-1].update(majority_difference_galaxy_minus_open_ended_code=round(est, 2), ci95_low=round(lo, 2), ci95_high=round(hi, 2))
+        ax.text(1.03, -0.55, 'Change', transform=ax.get_yaxis_transform(), fontsize=5.0, fontweight='bold', va='bottom')
+        ax.set_yticks(range(len(CFG5)))
+        ax.set_yticklabels([ROW[c] for c in CFG5] if k == 0 else [], fontsize=5.3, linespacing=1.05); ax.tick_params(axis='y', length=0)
+        ax.set_ylim(len(CFG5) - 0.5, -0.55); ax.set_xlim(65, 100); ax.set_xticks(range(70, 101, 10)); grid_x(ax)
+        ntask = len({t for (bb, c, e, t) in M if bb == b})
+        ax.set_xlabel(f'Accuracy (% of {ntask} tasks)' if b != 'IWC' else f'Output agreement (%, {ntask} tasks): open, mean\nof runs; filled, median of three replicate runs')
+        ax.set_title(bl, fontsize=6, loc='left', pad=4)
+    note = ("Open symbols: single run (run-level accuracy); filled symbols: majority vote; change = majority vote − single run, in points. "
+            "BixBench-Verified-50: evaluator scores. CompBioBench: exact string match against the lab's score-inferred answer key (54 tasks) and "
+            "score-predicted answers (46 tasks; genome-coords-q1 = E); these grades reproduce all 24 official replicate scores in the lab results file of "
+            "17 September 2026, two of which are one point above the archived values used in Fig. 2d. GPT-6 Astra, with one unpaired run per task, is excluded. "
+            "IWC has a continuous endpoint, so its majority value is the median of the three replicate runs' output agreement (for a 0/1 score, the median "
+            "of three is the majority vote), over the nine tasks scored in both conditions; it is not pooled in a. Intervals: 95% percentile cluster "
+            "bootstrap (source capsules for BixBench-Verified-50, tasks for CompBioBench and IWC; 20,000 resamples). Source Data give the Galaxy − open-ended "
+            "code difference per benchmark and the outcome of every replicate set (majority correct, majority incorrect, no majority).")
+    fig.text(0.023, 0.105, textwrap.fill(note, 215), fontsize=5.0, color=INK2, va='top', linespacing=1.25)
+    save(fig, 'OD_Fig4_majority_vote_accuracy', 'Majority-vote accuracy per model configuration and execution condition')
+    sets_rows = [dict(benchmark=dict(BENCH3)[b], model_configuration=ROW[c].replace('\n', ' '), execution_condition=ENV_LABEL_LONG[e], task=t,
+                      replicate_scores='; '.join(f'{x:g}' for x in v['scores']), run_level=round(v['run_level'], 4), majority=round(v['majority'], 4),
+                      outcome=v['outcome']) for (b, c, e, t), v in sorted(M.items())]
+    source_data('OD_Fig4', {'a_pooled_majority_vote': pd.DataFrame(rows_a), 'b_by_benchmark': pd.DataFrame(rows_b),
+                            'ab_replicate_sets': pd.DataFrame(sets_rows)})
+    return rows_a, rows_b
+
+
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
     od_fig1()
@@ -366,4 +564,5 @@ if __name__ == '__main__':
         print(x['execution_condition'], x['config'], round(x['ratio'], 2), f"p={x['p']:.3g} holm={x['p_holm']:.3g}", f"CI=({x['ratio_ci_low']:.2f}, {x['ratio_ci_high']:.2f})")
     for e, v in within.items():
         print('within', e, v['n_sets'], round(v['ratio'], 2), round(v['p'], 3))
+    od_fig4()
     print('wrote', sorted(os.listdir(OUT)))
