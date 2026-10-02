@@ -10,9 +10,10 @@ COMPBIO_KEY_DIR=/path/to/compbiobench_key python manuscript_material/scripts/fig
 A replicate set is the three replicate runs of one task × model configuration × execution condition.
 
 - **Figs. 1–3** use BixBench-Verified-50 only, the benchmark with a binary score for every run and a primary cause for every scored-incorrect run. All five model configurations are shown, including the superseded Claude Code agent harness. Where they are pooled, the pooling matches Fig. 4b: 250 replicate sets per condition.
-- **Fig. 4** also covers CompBioBench and IWC.
+- **Figs. 4–6** also cover CompBioBench and IWC. Fig. 6 needs no reference answers.
+- **Fig. 7** covers the Galaxy condition of BixBench-Verified-50 and CompBioBench; user-defined tools were not offered for IWC tasks.
 
-**CompBioBench reference (Fig. 4 only).** The archive keeps no per-run CompBioBench grades, so Fig. 4 grades each run against the reference used by the task-level audit (`individual_error_analysis.md`, "How references were established"). The reference comes from the lab results repository `goeckslab/galaxy-agent-benchmark` (private; commit `bdc00429f559`). `COMPBIO_KEY_DIR` must point to a folder that holds three files from it, and the script checks each against its SHA-256:
+**CompBioBench reference (Figs. 4, 5 and 7).** The archive keeps no per-run CompBioBench grades, so Figs. 4, 5 and 7 grade each run against the reference used by the task-level audit (`individual_error_analysis.md`, "How references were established"). The reference comes from the lab results repository `goeckslab/galaxy-agent-benchmark` (private; commit `bdc00429f559`). `COMPBIO_KEY_DIR` must point to a folder that holds three files from it, and the script checks each against its SHA-256:
 
 | File | SHA-256 prefix | Role |
 |---|---|---|
@@ -90,3 +91,107 @@ Open symbols show run-level accuracy (single run) and filled symbols majority-vo
 *Differences from other figures.*
 - Two CompBioBench replicate scores are one point above the archived values used in Fig. 2d: GPT-5.6 Sol Galaxy r3 (92 versus 91) and DeepSeek V4 Pro Galaxy r1 (84 versus 83). The grades here match the lab results file of 17 September 2026.
 - GPT-6 Astra is excluded because it has one unpaired run per task.
+
+**On-demand Fig. 5 | Execution errors by type, and recovery from them, per benchmark.** (`OD_Fig5_execution_errors_solved`)
+Rows: **a**, IWC; **b**, BixBench-Verified-50; **c**, CompBioBench. Each row has three plots, with open-ended code shown first:
+- **What went wrong:** errors per run, by type (bars).
+- **Recovered, by type:** the share of each type's errors that the run recovered from.
+- **Recovered, by model configuration:** the same share, by model configuration.
+
+Recovery points carry 95% cluster-bootstrap intervals, resampling source capsules for BixBench-Verified-50 and tasks otherwise (20,000 resamples). They are shown only when there are at least 10 errors.
+
+*Definitions.*
+- **Error.** A shell command that exited with a non-zero code, or a Galaxy analysis job that ended in the error state. A silent exit code 1 is not counted, because it is a negative test result such as a search with no match.
+- **Error type.** Each error gets a type from its error message, with one set of ordered rules (`fig_on_demand.ERROR_RULES`) applied to both:
+  - shell output read from the execution trace;
+  - Galaxy job messages read from the archived job records.
+
+  The types are:
+  - code, parameter or syntax error;
+  - missing software, package or container;
+  - file, path or input format;
+  - time or memory limit;
+  - network or download;
+  - Galaxy job never started: a job with neither a command line nor any output, mostly UDTs rejected before rendering;
+  - no or unclassified message.
+- **Recovered.** The error occurred in a run that still ended correct:
+  - BixBench-Verified-50: scored correct;
+  - CompBioBench: exact match to the reference key;
+  - IWC: output agreement of 0.95 or above.
+
+*Runs included.*
+- IWC uses the nine tasks scored in both conditions.
+- Excluded: Galaxy-condition runs without a detailed analysis history (36 BixBench-Verified-50, 2 CompBioBench, 2 IWC), 12 CompBioBench runs without an execution trace, and GPT-6 Astra.
+
+*Checks.* For every run, the Galaxy job errors equal the archive's per-run count. For every Codex run, the counted shell failures never exceed the archived non-zero exits.
+
+*Results (errors per run, Galaxy versus open-ended code).*
+
+| Benchmark | Errors per run | Errors recovered |
+|---|---:|---:|
+| IWC | 3.88 versus 4.61 | 94% versus 79% |
+| BixBench-Verified-50 | 2.31 versus 2.26 | 78% versus 75% |
+| CompBioBench | 4.45 versus 2.87 | 80% versus 75% |
+
+- **Open-ended code:** errors were mostly code errors and missing software. On IWC, time or memory limits were also common (1.0 per run).
+- **Galaxy:** errors were mostly code or parameter errors (1.3–1.4 per run), and Galaxy jobs that never started. Jobs that never started were 1.25 per run on CompBioBench and 0.56 on IWC; they account for most of CompBioBench's extra Galaxy errors.
+- **Recovery:** the recovery intervals of the two conditions overlap for every error type and every model configuration. The point estimates favour Galaxy, but no single difference is distinguishable.
+
+**On-demand Fig. 6 | Actions per run from start to end of a task, by model configuration and benchmark.** (`OD_Fig6_actions_per_run`)
+
+*Definition of an action.* An action is one tool call by the agent: a shell command, a Galaxy interface call, a web search or fetch, or a file read, write or edit. Two things are not counted:
+- planning-list updates;
+- reasoning steps, which Codex traces do not record.
+
+The script checks its action counts against the archive's per-run interface-call totals.
+
+*Panels.*
+- **a. Summary.** The ratio of median actions, Galaxy ÷ open-ended code, for every model configuration (rows) and benchmark (columns).
+  - Each ratio has a 95% cluster-bootstrap interval, resampling tasks, or source capsules for BixBench-Verified-50 (20,000 resamples).
+  - A filled diamond means the difference is significant: Holm-adjusted P < 0.05 over the 13 comparisons, from a two-sided Wilcoxon signed-rank test on per-task median actions with tasks paired across conditions.
+- **b–f. One panel per model configuration.** Each shows the three benchmarks side by side, open-ended code then Galaxy.
+  - Boxes span the middle 50% of runs and mark the median. Whiskers extend to 1.5 times the interquartile range. Points are runs: squares for open-ended code, circles for Galaxy.
+  - The bracket above each pair gives the ratio and the adjusted P. It is bold when significant.
+  - The axis is linear from 0 to 1 and logarithmic above.
+
+*Runs included.* IWC uses all ten tasks. Runs without an execution trace (12 CompBioBench) and GPT-6 Astra are excluded.
+
+*Results.* Every model configuration needed more actions in the Galaxy condition on every benchmark:
+
+| Benchmark | Galaxy ÷ open-ended code | Significant? |
+|---|---|---|
+| BixBench-Verified-50 | 1.9–2.9× | All 5 comparisons (adjusted P ≤ 5 × 10⁻⁶) |
+| CompBioBench | 1.8–3.0× | All 4 comparisons (adjusted P ≤ 5 × 10⁻⁶) |
+| IWC | 1.6–1.9× | None of 4 (adjusted P from 0.07 to 1.00; ten tasks) |
+
+Per-run counts by kind of action are in the `abf_runs` sheet.
+
+**On-demand Fig. 7 | User-defined tools and accuracy in the Galaxy condition.** (`OD_Fig7_udt_and_accuracy`)
+A user-defined tool (UDT) is agent-written code that Galaxy runs as a job. UDTs were not offered for IWC tasks (0 of 120 runs), so the figure covers BixBench-Verified-50 and CompBioBench. Runs without an execution trace (12 CompBioBench) are excluded, because UDT use cannot be observed without it.
+
+*Panels.*
+- **a. Forest plot** of the accuracy difference, with a UDT − without, within the same task.
+  - Squares are Mantel–Haenszel risk differences per model configuration, stratified by task. Square size grows with the number of informative tasks.
+  - The diamond is the pooled estimate, stratified by task × model configuration.
+  - Intervals: 95% cluster bootstrap, resampling source capsules for BixBench-Verified-50 and tasks for CompBioBench (20,000 resamples).
+  - Open squares mark model configurations whose UDT and non-UDT runs had the same accuracy in every shared task.
+  - The columns give each difference and the raw accuracies.
+- **b. Accuracy by UDT trajectory.** Runs are grouped by what happened to their UDT: no UDT requested, a UDT job succeeded, or every UDT job failed (outcome from the archived history). Incorrect UDT runs are split by where the error happened, from c.
+  - Rows with fewer than 5 runs are in the Source Data only: BixBench-Verified-50 with every UDT job failed (4 runs), and CompBioBench with outcome not recorded (1 run).
+- **c. Where the error happened in every scored-incorrect UDT run** (trace-level audit, `udt_audit/`).
+  - Categories are laid out along the run's stages, after the stage-ordered failure taxonomy of Cemri et al. (2025, *Why do multi-agent LLM systems fail?*): before the UDT, at the UDT step, after the UDT, off the answer path, or no execution error.
+  - The UDT-step boxes are highlighted.
+
+*Results.*
+- **Association.** Requesting a UDT was not associated with lower accuracy within the same task:
+  - BixBench-Verified-50: +2.7 points (0.0 to +5.8).
+  - CompBioBench: +1.9 points (−4.8 to +8.4).
+- **Trajectory.**
+  - Runs whose UDT jobs succeeded were at least as accurate as runs without a UDT: 91% versus 82% on BixBench-Verified-50, and 89% versus 88% on CompBioBench.
+  - When every UDT job failed, 82% of 240 CompBioBench runs still reached a correct answer by another route.
+- **Error location.**
+  - BixBench-Verified-50: the error lay at the UDT step in 3 of 22 runs (14%).
+  - CompBioBench: at the UDT step in 50 of 108 runs (46%).
+  - Most of those were the agent's analysis written into the UDT. The UDT mechanism itself failed in 15 of 130.
+
+*Source Data.* Per-run records, with trace lines and rationale, are in `c_audit_per_run` and `udt_audit/udt_error_audit.jsonl`.
