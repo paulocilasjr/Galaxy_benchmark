@@ -128,6 +128,20 @@ Primary outcomes:
 - `result_quality`
 - `scientific_acceptability`
 
+## Status of the aims in the archived evaluation
+
+The archived evaluation analysed in `manuscript_material/` and `manuscript_narrative/` (4,240 runs on BixBench-Verified-50, CompBioBench and IWC) covers only part of this design. The aims above remain the benchmark's goals; this table records what that archive does and does not evaluate.
+
+| Design element | In the archived evaluation |
+|---|---|
+| `open` vs `galaxy` execution | Evaluated: paired arms, four model configurations, three replicate runs per task and arm. The arms also differed in prompts, budgets and run campaigns (`manuscript_narrative/derived/design/`). |
+| `single_run` vs `multi_run`, best-of-n, improvement trajectory (Aim 1) | Not evaluated. The three replicate runs are independent and measure repeatability, not iterative refinement. |
+| Orchestration, failures and recovery (Aim 2) | Partly evaluated from traces: tool use, interface failures, recovery outcomes and execution attribution. Alternative workflow classes and exploration profiles are not formalized. |
+| Prompt variants (Aim 3) | Not evaluated in the archive. `low_context`, `medium_context` and `high_context` prompts exist under `experiments/` for GalaxyBench tasks. |
+| Multiple acceptable solutions and human-informed acceptability (Aim 4) | Partly evaluated: IWC uses route-specific references, and a targeted, AI-assisted trace audit records reference ambiguity. No human adjudication was performed; a protocol is in `manuscript_narrative/user-oriented/supplementary/Supplementary_Note_1_prospective_validation.md`. |
+| `galaxy_skills` environment | Not run as a separate environment. Skills were available in both arms, and Galaxy-specific skills only in the Galaxy arm. |
+| Run artifact layout under `outputs/` | Not used by the archive. `outputs/` is created by new benchmark runs and is not part of this repository; archived runs are under `BixBench_50/`, `CompBio/` and `IWC/`. |
+
 ## Benchmark Positioning
 
 Galaxy-Bench sits between:
@@ -273,6 +287,8 @@ outputs/<timestamp>_<level>_<experiment>/
     `-- reproduce_<experiment>.py
 ```
 
+`outputs/` is created by new benchmark runs and is not part of this repository.
+
 Each completed non-BixBench run also writes `experiment_summary.json` at the run-directory root. This file is the reviewer-facing index for the run and records the experiment name, ground-truth files used for comparison, Galaxy tools used, final Galaxy result files and preserved local paths, transformed Galaxy-derived outputs used for comparison, and `Experiment_score` with `prompt_score`, `transformed_prompt_score`, `direct_ground_truth_match_score`, `transformed_ground_truth_match_score`, and `agent_performance_in_galaxy_score`.
 
 BixBench runs use the 50-question verified subset from `phylobio/BixBench-Verified-50` and a reduced `experiment_summary.json` shape because they are final-answer benchmarks. For BixBench, keep only `experiment`, `Ground_truth_path`, `Galaxy_tools_used`, `Galaxy_results`, and `Experiment_score` with `ideal`, `Galaxy_answer`, and `direct_ground_truth_match_score`.
@@ -313,9 +329,4 @@ Galaxy-Bench is intended to answer the questions reviewers will ask:
 - Does it preserve execution evidence strongly enough for audit?
 - Does it measure scientific acceptability rather than exact imitation alone?
 
-See:
-
-- [docs/formal_score_model.md](/Users/4475918/Projects/Galaxy_benchmark/docs/formal_score_model.md)
-- [project_spec/PROJECT_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/PROJECT_SPEC.md)
-- [project_spec/evaluation/SCORING_SPEC.md](/Users/4475918/Projects/Galaxy_benchmark/project_spec/evaluation/SCORING_SPEC.md)
-- [docs/reviewer_readiness.md](/Users/4475918/Projects/Galaxy_benchmark/docs/reviewer_readiness.md)
+The execution and scoring rules are in [SKILL.md](SKILL.md). The formal score model, project specification and reviewer-readiness documents that earlier versions of this README linked (`docs/`, `project_spec/`) are not in this repository. Analyses of the archived runs are documented in [manuscript_material/](manuscript_material/) and [manuscript_narrative/](manuscript_narrative/).
