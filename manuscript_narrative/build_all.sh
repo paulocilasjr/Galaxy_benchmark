@@ -22,6 +22,8 @@ export NODE_PATH
 "$PY" manuscript_narrative/user-oriented/scripts/make_figures.py
 "$PY" manuscript_narrative/galaxy-oriented/scripts/make_figures.py
 "$PY" manuscript_narrative/scripts/make_supplement.py
+"$PY" manuscript_narrative/galaxy-oriented/conformance/build_fixtures.py
+"$PY" manuscript_narrative/galaxy-oriented/conformance/selftest.py
 
 "$NARRATIVE_NODE" manuscript_narrative/build_docx.js manuscript_narrative/user-oriented \
   manuscript_narrative/user-oriented/Galaxy_agents_user_oriented_manuscript.docx

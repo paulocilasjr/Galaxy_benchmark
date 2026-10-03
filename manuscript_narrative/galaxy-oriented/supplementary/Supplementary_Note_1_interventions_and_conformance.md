@@ -41,7 +41,7 @@ The suite is a fixed set of requests that tests the adapter and server, not the 
 - Life cycle: copying a history, downloading a dataset in full and resuming an interrupted wait must work through the interface.
 - Isolation: attempts to read another run's history must be refused and logged.
 
-The suite, its expected results and its scoring script are to be published with the intervention study.
+The suite, its expected results and its scoring script are to be published with the intervention study. A first version is in `galaxy-oriented/conformance/` of the code release: 33 fixtures across R1–R6, five of them reproducing request shapes from archived bix-35-q1 job ledgers, with a scorer and a self-test in which reference responses pass and ten injected defects are each detected. It has not been run against any deployment, and its tool versions, images and output descriptions are frozen only at registration.
 
 Every fixture includes input hashes, expected resolved state, allowed defaults, output identity and expected failure phase. Add legitimate positive controls, dataset-only tools and calls whose comparison is unsupported. Include deliberate mutations that remove parameter checks, truncate receipts or permit cross-account reads; the suite must detect them before intervention results are interpreted. Some pre-dispatch failures legitimately have no stderr, so check availability states rather than requiring stderr in every phase.
 

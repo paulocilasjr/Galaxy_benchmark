@@ -36,6 +36,8 @@ The primary user endpoint is independent replay success per assigned attempt; sc
 
 **Blinding.** Standardize output summaries and remove arm labels while retaining scientific information. Record reviewers' arm guesses. Trace review is partially blinded because provenance structure can reveal the arm. A separate usability assessment uses authentic records; it cannot be fully blinded.
 
+**Packets.** `user-oriented/review/make_review_packets.py` in the code release generates blinded packets for the archived runs. It covers all discordant sets plus up to five concordant sets per benchmark × arm × stratum (660 runs in 95 tasks), with inclusion probabilities, a 20-run arm-guess pilot and 30 audit-verification cases. Because packets reveal benchmark references, they are written outside the repository. No review has been performed.
+
 **Rubric.** Each run is rated as scientifically valid, defensible but different from the reference, or invalid. Reviewers also rate whether the analysis followed the request and whether each step can be checked from the record, and they record the time taken to check it.
 
 **Reviewers.** Two domain experts per task review independently. Agreement is reported as Cohen's kappa, and a third expert resolves disagreements.

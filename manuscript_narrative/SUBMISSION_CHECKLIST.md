@@ -32,6 +32,9 @@ Run `scripts/validate_package.py --submission` after supplying these facts. A fa
 - Freeze exact model/harness/interface versions, task/input/reference hashes, budgets, retry rules and analysis code for a prospective comparison.
 - Choose held-out task counts and replication from a power calculation; justify any non-inferiority margin before observing new results.
 - Execute intervention and conformance studies, including positive, negative and mutation controls.
+  - Prepared, not executed: `galaxy-oriented/conformance/` holds 33 fixtures (five reproducing archived bix-35-q1 request shapes), a scorer and a self-test in which reference responses pass and ten injected defects are detected. Freeze values, a live driver and runs on the primary and second deployments remain.
+- Human scientific assessment and audit verification.
+  - Prepared, not performed: `user-oriented/review/make_review_packets.py` writes blinded packets outside the repository (660 runs in 95 tasks, inclusion probabilities, a 20-run arm-guess pilot, 30 audit-verification cases). Reviewers, assignment and the stage-2 reference release (CompBioBench pending maintainer permission) remain.
 - Use a second Galaxy deployment for installation robustness; implement the contract on another workbench before claiming platform transfer.
 
 These requirements affect the strength of the claims. The current drafts support conditional archive findings and testable requirements; they do not establish Galaxy superiority or a validated portable contract.

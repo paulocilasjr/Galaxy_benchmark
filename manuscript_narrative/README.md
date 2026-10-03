@@ -63,6 +63,11 @@ PYTHON=.venv-narrative/bin/python sh manuscript_narrative/build_all.sh
 
 The submission check intentionally fails while required author fields or attestations remain unresolved. DOCX pages must also be rendered and visually reviewed after layout changes; XML checks alone do not validate appearance. `NODE_BINARY` may select a Node executable, and `NODE_PATH` may select the documented bundled package directory.
 
+## Review packets and conformance fixtures
+
+- `user-oriented/review/`: generator for blinded expert-review and audit-verification packets (Supplementary Note 1, section 4). Packets reveal benchmark references, so they are written outside the repository (default `../Galaxy_benchmark_review_packets/user_oriented/`); only the answer-free sampling design and a hash manifest are kept here. No review has been performed.
+- `galaxy-oriented/conformance/`: 33 conformance fixtures for requirements R1–R6, with a scorer and a mutation self-test that `build_all.sh` runs (Supplementary Note 1, section 3). The suite has not been run against any deployment.
+
 ## What is not done here
 
 The review's steps 3 and 4 need new agent runs, human experts or a second Galaxy deployment. They are specified, not reported:
