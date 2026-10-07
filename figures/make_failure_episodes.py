@@ -23,6 +23,7 @@ import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
 AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
 EVIDENCE = [os.path.join(ROOT, b, 'analysis', '*', 'history_analysis_evidence.json') for b in ('BixBench_50', 'CompBio', 'IWC')]
@@ -119,7 +120,7 @@ def galaxy_episodes():
 
 def main():
     ep = pd.concat([galaxy_episodes(), shell_episodes()], ignore_index=True)
-    r = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    r = pd.read_csv(SCORED)
     r['run_correct'] = (r.score >= r.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     ep = ep.merge(r[['benchmark', 'task', 'cfg', 'env', 'replicate', 'run_correct', 'cluster']],
                   on=['benchmark', 'task', 'cfg', 'env', 'replicate'], how='inner')

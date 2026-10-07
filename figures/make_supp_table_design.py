@@ -1,8 +1,8 @@
 """Supplementary Table: design and run selection for each benchmark and condition (accompanies Fig. 1).
 
 From the read-only design extraction (manuscript_narrative/derived/design/per_run_design_metadata.csv) and the scored
-runs (manuscript_narrative/original_layout/analysis/accuracy_primary_runs.csv). Writes figures/supp_table_design.csv
-and figures/supp_table_design.md.
+runs (figures/scored_runs.csv, every run as the public results site shows it; make_scored_runs.py). Writes
+figures/supp_table_design.csv and figures/supp_table_design.md.
 """
 import os
 
@@ -10,7 +10,7 @@ import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
-SCORED = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis', 'accuracy_primary_runs.csv')
+SCORED = os.path.join(ROOT, 'figures', 'scored_runs.csv')
 OUT = os.path.join(ROOT, 'figures')
 PRIMARY = {'codex_gpt_5_5', 'codex_gpt_5_6_sol', 'codex_gpt_5_6_luna', 'deepseek_v4_pro_via_codex',
            'codex_deepseek_v4_pro_0813', 'codex_deepseek_v4_pro'}
@@ -57,7 +57,7 @@ def main():
                                             f'{p.prompt_file_words.max():.0f})',
             'Distinct prompt files': p.prompt_file_sha256.nunique(),
             'Time budget': budget(p),
-            'Selection note': ('Host-read removal task unscored (12 runs in this condition)' if bm == 'IWC' else '') +
+            'Selection note': ('Host-read removal scored from run_record.json, the value the results site shows' if bm == 'IWC' else '') +
                               ('Composite campaigns: some replicate vectors combine runs from different campaigns'
                                if bm == 'CompBio' else ''),
         })

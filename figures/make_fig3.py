@@ -21,6 +21,8 @@ error breakdown by channel; c, final correctness by error bin for each benchmark
 A run is correct when accepted (BixBench-Verified-50, CompBioBench) or at >= 0.99 IWC output agreement. Intervals are
 95% percentile cluster-bootstrap intervals (20,000 resamples; clusters are BixBench source capsules, otherwise tasks).
 P values come from paired cluster randomization tests (200,000 draws), Holm-adjusted within each panel.
+Scores come from figures/scored_runs.csv (make_scored_runs.py): every run as the public results site shows it
+(https://goeckslab.github.io/galaxy-agent-benchmark/), the IWC host-read removal task included.
 Writes figures/fig3.{svg,pdf,png}, fig3_source_data.csv, fig3_failure_class_codebook.csv, ed_fig3.{svg,pdf,png} and
 ed_fig3_source_data.csv, and prints the statistics.
 """
@@ -55,6 +57,7 @@ ERRORS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_
 ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
 COMPBIO_AUDIT = os.path.join(ROOT, 'CompBio', 'compBio_overview_audit.json')
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM = 20000, 20261002, 200000
 W, MM = 180.0, 1 / 25.4
 CFG = style.CONFIGS
@@ -160,7 +163,7 @@ def boot_ratio(frame, num_col, den_col):
 
 # ---------------------------------------------------------------- data
 def load_runs():
-    r = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    r = pd.read_csv(SCORED)
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = (r.score >= r.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     return r
@@ -181,6 +184,9 @@ def read_sheet(path, name):
     ws = openpyxl.load_workbook(path, read_only=True)[name]
     rows = list(ws.iter_rows(values_only=True))
     e = pd.DataFrame(rows[1:], columns=rows[0])
+    extra = os.path.join(OUT, f'wf003_{name}.csv')       # host-read removal runs (make_wf003_errors.py)
+    if name in ('abc_runs', 'abc_every_error') and os.path.exists(extra):
+        e = pd.concat([e, pd.read_csv(extra)], ignore_index=True)
     e = e[e.model_configuration != 'DeepSeek V4 Pro (Claude Code, superseded)']
     return e.assign(benchmark=e.benchmark.map({'BixBench-Verified-50': 'BixBench50', 'BixBench50': 'BixBench50',
                                                'CompBioBench': 'CompBio', 'IWC': 'IWC'}),

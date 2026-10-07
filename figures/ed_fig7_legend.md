@@ -1,5 +1,6 @@
 **Extended Data Fig. 7 \| Verification, recovery and selected cases.**
 **a**, Verification checks in 80 runs sampled at 10 per benchmark (BixBench-Verified-50, CompBioBench) × condition × outcome, coded by AI coders blind to the grade (the condition is visible in a transcript).
+Outcome is the current grade: one run sampled as incorrect (bix-53-q2) is correct after that task's regrade, so the groups hold 41 correct and 39 incorrect runs.
 A check counts when the agent explicitly tested something its answer depended on: counts or denominators; recomputation by a second method; sensitivity to a parameter or definition; an input assumption; plausibility; or a domain diagnostic.
 Right, runs in which a check changed the method or the answer.
 Intervals, 95% Wilson intervals.

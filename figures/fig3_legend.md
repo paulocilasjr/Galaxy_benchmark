@@ -7,7 +7,7 @@ Route–correctness associations are descriptive; twelve CompBioBench runs have 
 **c**, Share of execution steps that failed: Galaxy jobs of installed tools and of UDTs, and shell commands (a silent exit code 1 is not counted) in each condition, with the number of steps in parentheses.
 Fixed later, failed steps later re-run without error in the same run (for shell commands, named analysis programs only; Extended Data Fig. 7b).
 Below, errors per run; right, error types (all seven in Extended Data Fig. 3b).
-**d**, Runs correct by the number of execution errors in the run (failed shell commands plus Galaxy jobs in the error state; 3,767 runs with records).
+**d**, Runs correct by the number of execution errors in the run (failed shell commands plus Galaxy jobs in the error state; 3,791 runs with records).
 Final correctness is not recovery from each failure, and error counts are outcomes of the run.
 The unadjusted difference among runs with errors is the primary estimate; the error-bin adjustment was chosen after inspecting the bins and is exploratory.
 **e**, Parameter checks on 16,757 installed-tool requests, comparing the requested parameters with those Galaxy validated before the job or recorded after it.

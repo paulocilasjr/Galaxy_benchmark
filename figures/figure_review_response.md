@@ -146,6 +146,63 @@ The IWC and BixBench-Verified-50 results did not change.
   - 30 used Codex app connectors to Galaxy, GitHub or Hugging Face.
 - **Exposure:** one rerun (lung-cancer-sc-q1, GPT-5.5 r3) fetched the project's own results page through the GitHub connector, then reused other runs' published histories. Under the exposure scan's existing rules it counts only as "attempted"; the rule was not extended, so that other runs keep their tiers.
 
+## Scores matched to the results site (2026-10-07)
+
+Every run is now scored as the public results site shows it (https://goeckslab.github.io/galaxy-agent-benchmark/), and the IWC host-read removal task is scored.
+The previous figures are kept in `archive/2026-10-07_before_site_scores/`.
+
+**Where the scores come from:**
+- `make_scored_runs.py` writes `scored_runs.csv`, which every figure script now reads in place of the archive's `accuracy_primary_runs.csv`.
+- It starts from the archive's table and takes the site's values from `site_snapshot/`: grades and values only, no answers.
+- It stops if any BixBench-Verified-50 grade or IWC value differs from the site.
+
+**What changed:**
+- **BixBench-Verified-50:** grades follow the site, which regraded two items after the original evaluation; 27 primary runs changed.
+  - bix-53-q2 accepts "increase": 18 runs now correct. The site still shows the six DeepSeek V4 Pro runs as incorrect, and they are kept as shown.
+  - bix-43-q2 uses platform-specific two-decimal scoring: 5 runs now correct, 4 now incorrect.
+- **CompBioBench:** unchanged. The archive's grades sum to the official-leaderboard score of every replicate, which is the site's headline.
+- **IWC host-read removal (wf_003):** scored from each run's `run_record.json`, the value the site shows.
+  - This adds 24 runs: 3,840 scored runs on 160 tasks, 240 for IWC.
+  - Its earlier exclusion rested on evaluator problems: two BWA runs were scored against the Bowtie2 reference, and three runs had unregistered aligner names or routes.
+  - The site values were reproduced from the submitted files against the benchmark's route references. Every Galaxy answer is a Galaxy job output.
+  - Caveat: the minimap2 route reference is GPT-5.5 custom-code replicate 3's own submission, so that run's 1.000 is self-referential.
+  - `make_wf003_errors.py` extracts the 24 runs' execution errors with `fig_on_demand.py`'s own rules. The on-demand workbook omits the task.
+- **Failure causes (Fig. 2d, Extended Data Fig. 2a):**
+  - Audited runs that the site grades correct leave the census.
+  - The 4 bix-43-q2 runs graded incorrect only by the site have no audit entry. They take the task-level audit's cause, benchmark specification or scoring (`individual_error_analysis.md`).
+- **Population sensitivities (Extended Data Fig. 2b):** recomputed on these scores with the primary estimator, instead of read from `accuracy_sensitivities.csv`.
+- **Verification sample (Fig. 4d, Extended Data Fig. 7a):** outcomes use the current grade. D079 (bix-53-q2) is now correct, so the groups hold 41 correct and 39 incorrect runs.
+- **Fig. 5c:** "Galaxy correct" uses the site's grades: the primary grades for the archived runs, and the site's 6 July page for the round-1 batch.
+- **Fixed:** the improvement-group agreement in the Fig. 3f and Extended Data Fig. 6d subtitles read 71%. Under pandas 3, the 30 requests without a group were counted as misses; it is now 89% (107 of 120).
+
+**Numbers that moved:**
+
+| Panel | Before | After |
+|---|---|---|
+| Fig. 1a, scored runs | 3,816 on 159 tasks | 3,840 on 160 tasks |
+| Fig. 2a, GPT-5.5 BixBench-Verified-50 (custom code / Galaxy) | 87.3% / 89.3% | 90.0% / 91.3% |
+| Fig. 2b, BixBench-Verified-50, pooled | +1.3 points (−3.6 to 6.3) | +0.5 points (−3.9 to 4.8) |
+| Fig. 2b, BixBench-Verified-50, without exposed runs | +1.5 points | +0.6 points |
+| Fig. 2b, IWC agreement, pooled | +4.0 points (0.7 to 7.8), *P* = 0.06 | +3.6 points (0.6 to 7.4), *P* = 0.055 |
+| Fig. 2b, smallest Holm-adjusted *P* | 0.38 | 0.19 |
+| Fig. 2d, incorrect BixBench-Verified-50 runs | 170 | 151 |
+| Fig. 3d, unadjusted / error-bin-adjusted | +2.1, *P* = 0.10 / +3.4, *P* = 0.01 | +1.6, *P* = 0.18 / +2.8, *P* = 0.02 |
+| Fig. 3f and Extended Data Fig. 6d, improvement group named | 71% | 89% |
+| Fig. 4c, IWC task correlation | ρ = 0.91, *P* = 0.001 (9 tasks) | ρ = 0.74, *P* = 0.02 (10 tasks) |
+| Fig. 4d, coded runs correct / incorrect | 40 / 40 | 41 / 39 |
+| Fig. 5a, IWC input, Galaxy / custom code | 1.7× (0.8–3.5) | 1.8× (0.9–3.4) |
+| Fig. 5c, Galaxy correct by stage | 91%, 89%, 89%, 91% | 93%, 91%, 91%, 91% |
+| Extended Data Fig. 2b, largest IWC estimate | +16.7 points | +15.0 points |
+| Extended Data Fig. 3c, IWC among runs with errors | +7.2, *P* = 0.07 | +6.9, *P* = 0.052 |
+| Extended Data Fig. 7b, failed steps | 6,061 | 6,114 |
+
+No conclusion changed direction and no test crossed *P* = 0.05.
+Every changed Source Data value is listed in `source_data_changes/` (`compare_source_data.py`).
+
+**Not yet updated:**
+- **`individual_error_analysis.md`:** it still describes bix-53-q2 and bix-43-q2 under the original evaluator's grades.
+- **Second rater (Extended Data Fig. 6c):** 7 of its 45 sampled runs are now graded correct. The check measures agreement on the cause at audit time; both raters attributed all 7 to the benchmark.
+
 ## Still not possible with the retained material
 
 | Item | Why it cannot be done now |

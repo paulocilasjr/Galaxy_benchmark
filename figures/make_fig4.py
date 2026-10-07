@@ -20,7 +20,9 @@ Extended Data Fig. 4: a, the 15 installed tools in the most Galaxy runs (complet
 similarity by model and benchmark, with sensitivity analyses; c, answer agreement under three answer-matching rules.
 
 A run is correct when accepted or, for IWC, at >= 0.99 output agreement. Intervals are 95% percentile cluster-bootstrap
-intervals (20,000 resamples; clusters are BixBench source capsules, otherwise tasks). Writes figures/fig4.{svg,pdf,png},
+intervals (20,000 resamples; clusters are BixBench source capsules, otherwise tasks). Scores come from figures/scored_runs.csv (make_scored_runs.py): every run as the public results site shows it
+(https://goeckslab.github.io/galaxy-agent-benchmark/), the IWC host-read removal task included.
+Writes figures/fig4.{svg,pdf,png},
 fig4_source_data.csv, fig4_tool_family_codebook.csv, ed_fig4.{svg,pdf,png} and ed_fig4_source_data.csv.
 """
 import glob
@@ -56,6 +58,7 @@ GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
 EVIDENCE = [os.path.join(ROOT, 'BixBench_50', 'analysis', '*', 'history_analysis_evidence.json'),
             os.path.join(ROOT, 'CompBio', 'analysis', '*', 'history_analysis_evidence.json')]
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM = 20000, 20261002, 20000
 W, MM = 180.0, 1 / 25.4
 CFG = style.CONFIGS
@@ -220,7 +223,7 @@ def spearman_perm(x, y, strata):
 
 # ---------------------------------------------------------------- data
 def load_runs():
-    r = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    r = pd.read_csv(SCORED)
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = (r.score >= r.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     return r
@@ -1107,7 +1110,7 @@ def main():
     draw_b(fig, H, agree, b_t)
     draw_c(fig, H, 64.0, task, per, within, elig)
     import make_ed_validation as validation                # same statistics as Extended Data Fig. 7a
-    ver, _, _ = validation.verification(None)
+    ver, _, _ = validation.verification(validation.load_runs())   # outcome from current grades
     draw_d(fig, H, 64.0, ver)
     draw_e(fig, H, 113.0, tab, ci, pooled)
     save(fig, 'fig4', 'Fig. 4 | Answer agreement and tool use vary across model configurations')

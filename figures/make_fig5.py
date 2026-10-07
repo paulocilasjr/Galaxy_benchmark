@@ -25,6 +25,8 @@ calls, web searches or fetches, file reads, writes and edits), as in On-demand F
 price, so ratios are not monetary costs. A run is correct when accepted or, for IWC, at >= 0.99 output agreement.
 Intervals are 95% percentile cluster-bootstrap intervals (clusters are BixBench source capsules, otherwise tasks); P values
 come from paired cluster sign-flip randomization tests (200,000 draws; exact with at most 16 clusters).
+Scores come from figures/scored_runs.csv (make_scored_runs.py): every run as the public results site shows it
+(https://goeckslab.github.io/galaxy-agent-benchmark/), the IWC host-read removal task included.
 Writes figures/fig5.{svg,pdf,png}, fig5_source_data.csv, ed_fig5.{svg,pdf,png} and ed_fig5_source_data.csv.
 """
 import glob
@@ -59,6 +61,7 @@ GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
 DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
 ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM, B_MEDIAN = 20000, 20261002, 200000, 2000
 W, MM = 180.0, 1 / 25.4
 CFG = style.CONFIGS
@@ -101,7 +104,7 @@ rng = np.random.default_rng(SEED)
 
 # ---------------------------------------------------------------- data
 def load_runs():
-    r = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    r = pd.read_csv(SCORED)
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = r.score >= r.benchmark.map(CORRECT_AT) - 1e-9
     t = pd.read_csv(os.path.join(AN, 'token_run_observations.csv'))
@@ -354,7 +357,7 @@ def token_rounds():
 
     Tokens are input (including cached) plus output, summed over the 50 tasks and averaged over replicates; the ratio
     is the ratio of these totals (the experiment's own measure). Interval: cluster bootstrap over source capsules."""
-    clus = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    clus = pd.read_csv(SCORED)
     clus = clus[clus.benchmark == 'BixBench50'].drop_duplicates('task').set_index('task').cluster
     rows = []
     for p in glob.glob(os.path.join(TOKEN_DIR, 'earlier_rounds', 'run_traces_july6_codex', '*', '*', 'replicate_*', 'usage.json')):
@@ -364,15 +367,31 @@ def token_rounds():
         u = json.load(open(p))['totals']
         ev = json.load(open(p.replace('usage.json', 'evaluation.json')))
         rows.append(dict(source='july6', task=task_dir.replace('_', '-'), env=GAL if cond.startswith('galaxy') else CODE,
-                         tokens=u['input_tokens'] + u['output_tokens'], correct=ev['accuracy']['score'] == 1))
+                         tokens=u['input_tokens'] + u['output_tokens'], correct=ev['accuracy']['score'] == 1,
+                         replicate=int(rep.split('_')[1]), condition_dir=cond))
     inv = pd.read_csv(os.path.join(TOKEN_DIR, 'run_inventory.csv'))
     inv['tokens'] = inv.input_tokens + inv.output_tokens
     for group, model, src in (('archive_', 'Codex GPT-5.5', 'archive GPT-5.5'), ('archive_', 'Codex GPT-5.6 Sol', 'archive GPT-5.6 Sol')):
         g = inv[inv.group.str.startswith(group) & (inv.model == model)]
-        rows += [dict(source=src, task=t.task, env=t.condition, tokens=t.tokens, correct=bool(t.passed)) for t in g.itertuples()]
+        rows += [dict(source=src, task=t.task, env=t.condition, tokens=t.tokens, correct=bool(t.passed), replicate=int(t.replicate))
+                 for t in g.itertuples()]
     g = inv[inv.group == 'token_optimization_oct2026']
     rows += [dict(source='token optimization', task=t.task, env=GAL, tokens=t.tokens, correct=bool(t.passed)) for t in g.itertuples()]
     runs = pd.DataFrame(rows)
+    # correctness as the results site shows it. The archived runs take the site-matched primary
+    # grades (scored_runs.csv); the 6 July batch takes the site's July page (site_snapshot/bixbench_july6_runs.json);
+    # the October batch already matches the site (137 of 150).
+    sc = pd.read_csv(SCORED)
+    sc = sc[sc.benchmark == 'BixBench50'].set_index(['task', 'cfg', 'env', 'replicate']).score
+    arch = runs.source.str.startswith('archive')
+    cfg = runs.source.map({'archive GPT-5.5': 'GPT-5.5', 'archive GPT-5.6 Sol': 'GPT-5.6 Sol'})
+    runs.loc[arch, 'correct'] = [bool(sc[(t, c, e, r)] >= 1) for t, c, e, r in
+                                 zip(runs.task[arch], cfg[arch], runs.env[arch], runs.replicate[arch])]
+    july = pd.DataFrame(json.load(open(os.path.join(OUT, 'site_snapshot', 'bixbench_july6_runs.json')))['runs'])
+    july = july.set_index(['item', 'condition', 'replicate']).passed
+    j6 = runs.source == 'july6'
+    runs.loc[j6, 'correct'] = [bool(july[(t, c, r)]) for t, c, r in
+                               zip(runs.task[j6], runs.condition_dir[j6], runs.replicate[j6])]
     runs['cluster'] = runs.task.map(clus)
     assert runs.cluster.notna().all()
     assert runs.groupby(['source', 'env']).size().eq(150).all(), runs.groupby(['source', 'env']).size()

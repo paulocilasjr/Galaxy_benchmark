@@ -13,6 +13,8 @@ b, failure episodes: failed steps later re-run without error in the same run, an
 c, a worked parameter check (bix-43-q4): a request blocked before the job, then corrected;
 d, a selected case (variant-status-q1): outcomes of all 24 runs and the runs that ran a read-position diagnostic.
 
+Scores come from figures/scored_runs.csv (make_scored_runs.py): every run as the public results site shows it
+(https://goeckslab.github.io/galaxy-agent-benchmark/), the IWC host-read removal task included.
 Writes figures/ed_fig6.{svg,pdf,png}, ed_fig7.{svg,pdf,png}, ed_fig6_source_data.csv and ed_fig7_source_data.csv.
 CompBioBench answers are never written.
 """
@@ -41,6 +43,7 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 ANN = os.path.join(OUT, 'annotations')
 AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
 SUMMARIES = os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
@@ -109,7 +112,7 @@ def cluster_diff(d):
 
 
 def load_runs():
-    r = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    r = pd.read_csv(SCORED)
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = (r.score >= r.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     return r
@@ -152,7 +155,7 @@ def second_rater_classes():
     m['rule'] = m.rule_class.str.split(' ').str[0]
     m['same'] = m['class'] == m.rule
     m['fix'] = m.rule.map(FIX)
-    m['fix_in'] = [f in p if f else np.nan for f, p in zip(m.fix, m.prevent)]
+    m['fix_in'] = [f in p if isinstance(f, str) else np.nan for f, p in zip(m.fix, m.prevent)]   # was `if f`, true for NaN
     m['agent_only'] = [p == ['Agent error only'] for p in m.prevent]
     m['multiple'] = [len([x for x in p if x not in ('Agent error only', 'Cannot tell')]) > 1 for p in m.prevent]
     per = m.groupby('rule').same.agg(['sum', 'size'])
@@ -175,6 +178,12 @@ def verification(r):
     d.loc[d.code == 'D043', 'V5'] = False          # an answer-file download, not a plausibility check (see README)
     d['any'] = d[[k for k, _ in CHECKS[:-1]]].any(axis=1)
     d = d.merge(pd.read_csv(os.path.join(ANN, 'D_key.csv')), on='code')
+    # outcome from the site-matched grades, not the grade at sampling time (D079, bix-53-q2, was
+    # sampled as incorrect and is correct on the results site)
+    cur = r.assign(ok_now=(r.score >= 1 - 1e-9).astype(int)).set_index(['benchmark', 'task', 'cfg', 'env', 'replicate']).ok_now
+    d['ok_sampled'] = d.ok
+    d['ok'] = cur.reindex(pd.MultiIndex.from_frame(d[['benchmark', 'task', 'cfg', 'env', 'replicate']])).values
+    assert d.ok.notna().all()
     out = []
     for by in ('ok', 'env'):
         for val, g in d.groupby(by):

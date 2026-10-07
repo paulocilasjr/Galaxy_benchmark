@@ -8,7 +8,7 @@ The primary tests (bold) pool both benchmarks within each condition and permute 
 **c**, Tool-set similarity of each task against the share of its 24 runs that were correct.
 Similarity is the mean pairwise Jaccard index of the three replicate runs' sets of installed tools, plus one item for any UDT, over task–model cells in which all three Galaxy runs completed a job.
 It ignores order, versions and parameters (sensitivity analyses in Extended Data Fig. 4b); correlations are descriptive.
-**d**, Verification checks in 80 runs (10 per benchmark × condition × outcome) coded by AI coders blind to the grade; 95% Wilson intervals (by condition, Extended Data Fig. 7a).
+**d**, Verification checks in 80 runs (sampled at 10 per benchmark × condition × outcome; 41 correct and 39 incorrect under the current grades) coded by AI coders blind to the grade; 95% Wilson intervals (by condition, Extended Data Fig. 7a).
 **e**, Outcome of every BixBench-Verified-50 and CompBioBench replicate set (both conditions) by held-out difficulty, the number of incorrect runs among the task's other 21 runs.
 Error bars, 95% intervals for the share with the same rejected answer in all three runs.
 A repeated rejection can reflect an agent's error, an ambiguous reference or the scorer, so on its own it does not measure rigor.
