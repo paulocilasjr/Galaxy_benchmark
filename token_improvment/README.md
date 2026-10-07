@@ -49,6 +49,13 @@ Each `analysis/<task>/` package holds:
 - **`token_optimization_oct2026`:** the 150 new runs, stored in `analysis/`.
 - **`archive_galaxy` and `archive_open_ended_code`:** 750 runs each, five model configurations × 3 replicates per task. These are the runs of the main archive. Their trace and history links are identical to the archived ones (`links_match_archive`), so they are not copied again; `local_path` points to `BixBench_50/analysis/...`. Their tokens and pass status come from the archive's run summaries.
 
+## Earlier round (July 2026, GPT-5.5)
+
+`earlier_rounds/run_traces_july6_codex/` holds the index and each run's `usage.json` and `evaluation.json` from the HF folder `bixbench/run_traces_july6_codex`: 50 tasks × 3 replicates × 4 conditions, GPT-5.5, high reasoning, Fast tier. Traces were not copied.
+With round 1 in place (shorter skills, prompt guidance), Galaxy with skills used 148.9M tokens per 50-task run and custom code with skills 27.2M (5.48×).
+After round 2 (submission, waiting and checks in one interface call), the archived GPT-5.5 runs (`run_traces_tokens_cut_jul14`) used 66.6M and 23.7M (2.81×), 55% fewer Galaxy tokens.
+Figure 5c plots both comparisons (`figures/make_fig5.py`, `token_rounds()`). The first single-run comparison of round 1 (about 20× falling to 8×, as the lab reported) has no archived runs and is not plotted.
+
 ## Collection result (2026-10-06)
 
 - **Answers and tokens:** all 150 runs' submitted answers and input, cached-input and output token counts match `summary.json` exactly (`verification.json`).
