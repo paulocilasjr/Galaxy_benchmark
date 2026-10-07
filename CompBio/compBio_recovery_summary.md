@@ -8,8 +8,13 @@ Additional read-only retrieval retained 21 prediction vectors and provenance tab
 
 | Campaign | replicates.tsv | Dated site metadata |
 | --- | --- | --- |
+| galaxy-gpt55-r2 | 89 (official leaderboard) | 87 (official_labelled) |
+| galaxy-gpt55-r3 | 87 (predicted leaderboard) | 86 (official_labelled) |
 | sol-galaxy-r1 | 92 (predicted leaderboard) | 93 (official_labelled) |
-| sol-galaxy-r3 | 92 (predicted leaderboard) | 91 (official_labelled) |
+| sol-galaxy-r3 | 92 (predicted leaderboard) | 93 (official_labelled) |
+| codex-ds-v4pro-galaxy-r1 | 83 (predicted leaderboard) | 85 (official_labelled) |
+| codex-ds-v4pro-galaxy-r2 | 87 (predicted leaderboard) | 86 (official_labelled) |
+| codex-ds-v4pro-galaxy-r3 | 83 (predicted leaderboard) | 83 (official_labelled) |
 
 
 

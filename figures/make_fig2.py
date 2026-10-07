@@ -30,6 +30,7 @@ import os
 import sys
 
 import numpy as np
+import panel_io  # noqa: E402  (figures/panel_io.py)
 import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -375,7 +376,7 @@ def draw_a(fig, H, tab, reps):
                handletextpad=0.3, columnspacing=1.0, borderaxespad=0, frameon=False)
 
 
-def draw_b(fig, H, y0, fr):
+def draw_b(fig, H, y0, fr, exp_sens=None, n_exposed=0):
     label(fig, 0, y0, 'b', 'Paired differences: Galaxy minus custom code', H)
     rows, y = [], 0.0
     for bm in BENCH:
@@ -386,11 +387,11 @@ def draw_b(fig, H, y0, fr):
             y += 1.0
         y += 0.45
     ymax = y - 0.45
-    h = 43.0
+    h = 42.0
     cols = [('mean_score', 'Mean score', 34.0, (-15, 25), [-10, 0, 10, 20]),
             ('all_three', 'All three runs correct', 67.0, (-45, 70), [-40, 0, 40])]
     for k, (grp, title, x0, xlim, ticks) in enumerate(cols):
-        ax = axes_mm(fig, x0, y0 + 12.0, 29.0, h, H)
+        ax = axes_mm(fig, x0, y0 + 13.0, 29.0, h, H)
         g = fr[fr.group == grp].set_index(['benchmark', 'cfg'])
         for bm, c, yy in rows:
             if c is None:
@@ -423,8 +424,13 @@ def draw_b(fig, H, y0, fr):
                 else:
                     ax.text(-0.05, yy, 'All four models' if c == 'all four' else c, transform=tr, ha='right',
                             va='center', fontsize=5.5, fontweight='bold' if c == 'all four' else 'normal')
-    fig.text((0 + 4.4) / W, 1 - (y0 + 4.6) / H, '← custom code higher · Galaxy higher →  (95% intervals)', fontsize=5,
-             color=style.INK2, va='top')
+    note = '← custom code higher · Galaxy higher →  (95% intervals)'
+    if exp_sens is not None:
+        e = exp_sens[exp_sens.population == 'Without verified or probable exposure'].set_index('benchmark')['diff']
+        note += (f'\nWithout the {n_exposed} runs that reached benchmark answers: BixBench-Verified-50 '
+                 f'{e["BixBench50"]:+.1f}, CompBioBench {e["CompBio"]:+.1f} points').replace('-', '\u2212') \
+            .replace('BixBench\u2212Verified\u221250', 'BixBench-Verified-50')
+    fig.text((0 + 4.4) / W, 1 - (y0 + 4.6) / H, note, fontsize=5, color=style.INK2, va='top', linespacing=1.25)
 
 
 def draw_c(fig, H, y0, grids, summ):
@@ -501,9 +507,12 @@ def stacked_causes(ax, yy, counts, over, width_mm, bar_h=0.66, outside=False, be
     return n
 
 
-def draw_d(fig, H, y0, tab, over, cover, pairs, sets, r):
-    label(fig, 0, y0, 'd', 'Why the conditions disagree (BixBench-Verified-50)', H,
-          'Incorrect runs by primary cause (AI-assisted audit), for task–model pairs whose conditions differ or agree')
+def draw_d(fig, H, y0, tab, over, cover, pairs, sets, r, cinfo=None):
+    note = 'Incorrect runs by primary cause (AI-assisted audit), for task–model pairs whose conditions differ or agree'
+    if cinfo:
+        note += (f'\nAn independent second rater agreed on the cause for {round(cinfo["agree"] * cinfo["items"])} of '
+                 f'{cinfo["items"]} sampled runs (κ = {cinfo["kappa"]:.2f})')
+    label(fig, 0, y0, 'd', 'Why the conditions disagree (BixBench-Verified-50)', H, note)
     ax = axes_mm(fig, 43.0, y0 + 12.0, 54.0, 19.0, H)
     ypos = [0.0, 1.45, 3.05, 4.1]
     for (ptype, env, lab), yy in zip(PAIR_TYPES, ypos):
@@ -512,7 +521,7 @@ def draw_d(fig, H, y0, tab, over, cover, pairs, sets, r):
         n = stacked_causes(ax, yy, counts, o, 54.0, outside=True, below=yy == ypos[-1])
         cv = cover.loc[(ptype, env)]
         ax.text(101.5, yy, f'{n} runs · {int(cv.tasks)} tasks', ha='left', va='center', fontsize=5, color=style.INK2)
-        ax.text(-1.0, yy, f'{style.ENV_LABEL[env]} runs', ha='right', va='center', fontsize=5)
+        ax.text(-1.0, yy, f'{style.ENV_LABEL[env].replace("Custom code", "Custom-code")} runs', ha='right', va='center', fontsize=5)
         if lab:
             npairs = int(pairs.get(ptype, 0)) if ptype != 'equal' else int(
                 (sets[sets.benchmark == 'BixBench50'].pivot_table(index=['task', 'cfg'], columns='env',
@@ -652,7 +661,7 @@ def ed_sensitivity(fig, H, y0, th, sens, main):
 
 
 # ---------------------------------------------------------------- source data and assembly
-def source_data(a_tab, a_reps, fr, b_tab, grids, summ, d_tab, d_over, d_cover, d_pairs):
+def source_data(a_tab, a_reps, fr, b_tab, grids, summ, d_tab, d_over, d_cover, d_pairs, exp_sens, cinfo):
     rows = []
     endpoint = {'IWC': 'output_agreement_x100'}
     for r in a_tab.itertuples():
@@ -691,6 +700,13 @@ def source_data(a_tab, a_reps, fr, b_tab, grids, summ, d_tab, d_over, d_cover, d
     for ptype, n in d_pairs.items():
         rows.append(dict(panel='d', benchmark='BixBench50', model='all four', condition='both', group=f'pairs_{ptype}',
                          measure='task_model_pairs', value=int(n)))
+    for t in exp_sens.itertuples():
+        rows.append(dict(panel='b', benchmark=t.benchmark, model='all four', condition='galaxy-custom_code',
+                         group=t.population, measure='runs_correct_difference_points (answer-exposure sensitivity)',
+                         value=t.diff, ci95_low=t.lo, ci95_high=t.hi, n=t.runs))
+    for k in ('items', 'agree', 'kappa', 'either'):
+        rows.append(dict(panel='d', benchmark='BixBench50', model='all four', condition='both',
+                         group='independent second rater (sample)', measure=k, value=cinfo[k]))
     cols = ['panel', 'benchmark', 'model', 'condition', 'replicate', 'group', 'measure', 'value', 'ci95_low',
             'ci95_high', 'n', 'p', 'p_holm']
     out = pd.DataFrame(rows).reindex(columns=cols)
@@ -731,6 +747,7 @@ def save(fig, name, title):
 
 
 def main():
+    panel_io.record(globals(), 'fig2')   # with PANEL_DATA set, also write figures/panel_data/fig2.json
     global rng
     r = load_runs()
     sets = replicate_sets(r)
@@ -745,6 +762,11 @@ def main():
     rng = np.random.default_rng(SEED + 2)
     th = iwc_threshold(r)
     sens = archive_sensitivities()
+    import make_ed_validation as validation          # same statistics as Extended Data Fig. 6
+    exp_counts, exp_sens, _ = validation.exposure(validation.load_runs())
+    n_exposed = int(exp_counts[['verified', 'probable']].values.sum())
+    _, cinfo = validation.second_rater_causes()
+    print('exposure sensitivity'); print(exp_sens.round(3).to_string()); print(cinfo)
     for name, t in (('a: Galaxy - custom code by benchmark and model', a_t), ('b: pooled', b_tab),
                     ('b: forest', fr), ('d: causes by pair type', d_tab), ('d: coverage', d_cover),
                     ('ED: IWC thresholds', th), ('ED: census', cen)):
@@ -756,11 +778,11 @@ def main():
     fig = plt.figure(figsize=(W * MM, H * MM))
     draw_a(fig, H, a_tab, a_reps)
     y2 = 54.0
-    draw_b(fig, H, y2, fr)
+    draw_b(fig, H, y2, fr, exp_sens, n_exposed)
     draw_c(fig, H, y2, grids, summ)
-    draw_d(fig, H, 119.0, d_tab, d_over, d_cover, d_pairs, sets, r)
+    draw_d(fig, H, 119.0, d_tab, d_over, d_cover, d_pairs, sets, r, cinfo)
     save(fig, 'fig2', 'Fig. 2 | Agents show similar observed benchmark performance in Galaxy and custom code')
-    source_data(a_tab, a_reps, fr, b_tab, grids, summ, d_tab, d_over, d_cover, d_pairs)
+    source_data(a_tab, a_reps, fr, b_tab, grids, summ, d_tab, d_over, d_cover, d_pairs, exp_sens, cinfo)
 
     main_rows = fr[(fr.group == 'mean_score') & (fr.cfg == 'all four')].set_index('benchmark').loc[BENCH].reset_index()
     He = 132.0

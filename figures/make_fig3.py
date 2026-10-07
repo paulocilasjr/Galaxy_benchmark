@@ -31,6 +31,7 @@ import os
 import sys
 
 import numpy as np
+import panel_io  # noqa: E402  (figures/panel_io.py)
 import openpyxl
 import pandas as pd
 
@@ -410,7 +411,8 @@ def panel_f():
     f = nc.galaxy_failures()
     f = f[f.cfg.isin(CFG)].assign(code=lambda x: x.failure_class.str.split(' ').str[0],
                                   run=lambda x: x.run_id + '|' + x.task)
-    assert len(f) == 7354, 'failed requests of the four primary configurations'
+    # 6,904 in runs that were not rerun plus 237 in the 53 reviewed reruns (the replaced runs had 450; total was 7,354)
+    assert len(f) == 7141, 'failed requests of the four primary configurations'
     rows, book = [], []
     for name, codes, desc in FIXES:
         g = f[f.code.isin(codes)]
@@ -566,8 +568,18 @@ def draw_b(fig, H, tab, acc):
               fontsize=5.0, handlelength=0.9, handletextpad=0.3, columnspacing=0.8, labelspacing=0.2, borderaxespad=0)
 
 
-def draw_c(fig, H, y0, rates, burden, tab):
-    label(fig, 0, y0, 'c', 'How often execution steps failed', H)
+EPISODE_CHANNEL = {'galaxy_tool': 'Galaxy installed-tool jobs', 'galaxy_udt': 'Galaxy UDT jobs',
+                   'galaxy_shell': 'shell (Galaxy runs)', 'code_shell': 'shell (custom code runs)'}
+
+
+def fixed_later():
+    """Share of failed steps later re-run without error in the same run (make_failure_episodes.py)."""
+    e = pd.read_csv(os.path.join(OUT, 'failure_episodes.csv'))
+    return e.groupby('channel').resolved.agg(['mean', 'size'])
+
+
+def draw_c(fig, H, y0, rates, burden, tab, fixed=None):
+    label(fig, 0, y0, 'c', 'How often execution steps failed, and were fixed later', H)
     ax = axes_mm(fig, 33.0, y0 + 10.0, 26.0, 20.0, H)
     rr = rates.set_index('channel')
     ypos = [0, 1.3, 2.6, 4.1]
@@ -579,6 +591,10 @@ def draw_c(fig, H, y0, rates, burden, tab):
                 ax.transData), ha='right', va='center', fontsize=5.5, linespacing=1.1)
         ax.text(t.hi + 1.5, y, f'{t.value:.0f}%' if t.value >= 10 else f'{t.value:.1f}%', ha='left', va='center',
                 fontsize=5, color=style.INK2)
+        if fixed is not None:
+            f = fixed.loc[EPISODE_CHANNEL[code]]
+            ax.text((62.5 - 33.0) / 26.0 * 60, y, f'{100 * f["mean"]:.0f}%', ha='center', va='center',
+                    fontsize=5.5, clip_on=False)
     tr = blended_transform_factory(ax.transAxes, ax.transData)
     ax.text(-1.25, 1.3, 'Galaxy\nruns', transform=tr, ha='left', va='center', fontsize=5.5, fontweight='bold',
             linespacing=1.1)
@@ -591,6 +607,9 @@ def draw_c(fig, H, y0, rates, burden, tab):
     ax.set_xticks([0, 20, 40, 60])
     style.grid_x(ax)
     ax.set_xlabel('Steps that failed (%)', labelpad=1.5)
+    if fixed is not None:
+        ax.text((62.5 - 33.0) / 26.0 * 60, -1.15, 'Fixed\nlater', ha='center', va='center', fontsize=5,
+                color=style.INK2, linespacing=1.05, clip_on=False)
     # all execution errors per run
     bx = axes_mm(fig, 33.0, y0 + 38.0, 26.0, 6.0, H)
     bb = burden.set_index('env')
@@ -598,7 +617,7 @@ def draw_c(fig, H, y0, rates, burden, tab):
         t = bb.loc[env]
         bx.plot([t.lo, t.hi], [y, y], color=style.ENV_COLOR[env], lw=0.8, zorder=3)
         cond_marker(bx, t.value, y, env, ms=3.2, zorder=4)
-        bx.text(-0.04, y, f'{style.ENV_LABEL[env]} runs', transform=blended_transform_factory(bx.transAxes, bx.transData),
+        bx.text(-0.04, y, f'{style.ENV_LABEL[env].replace("Custom code", "Custom-code")} runs', transform=blended_transform_factory(bx.transAxes, bx.transData),
                 ha='right', va='center', fontsize=5.5)
         bx.text(t.hi + 0.12, y, f'{t.value:.1f}', ha='left', va='center', fontsize=5, color=style.INK2)
     bx.set_ylim(1.6, -0.6)
@@ -690,9 +709,11 @@ def draw_e(fig, H, y0, tab, follow):
              f'scientifically appropriate.', fontsize=5, color=style.INK2, va='top', linespacing=1.25)
 
 
-def draw_f(fig, H, y0, tab, runs_any):
+def draw_f(fig, H, y0, tab, runs_any, ainfo):
     label(fig, 90.0, y0, 'f', 'Failed requests and candidate infrastructure improvements', H,
-          'Failure classes grouped by the change most likely to help (unvalidated codebook in Source Data)')
+          'Failure classes grouped by the change most likely to help (codebook in Source Data); an independent rater\n'
+          f'reproduced {100 * ainfo["agree_classified"]:.0f}% of the classes and named the same improvement for '
+          f'{100 * ainfo["fix_supported"]:.0f}% of requests')
     ax = axes_mm(fig, 133.0, y0 + 12.5, 28.0, 33.0, H)
     n = len(tab)
     ypos = [i + (0.4 if t.fix in UNRESOLVED else 0) for i, t in enumerate(tab.itertuples())]
@@ -764,7 +785,7 @@ def ed_types(fig, H, y0, tab, runs):
     ax.set_xticks([0, 25, 50, 75, 100])
     ax.set_xlabel('Errors (%)')
     for y, (c, name, env) in zip(ypos, CHANNELS):
-        ax.text(-1.5, y, f'{name} ({style.ENV_LABEL[env]} runs)', ha='right', va='center', fontsize=5)
+        ax.text(-1.5, y, f'{name} ({"Galaxy" if env == GAL else "custom-code"} runs)', ha='right', va='center', fontsize=5)
         n = int(tab.loc[c].sum())
         ax.text(101.5, y, f'{n:,} ({n / runs[env]:.1f}/run)', ha='left', va='center', fontsize=5, color=style.INK2)
     ax.legend(handles=[Patch(fc=col, label=lab) for lab, col in ETYPES], loc='upper left', bbox_to_anchor=(1.25, 1.0),
@@ -892,6 +913,7 @@ def save(fig, name, title):
 
 
 def main():
+    panel_io.record(globals(), 'fig3')   # with PANEL_DATA set, also write figures/panel_data/fig3.json
     global rng
     r = load_runs()
     calls, traced = load_calls()
@@ -920,11 +942,13 @@ def main():
     draw_a(fig, H, a_tab, a_t)
     draw_b(fig, H, b_tab, b_acc)
     y2 = 63.0
-    draw_c(fig, H, y2, rates, burden, c_tab)
+    draw_c(fig, H, y2, rates, burden, c_tab, fixed_later())
     draw_d(fig, H, y2, rec, bins_)
     y3 = 113.0
     draw_e(fig, H, y3, e_tab, follow)
-    draw_f(fig, H, y3, f_tab, runs_any)
+    import make_ed_validation as validation          # same statistics as Extended Data Fig. 6d
+    _, ainfo = validation.second_rater_classes()
+    draw_f(fig, H, y3, f_tab, runs_any, ainfo)
     save(fig, 'fig3', 'Fig. 3 | Galaxy provides a structured environment for agent analyses')
     source_data(a_tab, a_t, b_tab, b_acc, b_route, rates, burden, c_tab, rec, coef, bins_, e_tab, follow, f_tab)
 

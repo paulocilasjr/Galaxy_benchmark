@@ -1,6 +1,6 @@
 **Fig. 2 \| Agents show similar observed benchmark performance in Galaxy and custom code.**
 **a**, Score of each model in the custom-code (squares) and Galaxy (circles) conditions, under each benchmark's scoring contract: acceptance by the original evaluator (BixBench-Verified-50; 150 runs per point), agreement with a reconstructed answer key (CompBioBench; 300 runs) and mean agreement with curated workflow outputs on a 0–1 scale (IWC; 27 runs).
-Small dots, replicates (one run per task).
+Dots, replicates.
 **b**, Galaxy minus custom code for each model and for the four models pooled (diamonds), for two estimands kept apart: the mean score (IWC agreement × 100) and the share of replicate sets (one task × model × condition, three runs) with all three runs correct (IWC, agreement ≥ 0.99).
 No difference was significant after Holm adjustment (smallest adjusted *P* = 0.38, GPT-5.5 on IWC); this does not establish equivalence, and no equivalence margin was prespecified.
 With nine IWC tasks, bootstrap intervals are too narrow: the pooled IWC agreement difference, +4.0 points (0.7 to 7.8), has an exact *P* of 0.06.
@@ -12,4 +12,4 @@ The six incorrect runs of the better condition in discordant pairs are in Source
 Right, a traced discordant case.
 A run is correct when accepted or, for IWC, at ≥ 0.99 agreement.
 Intervals are 95% percentile cluster-bootstrap intervals (20,000 resamples; clusters are BixBench source capsules, otherwise tasks). *P* values come from paired cluster sign-flip tests (200,000 draws; exact for IWC).
-Extended Data Fig. 2 gives the full census of causes and the sensitivity analyses.
+Extended Data Figs 2 and 6: cause census, sensitivity analyses (including answer exposure) and a second audit.

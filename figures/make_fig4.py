@@ -33,6 +33,7 @@ import re
 import sys
 
 import numpy as np
+import panel_io  # noqa: E402  (figures/panel_io.py)
 import pandas as pd
 from scipy.stats import rankdata
 
@@ -228,7 +229,7 @@ def load_runs():
 def load_calls():
     c = pd.read_csv(os.path.join(GC, 'calls.csv.gz'), low_memory=False,
                     usecols=['benchmark', 'task', 'model', 'replicate', 'tool', 'galaxy_server', 'n_jobs', 'job_states',
-                             'tool_id_base', 'tool_id_full'])
+                             'tool_id_base', 'tool_id_full', 'run_id', 'line'])
     c = c[c.model.isin(TRACE_MODEL) & c.galaxy_server].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
     c['completed'] = c.job_states.fillna('').str.contains(r'(?:^|;)ok(?=;|$)')
     cov = pd.read_csv(os.path.join(GC, 'run_coverage.csv'))
@@ -673,7 +674,8 @@ def draw_b(fig, H, agree, tests):
             ax.plot(*zip(*pts), color=style.NEUTRAL_MID, lw=0.4, zorder=2)
         if g:
             ax.axvline(g * 1.15 - 0.575, color=style.GRID, lw=0.6, zorder=1)
-    ax.set_ylim(55, 100)
+    ax.set_ylim(55, 101.5)
+    ax.spines['left'].set_bounds(55, 100)
     ax.set_yticks([60, 70, 80, 90, 100])
     style.grid_y(ax)
     ax.set_xticks([g * 1.15 for g in range(len(QA))], [BENCH_NAME[b] for b in QA], fontsize=5.5)
@@ -701,11 +703,11 @@ def draw_b(fig, H, agree, tests):
 
 def draw_c(fig, H, y0, task, per, within, elig):
     label(fig, 0, y0, 'c', 'Tool-set similarity and task accuracy', H,
-          'Galaxy; 1 = the same set of tools in all three runs (any UDT counted as one item; order, versions and '
+          'Galaxy; 1 = the same set of tools in all three runs (any UDT counted as one item; order, versions and\n'
           f'parameters ignored). Models compared on the same task: Spearman ρ = {signed(within["rho"])}, '
           f'{fmt_p(within["p"])}')
     for j, bm in enumerate(BENCH):
-        ax = axes_mm(fig, 11.0 + j * 57.0, y0 + 16.5, 50.0, 23.5, H)
+        ax = axes_mm(fig, 11.0 + j * 40.5, y0 + 21.0, 35.0, 20.0, H)
         t = task[task.benchmark == bm]
         m, col = BENCH_MARK[bm]
         jitter = rng.uniform(-1.2, 1.2, len(t))
@@ -722,14 +724,40 @@ def draw_c(fig, H, y0, task, per, within, elig):
             ax.set_ylabel('Tool-set similarity')
         p = per[bm]
         e = elig.loc[bm]
-        ax.text(0.0, 1 + 4.6 / 25.0, f'{BENCH_NAME[bm]}: ρ = {signed(p["rho"])}, {fmt_p(p["p"])}',
-                transform=ax.transAxes, ha='left', va='bottom', fontsize=5.5, fontweight='bold')
-        ax.text(0.0, 1 + 1.2 / 25.0, f'{p["tasks"]} tasks; {int(e["sum"])} of {int(e["size"])} task–model cells eligible',
-                transform=ax.transAxes, ha='left', va='bottom', fontsize=5, color=style.INK2)
+        ax.text(0.0, 1 + 5.9 / 20.0, BENCH_NAME[bm], transform=ax.transAxes, ha='left', va='bottom', fontsize=5.5,
+                fontweight='bold')
+        ax.text(0.0, 1 + 1.0 / 20.0, f'ρ = {signed(p["rho"])}, {fmt_p(p["p"])}\n{p["tasks"]} tasks; {int(e["sum"])} of '
+                f'{int(e["size"])} cells eligible', transform=ax.transAxes, ha='left', va='bottom', fontsize=5,
+                color=style.INK2, linespacing=1.2)
 
 
-def draw_d(fig, H, y0, tab, ci, counts):
-    label(fig, 0, y0, 'd', 'Replicate outcomes by held-out task difficulty', H,
+VER_LABEL = [('V1', 'Counts or denominators'), ('V2', 'Second method'), ('V3', 'Sensitivity analysis'),
+             ('V4', 'Input assumption'), ('V5', 'Plausibility'), ('V6', 'Domain diagnostic'), ('any', 'Any check')]
+
+
+def draw_d(fig, H, y0, ver):
+    """Verification checks in correct and incorrect runs (Extended Data Fig. 7a, by outcome)."""
+    label(fig, 131.0, y0, 'd', 'Verification checks', H, '80 coded runs (coder blind\nto the grade); 95% intervals')
+    ax = axes_mm(fig, 154.0, y0 + 17.0, 22.0, 24.0, H)
+    for k, (val, lab, col, mk) in enumerate(((1, 'Correct', style.INK, 'o'), (0, 'Incorrect', '#999999', 's'))):
+        d = ver[(ver.by == 'ok') & (ver.group == val)].set_index('check').reindex([c for c, _ in VER_LABEL])
+        y = np.arange(len(VER_LABEL)) + (k - 0.5) * 0.3
+        ax.errorbar(d.value, y, xerr=[d.value - d.lo, d.hi - d.value], fmt=mk, ms=2.6, color=col, mfc=col, mec='white',
+                    mew=0.3, elinewidth=0.6, capsize=0, label=lab)
+    ax.set_yticks(range(len(VER_LABEL)), [l for _, l in VER_LABEL], fontsize=5)
+    ax.get_yticklabels()[-1].set_fontweight('bold')
+    ax.set_ylim(len(VER_LABEL) - 0.4, -0.6)
+    ax.set_xlim(0, 100)
+    ax.set_xticks([0, 50, 100])
+    style.grid_x(ax)
+    ax.tick_params(axis='y', length=0)
+    ax.set_xlabel('Runs with the check (%)', labelpad=1.5)
+    ax.legend(loc='lower right', bbox_to_anchor=(1.05, 1.0), ncol=2, fontsize=5, borderaxespad=0.2, handletextpad=0.1,
+              columnspacing=0.6, handlelength=1.0)
+
+
+def draw_e(fig, H, y0, tab, ci, counts):
+    label(fig, 0, y0, 'e', 'Replicate outcomes by held-out task difficulty', H,
           'BixBench-Verified-50 and CompBioBench, both conditions; difficulty from the task\'s other 21 runs, so a '
           'set\'s own runs never define it')
     labs = [b[2] for b in DIFF_BINS]
@@ -860,6 +888,50 @@ def ed_matching(fig, H, mr):
               bbox_to_anchor=(1.0, 1.02), ncol=2, fontsize=5, borderaxespad=0)
 
 
+UDT_CLASSES = ['Statistics, machine learning and enrichment', 'Single-cell and spatial analysis',
+               'Variant calling and annotation', 'Peak calling and epigenomics', 'Genomic intervals and sequence features',
+               'Read processing and alignment', 'Expression and differential testing', 'Phylogenetics',
+               'Sequence search, taxonomy and assembly', 'Tables and text', 'Script supplied as a dataset',
+               'Environment probe or set-up', 'Other methods']
+
+
+def udt_methods(calls):
+    """Completed UDT jobs by method class (figures/udt_methods.csv, built by make_udt_methods.py), per model and
+    benchmark, as a share of that model's completed UDT jobs."""
+    u = pd.read_csv(os.path.join(OUT, 'udt_methods.csv'))
+    done = calls[(calls.tool == 'run_galaxy_udt_and_wait') & calls.completed][['run_id', 'task', 'line']]
+    u = u.merge(done, on=['run_id', 'task', 'line'])
+    tab = u.groupby(['method_class', 'benchmark', 'cfg']).size().unstack(['benchmark', 'cfg'], fill_value=0)
+    cols = pd.MultiIndex.from_product([QA, CFG])
+    tab = tab.reindex(index=UDT_CLASSES, columns=cols, fill_value=0)
+    return 100 * tab / tab.sum(axis=0).replace(0, np.nan), tab.sum(axis=0), u
+
+
+def ed_udt(fig, H, y0, pct, n):
+    label(fig, 0, y0, 'e', 'What completed UDT jobs computed', H,
+          'Share of each model\'s completed UDT jobs by method class (rules on the UDT definition: code first, '
+          'then a tool-specific container)')
+    ax = axes_mm(fig, 58.0, y0 + 12.0, 76.0, 30.0, H)
+    m = pct.values
+    cmap = LinearSegmentedColormap.from_list('blues', ['#FFFFFF', '#CFE3F1', style.GALAXY, '#063B5E'])
+    ax.imshow(m, aspect='auto', cmap=cmap, vmin=0, vmax=100, interpolation='nearest')
+    for i in range(m.shape[0]):
+        for j in range(m.shape[1]):
+            if not np.isnan(m[i, j]):
+                ax.text(j, i, f'{m[i, j]:.0f}', ha='center', va='center', fontsize=5,
+                        color='white' if m[i, j] >= 45 else style.INK)
+    ax.set_yticks(range(len(UDT_CLASSES)), UDT_CLASSES, fontsize=5)
+    ax.set_xticks(range(m.shape[1]), [f'{MODEL_SHORT[c]}\n({int(n[(b, c)])})' for b, c in pct.columns], fontsize=5)
+    ax.tick_params(length=0, pad=1.5)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.axvline(3.5, color='white', lw=1.6)
+    tr = blended_transform_factory(ax.transData, ax.transAxes)
+    for b, bm in enumerate(QA):
+        ax.text(b * 4 + 1.5, 1.01, BENCH_SHORT[bm], transform=tr, ha='center', va='bottom', fontsize=5.5,
+                fontweight='bold')
+
+
 def ed_difficulty(fig, H, y0, ds):
     label(fig, 108.0, y0, 'd', 'Same rejected answer by held-out difficulty, two definitions', H)
     ax = axes_mm(fig, 120.0, y0 + 9.0, 58.0, 20.0, H)
@@ -874,13 +946,19 @@ def ed_difficulty(fig, H, y0, ds):
     ax.set_yticks([0, 20, 40, 60])
     style.grid_y(ax)
     ax.set_ylabel('Replicate sets (%)')
-    ax.set_xlabel('Held-out difficulty (0; 1–2; 3–10 or 3–8; 11–21 or 9–18 incorrect runs)', labelpad=1.5)
+    ax.set_xlabel('Held-out task difficulty', labelpad=1.5)
     ax.legend(loc='upper left', fontsize=5, borderaxespad=0.2, handletextpad=0.3)
 
 
 # ---------------------------------------------------------------- source data and assembly
-def source_data(pct, counts, runs, agree, b_t, task, per, within, elig, tab, ci, pooled, sets):
+def source_data(pct, counts, runs, agree, b_t, task, per, within, elig, tab, ci, pooled, sets, ver=None):
     rows = []
+    if ver is not None:
+        for t in ver[ver.by == 'ok'].itertuples():
+            rows.append(dict(panel='d', benchmark='BixBench50+CompBio', model='all four',
+                             group='correct runs' if t.group == 1 else 'incorrect runs',
+                             measure=f'pct_runs_with_check: {dict(VER_LABEL)[t.check]}', value=t.value, ci95_low=t.lo,
+                             ci95_high=t.hi, n=t.n))
     for fam in pct.index:
         for bm, c in pct.columns:
             rows.append(dict(panel='a', benchmark=bm, model=c, group=fam, measure='pct_galaxy_runs_with_completed_job',
@@ -909,29 +987,30 @@ def source_data(pct, counts, runs, agree, b_t, task, per, within, elig, tab, ci,
                      p=within['p']))
     for (c, b_), t in tab.iterrows():
         for code, lab, _ in OUTCOMES:
-            rows.append(dict(panel='d', benchmark='BixBench50+CompBio', model=c, group=f'held-out incorrect {b_} of 21',
+            rows.append(dict(panel='e', benchmark='BixBench50+CompBio', model=c, group=f'held-out incorrect {b_} of 21',
                              measure=f'replicate_sets: {lab}', value=int(t[code]), n=int(t.sum())))
     for t in ci.itertuples():
-        rows.append(dict(panel='d', benchmark='BixBench50+CompBio', model=t.cfg,
+        rows.append(dict(panel='e', benchmark='BixBench50+CompBio', model=t.cfg,
                          group=f'held-out incorrect {t.diff_bin} of 21', measure='pct_sets_same_rejected_answer',
                          value=t.value, ci95_low=t.lo, ci95_high=t.hi))
     for b_, t in pooled.iterrows():
         for code, lab, _ in OUTCOMES:
-            rows.append(dict(panel='d', benchmark='BixBench50+CompBio', model='all four',
+            rows.append(dict(panel='e', benchmark='BixBench50+CompBio', model='all four',
                              group=f'held-out incorrect {b_} of 21', measure=f'replicate_sets: {lab}',
                              value=int(t[code]), n=int(t.sum())))
-    rows.append(dict(panel='d', benchmark='BixBench50+CompBio', model='all four', measure='sets_with_missing_submission',
+    rows.append(dict(panel='e', benchmark='BixBench50+CompBio', model='all four', measure='sets_with_missing_submission',
                      value=int((sets.missing > 0).sum()), n=len(sets)))
-    rows.append(dict(panel='d', benchmark='BixBench50+CompBio', model='all four',
+    rows.append(dict(panel='e', benchmark='BixBench50+CompBio', model='all four',
                      measure='sets_all_accepted_with_different_answers',
                      value=int(((sets.n_ok == 3) & (sets.same == 0)).sum()), n=len(sets)))
     cols = ['panel', 'benchmark', 'model', 'group', 'measure', 'value', 'ci95_low', 'ci95_high', 'n', 'p', 'p_holm']
     out = pd.DataFrame(rows).reindex(columns=cols)
     out['group'] = out.group.replace({'open_ended_code': 'custom_code'})
+    out = out.sort_values('panel', kind='stable')
     out.round(4).to_csv(os.path.join(OUT, 'fig4_source_data.csv'), index=False)
 
 
-def ed_source_data(top, per, runs, sim, sim_t, sens, mr, ds):
+def ed_source_data(top, per, runs, sim, sim_t, sens, mr, ds, udt_pct, udt_n):
     rows = []
     for rank, t in enumerate(top.index, 1):
         for c in CFG:
@@ -949,6 +1028,10 @@ def ed_source_data(top, per, runs, sim, sim_t, sens, mr, ds):
     for t in mr.itertuples():
         rows.append(dict(panel='c', model='all four', group=t.label, measure=f'pct_sets_same_answer ({t.env})',
                          value=t.value, n=t.sets))
+    for cls in udt_pct.index:
+        for bm, c in udt_pct.columns:
+            rows.append(dict(panel='e', benchmark=bm, model=c, group=cls, measure='pct_completed_udt_jobs',
+                             value=udt_pct.loc[cls, (bm, c)], n=int(udt_n[(bm, c)])))
     for t in ds.itertuples():
         rows.append(dict(panel='d', model='all four', group=f'{t.definition}: {t.bin} incorrect',
                          measure='pct_sets_same_rejected_answer', value=t.value, ci95_low=t.lo, ci95_high=t.hi,
@@ -970,6 +1053,7 @@ def save(fig, name, title):
 
 
 def main():
+    panel_io.record(globals(), 'fig4')   # with PANEL_DATA set, also write figures/panel_data/fig4.json
     global rng
     r = load_runs()
     calls, traced = load_calls()
@@ -1022,18 +1106,24 @@ def main():
     draw_a(fig, H, pct, runs)
     draw_b(fig, H, agree, b_t)
     draw_c(fig, H, 64.0, task, per, within, elig)
-    draw_d(fig, H, 113.0, tab, ci, pooled)
+    import make_ed_validation as validation                # same statistics as Extended Data Fig. 7a
+    ver, _, _ = validation.verification(None)
+    draw_d(fig, H, 64.0, ver)
+    draw_e(fig, H, 113.0, tab, ci, pooled)
     save(fig, 'fig4', 'Fig. 4 | Answer agreement and tool use vary across model configurations')
-    source_data(pct, counts, runs, agree, b_t, task, per, within, elig, tab, ci, pooled, sets)
+    source_data(pct, counts, runs, agree, b_t, task, per, within, elig, tab, ci, pooled, sets, ver)
 
-    He = 122.0
+    udt_pct, udt_n, udt_rows = udt_methods(calls)
+    print('UDT methods (% of completed UDT jobs)'); print(udt_pct.round(0).to_string())
+    He = 170.0
     fig = plt.figure(figsize=(W * MM, He * MM))
     ed_tools(fig, He, top, per_tool, runs_cfg)
     ed_similarity(fig, He, sim, sim_t, sens)
     ed_matching(fig, He, mr)
     ed_difficulty(fig, He, 88.0, ds)
+    ed_udt(fig, He, 122.0, udt_pct, udt_n)
     save(fig, 'ed_fig4', 'Extended Data Fig. 4 | Tool inventory, tool-set similarity and answer matching')
-    ed_source_data(top, per_tool, runs_cfg, sim, sim_t, sens, mr, ds)
+    ed_source_data(top, per_tool, runs_cfg, sim, sim_t, sens, mr, ds, udt_pct, udt_n)
 
 
 if __name__ == '__main__':

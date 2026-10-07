@@ -1,6 +1,6 @@
 # Design differences between the open-ended-code and Galaxy arms
 
-Compiled 2026-10-02 from the archived Galaxy_benchmark repository. 4,240 archived runs: BixBench50 1,500; CompBio 2,500; IWC 240. Read-only extraction; ground_truth/, evaluation.json and result.json contents, .env and credentials were not read; no agent code run; no server contacted. Machine-readable tables, with the exact source fields, are in `design_metadata.json`; `per_run_design_metadata.csv` lists one row per run. 'Not recorded' means no field holding the value was found; nothing is imputed. One public Galaxy username and two account tokens are redacted, as the archive itself does elsewhere.
+Compiled 2026-10-07 from the archived Galaxy_benchmark repository. 4,240 archived runs: BixBench50 1,500; CompBio 2,500; IWC 240. Read-only extraction; ground_truth/, evaluation.json and result.json contents, .env and credentials were not read; no agent code run; no server contacted. Machine-readable tables, with the exact source fields, are in `design_metadata.json`; `per_run_design_metadata.csv` lists one row per run. 'Not recorded' means no field holding the value was found; nothing is imputed. One public Galaxy username and two account tokens are redacted, as the archive itself does elsewhere.
 
 ## Key differences
 
@@ -8,7 +8,7 @@ Compiled 2026-10-02 from the archived Galaxy_benchmark repository. 4,240 archive
 - **Run budgets elsewhere are asymmetric or absent.** CompBio code prompts state "You have 120 minutes" for 1,294/1,300 runs (240 or 480 min for 6 single-item recovery runs). No budget is recorded for CompBio Galaxy runs or for any BixBench50 run.
 - **Prompts always differ between arms.** No task/model/replicate pair shares a prompt file (0 identical of 2,070 compared). BixBench and CompBio Galaxy prompts add execution policy: compute on Galaxy only, copy or use the assigned history, banned tools, a local-code allowlist, route selection and UDT rules, MCP tool names and blocking-call timeouts. By median they are longer: 702 vs 368 words in BixBench50 and 938 vs 227 in CompBio. IWC prompts differ in only two lines plus the logging instruction: 55 code prompts (the 12 h code runs) require structured `analysis_steps.jsonl` records, and all Galaxy prompts ask for a concise log. Prompt versions also vary within arms: BixBench uses two versions per arm (Galaxy: GPT models vs DeepSeek; code: GPT-5.5 and DeepSeek vs GPT-5.6), and CompBio Galaxy uses an older and a newer (`promptv2`) version.
 - **Harnesses and containers are not constant within configurations.** BixBench GPT-5.5 Galaxy runs used 4 image tags, mostly `full-blocking-20260715`, while its code runs mostly used `no-static-udt-resolver-20260714`. CompBio Galaxy runs ran in Docker (`galaxy-eval-agent:latest`), while CompBio code runs ran in a host conda clone with no container. IWC used one image digest for both arms, the same digest as the CompBio Galaxy image.
-- **CompBio vectors are composite campaigns, mostly in the Galaxy arm.** 387/1,200 Galaxy runs and 101/1,300 code runs come from a campaign other than the largest one in their replicate vector. 86 Galaxy runs and 0 code runs come from campaigns whose names reference wrong answers or target scores (`wrong19`, `wrongset`, `fastwrong`, `target84`, `near84`). Of the 2,400 archived paired runs, 2,399 match the registry's source campaign for that item.
+- **CompBio vectors are composite campaigns, mostly in the Galaxy arm.** 412/1,200 Galaxy runs and 101/1,300 code runs come from a campaign other than the largest one in their replicate vector. 86 Galaxy runs and 0 code runs come from campaigns whose names reference wrong answers or target scores (`wrong19`, `wrongset`, `fastwrong`, `target84`, `near84`). Of the 2,400 archived paired runs, 2,399 match the registry's source campaign for that item.
 - **Reruns and replacements exist in all benchmarks.** BixBench50 has 13 non-primary iteration settings, and IWC has 27 Galaxy and 11 code runs from rerun roots, both detailed under Q7.
 - **Other arm-specific conditions.** BixBench DeepSeek Galaxy runs (both harnesses, 300) had no local input files, while GPT Galaxy runs and all code runs did. Galaxy-only skills (`galaxy-tool-submission`, `galaxy-udt-authoring`) were removed from code runs. BixBench DeepSeek-via-Codex code runs still mounted a Galaxy API key. Some CompBio Galaxy histories were tagged `training`. Galaxy-arm registry campaigns carry two redacted account labels.
 
@@ -32,14 +32,20 @@ Source: analysis.json runs[].model_metadata.harness (mm_harness); docker image f
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | Code | bixbench-claude-agent:deepseek-v4pro-latest-20260716 | bixbench-claude-agent:deepseek-v4pro-latest-20260716 | not recorded | docker (docker_invocation.json) | claude_code | 150 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Galaxy | bixbench-codex-agent:deepseek-v4pro-formal-20260813 | bixbench-codex-agent:deepseek-v4pro-formal-20260813 | not recorded | docker (docker_invocation.json) | codex_cli_0.146.0 | 150 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Code | bixbench-codex-agent:deepseek-v4pro-formal-20260813 | bixbench-codex-agent:deepseek-v4pro-formal-20260813 | not recorded | docker (docker_invocation.json) | codex_cli_0.146.0 | 150 |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 300 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 289 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | docker | sha256:57082a89e7488823ff9713d36e4dfef07fcba3b2770f00105c0a25102ee7d48d | sha256:57082a89e748... | docker | not recorded | 11 |
 | CompBio | DeepSeek V4 Pro 0813 (Codex) | Code | conda | not recorded | not recorded | host_conda_clone | codex_cli_0146_x64_runtime | 300 |
-| CompBio | GPT-5.5 | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 244 |
+| CompBio | GPT-5.5 | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 209 |
+| CompBio | GPT-5.5 | Galaxy | docker | sha256:57082a89e7488823ff9713d36e4dfef07fcba3b2770f00105c0a25102ee7d48d | sha256:57082a89e748... | docker | not recorded | 25 |
+| CompBio | GPT-5.5 | Galaxy | docker | sha256:9a3bfbc03655784764a864f07372e9b39fbc97087460a60362be6c78937fbede | sha256:9a3bfbc03655... | docker | not recorded | 10 |
 | CompBio | GPT-5.5 | Galaxy | not recorded | not recorded | not recorded | docker | not recorded | 56 |
 | CompBio | GPT-5.5 | Code | not recorded | not recorded | not recorded | host_conda_clone | not recorded | 300 |
-| CompBio | GPT-5.6 Luna | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 300 |
+| CompBio | GPT-5.6 Luna | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 294 |
+| CompBio | GPT-5.6 Luna | Galaxy | docker | sha256:57082a89e7488823ff9713d36e4dfef07fcba3b2770f00105c0a25102ee7d48d | sha256:57082a89e748... | docker | not recorded | 5 |
+| CompBio | GPT-5.6 Luna | Galaxy | docker | sha256:9a3bfbc03655784764a864f07372e9b39fbc97087460a60362be6c78937fbede | sha256:9a3bfbc03655... | docker | not recorded | 1 |
 | CompBio | GPT-5.6 Luna | Code | not recorded | not recorded | not recorded | host_conda_clone | not recorded | 300 |
-| CompBio | GPT-5.6 Sol | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 270 |
+| CompBio | GPT-5.6 Sol | Galaxy | docker | galaxy-eval-agent:latest | sha256:57082a89e748... | docker | not recorded | 269 |
+| CompBio | GPT-5.6 Sol | Galaxy | docker | sha256:57082a89e7488823ff9713d36e4dfef07fcba3b2770f00105c0a25102ee7d48d | sha256:57082a89e748... | docker | not recorded | 1 |
 | CompBio | GPT-5.6 Sol | Galaxy | not recorded | not recorded | not recorded | docker | not recorded | 30 |
 | CompBio | GPT-5.6 Sol | Code | not recorded | not recorded | not recorded | host_conda_clone | not recorded | 300 |
 | CompBio | GPT-6 Astra | Code | conda | not recorded | not recorded | host_conda_clone | ChatGPT.app | 100 |
@@ -312,13 +318,13 @@ Source: run_record.json prepared_at_utc (workspace preparation, not execution st
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | Code | 2026-07-16 15:47 to 2026-07-16 15:47 | 2026-07-16 15:51 to 2026-07-17 18:02 | 2026-07-16 15:53 to 2026-07-17 19:14 | not recorded | not recorded |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Galaxy | 2026-08-15 02:12 to 2026-08-21 14:28 | 2026-08-15 12:46 to 2026-08-21 14:32 | 2026-08-15 12:50 to 2026-08-21 17:52 | 2026-08-15 12:47 to 2026-08-17 11:54 | not recorded |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Code | 2026-08-15 02:12 to 2026-08-15 02:12 | 2026-08-15 02:42 to 2026-08-15 21:20 | 2026-08-15 02:49 to 2026-08-15 21:23 | not recorded | not recorded |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | 2026-08-13 17:43 to 2026-08-26 01:42 | not recorded | not recorded | 2026-08-14 23:41 to 2026-08-26 16:15 | 2026-08-13 17:37 to 2026-08-26 01:20 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | 2026-08-13 17:43 to 2026-08-26 01:42 | not recorded | not recorded | 2026-08-14 23:41 to 2026-09-30 11:02 | 2026-08-13 17:37 to 2026-08-26 01:20 |
 | CompBio | DeepSeek V4 Pro 0813 (Codex) | Code | 2026-08-13 17:43 to 2026-08-23 19:47 | not recorded | not recorded | not recorded | 2026-08-13 17:37 to 2026-08-23 19:38 |
-| CompBio | GPT-5.5 | Galaxy | 2026-08-03 11:00 to 2026-08-25 14:19 | not recorded | not recorded | 2026-08-03 11:00 to 2026-08-25 14:31 | 2026-08-03 11:00 to 2026-08-25 14:20 |
+| CompBio | GPT-5.5 | Galaxy | 2026-08-03 11:00 to 2026-08-25 14:19 | not recorded | not recorded | 2026-08-03 11:00 to 2026-10-03 16:15 | 2026-08-03 11:00 to 2026-08-25 14:20 |
 | CompBio | GPT-5.5 | Code | 2026-07-30 04:41 to 2026-08-05 15:08 | not recorded | not recorded | not recorded | 2026-07-30 04:41 to 2026-08-05 15:08 |
-| CompBio | GPT-5.6 Luna | Galaxy | 2026-08-20 04:14 to 2026-08-28 02:33 | not recorded | not recorded | 2026-08-21 04:17 to 2026-08-28 03:24 | 2026-08-20 04:05 to 2026-08-28 02:30 |
+| CompBio | GPT-5.6 Luna | Galaxy | 2026-08-20 04:14 to 2026-08-28 02:33 | not recorded | not recorded | 2026-08-21 04:17 to 2026-09-30 14:27 | 2026-08-20 04:05 to 2026-08-28 02:30 |
 | CompBio | GPT-5.6 Luna | Code | 2026-08-03 22:12 to 2026-08-11 03:20 | not recorded | not recorded | not recorded | 2026-08-03 22:12 to 2026-08-11 03:19 |
-| CompBio | GPT-5.6 Sol | Galaxy | 2026-08-09 11:31 to 2026-08-24 01:34 | not recorded | not recorded | 2026-08-09 11:37 to 2026-08-24 01:44 | 2026-08-09 11:31 to 2026-08-24 01:35 |
+| CompBio | GPT-5.6 Sol | Galaxy | 2026-08-09 11:31 to 2026-08-24 01:34 | not recorded | not recorded | 2026-08-09 11:37 to 2026-09-30 08:25 | 2026-08-09 11:31 to 2026-08-24 01:35 |
 | CompBio | GPT-5.6 Sol | Code | 2026-08-05 01:54 to 2026-08-09 23:43 | not recorded | not recorded | not recorded | 2026-08-05 01:54 to 2026-08-09 23:42 |
 | CompBio | GPT-6 Astra | Code | 2026-09-10 02:00 to 2026-09-10 14:01 | not recorded | not recorded | not recorded | 2026-09-10 02:00 to 2026-09-10 14:00 |
 | IWC | DeepSeek V4 Pro (Codex) | Galaxy | not recorded | 2026-08-28 11:45 to 2026-09-02 12:55 | 2026-08-28 11:51 to 2026-09-02 14:12 | 2026-08-28 11:45 to 2026-09-02 12:55 | not recorded |
@@ -337,7 +343,7 @@ Galaxy history snapshot times (`history.json`):
 | Benchmark | Unique histories | create_time range | update_time range |
 |---|---|---|---|
 | BixBench50 | 747 | 2026-07-15T03:31 to 2026-08-17T11:54 | 2026-07-17T23:58 to 2026-08-25T11:22 |
-| CompBio | 1,200 | 2026-08-03T11:00 to 2026-08-28T03:24 | 2026-08-12T21:42 to 2026-08-28T19:55 |
+| CompBio | 1,200 | 2026-08-03T11:00 to 2026-10-03T16:15 | 2026-08-12T21:42 to 2026-10-06T11:09 |
 | IWC | 120 | 2026-08-27T08:15 to 2026-09-03T04:01 | 2026-08-29T13:24 to 2026-09-10T12:27 |
 
 | Benchmark | Model | Links | Unique | history.json present | create_time range | update_time range |
@@ -347,10 +353,10 @@ Galaxy history snapshot times (`history.json`):
 | BixBench50 | GPT-5.6 Sol | 150 | 149 | 150 | 2026-08-01T10:49 to 2026-08-02T20:28 | 2026-08-04T01:03 to 2026-08-10T12:20 |
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | 150 | 148 | 150 | 2026-07-16T15:49 to 2026-07-17T20:22 | 2026-07-18T00:00 to 2026-07-25T10:22 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | 150 | 150 | 146 | 2026-08-15T12:47 to 2026-08-17T11:54 | 2026-08-19T22:07 to 2026-08-25T11:22 |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | 300 | 300 | 300 | 2026-08-14T23:41 to 2026-08-26T16:15 | 2026-08-26T21:16 to 2026-08-28T15:18 |
-| CompBio | GPT-5.5 | 300 | 300 | 300 | 2026-08-03T11:00 to 2026-08-25T14:31 | 2026-08-12T21:42 to 2026-08-28T15:18 |
-| CompBio | GPT-5.6 Luna | 300 | 300 | 300 | 2026-08-21T04:17 to 2026-08-28T03:24 | 2026-08-28T19:37 to 2026-08-28T19:55 |
-| CompBio | GPT-5.6 Sol | 300 | 300 | 300 | 2026-08-09T11:37 to 2026-08-24T01:44 | 2026-08-12T21:45 to 2026-08-28T15:18 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | 300 | 300 | 300 | 2026-08-14T23:41 to 2026-09-30T11:02 | 2026-08-26T21:16 to 2026-10-06T11:09 |
+| CompBio | GPT-5.5 | 300 | 300 | 300 | 2026-08-03T11:00 to 2026-10-03T16:15 | 2026-08-12T21:42 to 2026-10-06T11:09 |
+| CompBio | GPT-5.6 Luna | 300 | 300 | 300 | 2026-08-21T04:17 to 2026-09-30T14:27 | 2026-08-28T19:37 to 2026-10-05T12:41 |
+| CompBio | GPT-5.6 Sol | 300 | 300 | 300 | 2026-08-09T11:37 to 2026-09-30T08:25 | 2026-08-12T21:45 to 2026-10-05T12:41 |
 | IWC | DeepSeek V4 Pro (Codex) | 30 | 30 | 30 | 2026-08-28T11:45 to 2026-09-02T12:55 | 2026-08-29T13:24 to 2026-09-10T12:27 |
 | IWC | GPT-5.5 | 30 | 30 | 30 | 2026-08-28T12:30 to 2026-09-02T05:22 | 2026-08-29T13:24 to 2026-09-10T12:27 |
 | IWC | GPT-5.6 Luna | 30 | 30 | 30 | 2026-08-27T08:15 to 2026-09-02T13:57 | 2026-08-29T13:24 to 2026-09-09T12:49 |
@@ -361,7 +367,7 @@ Evidence collection (retrospective audit):
 | Benchmark | Source retrieval (sources[].retrieval_time_utc) | Evidence audit timestamp |
 |---|---|---|
 | BixBench50 | 2026-09-20T17:33 to 2026-09-20T19:58 UTC | 2026-09-20T19:58 to 2026-09-20T20:00 UTC |
-| CompBio | 2026-09-21T20:02 to 2026-09-21T23:35 UTC | 2026-09-21T23:39 to 2026-09-21T23:41 UTC |
+| CompBio | 2026-09-21T20:02 to 2026-10-07T00:57 UTC | 2026-09-21T23:39 to 2026-10-07T01:06 UTC |
 | IWC | 2026-09-23T14:11 to 2026-09-23T14:30 UTC | 2026-09-23T14:39 to 2026-09-23T14:39 UTC |
 
 Galaxy update_time reflects the last server-side change (for example publication or later tagging), not run end. Galaxy job create_time values in evidence include jobs inherited from copied seed histories and are not used as run dates. Open-ended BixBench GPT-5.6 and DeepSeek-via-Codex runs, and all CompBio open-ended runs, have no recorded execution start; only preparation/creation or usage-write times. CompBio aggregate registry files were retrieved 2026-09-22; the IWC scientific audit was generated 2026-09-23.
@@ -382,9 +388,9 @@ Source: analysis.json runs[].galaxy_helpers_exposed (non-null only for IWC; copi
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | Code | - | not recorded: 150 | none: 150 | not_set: 150 | - | not recorded | n/a | 0 | 0 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Galaxy | https://usegalaxy.org | True: 150 | - | read_only_secret_file: 150 | - | not recorded | n/a | 150 | 14 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Code | - | False: 150 | - | read_only_secret_file: 150 | - | not recorded | n/a | 0 | 0 |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | https://usegalaxy.org | True: 300 | - | container_temp_secret_file: 300 | - | not recorded | n/a | 0 | 130 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | https://usegalaxy.org | True: 300 | - | container_temp_secret_file: 300 | - | not recorded | n/a | 0 | 133 |
 | CompBio | DeepSeek V4 Pro 0813 (Codex) | Code | - | not recorded: 300 | - | not recorded: 300 | - | not recorded | n/a | 0 | 0 |
-| CompBio | GPT-5.5 | Galaxy | https://usegalaxy.org | True: 244; not recorded: 56 | - | container_temp_secret_file: 244; not recorded: 56 | - | not recorded | n/a | 0 | 263 |
+| CompBio | GPT-5.5 | Galaxy | https://usegalaxy.org | True: 244; not recorded: 56 | - | container_temp_secret_file: 244; not recorded: 56 | - | not recorded | n/a | 0 | 262 |
 | CompBio | GPT-5.5 | Code | - | not recorded: 300 | - | not recorded: 300 | - | not recorded | n/a | 0 | 0 |
 | CompBio | GPT-5.6 Luna | Galaxy | https://usegalaxy.org | True: 300 | - | container_temp_secret_file: 300 | - | not recorded | n/a | 0 | 176 |
 | CompBio | GPT-5.6 Luna | Code | - | not recorded: 300 | - | not recorded: 300 | - | not recorded | n/a | 0 | 0 |
@@ -406,31 +412,31 @@ A recorded list of exposed Galaxy MCP tools exists only for IWC (7 tools: stage_
 
 Source: Per-run campaign = runs/<campaign>/ directory in run_record.json agent_workspace (CompBio); cross-checked against CompBio/compBio_overview_audit.json score_vectors[].source_campaigns (from paper_site_runs.json roots) and replicates/<campaign>/provenance.tsv source_run_id; BixBench: evidence runs[].iteration_setting and attempt.json experiment/attempt; IWC: codex_invocation.json run_root.
 
-Archive-to-registry check over the 2,400 paired runs: 2,322 identical campaign names and 77 identical after the archive's account redaction. 1 differs: DeepSeek Galaxy r3 `finding-geo-q1`, where the vector uses an `operator_na` final-disposition campaign and the archived trace comes from `finding_geo_strict_retry2`.
+Archive-to-registry check over the 2,400 paired runs: 2,273 identical campaign names and 73 identical after the archive's account redaction. 54 differs: DeepSeek Galaxy r3 `finding-geo-q1`, where the vector uses an `operator_na` final-disposition campaign and the archived trace comes from `finding_geo_strict_retry2`.
 
 | Model | Arm | Rep | Vector (campaign_id) | Score type | Campaigns | Runs from largest | From other campaigns | Outcome-named | Consensus/top10 | Other-replicate-labelled | Account labels (registry) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| GPT-5.5 | Galaxy | 1 | galaxy-gpt55 | official_labelled | 8 | 33 | 67 | 19 | 0 | 0 | - |
-| GPT-5.5 | Galaxy | 2 | galaxy-gpt55-r2 | official_labelled | 6 | 33 | 67 | 0 | 10 | 0 | [account-A]: 5; [account-B]: 5 |
-| GPT-5.5 | Galaxy | 3 | galaxy-gpt55-r3 | predicted | 6 | 47 | 53 | 0 | 3 | 0 | [account-B]: 46; [account-A]: 51 |
+| GPT-5.5 | Galaxy | 1 | galaxy-gpt55 | official_labelled | 9 | 33 | 67 | 19 | 0 | 0 | - |
+| GPT-5.5 | Galaxy | 2 | galaxy-gpt55-r2 | official_labelled | 15 | 32 | 68 | 0 | 8 | 0 | [account-A]: 5; [account-B]: 5 |
+| GPT-5.5 | Galaxy | 3 | galaxy-gpt55-r3 | official_labelled | 31 | 35 | 65 | 0 | 2 | 0 | [account-B]: 46; [account-A]: 51 |
 | GPT-5.5 | Code | 1 | gpt55-anycode-jul30 | official_labelled | 2 | 99 | 1 | 0 | 0 | n/a | - |
 | GPT-5.5 | Code | 2 | gpt55-anycode-r1 | official_labelled | 2 | 90 | 10 | 0 | 10 | n/a | - |
 | GPT-5.5 | Code | 3 | gpt55-anycode-r2 | official_labelled | 1 | 100 | 0 | 0 | 0 | n/a | - |
 | GPT-5.6 Sol | Galaxy | 1 | sol-galaxy-r1 | official_labelled | 3 | 65 | 35 | 19 | 0 | 0 | - |
 | GPT-5.6 Sol | Galaxy | 2 | sol-galaxy-r2 | predicted | 6 | 63 | 37 | 5 | 0 | 0 | - |
-| GPT-5.6 Sol | Galaxy | 3 | sol-galaxy-r3 | official_labelled | 6 | 76 | 24 | 5 | 0 | 0 | - |
+| GPT-5.6 Sol | Galaxy | 3 | sol-galaxy-r3 | official_labelled | 7 | 76 | 24 | 5 | 0 | 0 | - |
 | GPT-5.6 Sol | Code | 1 | sol-anycode-r1 | official_labelled | 1 | 100 | 0 | 0 | 0 | 0 | - |
 | GPT-5.6 Sol | Code | 2 | sol-anycode-r2 | official_labelled | 1 | 100 | 0 | 0 | 0 | 0 | - |
 | GPT-5.6 Sol | Code | 3 | sol-anycode-r3 | official_labelled | 2 | 99 | 1 | 0 | 0 | 0 | - |
-| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 1 | codex-ds-v4pro-galaxy-r1 | predicted | 3 | 96 | 4 | 0 | 0 | 0 | - |
-| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 2 | codex-ds-v4pro-galaxy-r2 | predicted | 2 | 86 | 14 | 0 | 0 | 0 | - |
-| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 3 | codex-ds-v4pro-galaxy-r3 | predicted | 4 | 93 | 7 | 0 | 0 | 0 | - |
+| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 1 | codex-ds-v4pro-galaxy-r1 | official_labelled | 8 | 92 | 8 | 0 | 0 | 0 | - |
+| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 2 | codex-ds-v4pro-galaxy-r2 | official_labelled | 5 | 84 | 16 | 0 | 0 | 0 | - |
+| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 3 | codex-ds-v4pro-galaxy-r3 | official_labelled | 7 | 91 | 9 | 0 | 0 | 0 | - |
 | DeepSeek V4 Pro 0813 (Codex) | Code | 1 | codex-ds-v4pro-anycode-r1 | predicted | 4 | 92 | 8 | 0 | 0 | 0 | - |
 | DeepSeek V4 Pro 0813 (Codex) | Code | 2 | codex-ds-v4pro-anycode-r2 | official_labelled | 5 | 95 | 5 | 0 | 0 | 0 | - |
 | DeepSeek V4 Pro 0813 (Codex) | Code | 3 | codex-ds-v4pro-anycode-r3 | official_labelled | 5 | 76 | 24 | 0 | 0 | 0 | - |
-| GPT-5.6 Luna | Galaxy | 1 | luna-galaxy-r1 | predicted | 10 | 52 | 48 | 11 | 0 | 1 | [account-B]: 45; [account-A]: 45 |
-| GPT-5.6 Luna | Galaxy | 2 | luna-galaxy-r2 | predicted | 7 | 81 | 19 | 17 | 0 | 1 | [account-B]: 3 |
-| GPT-5.6 Luna | Galaxy | 3 | luna-galaxy-r3 | predicted | 6 | 88 | 12 | 10 | 0 | 2 | [account-A]: 3 |
+| GPT-5.6 Luna | Galaxy | 1 | luna-galaxy-r1 | official_labelled | 13 | 51 | 49 | 11 | 0 | 1 | [account-B]: 45; [account-A]: 45 |
+| GPT-5.6 Luna | Galaxy | 2 | luna-galaxy-r2 | official_labelled | 9 | 79 | 21 | 17 | 0 | 1 | [account-B]: 3 |
+| GPT-5.6 Luna | Galaxy | 3 | luna-galaxy-r3 | official_labelled | 7 | 87 | 13 | 10 | 0 | 2 | [account-A]: 3 |
 | GPT-5.6 Luna | Code | 1 | luna-anycode-r1 | official_labelled | 2 | 99 | 1 | 0 | 0 | 0 | - |
 | GPT-5.6 Luna | Code | 2 | luna-anycode-r2 | official_labelled | 3 | 57 | 43 | 0 | 0 | 0 | - |
 | GPT-5.6 Luna | Code | 3 | luna-anycode-r3 | predicted | 5 | 94 | 6 | 0 | 0 | 0 | - |
@@ -438,7 +444,7 @@ Archive-to-registry check over the 2,400 paired runs: 2,322 identical campaign n
 
 | Arm | Runs from largest campaign | From other campaigns | Outcome-named | Consensus/top10 |
 |---|---|---|---|---|
-| Galaxy | 813 | 387 | 86 | 13 |
+| Galaxy | 788 | 412 | 86 | 10 |
 | Code | 1,199 | 101 | 0 | 10 |
 
 CompBio final vectors are composites. 'Largest campaign' is the campaign contributing most items to a vector; other campaigns include recoveries, continuations, completions, retries, repeats and fresh-history reruns. Campaign names containing 'wrong', 'wrongset', 'fastwrong', 'target84' or 'near84' (outcome_named) suggest item selection informed by earlier answers or scores; names containing 'consensus' or 'top10' indicate other selective reruns whose criterion is not stated. The selection rules are not recorded in the archive. Registry campaign names carry two account-like tokens that the archive redacts as [REDACTED ACCOUNT]; they are shown here as [account-A]/[account-B]. Cross-replicate counts compare the _rN token in the campaign name with the archived replicate label and are not computed for open-ended GPT-5.5, whose registry labels are offset (gpt55-anycode-jul30 = R1, gpt55-anycode-r1 = R2, gpt55-anycode-r2 = R3).
@@ -557,10 +563,10 @@ CompBio Galaxy history routing tag (`history_routing_tags.json`):
 
 | Model | Galaxy runs | Tag 'training' applied | Tag-disabled record |
 |---|---|---|---|
-| DeepSeek V4 Pro 0813 (Codex) | 300 | 64 | 1 |
-| GPT-5.5 | 300 | 146 | 3 |
-| GPT-5.6 Luna | 300 | 113 | 189 |
-| GPT-5.6 Sol | 300 | 18 | 0 |
+| DeepSeek V4 Pro 0813 (Codex) | 300 | 60 | 12 |
+| GPT-5.5 | 300 | 111 | 38 |
+| GPT-5.6 Luna | 300 | 107 | 195 |
+| GPT-5.6 Sol | 300 | 17 | 1 |
 
 Network-related records:
 
@@ -576,13 +582,13 @@ Network-related records:
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | Code | 150 | 0 | 0 | - | 150 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Galaxy | 150 | 0 | 0 | - | 0 |
 | BixBench50 | DeepSeek V4 Pro (Codex) | Code | 150 | 0 | 0 | - | 150 |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | 300 | 1 | 0 | - | 300 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | Galaxy | 300 | 12 | 0 | - | 300 |
 | CompBio | DeepSeek V4 Pro 0813 (Codex) | Code | 300 | 2 | 2 | - | 300 |
-| CompBio | GPT-5.5 | Galaxy | 300 | 22 | 0 | - | 300 |
+| CompBio | GPT-5.5 | Galaxy | 300 | 52 | 0 | - | 300 |
 | CompBio | GPT-5.5 | Code | 300 | 0 | 0 | - | 300 |
-| CompBio | GPT-5.6 Luna | Galaxy | 300 | 258 | 0 | - | 300 |
+| CompBio | GPT-5.6 Luna | Galaxy | 300 | 260 | 0 | - | 300 |
 | CompBio | GPT-5.6 Luna | Code | 300 | 0 | 0 | - | 300 |
-| CompBio | GPT-5.6 Sol | Galaxy | 300 | 10 | 0 | - | 300 |
+| CompBio | GPT-5.6 Sol | Galaxy | 300 | 11 | 0 | - | 300 |
 | CompBio | GPT-5.6 Sol | Code | 300 | 0 | 0 | - | 300 |
 | CompBio | GPT-6 Astra | Code | 100 | 100 | 100 | - | 100 |
 | IWC | DeepSeek V4 Pro (Codex) | Galaxy | 30 | 0 | 0 | bridge | 0 |

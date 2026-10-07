@@ -367,8 +367,12 @@ def od_fig3(seed=7):
 
 # =====================================================================================================
 KEY_DIR = os.environ.get('COMPBIO_KEY_DIR')
+# SHA-256 prefixes: the two answer files as recorded in individual_error_analysis.md; the lab results file is the
+# 2026-10-05 version (lab repository commit 9914f4899411), which differs from the earlier pinned version (055cfb18,
+# commit bdc00429f559) only in the official scores and vector hashes of the Galaxy replicates changed by the reviewed
+# reruns (CompBio/reruns_20261005).
 KEY_SHA = {'score_inferred_answers.tsv': '959dd3f2', 'compbiobench_results_score_predicted_answers.tsv': '57a6a92d',
-           'paper_site_runs_lab.json': '055cfb18'}  # SHA-256 prefixes recorded in individual_error_analysis.md
+           'paper_site_runs_lab.json': 'ff1f443b'}
 MODEL_ALL = dict(MODEL, codex_deepseek_v4_pro_0813='DeepSeek V4 Pro', codex_deepseek_v4_pro='DeepSeek V4 Pro')
 BENCH3 = [('BixBench50', 'BixBench-Verified-50'), ('CompBio', 'CompBioBench'), ('IWC', 'IWC')]
 IWC_UNMATCHED = 'wf_003_host_contamination_removal'  # not scored for GPT-5.5 open-ended code: nine matched tasks, as in Fig. 2a
@@ -1065,7 +1069,8 @@ def od_fig7(n_boot=20000, seed=20260929):
             x.update({k: audit[(b, r['task'], r['run_id'])][k] for k in ('category', 'udt_role', 'answer_source', 'confidence', 'rationale',
                                                                           'decisive_error_lines', 'udt_lines')})
         runs.append(x)
-    assert sum(1 for x in runs if x['udt'] and not x['correct']) == len(audit) == 130
+    # 130 audited runs before the reviewed CompBioBench reruns; 10 replaced runs left the audit and 14 incoming runs joined it
+    assert sum(1 for x in runs if x['udt'] and not x['correct']) == len(audit) == 134
     rng = np.random.default_rng(seed)
 
     def mh(rr, stratum):
@@ -1242,7 +1247,7 @@ def od_fig7(n_boot=20000, seed=20260929):
             "configuration; square size grows with the number of informative tasks) or within task × model configuration (diamond); 95% percentile "
             "cluster bootstrap (source capsules for BixBench-Verified-50, tasks for CompBioBench; 20,000 resamples). b, UDT job outcome from the "
             "archived analysis history (rows with fewer than 5 runs are in Source Data only: BixBench-Verified-50, every UDT job failed, 4 runs; "
-            "CompBioBench, outcome not recorded, 1 run); error location from c. c, Trace-level audit of all 130 scored-incorrect UDT runs against a fixed codebook "
+            f"CompBioBench, outcome not recorded, 1 run); error location from c. c, Trace-level audit of all {len(audit)} scored-incorrect UDT runs against a fixed codebook "
             "(on_demand/udt_audit/; layout after the stage-ordered failure taxonomy of Cemri et al., 2025).")
     fig.text(0.005, 0.072, textwrap.fill(note, 220), fontsize=5.0, color=INK2, va='top', linespacing=1.25)
     save(fig, 'OD_Fig7_udt_and_accuracy', 'User-defined tools and accuracy in the Galaxy condition')

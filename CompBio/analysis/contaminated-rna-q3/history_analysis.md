@@ -8,7 +8,7 @@ Original traces were retrieved for **25/25** rows. Public Galaxy contents were r
 
 ## 2. Main outcomes
 
-The original evaluator supplied a numeric score for **0/25** runs. These are original run evaluations, separate from saved outputs and the auditor's interpretation. The scoring field and mode are retained per run; scores from different benchmarks must not be pooled. The retrieved public histories expose **117 distinct analytical creating jobs**, including **18 failed jobs**. Native shell and MCP calls are separate from those jobs and are not equated with scientific attempts.
+The original evaluator supplied a numeric score for **0/25** runs. These are original run evaluations, separate from saved outputs and the auditor's interpretation. The scoring field and mode are retained per run; scores from different benchmarks must not be pooled. The retrieved public histories expose **100 distinct analytical creating jobs**, including **16 failed jobs**. Native shell and MCP calls are separate from those jobs and are not equated with scientific attempts.
 
 | Model slug | Galaxy score mean | Code score mean | Difference (original metric unit) | Galaxy/code median input-token ratio |
 |---|---:|---:|---:|---:|
@@ -28,7 +28,7 @@ Among the 0 runs with an original numeric evaluator score, the score field and a
 
 ### Analysis execution, failures, and recovery
 
-The retrieved public histories contain 117 distinct analytical creating jobs after excluding data-fetch jobs and deduplicating multi-output jobs and shared histories. 18 have a failed/error state. The per-run job ledgers retain tool IDs, parameters, native IDs, status, available error text, and source links. A later successful Galaxy job with the same tool and input HDA IDs is flagged as an operational recovery **candidate** for case review. Nonzero shell exits and failed Galaxy jobs are platform-specific observations; the pipeline does not manufacture a cross-condition scientific-attempt count or infer scientific recovery from a later successful command alone.
+The retrieved public histories contain 100 distinct analytical creating jobs after excluding data-fetch jobs and deduplicating multi-output jobs and shared histories. 16 have a failed/error state. The per-run job ledgers retain tool IDs, parameters, native IDs, status, available error text, and source links. A later successful Galaxy job with the same tool and input HDA IDs is flagged as an operational recovery **candidate** for case review. Nonzero shell exits and failed Galaxy jobs are platform-specific observations; the pipeline does not manufacture a cross-condition scientific-attempt count or infer scientific recovery from a later successful command alone.
 
 ### Solution-route variability across models and replicates
 
@@ -44,13 +44,13 @@ Provider usage totals are retained with their original accounting categories. Ca
 |---|---|---|---|---|---:|---:|
 | `galaxy_codex_gpt_5_5_r1` | unavailable | unavailable / unavailable | pan | unclassified | 10 / 4 | 2 |
 | `galaxy_codex_gpt_5_5_r2` | gpt-5.5 | unavailable / unavailable | pan | unclassified | 5 / 3 | 1 |
-| `galaxy_codex_gpt_5_5_r3` | gpt-5.5 | unavailable / unavailable | mesomycoplasma | unclassified | 16 / 3 | 1 |
+| `galaxy_codex_gpt_5_5_r3` | gpt-5.5 | unavailable / unavailable | pan | unclassified | 5 / 1 | 0 |
 | `open_ended_code_codex_gpt_5_5_r1` | unavailable | unavailable / unavailable | pan | local shell or script; method unclassified | unavailable / unavailable | 2 |
 | `open_ended_code_codex_gpt_5_5_r2` | unavailable | unavailable / unavailable | pan | local shell or script; method unclassified | unavailable / unavailable | 9 |
 | `open_ended_code_codex_gpt_5_5_r3` | unavailable | unavailable / unavailable | pan | local shell or script; method unclassified | unavailable / unavailable | 6 |
 | `galaxy_codex_gpt_5_6_sol_r1` | gpt-5.6-sol | unavailable / unavailable | pan | unclassified | 7 / 1 | 0 |
 | `galaxy_codex_gpt_5_6_sol_r2` | gpt-5.6-sol | unavailable / unavailable | rattus | unclassified | 24 / 3 | 2 |
-| `galaxy_codex_gpt_5_6_sol_r3` | gpt-5.6-sol | unavailable / unavailable | mesomycoplasma | unclassified | 10 / 0 | 0 |
+| `galaxy_codex_gpt_5_6_sol_r3` | gpt-5.6-sol | unavailable / unavailable | pan | unclassified | 4 / 0 | 1 |
 | `open_ended_code_codex_gpt_5_6_sol_r1` | unavailable | unavailable / unavailable | mesomycoplasma | local shell or script; method unclassified | unavailable / unavailable | 2 |
 | `open_ended_code_codex_gpt_5_6_sol_r2` | unavailable | unavailable / unavailable | pan | local shell or script; method unclassified | unavailable / unavailable | 5 |
 | `open_ended_code_codex_gpt_5_6_sol_r3` | unavailable | unavailable / unavailable | pan | local shell or script; method unclassified | unavailable / unavailable | 7 |
@@ -93,11 +93,11 @@ An independent experiment manifest is needed to establish expected coverage, see
 
 ### Abstract-ready paragraph
 
-For one selected compbio task, 25 supplied runs yielded 0 original numeric evaluator scores. Retrieved public Galaxy records exposed 117 distinct analytical creating jobs, including 18 failed jobs. These case-study counts describe the supplied links and do not establish benchmark-wide condition effects or human readability gains.
+For one selected compbio task, 25 supplied runs yielded 0 original numeric evaluator scores. Retrieved public Galaxy records exposed 100 distinct analytical creating jobs, including 16 failed jobs. These case-study counts describe the supplied links and do not establish benchmark-wide condition effects or human readability gains.
 
 ### Results draft
 
-We audited 25 workbook-listed runs for contaminated-rna-q3, retaining original agent traces, evaluator records, usage totals, and read-only Galaxy history snapshots where accessible. The original evaluator returned a numeric score for 0 runs. We kept those scores separate from saved Galaxy outputs and did not regrade answers. Distinct public Galaxy histories exposed 117 analytical creating jobs, of which 18 had failed/error status. Within-model score and input-token comparisons were calculated only where both conditions supplied compatible original fields; they are descriptive ratios or differences for a single task. Replicate seeds, complete protocol coverage, stage-attributed tokens, and blinded readability outcomes were unavailable, limiting causal and benchmark-wide inference.
+We audited 25 workbook-listed runs for contaminated-rna-q3, retaining original agent traces, evaluator records, usage totals, and read-only Galaxy history snapshots where accessible. The original evaluator returned a numeric score for 0 runs. We kept those scores separate from saved Galaxy outputs and did not regrade answers. Distinct public Galaxy histories exposed 100 analytical creating jobs, of which 16 had failed/error status. Within-model score and input-token comparisons were calculated only where both conditions supplied compatible original fields; they are descriptive ratios or differences for a single task. Replicate seeds, complete protocol coverage, stage-attributed tokens, and blinded readability outcomes were unavailable, limiting causal and benchmark-wide inference.
 
 ## CompBio source recovery
 

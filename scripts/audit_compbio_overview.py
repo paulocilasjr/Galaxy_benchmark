@@ -219,6 +219,13 @@ def build(validate_packages=False):
             "nonzero_shell_distribution":describe(r['derived_metrics']['nonzero_exit_shell_calls'] for r in sub if r['evidence_completeness']['agent_transcript']=='retrieved')}
     site=read(META/'paper_site_runs.json')
     old={r['campaign_id']:r for r in csv.DictReader((META/'compbiobench/replicates.tsv').open(),delimiter='\t')}
+    # Reviewed Galaxy reruns (2026-10-05): the archived vectors predate them, so each rerun answer replaces the vector
+    # entry it superseded, and, for the replicates that contain reruns only, the official score after the reruns
+    # replaces the archived score. Every other replicate keeps its archived entry.
+    rerun_answers={(r['task'],r['run_id']):r['answer_rerun'] for r in csv.DictReader((BASE/'reruns_20261005/rerun_manifest.csv').open())}
+    rerun_scores={('galaxy_'+SITE_MODELS[r['site_model_id']]+'_'+r['replicate']):int(r['official_score_after'])
+                  for r in csv.DictReader((BASE/'reruns_20261005/official_scores_20261005.csv').open())}
+    rerun_scores={k:v for k,v in rerun_scores.items() if any(rid==k for _,rid in rerun_answers)}
     for m in site['models']:
         for cond,v in m['conditions'].items():
             for rep in v['replicates']:
@@ -226,15 +233,20 @@ def build(validate_packages=False):
                 rid=c+'_'+SITE_MODELS[m['id']]+'_'+rep['id']
                 path=META/'compbiobench/replicates'/rep['campaign_id']/'predictions.tsv'
                 rows=list(csv.DictReader(path.open(),delimiter='\t')) if path.exists() else []
+                overrides=[a['question_id'] for a in rows if (a['question_id'],rid) in rerun_answers]
+                for a in rows:
+                    a['answer']=rerun_answers.get((a['question_id'],rid),a['answer'])
                 mismatches=[a['question_id'] for a in rows if records[a['question_id'],rid]['outcome']['submitted_answer']!=a['answer']]
-                kind='official_labelled' if 'official_score' in rep else 'predicted'
-                score=rep.get('official_score',rep.get('predicted_score'))
+                kind='official_labelled' if 'official_score' in rep or rid in rerun_scores else 'predicted'
+                score=rerun_scores.get(rid,rep.get('official_score',rep.get('predicted_score')))
                 entry={"model":SITE_MODELS[m['id']],"condition":c,"replicate":rep['id'],"campaign_id":rep['campaign_id'],
-                       "score":score,"score_type":kind,"denominator":100,"source":"source_snapshots/aggregate_metadata/paper_site_runs.json",
+                       "score":score,"score_type":kind,"denominator":100,
+                       "source":"reruns_20261005/official_scores_20261005.csv" if rid in rerun_scores else "source_snapshots/aggregate_metadata/paper_site_runs.json",
                        "source_pointer":f"models/{site['models'].index(m)}/conditions/{cond}/replicates/{v['replicates'].index(rep)}",
                        "advertised_sha256":rep['vector_sha256'],"observed_sha256":sha(path) if path.exists() else None,
                        "vector_path":str(path.relative_to(BASE)) if path.exists() else None,
                        "hash_matches":sha(path)==rep['vector_sha256'] if path.exists() else None,"answers_compared":len(rows),"answer_mismatch_tasks":mismatches,
+                       "rerun_answers_applied":overrides,
                        "source_campaigns":rep['roots'],"included_run_ids":[rid],"included_task_ids":sorted(r['question_id'] for r in rows)}
                 prior=old.get(rep['campaign_id'])
                 if prior and (float(prior['score'])!=score or ('official' in prior['score_type'])!=(kind=='official_labelled')):

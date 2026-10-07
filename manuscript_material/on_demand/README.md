@@ -19,7 +19,7 @@ A replicate set is the three replicate runs of one task × model configuration �
 |---|---|---|
 | `score_inferred_answers.tsv` | `959dd3f2` | Answers inferred from official scores (54 tasks) |
 | `compbiobench_results_score_predicted_answers.tsv` | `57a6a92d` | Predicted answers (46 tasks) |
-| `paper_site_runs_lab.json` | `055cfb18` | Official scores used for verification |
+| `paper_site_runs_lab.json` | `ff1f443b` | Official scores used for verification (version of 5 October 2026, after the reviewed CompBioBench reruns; `CompBio/reruns_20261005/`) |
 
 The script also stops unless the per-run grades reproduce all 24 official paired replicate scores. Keep these files outside this repository. Agents are run from this repository, so a key stored here could be read during a benchmark run.
 
@@ -89,7 +89,7 @@ Open symbols show run-level accuracy (single run) and filled symbols majority-vo
   - The largest IWC changes, +7.7 for DeepSeek V4 Pro (Codex) open-ended code and +3.9 for GPT-5.5 Galaxy, come from single failed replicate runs that the median discards.
 
 *Differences from other figures.*
-- Two CompBioBench replicate scores are one point above the archived values used in Fig. 2d: GPT-5.6 Sol Galaxy r3 (92 versus 91) and DeepSeek V4 Pro Galaxy r1 (84 versus 83). The grades here match the lab results file of 17 September 2026.
+- The CompBioBench replicate scores match the lab results file of 5 October 2026, which includes the reviewed Galaxy reruns (`CompBio/reruns_20261005/`). Before the reruns, two scores here were one point above the archived values (GPT-5.6 Sol Galaxy r3, 92 versus 91; DeepSeek V4 Pro Galaxy r1, 84 versus 83); both replicates now carry their official post-rerun scores (93 and 85).
 - GPT-6 Astra is excluded because it has one unpaired run per task.
 
 **On-demand Fig. 5 | Execution errors by type, and recovery from them, per benchmark.** (`OD_Fig5_execution_errors_solved`)
@@ -131,7 +131,7 @@ Recovery points carry 95% cluster-bootstrap intervals, resampling source capsule
 |---|---:|---:|
 | IWC | 3.88 versus 4.61 | 94% versus 79% |
 | BixBench-Verified-50 | 2.31 versus 2.26 | 78% versus 75% |
-| CompBioBench | 4.45 versus 2.87 | 80% versus 75% |
+| CompBioBench | 4.17 versus 2.87 | 81% versus 75% |
 
 - **Open-ended code:** errors were mostly code errors and missing software. On IWC, time or memory limits were also common (1.0 per run).
 - **Galaxy:** errors were mostly code or parameter errors (1.3–1.4 per run), and Galaxy jobs that never started. Jobs that never started were 1.25 per run on CompBioBench and 0.56 on IWC; they account for most of CompBioBench's extra Galaxy errors.
@@ -185,13 +185,13 @@ A user-defined tool (UDT) is agent-written code that Galaxy runs as a job. UDTs 
 *Results.*
 - **Association.** Requesting a UDT was not associated with lower accuracy within the same task:
   - BixBench-Verified-50: +2.7 points (0.0 to +5.8).
-  - CompBioBench: +1.9 points (−4.8 to +8.4).
+  - CompBioBench: +1.9 points (−5.0 to +8.6).
 - **Trajectory.**
-  - Runs whose UDT jobs succeeded were at least as accurate as runs without a UDT: 91% versus 82% on BixBench-Verified-50, and 89% versus 88% on CompBioBench.
-  - When every UDT job failed, 82% of 240 CompBioBench runs still reached a correct answer by another route.
+  - Runs whose UDT jobs succeeded were more accurate than runs without a UDT on BixBench-Verified-50 (91% versus 82%) and about as accurate on CompBioBench (88% versus 89%).
+  - When every UDT job failed, 82% of 198 CompBioBench runs still reached a correct answer by another route.
 - **Error location.**
   - BixBench-Verified-50: the error lay at the UDT step in 3 of 22 runs (14%).
-  - CompBioBench: at the UDT step in 50 of 108 runs (46%).
-  - Most of those were the agent's analysis written into the UDT. The UDT mechanism itself failed in 15 of 130.
+  - CompBioBench: at the UDT step in 58 of 112 runs (52%).
+  - Most of those were the agent's analysis written into the UDT. The UDT mechanism itself failed in 14 of 134.
 
 *Source Data.* Per-run records, with trace lines and rationale, are in `c_audit_per_run` and `udt_audit/udt_error_audit.jsonl`.

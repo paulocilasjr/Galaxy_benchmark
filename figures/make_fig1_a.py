@@ -587,6 +587,12 @@ def step_evaluate(cv, x, y, w, h):
 # ---------------------------------------------------------------- assemble
 def main():
     f = facts()
+    if os.environ.get('PANEL_DATA'):   # the counts this schematic shows, for the manuscript repository (panel_io.py)
+        import json
+        import panel_io
+        os.makedirs(panel_io.OUT, exist_ok=True)
+        with open(os.path.join(panel_io.OUT, 'fig1_a.json'), 'w') as fh:
+            json.dump({'script': 'fig1_a', 'facts': {k: int(v) for k, v in f.items()}}, fh, indent=1)
     n_tasks = f['bix'] + f['cb'] + f['iwc']
     n_runs = n_tasks * len(CONFIGS) * N_COND * N_REP
     n_scored_tasks = n_tasks - 1                          # IWC host-read removal has no comparable score

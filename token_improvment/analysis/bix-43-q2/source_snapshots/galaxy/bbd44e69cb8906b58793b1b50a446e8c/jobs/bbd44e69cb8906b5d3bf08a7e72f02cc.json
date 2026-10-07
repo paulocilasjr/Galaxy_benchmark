@@ -1,0 +1,68 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5d3bf08a7e72f02cc",
+  "history_id": "bbd44e69cb8906b58793b1b50a446e8c",
+  "tool_id": "pydeseq2-cbd-cisplatin-vs-dmso-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-10-05T23:04:31.485162",
+  "update_time": "2026-10-05T23:06:14.988635",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - \"/jetstream2/scratch/main/jobs/80292451/inputs/dataset_f6503445-cd4c-428d-8a8d-9028939ec34e.dat\" \"/jetstream2/scratch/main/jobs/80292451/inputs/dataset_b3d7099d-14bf-4d81-ac35-b9cad75e55cc.dat\" \"/jetstream2/scratch/main/jobs/80292451/inputs/dataset_cc1fa065-db24-424c-8a46-6b2b352851bb.dat\" <<'PY'\nimport json\nimport os\nimport sys\nimport pandas as pd\nimport numpy as np\nimport pydeseq2\nfrom pydeseq2.dds import DeseqDataSet\nfrom pydeseq2.ds import DeseqStats\n\ncounts_path, layout_path, mapping_path = sys.argv[1:4]\nraw = pd.read_csv(counts_path, index_col=0)\nraw.index = raw.index.astype(str)\nraw.columns = raw.columns.astype(str)\nraw = raw.apply(pd.to_numeric, errors=\"raise\")\nif raw.index.duplicated().any():\n    raise ValueError(\"Duplicate gene IDs in count matrix\")\nif raw.columns.duplicated().any():\n    raise ValueError(\"Duplicate sample IDs in count matrix\")\nif raw.isna().any().any():\n    raise ValueError(\"Missing count values\")\nif (raw < 0).any().any() or not np.allclose(raw.to_numpy(), np.rint(raw.to_numpy())):\n    raise ValueError(\"Counts must be nonnegative integers\")\nraw = raw.astype(int)\n\nprefilter = (raw > 10).any(axis=1)\nfiltered = raw.loc[prefilter].copy()\n\nlayout = pd.read_csv(layout_path)\nrequired_layout = {\"SampleID\", \"Group\"}\nif not required_layout.issubset(layout.columns):\n    raise ValueError(\"sample_layout.csv lacks SampleID or Group\")\nlayout[\"sample\"] = layout[\"SampleID\"].astype(str).str.replace(\"-\", \"_\", regex=False)\nwanted_groups = [\n    \"DMSO\",\n    \"DMSO_Serum_starvation\",\n    \"Cisplatin_IC50_CBD_IC50\",\n    \"Cisplatin_IC50_CBD_IC50_Serum_starvation_16h\",\n]\nmetadata = layout.loc[layout[\"Group\"].isin(wanted_groups), [\"sample\", \"Group\"]].copy()\nif metadata[\"sample\"].duplicated().any():\n    raise ValueError(\"Duplicate selected SampleID\")\nmetadata = metadata.set_index(\"sample\")\nmissing = [s for s in metadata.index if s not in filtered.columns]\nif missing:\n    raise ValueError(\"Selected samples absent from count matrix: \" + \",\".join(missing))\nif metadata.shape[0] != 12 or set(metadata[\"Group\"]) != set(wanted_groups):\n    raise ValueError(\"Expected exactly 12 samples across the four requested groups\")\n\ncounts = filtered.loc[:, metadata.index].T\nn_cpus = max(1, int(os.environ.get(\"GALAXY_SLOTS\", \"1\")))\ndds = DeseqDataSet(\n    counts=counts,\n    metadata=metadata,\n    design=\"~Group\",\n    refit_cooks=True,\n    n_cpus=n_cpus,\n)\ndds.deseq2()\nstats = DeseqStats(\n    dds,\n    contrast=[\"Group\", \"Cisplatin_IC50_CBD_IC50\", \"DMSO\"],\n    alpha=0.05,\n    cooks_filter=True,\n    independent_filter=True,\n    n_cpus=n_cpus,\n)\nstats.summary()\nres = stats.results_df.copy()\nres.index.name = \"ENSG\"\nres.to_csv(\"pydeseq2_results.tsv\", sep=\"\\t\", index=True)\n\nsig_mask = (\n    res[\"padj\"].notna()\n    & (res[\"padj\"] <= 0.05)\n    & (res[\"log2FoldChange\"].abs() >= 0.5)\n    & (res[\"baseMean\"] >= 10)\n)\nsig_ids = res.index[sig_mask].astype(str)\nmapping = pd.read_csv(mapping_path, sep=\"\\t\", dtype=str)\nif not {\"ENSG\", \"gene_name\"}.issubset(mapping.columns):\n    raise ValueError(\"Mapping file lacks ENSG or gene_name\")\nmapping = mapping.dropna(subset=[\"ENSG\", \"gene_name\"]).drop_duplicates(subset=[\"ENSG\"], keep=\"first\")\nmapped = mapping.loc[mapping[\"ENSG\"].isin(sig_ids), [\"ENSG\", \"gene_name\"]].copy()\ngenes = sorted(set(x.strip() for x in mapped[\"gene_name\"].astype(str) if x.strip()))\nwith open(\"de_gene_names.txt\", \"w\") as out:\n    for gene in genes:\n        out.write(gene + \"\\n\")\n\naudit = {\n    \"pydeseq2_version\": pydeseq2.__version__,\n    \"design\": \"~Group\",\n    \"included_groups\": wanted_groups,\n    \"contrast\": [\"Group\", \"Cisplatin_IC50_CBD_IC50\", \"DMSO\"],\n    \"all_input_samples_prefilter_scope\": int(raw.shape[1]),\n    \"input_genes\": int(raw.shape[0]),\n    \"prefilter_rule\": \"count > 10 in at least one of all 30 samples\",\n    \"genes_after_prefilter\": int(filtered.shape[0]),\n    \"model_samples\": int(counts.shape[0]),\n    \"alpha\": 0.05,\n    \"thresholds\": {\"padj_max\": 0.05, \"abs_log2FoldChange_min\": 0.5, \"baseMean_min\": 10},\n    \"significant_ensg_count\": int(sig_mask.sum()),\n    \"mapped_foreground_unique_gene_count\": int(len(genes)),\n    \"unmapped_significant_ensg_count\": int(len(set(sig_ids) - set(mapped[\"ENSG\"]))),\n}\nwith open(\"audit.json\", \"w\") as out:\n    json.dump(audit, out, indent=2, sort_keys=True)\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a472135ba218aa6e0230b9c",
+      "src": "hda",
+      "uuid": "f6503445-cd4c-428d-8a8d-9028939ec34e"
+    },
+    "layout": {
+      "id": "f9cad7b01a472135d6afd853beb8752c",
+      "src": "hda",
+      "uuid": "b3d7099d-14bf-4d81-ac35-b9cad75e55cc"
+    },
+    "mapping": {
+      "id": "f9cad7b01a4721350084e4ac70b44d76",
+      "src": "hda",
+      "uuid": "cc1fa065-db24-424c-8a46-6b2b352851bb"
+    }
+  },
+  "outputs": {
+    "results": {
+      "id": "f9cad7b01a472135e0b4285e7fb4c71f",
+      "src": "hda",
+      "uuid": "7359552e-6727-4aa8-a223-fe0b27258aa5"
+    },
+    "gene_list": {
+      "id": "f9cad7b01a472135c0f6a382c021c00e",
+      "src": "hda",
+      "uuid": "8333d55e-a84b-4439-8528-13a53eab4aa0"
+    },
+    "audit": {
+      "id": "f9cad7b01a4721351d18d2d05b0b4e18",
+      "src": "hda",
+      "uuid": "45e2bfe9-7470-4a4b-9760-3429e655fa68"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "Using None as control genes, passed at DeseqDataSet initialization\nLog2 fold change & Wald test p-value: Group Cisplatin_IC50_CBD_IC50 vs DMSO\n                   baseMean  log2FoldChange  ...    pvalue      padj\nENSG00000227232  405.417697        0.075029  ...  0.542424  0.752576\nENSG00000238009    7.056737        0.203513  ...  0.795062       NaN\nENSG00000237683  822.713199       -0.018202  ...  0.873105  0.947233\nENSG00000268903    4.796108       -0.768451  ...  0.373425       NaN\nENSG00000239906   10.009269        0.628877  ...  0.283913       NaN\n...                     ...             ...  ...       ...       ...\nENSG00000267793    3.965080       -0.917924  ...  0.293887       NaN\nENSG00000260197   18.275125        0.441250  ...  0.392765  0.638010\nENSG00000012817  386.210962        0.271205  ...  0.020681  0.111045\nENSG00000198692  139.610135        0.144948  ...  0.363290  0.614642\nENSG00000237917   20.786336        0.264502  ...  0.519598  0.738933\n\n[20130 rows x 6 columns]\n",
+  "tool_stderr": "Fitting size factors...\n... done in 0.02 seconds.\n\nFitting dispersions...\n... done in 4.88 seconds.\n\nFitting dispersion trend curve...\n... done in 0.43 seconds.\n\nFitting MAP dispersions...\n... done in 7.08 seconds.\n\nFitting LFCs...\n... done in 3.36 seconds.\n\nCalculating cook's distance...\n... done in 0.02 seconds.\n\nReplacing 0 outlier genes.\n\nRunning Wald tests...\n... done in 1.22 seconds.\n\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "Using None as control genes, passed at DeseqDataSet initialization\nLog2 fold change & Wald test p-value: Group Cisplatin_IC50_CBD_IC50 vs DMSO\n                   baseMean  log2FoldChange  ...    pvalue      padj\nENSG00000227232  405.417697        0.075029  ...  0.542424  0.752576\nENSG00000238009    7.056737        0.203513  ...  0.795062       NaN\nENSG00000237683  822.713199       -0.018202  ...  0.873105  0.947233\nENSG00000268903    4.796108       -0.768451  ...  0.373425       NaN\nENSG00000239906   10.009269        0.628877  ...  0.283913       NaN\n...                     ...             ...  ...       ...       ...\nENSG00000267793    3.965080       -0.917924  ...  0.293887       NaN\nENSG00000260197   18.275125        0.441250  ...  0.392765  0.638010\nENSG00000012817  386.210962        0.271205  ...  0.020681  0.111045\nENSG00000198692  139.610135        0.144948  ...  0.363290  0.614642\nENSG00000237917   20.786336        0.264502  ...  0.519598  0.738933\n\n[20130 rows x 6 columns]\n",
+  "stderr": "Fitting size factors...\n... done in 0.02 seconds.\n\nFitting dispersions...\n... done in 4.88 seconds.\n\nFitting dispersion trend curve...\n... done in 0.43 seconds.\n\nFitting MAP dispersions...\n... done in 7.08 seconds.\n\nFitting LFCs...\n... done in 3.36 seconds.\n\nCalculating cook's distance...\n... done in 0.02 seconds.\n\nReplacing 0 outlier genes.\n\nRunning Wald tests...\n... done in 1.22 seconds.\n\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

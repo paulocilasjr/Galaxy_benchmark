@@ -1,0 +1,98 @@
+{
+  "config.json": {
+    "head": "{\n  \"architectures\": [\n    \"CaduceusForMaskedLM\"\n  ],\n  \"auto_map\": {\n    \"AutoConfig\": \"configuration_caduceus.CaduceusConfig\",\n    \"AutoModel\": \"modeling_caduceus.Caduceus\",\n    \"AutoModelForMaskedLM\": \"modeling_caduceus.CaduceusForMaskedLM\",\n    \"AutoModelForSequenceClassification\": \"modeling_caduceus.CaduceusForSequenceClassification\"\n  },\n  \"bidirectional\": true,\n  \"bidirectional_strategy\": \"add\",\n  \"bidirectional_weight_tie\": true,\n  \"complement_map\": {\n    \"0\": 0,\n    \"1\": 1,\n    \"2\": 2,\n    \"3\": 3,\n    \"4\": 4,\n    \"5\": 5,\n    \"6\": 6,\n    \"7\": 10,\n    \"8\": 9,\n    \"9\": 8,\n    \"10\": 7,\n    \"11\": 11,\n    \"12\": 12,\n    \"13\": 13,\n    \"14\": 14,\n    \"15\": 15\n  },\n  \"d_model\": 256,\n  \"fused_add_norm\": true,\n  \"initializer_cfg\": {\n    \"initializer_range\": 0.02,\n    \"n_residuals_per_layer\": 1,\n    \"rescale_prenorm_residual\": true\n  },\n  \"model_type\": \"caduceus\",\n  \"n_layer\": 16,\n  \"norm_epsilon\": 1e-05,\n  \"pad_vocab_size_multiple\": 8,\n  \"rcps\": false,\n  \"residual_in_fp32\": false,\n  \"rms_norm\": true,\n  \"ssm_cfg\": {\n    \"bias\": false,\n    \"conv_bias\": true,\n    \"d_conv\": 4,\n    \"d_state\": 16,\n    \"dt_init\": \"random\",\n    \"dt_init_floor\": 0.0001,\n    \"dt_max\": 0.1,\n    \"dt_min\": 0.001,\n    \"dt_rank\": \"auto\",\n    \"dt_scale\": 1.0,\n    \"expand\": 2,\n    \"use_fast_path\": true\n  },\n  \"torch_dtype\": \"float32\",\n  \"transformers_version\": \"4.38.1\",\n  \"vocab_size\": 16\n}\n",
+    "imports": [],
+    "mamba_mentions": [],
+    "size": 1376
+  },
+  "configuration_caduceus.py": {
+    "head": "\"\"\"Caduceus config for Hugging Face.\n\n\"\"\"\n\nfrom typing import Optional, Union\n\nfrom transformers import PretrainedConfig\n\n\nclass CaduceusConfig(PretrainedConfig):\n    \"\"\"Config that extends the original MambaConfig with params relevant to bi-directionality and RC equivariance.\"\"\"\n    model_type = \"caduceus\"\n\n    def __init__(\n            self,\n            # From original MambaConfig\n            d_model: int = 2560,\n            n_layer: int = 64,\n            vocab_size: int = 50277,\n            ssm_cfg: Optional[dict] = None,\n            rms_norm: bool = True,\n            residual_in_fp32: bool = True,\n            fused_add_norm: bool = True,\n            pad_vocab_size_multiple: int = 8,\n\n            # Not in original MambaConfig, but default arg in create_block in mamba_ssm repo; used in layer norm\n            norm_epsilon: float = 1e-5,\n\n            # Used in init_weights\n            initializer_cfg: Optional[dict] = None,\n\n            # Caduceus-specific params\n            bidirectional: bool = True,\n            bidirectional_strategy: Union[str, None] = \"add\",\n            bidirectional_weight_tie: bool = True,\n            rcps: bool = False,\n            complement_map: Optional[dict] = None,  # used for RCPSEmbedding / RCPSLMHead\n            **kwargs,\n    ):\n        super().__init__(**kwargs)\n        self.d_model = d_model\n        self.n_layer = n_layer\n        self.vocab_size = vocab_size\n        self.ssm_cfg = ssm_cfg\n        self.rms_norm = rms_norm\n        self.residual_in_fp32 = residual_in_fp32\n        self.fused_add_norm = fused_add_norm\n        self.pad_vocab_size_multiple = pad_vocab_size_multiple\n        self.norm_epsilon = norm_epsilon\n        self.initializer_cfg = initializer_cfg\n        self.bidirectional = bidirectional\n        self.bidirectional_strategy = bidirectional_strategy\n        self.bidirectional_weight_tie = bidirectional_weight_tie\n        self.rcps = rcps\n        self.complement_map = complement_map\n",
+    "imports": [
+      "from typing import Optional, Union",
+      "from transformers import PretrainedConfig"
+    ],
+    "mamba_mentions": [
+      "\"\"\"Config that extends the original MambaConfig with params relevant to bi-directionality and RC equivariance.\"\"\"",
+      "# From original MambaConfig",
+      "# Not in original MambaConfig, but default arg in create_block in mamba_ssm repo; used in layer norm"
+    ],
+    "size": 1964
+  },
+  "modeling_caduceus.py": {
+    "head": "\"\"\"Caduceus model for Hugging Face.\n\n\"\"\"\n\nimport inspect\nimport math\nfrom functools import partial\nfrom typing import Optional, Tuple, Union\n\nimport torch\nfrom mamba_ssm.modules.mamba_simple import Mamba\ntry:\n    from mamba_ssm.modules.mamba_simple import Block  # Legacy mambav1 file structure\nexcept ImportError:\n    from mamba_ssm.modules.block import Block  # mambav2 file structure\nfrom torch import nn\nfrom torch.nn import functional as F\nfrom transformers import PreTrainedModel\nfrom transformers.modeling_outputs import BaseModelOutputWithNoAttention, MaskedLMOutput, SequenceClassifierOutput\n\ntry:\n    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn  # Legacy mambav1 file structure\nexcept ImportError:\n    try:\n        from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn  # mambav2 file structure\n    except ImportError:\n        RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None\n\nfrom .configuration_caduceus import CaduceusConfig\nfrom .modeling_rcps import RCPSAddNormWrapper, RCPSEmbedding, RCPSLMHead, RCPSMambaBlock\n\n\ndef create_block(\n        d_model,\n        ssm_cfg=None,\n        norm_epsilon=1e-5,\n        rms_norm=False,\n        residual_in_fp32=False,\n        fused_add_norm=False,\n        layer_idx=None,\n        bidirectional=True,\n        bidirectional_strategy=\"add\",\n        bidirectional_weight_tie=True,\n        rcps=False,\n        device=None,\n        dtype=None,\n):\n    \"\"\"Create Caduceus block.\n\n    Adapted from: https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py\n    \"\"\"\n    if ssm_cfg is None:\n        ssm_cfg = {}\n    factory_kwargs = {\"device\": device, \"dtype\": dtype}\n    bidirectional_kwargs = {\n        \"bidirectional\": bidirectional,\n        \"bidirectional_strategy\": bidirectional_strategy,\n        \"bidirectional_weight_tie\": bidirectional_weight_tie,\n    }\n    mixer_cls = partial(BiMambaWrapper, layer_idx=layer_idx, **ssm_cfg, **bidirectional_kwargs, **factory_kwargs)\n    norm_cls = partial(\n        nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon, **factory_kwargs\n    )\n    block_cls = RCPSMambaBlock if rcps else Block\n    # mambav2 compatibility\n    if \"mlp_cls\" in inspect.signature(block_cls.__init__).parameters:\n        block = block_cls(\n            d_model,\n            mixer_cls,\n            mlp_cls=nn.Identity,\n            norm_cls=norm_cls,\n            fused_add_norm=fused_add_norm,\n            residual_in_fp32=residual_in_fp32,\n        )\n    else:\n        block = block_cls(\n            d_model,\n            mixer_cls,\n            norm_cls=norm_cls,\n            fused_add_norm=fused_add_norm,\n            residual_in_fp32=residual_in_fp32,\n        )\n    block.layer_idx = layer_idx\n    return block\n\n\nclass BiMambaWrapper(nn.Module):\n    \"\"\"Thin wrapper around Mamba to support bi-directionality.\"\"\"\n\n    def __init__(\n            self,\n            d_model: int,\n            bidirectional: bool = True,\n            bidirectional",
+    "imports": [
+      "import inspect",
+      "import math",
+      "from functools import partial",
+      "from typing import Optional, Tuple, Union",
+      "import torch",
+      "from mamba_ssm.modules.mamba_simple import Mamba",
+      "from torch import nn",
+      "from torch.nn import functional as F",
+      "from transformers import PreTrainedModel",
+      "from transformers.modeling_outputs import BaseModelOutputWithNoAttention, MaskedLMOutput, SequenceClassifierOutput",
+      "from .configuration_caduceus import CaduceusConfig",
+      "from .modeling_rcps import RCPSAddNormWrapper, RCPSEmbedding, RCPSLMHead, RCPSMambaBlock"
+    ],
+    "mamba_mentions": [
+      "from mamba_ssm.modules.mamba_simple import Mamba",
+      "from mamba_ssm.modules.mamba_simple import Block  # Legacy mambav1 file structure",
+      "from mamba_ssm.modules.block import Block  # mambav2 file structure",
+      "from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn  # Legacy mambav1 file structure",
+      "from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn  # mambav2 file structure",
+      "RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None",
+      "from .modeling_rcps import RCPSAddNormWrapper, RCPSEmbedding, RCPSLMHead, RCPSMambaBlock",
+      "Adapted from: https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py",
+      "mixer_cls = partial(BiMambaWrapper, layer_idx=layer_idx, **ssm_cfg, **bidirectional_kwargs, **factory_kwargs)",
+      "nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon, **factory_kwargs",
+      "block_cls = RCPSMambaBlock if rcps else Block",
+      "# mambav2 compatibility",
+      "class BiMambaWrapper(nn.Module):",
+      "\"\"\"Thin wrapper around Mamba to support bi-directionality.\"\"\"",
+      "**mamba_kwargs,",
+      "self.mamba_fwd = Mamba(",
+      "**mamba_kwargs",
+      "self.mamba_rev = Mamba(",
+      "**mamba_kwargs",
+      "self.mamba_rev.in_proj.weight = self.mamba_fwd.in_proj.weight",
+      "self.mamba_rev.in_proj.bias = self.mamba_fwd.in_proj.bias",
+      "self.mamba_rev.out_proj.weight = self.mamba_fwd.out_proj.weight",
+      "self.mamba_rev.out_proj.bias = self.mamba_fwd.out_proj.bias",
+      "self.mamba_rev = None",
+      "out = self.mamba_fwd(hidden_states, inference_params=inference_params)",
+      "out_rev = self.mamba_rev(",
+      "# Mamba changes the order of residual and layer norm:",
+      "raise ImportError(\"Failed to import Triton LayerNorm / RMSNorm kernels\")",
+      "norm_f = (nn.LayerNorm if not config.rms_norm else RMSNorm)(",
+      "fused_add_norm_fn = rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn",
+      "_no_split_modules = [\"BiMambaWrapper\"]",
+      "\"\"\"Adapted from: https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py\"\"\"",
+      "def maybe_weight_tie_mamba(self):",
+      "layer.mixer.submodule.mamba_rev.in_proj.weight = layer.mixer.submodule.mamba_fwd.in_proj.weight",
+      "layer.mixer.submodule.mamba_rev.in_proj.bias = layer.mixer.submodule.mamba_fwd.in_proj.bias",
+      "layer.mixer.submodule.mamba_rev.out_proj.weight = layer.mixer.submodule.mamba_fwd.out_proj.weight",
+      "layer.mixer.submodule.mamba_rev.out_proj.bias = layer.mixer.submodule.mamba_fwd.out_proj.bias",
+      "layer.mixer.mamba_rev.in_proj.weight = layer.mixer.mamba_fwd.in_proj.weight",
+      "layer.mixer.mamba_rev.in_proj.bias = layer.mixer.mamba_fwd.in_proj.bias",
+      "layer.mixer.mamba_rev.out_proj.weight = layer.mixer.mamba_fwd.out_proj.weight",
+      "layer.mixer.mamba_rev.out_proj.bias = layer.mixer.mamba_fwd.out_proj.bias",
+      "self.maybe_weight_tie_mamba()",
+      "def maybe_weight_tie_mamba(self):",
+      "self.caduceus.maybe_weight_tie_mamba()",
+      "self.maybe_weight_tie_mamba()",
+      "def maybe_weight_tie_mamba(self):",
+      "self.caduceus.maybe_weight_tie_mamba()",
+      "self.maybe_weight_tie_mamba()"
+    ],
+    "size": 28936
+  },
+  "tokenization_caduceus.py": {
+    "head": "\"\"\"Character tokenizer for Hugging Face.\n\n\"\"\"\n\nfrom typing import List, Optional, Dict, Sequence, Tuple\n\nfrom transformers import PreTrainedTokenizer\n\n\nclass CaduceusTokenizer(PreTrainedTokenizer):\n    model_input_names = [\"input_ids\"]\n\n    def __init__(self,\n                 model_max_length: int,\n                 characters: Sequence[str] = (\"A\", \"C\", \"G\", \"T\", \"N\"),\n                 complement_map=None,\n                 bos_token=\"[BOS]\",\n                 eos_token=\"[SEP]\",\n                 sep_token=\"[SEP]\",\n                 cls_token=\"[CLS]\",\n                 pad_token=\"[PAD]\",\n                 mask_token=\"[MASK]\",\n                 unk_token=\"[UNK]\",\n                 **kwargs):\n        \"\"\"Character tokenizer for Hugging Face transformers.\n\n        Adapted from https://huggingface.co/LongSafari/hyenadna-tiny-1k-seqlen-hf/blob/main/tokenization_hyena.py\n        Args:\n            model_max_length (int): Model maximum sequence length.\n            characters (Sequence[str]): List of desired characters. Any character which\n                is not included in this list will be replaced by a special token called\n                [UNK] with id=6. Following is a list of the special tokens with\n                their corresponding ids:\n                    \"[CLS]\": 0\n                    \"[SEP]\": 1\n                    \"[BOS]\": 2\n                    \"[MASK]\": 3\n                    \"[PAD]\": 4\n                    \"[RESERVED]\": 5\n                    \"[UNK]\": 6\n                an id (starting at 7) will be assigned to each character.\n            complement_map (Optional[Dict[str, str]]): Dictionary with string complements for each character.\n        \"\"\"\n        if complement_map is None:\n            complement_map = {\"A\": \"T\", \"C\": \"G\", \"G\": \"C\", \"T\": \"A\", \"N\": \"N\"}\n        self.characters = characters\n        self.model_max_length = model_max_length\n\n        self._vocab_str_to_int = {\n            \"[CLS]\": 0,\n            \"[SEP]\": 1,\n            \"[BOS]\": 2,\n            \"[MASK]\": 3,\n            \"[PAD]\": 4,\n            \"[RESERVED]\": 5,\n            \"[UNK]\": 6,\n            **{ch: i + 7 for i, ch in enumerate(self.characters)},\n        }\n        self._vocab_int_to_str = {v: k for k, v in self._vocab_str_to_int.items()}\n        add_prefix_space = kwargs.pop(\"add_prefix_space\", False)\n        padding_side = kwargs.pop(\"padding_side\", \"left\")\n\n        self._complement_map = {}\n        for k, v in self._vocab_str_to_int.items():\n            complement_id = self._vocab_str_to_int[complement_map[k]] if k in complement_map.keys() else v\n            self._complement_map[self._vocab_str_to_int[k]] = complement_id\n\n        super().__init__(\n            bos_token=bos_token,\n            eos_token=eos_token,\n            sep_token=sep_token,\n            cls_token=cls_token,\n            pad_token=pad_token,\n            mask_token=mask_token,\n            unk_token=unk_token,\n            add_prefix_space=add_prefix_space,\n            model_max_length=model_max_length,\n            padd",
+    "imports": [
+      "from typing import List, Optional, Dict, Sequence, Tuple",
+      "from transformers import PreTrainedTokenizer"
+    ],
+    "mamba_mentions": [],
+    "size": 4966
+  }
+}
