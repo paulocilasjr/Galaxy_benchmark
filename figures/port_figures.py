@@ -165,6 +165,49 @@ if __name__ == '__main__':
 '''
 
 FIG1_MAIN_NOTE = 'counts from data/figure_panels/fig1_a.json'
+SECTION = {'fig1_a': 'the study design (Results section 1 of `manuscript/outline.md`)',
+           'fig2': 'Results section 1 of `manuscript/outline.md` (accuracy in Galaxy and custom code)',
+           'fig3': 'Results section 2 of `manuscript/outline.md` (Galaxy as a structured environment)',
+           'fig4': 'Results section 3 of `manuscript/outline.md` (task solution variability)',
+           'fig5': 'Results section 4 of `manuscript/outline.md` (inspectability and token cost)',
+           'ed_fig2': 'Results section 1 (failure causes and sensitivity analyses for Figure 2)',
+           'ed_fig3': 'Results section 2 (task status, execution errors and recovery for Figure 3)',
+           'ed_fig4': 'Results section 3 (tools, route similarity, answer matching and UDT methods for Figure 4)',
+           'ed_fig5': 'Results section 4 (token use by model, outcome and action count for Figure 5)',
+           'ed_fig6': 'Results sections 1 and 2 (independent checks of the audits and of benchmark integrity)',
+           'ed_fig7': 'Results sections 2 and 3 (verification, recovery and selected cases)'}
+README = """# {label}: {title}
+
+Supports {section}.
+The legend draft is in [legend.md](legend.md).
+
+## Files
+
+- `make_figure.py`: the drawing code of the run archive's `figures/{script}`, copied unchanged; it replays the values that script computed and writes every file below.
+- `{folder}.pdf`, `.png` (600 dpi, RGB) and `.svg` (editable text).
+- `source_data.csv`: every plotted value, interval, *P* value and count, one row each (the archive's `{record}_source_data.csv`).
+- `legend.md`: figure legend draft.
+
+## Regenerate
+
+```bash
+python analysis/export_galaxy_benchmark_tables.py --source /path/to/Galaxy_benchmark   # only if the archive changes
+python figures/{folder}/make_figure.py
+```
+
+## Provenance
+
+Every estimate, interval and *P* value was computed by `figures/{script}` in the run archive, [{archive}@{short}](https://github.com/{archive}/tree/{commit}).
+While drawing, that script recorded the arguments of each drawing call in `figures/panel_data/{script_record}.json` (`figures/panel_io.py`); `analysis/export_galaxy_benchmark_tables.py` copies the file to `data/figure_panels/`.
+`make_figure.py` replays those calls with the same drawing code, so this figure is the archive's figure: the two PNGs were compared pixel for pixel and the source data byte for byte.
+Nothing is recomputed in this repository; the recorded tables hold identifiers, scores, counts and estimates only (no trace text, prompts or answers).
+
+## Panels and methods (from the archive script)
+
+```text
+{doc}
+```
+"""
 
 
 def port(target, commit, only=None):
@@ -214,6 +257,11 @@ def port(target, commit, only=None):
         code = head + '\n'.join(imps) + '\n\n' + '\n\n\n'.join(body) + tail
         compile(code, folder, 'exec')
         open(os.path.join(out_dir, 'make_figure.py'), 'w').write(code)
+        shutil.copyfile(os.path.join(HERE, f'{record}_legend.md'), os.path.join(out_dir, 'legend.md'))
+        doc = ast.get_docstring(ast.parse(open(path).read())) or ''
+        open(os.path.join(out_dir, 'README.md'), 'w').write(README.format(
+            label=label, title=title, section=SECTION[record], folder=folder, record=record, script=script,
+            script_record=script_record, archive=ARCHIVE, commit=commit, short=commit[:7], doc=doc.strip()))
         print(f'{folder}: {len(body)} definitions from {script}')
     shutil.copyfile(os.path.join(ROOT, 'manuscript_material', 'scripts', 'style.py'),
                     os.path.join(target, 'figures', 'figure_style.py'))
