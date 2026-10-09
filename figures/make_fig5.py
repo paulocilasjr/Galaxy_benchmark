@@ -7,10 +7,14 @@ a, Galaxy / custom-code token ratios for each benchmark (including IWC, where Ga
    consumption). Below, input tokens of incorrect relative to correct runs of the same task and model;
 b, where the extra input comes from: Galaxy / custom-code ratios of actions and of input tokens per action, by
    benchmark; right, the characters Galaxy returned to the agent, by what the request was for;
-c, what the retained record holds for each analysis step in each condition, separating structured records from free
+c, reducing Galaxy token use: Galaxy / custom-code tokens per complete 50-task BixBench-Verified-50 run before and after
+   each round of interface changes (July, GPT-5.5: archived July 6 batch, then the archived runs; October, GPT-5.6 Sol:
+   archived runs, the one-replicate intermediate round from the batch summary, then the token-optimization batch), from
+   token_improvment/ (run_inventory.csv, earlier_rounds/, site_snapshot/summary.json);
+d, what the retained record holds for each analysis step in each condition, separating structured records from free
    text in the retained trace, records of the environment only, and evidence that was not retained or not recorded
    (unknown, not absent);
-d, one analysis step recorded both ways: PhyKIT relative composition variability on bix-45-q1 (GPT-5.6 Sol, replicate
+e, one analysis step recorded both ways: PhyKIT relative composition variability on bix-45-q1 (GPT-5.6 Sol, replicate
    1), the tool-version case of Fig. 2d.
 
 Extended Data Fig. 5: a, accuracy against median input tokens per model and condition, by benchmark; b, input tokens of
@@ -21,6 +25,8 @@ calls, web searches or fetches, file reads, writes and edits), as in On-demand F
 price, so ratios are not monetary costs. A run is correct when accepted or, for IWC, at >= 0.99 output agreement.
 Intervals are 95% percentile cluster-bootstrap intervals (clusters are BixBench source capsules, otherwise tasks); P values
 come from paired cluster sign-flip randomization tests (200,000 draws; exact with at most 16 clusters).
+Scores come from figures/scored_runs.csv (make_scored_runs.py): every run as the public results site shows it
+(https://goeckslab.github.io/galaxy-agent-benchmark/), the IWC host-read removal task included.
 Writes figures/fig5.{svg,pdf,png}, fig5_source_data.csv, ed_fig5.{svg,pdf,png} and ed_fig5_source_data.csv.
 """
 import glob
@@ -33,6 +39,7 @@ import sys
 import textwrap
 
 import numpy as np
+import panel_io  # noqa: E402  (figures/panel_io.py)
 import openpyxl
 import pandas as pd
 
@@ -54,6 +61,7 @@ GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
 DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
 ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM, B_MEDIAN = 20000, 20261002, 200000, 2000
 W, MM = 180.0, 1 / 25.4
 CFG = style.CONFIGS
@@ -96,7 +104,7 @@ rng = np.random.default_rng(SEED)
 
 # ---------------------------------------------------------------- data
 def load_runs():
-    r = pd.read_csv(os.path.join(AN, 'accuracy_primary_runs.csv'))
+    r = pd.read_csv(SCORED)
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = r.score >= r.benchmark.map(CORRECT_AT) - 1e-9
     t = pd.read_csv(os.path.join(AN, 'token_run_observations.csv'))
@@ -233,6 +241,8 @@ def replies(calls, r):
 def evidence(calls):
     """Share of analysis steps (runs, for the whole analysis) whose retained record holds each element, by level."""
     udt_ids = set(calls[calls.tool == 'run_galaxy_udt_and_wait'].tool_id_full.dropna())
+    u = pd.read_csv(os.path.join(OUT, 'udt_methods.csv'))           # UDT definitions (make_udt_methods.py)
+    versioned = set(zip(u[u.container_versioned].run_id, u[u.container_versioned].udt_id))
     design = pd.read_csv(DESIGN, low_memory=False)
     image = (design.docker_image.notna() | design.docker_image_id.notna() | design.iso_image_id.notna())
     image = dict(zip(zip(design.benchmark, design.task, design.run_id), image))
@@ -260,7 +270,8 @@ def evidence(calls):
                 if env == GAL:
                     tool = str(e.get('tool') or '')
                     has = lambda k: str(e.get(k)) not in ('[]', 'None', '', 'nan')   # noqa: E731
-                    steps.append(dict(env=env, software='T' if tool in udt_ids else 'S',
+                    soft = ('S' if (run['run_id'], tool) in versioned else 'T') if tool in udt_ids else 'S'
+                    steps.append(dict(env=env, software=soft,
                                       parameters='S' if e.get('parameters') not in (None, '', 'None', '{}') else 'N',
                                       inputs='S' if has('input_artifact_ids') or has('native_input_hda_ids') else 'N',
                                       outputs='S' if has('output_artifact_ids') else 'N',
@@ -326,6 +337,105 @@ def trade(r):
                          s_hi=100 * np.percentile(acc, 97.5), tokens=g.input_tokens.median(),
                          t_lo=np.percentile(med, 2.5), t_hi=np.percentile(med, 97.5), runs=len(g)))
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------- token reduction rounds (panel c)
+TOKEN_DIR = os.path.join(ROOT, 'token_improvment')
+ROUNDS = [  # (comparison, stage, label, source)
+    ('July', 'before', 'Round 1 in place: shorter skills, prompt guidance', 'july6'),
+    ('July', 'after', 'Round 2: submit, wait and check in one MCP call', 'archive GPT-5.5'),
+    ('October', 'before', 'Archived runs (round 2 in place)', 'archive GPT-5.6 Sol'),
+    ('October', 'interface', 'Round 3: compact replies, templates (1 replicate)', 'summary mcp_v2'),
+    ('October', 'after', 'Round 3 plus longer waits between requests', 'token optimization'),
+]
+ROUND_HEAD = {'July': 'July 2026 · GPT-5.5 · 3 runs per task and condition',
+              'October': 'October 2026 · GPT-5.6 Sol · 3 runs per task'}
+
+
+def token_rounds():
+    """Galaxy / custom-code tokens per complete 50-task BixBench run before and after each round of interface changes.
+
+    Tokens are input (including cached) plus output, summed over the 50 tasks and averaged over replicates; the ratio
+    is the ratio of these totals (the experiment's own measure). Interval: cluster bootstrap over source capsules."""
+    clus = pd.read_csv(SCORED)
+    clus = clus[clus.benchmark == 'BixBench50'].drop_duplicates('task').set_index('task').cluster
+    rows = []
+    for p in glob.glob(os.path.join(TOKEN_DIR, 'earlier_rounds', 'run_traces_july6_codex', '*', '*', 'replicate_*', 'usage.json')):
+        task_dir, cond, rep = p.split(os.sep)[-4:-1]
+        if cond not in ('galaxy_strict_skills', 'anycode_nongalaxy_skills'):
+            continue
+        u = json.load(open(p))['totals']
+        ev = json.load(open(p.replace('usage.json', 'evaluation.json')))
+        rows.append(dict(source='july6', task=task_dir.replace('_', '-'), env=GAL if cond.startswith('galaxy') else CODE,
+                         tokens=u['input_tokens'] + u['output_tokens'], correct=ev['accuracy']['score'] == 1,
+                         replicate=int(rep.split('_')[1]), condition_dir=cond))
+    inv = pd.read_csv(os.path.join(TOKEN_DIR, 'run_inventory.csv'))
+    inv['tokens'] = inv.input_tokens + inv.output_tokens
+    for group, model, src in (('archive_', 'Codex GPT-5.5', 'archive GPT-5.5'), ('archive_', 'Codex GPT-5.6 Sol', 'archive GPT-5.6 Sol')):
+        g = inv[inv.group.str.startswith(group) & (inv.model == model)]
+        rows += [dict(source=src, task=t.task, env=t.condition, tokens=t.tokens, correct=bool(t.passed), replicate=int(t.replicate))
+                 for t in g.itertuples()]
+    g = inv[inv.group == 'token_optimization_oct2026']
+    rows += [dict(source='token optimization', task=t.task, env=GAL, tokens=t.tokens, correct=bool(t.passed)) for t in g.itertuples()]
+    runs = pd.DataFrame(rows)
+    # correctness as the results site shows it. The archived runs take the site-matched primary
+    # grades (scored_runs.csv); the 6 July batch takes the site's July page (site_snapshot/bixbench_july6_runs.json);
+    # the October batch already matches the site (137 of 150).
+    sc = pd.read_csv(SCORED)
+    sc = sc[sc.benchmark == 'BixBench50'].set_index(['task', 'cfg', 'env', 'replicate']).score
+    arch = runs.source.str.startswith('archive')
+    cfg = runs.source.map({'archive GPT-5.5': 'GPT-5.5', 'archive GPT-5.6 Sol': 'GPT-5.6 Sol'})
+    runs.loc[arch, 'correct'] = [bool(sc[(t, c, e, r)] >= 1) for t, c, e, r in
+                                 zip(runs.task[arch], cfg[arch], runs.env[arch], runs.replicate[arch])]
+    july = pd.DataFrame(json.load(open(os.path.join(OUT, 'site_snapshot', 'bixbench_july6_runs.json')))['runs'])
+    july = july.set_index(['item', 'condition', 'replicate']).passed
+    j6 = runs.source == 'july6'
+    runs.loc[j6, 'correct'] = [bool(july[(t, c, r)]) for t, c, r in
+                               zip(runs.task[j6], runs.condition_dir[j6], runs.replicate[j6])]
+    runs['cluster'] = runs.task.map(clus)
+    assert runs.cluster.notna().all()
+    assert runs.groupby(['source', 'env']).size().eq(150).all(), runs.groupby(['source', 'env']).size()
+    stage = json.load(open(os.path.join(TOKEN_DIR, 'site_snapshot', 'summary.json')))['statistics']['stages']['mcp_v2']
+    per_task = runs.groupby(['source', 'env', 'cluster', 'task']).tokens.sum().unstack('env')
+    boot = np.random.default_rng(SEED + 7)
+    out = []
+    for comparison, key, lab, src in ROUNDS:
+        base = 'archive GPT-5.6 Sol' if comparison == 'October' else src
+        if src == 'summary mcp_v2':
+            gal_m = stage['mean_tokens'] / 1e6
+            code_m = runs[(runs.source == base) & (runs.env == CODE)].tokens.sum() / 3 / 1e6
+            out.append(dict(comparison=comparison, stage=key, label=lab, source=src, galaxy_tokens_m=gal_m, code_tokens_m=code_m,
+                            ratio=stage['galaxy_over_open_ended'], lo=np.nan, hi=np.nan, galaxy_correct=np.nan, code_correct=np.nan,
+                            galaxy_runs=stage['items_per_replicate'] * stage['replicates'], replicates=stage['replicates'],
+                            model_requests=stage['mean_model_requests'], wait_calls=stage['mean_wait_calls']))
+            continue
+        gal = per_task.loc[src, GAL].dropna()
+        code = per_task.loc[base, CODE].reindex(gal.index.get_level_values('task'), level='task').dropna()
+        t = pd.DataFrame({'gal': gal.droplevel('cluster'), 'code': code.droplevel('cluster')})
+        t['cluster'] = t.index.map(clus)
+        cs = t.groupby('cluster')[['gal', 'code']].sum()
+        idx = boot.integers(0, len(cs), (B, len(cs)))
+        draws = cs.gal.values[idx].sum(1) / cs.code.values[idx].sum(1)
+        g_runs, c_runs = runs[(runs.source == src) & (runs.env == GAL)], runs[(runs.source == base) & (runs.env == CODE)]
+        out.append(dict(comparison=comparison, stage=key, label=lab, source=src, galaxy_tokens_m=g_runs.tokens.sum() / 3 / 1e6,
+                        code_tokens_m=c_runs.tokens.sum() / 3 / 1e6, ratio=t.gal.sum() / t.code.sum(),
+                        lo=np.percentile(draws, 2.5), hi=np.percentile(draws, 97.5), galaxy_correct=100 * g_runs.correct.mean(),
+                        code_correct=100 * c_runs.correct.mean(), galaxy_runs=len(g_runs), replicates=3,
+                        model_requests=(json.load(open(os.path.join(TOKEN_DIR, 'site_snapshot', 'summary.json')))['statistics']
+                                        ['stages']['long_wait']['mean_model_requests'] if src == 'token optimization' else np.nan),
+                        wait_calls=(json.load(open(os.path.join(TOKEN_DIR, 'site_snapshot', 'summary.json')))['statistics']
+                                    ['stages']['long_wait']['mean_wait_calls'] if src == 'token optimization' else np.nan)))
+    out = pd.DataFrame(out)
+    # change in Galaxy tokens from the first to the last stage of each comparison, paired by task
+    change = {}
+    for comparison, (a, b) in {'July': ('july6', 'archive GPT-5.5'), 'October': ('archive GPT-5.6 Sol', 'token optimization')}.items():
+        ga, gb = per_task.loc[a, GAL].dropna(), per_task.loc[b, GAL].dropna()
+        cs = pd.DataFrame({'a': ga, 'b': gb}).groupby('cluster').sum()
+        idx = boot.integers(0, len(cs), (B, len(cs)))
+        draws = cs.b.values[idx].sum(1) / cs.a.values[idx].sum(1) - 1
+        change[comparison] = dict(pct=100 * (cs.b.sum() / cs.a.sum() - 1), lo=100 * np.percentile(draws, 2.5),
+                                  hi=100 * np.percentile(draws, 97.5))
+    return out, change
 
 
 # ---------------------------------------------------------------- drawing helpers
@@ -472,11 +582,58 @@ def draw_b(fig, H, act, rep, never, cached):
              fontsize=5, color=style.INK2, va='top', linespacing=1.25)
 
 
-def draw_c(fig, H, y0, ev, counts):
-    label(fig, 0, y0, 'c', 'What the retained record holds for each analysis step', H,
+def draw_c(fig, H, y0, tr, change):
+    label(fig, 0, y0, 'c', 'Reducing Galaxy token use', H,
+          'Galaxy / custom-code tokens per complete 50-task run (input, including cached, plus output) on BixBench-Verified-50, '
+          'before and after each round of interface changes;\nfilled, three replicates with 95% intervals over source capsules; '
+          'open, one replicate (batch summary only). The October rows share one set of custom-code runs.')
+    ax = axes_mm(fig, 62.0, y0 + 10.0, 40.0, 17.0, H)
+    rows, y = [], 0.0
+    for comparison in ('July', 'October'):
+        rows.append(('head', comparison, y))
+        y += 1.0
+        for t in tr[tr.comparison == comparison].itertuples():
+            rows.append(('row', t, y))
+            y += 1.0
+        y += 0.3
+    trf = blended_transform_factory(ax.transAxes, ax.transData)
+    col = {'galaxy': 59.0 / 40.0, 'code': 72.0 / 40.0, 'correct': 88.0 / 40.0}   # right edges of the table columns
+    for name, x in (('Galaxy tokens', col['galaxy']), ('Custom code', col['code']), ('Galaxy correct', col['correct'])):
+        ax.text(x, -0.75, name, transform=trf, ha='right', va='center', fontsize=5, fontweight='bold')
+    for comparison in ('July', 'October'):
+        ys = [yy for kind, t, yy in rows if kind == 'row' and t.comparison == comparison]
+        xs = tr[tr.comparison == comparison].ratio.values
+        ax.plot(xs, ys, color=style.NEUTRAL_MID, lw=0.6, zorder=2)
+    for kind, t, yy in rows:
+        if kind == 'head':
+            ax.text(-62.0 / 40.0, yy, ROUND_HEAD[t], transform=trf, ha='left', va='center', fontsize=5.5, fontweight='bold')
+            continue
+        one = np.isnan(t.lo)
+        if not one:
+            ax.plot([t.lo, t.hi], [yy, yy], color=style.GALAXY, lw=0.8, zorder=3, solid_capstyle='butt')
+        ax.plot(t.ratio, yy, ls='', marker='D', ms=2.8, mfc='white' if one else style.GALAXY, mec=style.GALAXY, mew=0.6, zorder=4)
+        ax.text(-0.03, yy, t.label, transform=trf, ha='right', va='center', fontsize=5)
+        ax.text(1.03, yy, f'{t.ratio:.2f}×', transform=trf, ha='left', va='center', fontsize=5,
+                fontweight='bold' if t.stage == 'after' else 'normal')
+        gal = f'{t.galaxy_tokens_m:.1f}M'
+        if t.stage == 'after':
+            gal += f' ({change[t.comparison]["pct"]:+.0f}%)'.replace('-', '−')
+        ax.text(col['galaxy'], yy, gal, transform=trf, ha='right', va='center', fontsize=5)
+        ax.text(col['code'], yy, f'{t.code_tokens_m:.1f}M', transform=trf, ha='right', va='center', fontsize=5)
+        ax.text(col['correct'], yy, '–' if np.isnan(t.galaxy_correct) else f'{t.galaxy_correct:.0f}%', transform=trf,
+                ha='right', va='center', fontsize=5)
+    log_ratio_axis(ax, 0.5, 8.0, (0.5, 1, 2, 4, 8))
+    ax.set_ylim(y - 0.3 + 0.1, -1.3)
+    ax.set_yticks([])
+    ax.spines['left'].set_visible(False)
+    ax.set_xlabel('Galaxy / custom code (log scale)', labelpad=1.5)
+
+
+def draw_d(fig, H, y0, ev, counts):
+    label(fig, 0, y0, 'd', 'What the retained record holds for each analysis step', H,
           f'{counts["steps"][CODE]:,} custom-code steps (shell commands labelled analysis) and '
           f'{counts["steps"][GAL]:,} Galaxy jobs;\nwhole analysis per run ({counts["runs"][GAL]:,} runs per condition)')
-    ax = axes_mm(fig, 40.0, y0 + 12.0, 46.0, 46.0, H)
+    ax = axes_mm(fig, 40.0, y0 + 12.0, 46.0, 38.0, H)
     ypos, y = [], 0.0
     for k, (code, name) in enumerate(ELEMENTS):
         for env in ENVS:
@@ -510,12 +667,12 @@ def draw_c(fig, H, y0, ev, counts):
     ax.set_xticks([0, 25, 50, 75, 100])
     ax.set_xlabel('Steps (or runs) (%)', labelpad=1.5)
     ax.legend(handles=[Patch(fc=col, ec=style.NEUTRAL_MID, lw=0.4, hatch='/////' if lev == 'N' else None, label=lab)
-                       for lev, lab, col in LEVELS], loc='upper left', bbox_to_anchor=(-0.78, -0.12), ncol=2,
+                       for lev, lab, col in LEVELS], loc='upper left', bbox_to_anchor=(-0.78, -0.17), ncol=2,
               fontsize=5, handlelength=1.1, handletextpad=0.3, columnspacing=0.8, labelspacing=0.25, borderaxespad=0)
 
 
-def draw_d(fig, H, y0, rec):
-    label(fig, 92.0, y0, 'd', 'One analysis step, recorded both ways', H,
+def draw_e(fig, H, y0, rec):
+    label(fig, 92.0, y0, 'e', 'One analysis step, recorded both ways', H,
           f'{EXAMPLE[0]}, PhyKIT relative composition variability; GPT-5.6 Sol, replicate 1 (the case in Fig. 2d)')
     x0, w, top, hgt = 96.0, 84.0, y0 + 11.5, 54.0
     ax = axes_mm(fig, x0, top, w, hgt, H)
@@ -649,8 +806,21 @@ def ed_actions(fig, H, y0, r):
 
 
 # ---------------------------------------------------------------- source data and assembly
-def source_data(tok, pooled, per, act, act_ok, rep, never, cached, ev, counts, rec):
+def source_data(tok, pooled, per, act, act_ok, rep, never, cached, ev, counts, rec, tr, change):
     rows = []
+    for t in tr.itertuples():
+        rows.append(dict(panel='c', benchmark='BixBench50', condition='galaxy / custom_code', group=f'{t.comparison}: {t.label}',
+                         measure='ratio_of_tokens_per_50_task_run (input incl. cached + output)', value=t.ratio,
+                         ci95_low=t.lo, ci95_high=t.hi, n=t.galaxy_runs))
+        for m in ('galaxy_tokens_m', 'code_tokens_m', 'galaxy_correct', 'code_correct', 'model_requests', 'wait_calls'):
+            if pd.notna(getattr(t, m)):
+                rows.append(dict(panel='c', benchmark='BixBench50', condition='galaxy' if m.startswith(('galaxy', 'model', 'wait'))
+                                 else 'custom_code', group=f'{t.comparison}: {t.label}', measure=f'{m} (source: {t.source})',
+                                 value=getattr(t, m), n=t.galaxy_runs))
+    for k, v in change.items():
+        rows.append(dict(panel='c', benchmark='BixBench50', condition='galaxy', group=k,
+                         measure='pct_change_galaxy_tokens_first_to_last_stage (paired by task)', value=v['pct'],
+                         ci95_low=v['lo'], ci95_high=v['hi'], n=50))
     for t in tok.itertuples():
         rows.append(dict(panel='a', benchmark=t.benchmark, condition='galaxy / custom_code', group=t.label,
                          measure='geometric_mean_paired_cell_ratio (primary)', value=t.ratio, ci95_low=t.lo,
@@ -681,11 +851,11 @@ def source_data(tok, pooled, per, act, act_ok, rep, never, cached, ev, counts, r
         rows.append(dict(panel='b', benchmark=bm, condition=env, group='runs', measure='median_cached_share_of_input_pct',
                          value=v))
     for t in ev.itertuples():
-        rows.append(dict(panel='c', benchmark='all', condition=t.env, group=t.element,
+        rows.append(dict(panel='d', benchmark='all', condition=t.env, group=t.element,
                          measure=f'pct_{"runs" if t.element == "analysis" else "steps"}: '
                                  f'{dict((l, n) for l, n, _ in LEVELS)[t.level]}', value=t.pct, n=t.n))
     for k, v in rec.items():
-        rows.append(dict(panel='d', benchmark='BixBench50', condition='both', group=EXAMPLE[0], measure=k, value=str(v)))
+        rows.append(dict(panel='e', benchmark='BixBench50', condition='both', group=EXAMPLE[0], measure=k, value=str(v)))
     cols = ['panel', 'benchmark', 'condition', 'group', 'measure', 'value', 'ci95_low', 'ci95_high', 'n', 'p', 'p_holm']
     out = pd.DataFrame(rows).reindex(columns=cols)
     out['condition'] = out.condition.str.replace('open_ended_code', 'custom_code')
@@ -709,6 +879,7 @@ def save(fig, name, title):
 
 
 def main():
+    panel_io.record(globals(), 'fig5')   # with PANEL_DATA set, also write figures/panel_data/fig5.json
     global rng
     r = load_runs()
     calls = load_calls()
@@ -727,16 +898,20 @@ def main():
         print(t.round(3).to_string())
     print('never', never.percent.to_dict(), '| cached', cached.round(1).to_dict(), '| counts', counts, '| rec', rec)
 
-    H = 150.0
+    tr, change = token_rounds()
+    print('c: token reduction rounds'); print(tr.round(3).to_string()); print(change)
+
+    H = 170.0
     rng = np.random.default_rng(SEED + 5)           # box jitter only
     fig = plt.figure(figsize=(W * MM, H * MM))
     draw_a(fig, H, tok, pooled)
     draw_b(fig, H, act, rep, never, cached)
-    draw_c(fig, H, 78.0, ev, counts)
-    draw_d(fig, H, 78.0, rec)
+    draw_c(fig, H, 73.0, tr, change)
+    draw_d(fig, H, 107.0, ev, counts)
+    draw_e(fig, H, 107.0, rec)
     save(fig, 'fig5', 'Fig. 5 | Galaxy records analyses as structured provenance and uses more input tokens on '
                       'question-answering tasks')
-    source_data(tok, pooled, per, act, act_ok, rep, never, cached, ev, counts, rec)
+    source_data(tok, pooled, per, act, act_ok, rep, never, cached, ev, counts, rec, tr, change)
 
     He = 100.0
     fig = plt.figure(figsize=(W * MM, He * MM))

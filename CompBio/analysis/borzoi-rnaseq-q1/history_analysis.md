@@ -8,11 +8,11 @@ Original traces were retrieved for **25/25** rows. Public Galaxy contents were r
 
 ## 2. Main outcomes
 
-The original evaluator supplied a numeric score for **0/25** runs. These are original run evaluations, separate from saved outputs and the auditor's interpretation. The scoring field and mode are retained per run; scores from different benchmarks must not be pooled. The retrieved public histories expose **100 distinct analytical creating jobs**, including **58 failed jobs**. Native shell and MCP calls are separate from those jobs and are not equated with scientific attempts.
+The original evaluator supplied a numeric score for **0/25** runs. These are original run evaluations, separate from saved outputs and the auditor's interpretation. The scoring field and mode are retained per run; scores from different benchmarks must not be pooled. The retrieved public histories expose **113 distinct analytical creating jobs**, including **59 failed jobs**. Native shell and MCP calls are separate from those jobs and are not equated with scientific attempts.
 
 | Model slug | Galaxy score mean | Code score mean | Difference (original metric unit) | Galaxy/code median input-token ratio |
 |---|---:|---:|---:|---:|
-| codex_deepseek_v4_pro_0813 | unavailable | unavailable | unavailable | 1.46 |
+| codex_deepseek_v4_pro_0813 | unavailable | unavailable | unavailable | 0.753 |
 | codex_gpt_5_5 | unavailable | unavailable | unavailable | unavailable |
 | codex_gpt_5_6_luna | unavailable | unavailable | unavailable | unavailable |
 | codex_gpt_5_6_sol | unavailable | unavailable | unavailable | unavailable |
@@ -28,7 +28,7 @@ Among the 0 runs with an original numeric evaluator score, the score field and a
 
 ### Analysis execution, failures, and recovery
 
-The retrieved public histories contain 100 distinct analytical creating jobs after excluding data-fetch jobs and deduplicating multi-output jobs and shared histories. 58 have a failed/error state. The per-run job ledgers retain tool IDs, parameters, native IDs, status, available error text, and source links. A later successful Galaxy job with the same tool and input HDA IDs is flagged as an operational recovery **candidate** for case review. Nonzero shell exits and failed Galaxy jobs are platform-specific observations; the pipeline does not manufacture a cross-condition scientific-attempt count or infer scientific recovery from a later successful command alone.
+The retrieved public histories contain 113 distinct analytical creating jobs after excluding data-fetch jobs and deduplicating multi-output jobs and shared histories. 59 have a failed/error state. The per-run job ledgers retain tool IDs, parameters, native IDs, status, available error text, and source links. A later successful Galaxy job with the same tool and input HDA IDs is flagged as an operational recovery **candidate** for case review. Nonzero shell exits and failed Galaxy jobs are platform-specific observations; the pipeline does not manufacture a cross-condition scientific-attempt count or infer scientific recovery from a later successful command alone.
 
 ### Solution-route variability across models and replicates
 
@@ -44,7 +44,7 @@ Provider usage totals are retained with their original accounting categories. Ca
 |---|---|---|---|---|---:|---:|
 | `galaxy_codex_gpt_5_5_r1` | unavailable | unavailable / unavailable | 9380 | unclassified | 7 / 3 | 0 |
 | `galaxy_codex_gpt_5_5_r2` | gpt-5.5 | unavailable / unavailable | 9380 | unclassified | 2 / 0 | 3 |
-| `galaxy_codex_gpt_5_5_r3` | gpt-5.5 | unavailable / unavailable | 9380 | unclassified | 5 / 5 | 7 |
+| `galaxy_codex_gpt_5_5_r3` | gpt-5.5 | unavailable / unavailable | 9380 | unclassified | 18 / 11 | 2 |
 | `open_ended_code_codex_gpt_5_5_r1` | unavailable | unavailable / unavailable | 9380 | local shell or script; method unclassified | unavailable / unavailable | 9 |
 | `open_ended_code_codex_gpt_5_5_r2` | unavailable | unavailable / unavailable | 9380 | local shell or script; method unclassified | unavailable / unavailable | 9 |
 | `open_ended_code_codex_gpt_5_5_r3` | unavailable | unavailable / unavailable | 8870 | local shell or script; method unclassified | unavailable / unavailable | 12 |
@@ -54,7 +54,7 @@ Provider usage totals are retained with their original accounting categories. Ca
 | `open_ended_code_codex_gpt_5_6_sol_r1` | unavailable | unavailable / unavailable | 9380 | local shell or script; method unclassified | unavailable / unavailable | 2 |
 | `open_ended_code_codex_gpt_5_6_sol_r2` | unavailable | unavailable / unavailable | 9380 | local shell or script; method unclassified | unavailable / unavailable | 2 |
 | `open_ended_code_codex_gpt_5_6_sol_r3` | unavailable | unavailable / unavailable | 9380 | local shell or script; method unclassified | unavailable / unavailable | 1 |
-| `galaxy_codex_deepseek_v4_pro_0813_r1` | deepseek-v4-pro | unavailable / unavailable | 9380 | unclassified | 11 / 10 | 11 |
+| `galaxy_codex_deepseek_v4_pro_0813_r1` | deepseek-v4-pro | unavailable / unavailable | 9380 | unclassified | 11 / 5 | 2 |
 | `galaxy_codex_deepseek_v4_pro_0813_r2` | deepseek-v4-pro | unavailable / unavailable | 9380 | unclassified | 12 / 5 | 1 |
 | `galaxy_codex_deepseek_v4_pro_0813_r3` | deepseek-v4-pro | unavailable / unavailable | 9380 | unclassified | 22 / 13 | 0 |
 | `open_ended_code_codex_deepseek_v4_pro_0813_r1` | deepseek-v4-pro | unavailable / unavailable | 8870 | local shell or script; method unclassified | unavailable / unavailable | 14 |
@@ -93,11 +93,11 @@ An independent experiment manifest is needed to establish expected coverage, see
 
 ### Abstract-ready paragraph
 
-For one selected compbio task, 25 supplied runs yielded 0 original numeric evaluator scores. Retrieved public Galaxy records exposed 100 distinct analytical creating jobs, including 58 failed jobs. These case-study counts describe the supplied links and do not establish benchmark-wide condition effects or human readability gains.
+For one selected compbio task, 25 supplied runs yielded 0 original numeric evaluator scores. Retrieved public Galaxy records exposed 113 distinct analytical creating jobs, including 59 failed jobs. These case-study counts describe the supplied links and do not establish benchmark-wide condition effects or human readability gains.
 
 ### Results draft
 
-We audited 25 workbook-listed runs for borzoi-rnaseq-q1, retaining original agent traces, evaluator records, usage totals, and read-only Galaxy history snapshots where accessible. The original evaluator returned a numeric score for 0 runs. We kept those scores separate from saved Galaxy outputs and did not regrade answers. Distinct public Galaxy histories exposed 100 analytical creating jobs, of which 58 had failed/error status. Within-model score and input-token comparisons were calculated only where both conditions supplied compatible original fields; they are descriptive ratios or differences for a single task. Replicate seeds, complete protocol coverage, stage-attributed tokens, and blinded readability outcomes were unavailable, limiting causal and benchmark-wide inference.
+We audited 25 workbook-listed runs for borzoi-rnaseq-q1, retaining original agent traces, evaluator records, usage totals, and read-only Galaxy history snapshots where accessible. The original evaluator returned a numeric score for 0 runs. We kept those scores separate from saved Galaxy outputs and did not regrade answers. Distinct public Galaxy histories exposed 113 analytical creating jobs, of which 59 had failed/error status. Within-model score and input-token comparisons were calculated only where both conditions supplied compatible original fields; they are descriptive ratios or differences for a single task. Replicate seeds, complete protocol coverage, stage-attributed tokens, and blinded readability outcomes were unavailable, limiting causal and benchmark-wide inference.
 
 ## CompBio source recovery
 

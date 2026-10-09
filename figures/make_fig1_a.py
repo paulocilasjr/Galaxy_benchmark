@@ -24,6 +24,7 @@ from matplotlib.patches import (Circle, Ellipse, FancyArrow, FancyArrowPatch, Fa
 from PIL import Image  # noqa: E402
 
 OUT = os.path.join(ROOT, 'figures')
+SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 W = 180.0                 # mm; Nature Methods double-column width
 PT = 25.4 / 72            # mm per point
 INK, INK2 = style.INK, style.INK2
@@ -385,7 +386,7 @@ def step_head(cv, x, y, i, name):
 # ---------------------------------------------------------------- panel a
 BENCHMARKS = [('BixBench-Verified-50', 'bix', '50 questions', 'Answer', 'Evaluator acceptance, 0 or 1'),
               ('CompBioBench', 'cb', '100 questions', 'Answer', 'Reconstructed-key agreement, 0 or 1'),
-              ('IWC', 'iwc', '10 workflows (9 scored)', 'Output files', 'Workflow-output agreement, 0–1')]
+              ('IWC', 'iwc', '10 workflows', 'Output files', 'Workflow-output agreement, 0–1')]
 
 
 def benchmarks(cv, x, y, w, f, bottom):
@@ -587,9 +588,15 @@ def step_evaluate(cv, x, y, w, h):
 # ---------------------------------------------------------------- assemble
 def main():
     f = facts()
+    if os.environ.get('PANEL_DATA'):   # the counts this schematic shows, for the manuscript repository (panel_io.py)
+        import json
+        import panel_io
+        os.makedirs(panel_io.OUT, exist_ok=True)
+        with open(os.path.join(panel_io.OUT, 'fig1_a.json'), 'w') as fh:
+            json.dump({'script': 'fig1_a', 'facts': {k: int(v) for k, v in f.items()}}, fh, indent=1)
     n_tasks = f['bix'] + f['cb'] + f['iwc']
     n_runs = n_tasks * len(CONFIGS) * N_COND * N_REP
-    n_scored_tasks = n_tasks - 1                          # IWC host-read removal has no comparable score
+    n_scored_tasks = n_tasks                              # host-read removal is scored (all ten IWC tasks)
     n_scored = n_scored_tasks * len(CONFIGS) * N_COND * N_REP
     n_archived = f['archived']
     cv = Canvas()

@@ -246,10 +246,10 @@ Same rule as B11, but now applied within a task and configuration: one or more a
 
 | Configuration | Galaxy | open-ended code |
 | --- | --- | --- |
-| GPT-5.5 | r1: 84/100 (O); r2: 89/100 (O; hash mismatch); r3: 87/100 (P; hash mismatch) | r1: 87/100 (O); r2: 88/100 (O; hash mismatch); r3: 84/100 (O; hash mismatch) |
-| GPT-5.6 Sol | r1: 93/100 (O); r2: 91/100 (P; hash mismatch); r3: 91/100 (O; hash mismatch) | r1: 88/100 (O); r2: 90/100 (O); r3: 95/100 (O) |
-| GPT-5.6 Luna | r1: 86/100 (P; vector absent); r2: 84/100 (P; vector absent); r3: 85/100 (P; vector absent) | r1: 84/100 (O); r2: 86/100 (O); r3: 85/100 (P) |
-| DeepSeek V4 Pro 0813 (Codex) | r1: 83/100 (P; hash mismatch); r2: 87/100 (P); r3: 83/100 (P) | r1: 80/100 (P); r2: 87/100 (O; hash mismatch); r3: 86/100 (O; hash mismatch) |
+| GPT-5.5 | r1: 84/100 (O); r2: 87/100 (O; hash mismatch); r3: 86/100 (O; hash mismatch) | r1: 87/100 (O); r2: 88/100 (O; hash mismatch); r3: 84/100 (O; hash mismatch) |
+| GPT-5.6 Sol | r1: 93/100 (O); r2: 91/100 (P; hash mismatch); r3: 93/100 (O; hash mismatch) | r1: 88/100 (O); r2: 90/100 (O); r3: 95/100 (O) |
+| GPT-5.6 Luna | r1: 87/100 (O; vector absent); r2: 84/100 (O; vector absent); r3: 85/100 (O; vector absent) | r1: 84/100 (O); r2: 86/100 (O); r3: 85/100 (P) |
+| DeepSeek V4 Pro 0813 (Codex) | r1: 85/100 (O; hash mismatch); r2: 86/100 (O); r3: 83/100 (O) | r1: 80/100 (P); r2: 87/100 (O; hash mismatch); r3: 86/100 (O; hash mismatch) |
 | GPT-6 Astra (unpaired) | Not represented | r1: 93/100 (O) |
 
 O = archive-labelled official, not an independently verified leaderboard receipt; P = predicted. 15 vectors are O and 10 P; 13 advertised hashes match retained bytes, nine mismatch and three vectors are absent. All parsed answers match for the 22 available vectors. Sol Galaxy r1/r3 were previously 92/100 P; dated metadata changes them to 93/100 O and 91/100 O. Neither version is silently discarded. No pooled accuracy, uncertainty interval, or task-level all/some/none-correct inference is computed from this mixture. Source: [aggregate audit](CompBio/compBio_overview_audit.json), `score_vectors` and `score_conflicts`.
@@ -258,13 +258,13 @@ O = archive-labelled official, not an independently verified leaderboard receipt
 
 | Configuration | Environment | Usage coverage | 1 distinct answer | 2 distinct | 3 distinct |
 | --- | --- | --- | --- | --- | --- |
-| GPT-5.5 | Galaxy | 297/300 (99.0%) | 84 | 11 | 5 |
+| GPT-5.5 | Galaxy | 297/300 (99.0%) | 82 | 13 | 5 |
 | GPT-5.5 | Open-ended code | 300/300 (100.0%) | 82 | 15 | 3 |
-| GPT-5.6 Sol | Galaxy | 300/300 (100.0%) | 87 | 11 | 2 |
+| GPT-5.6 Sol | Galaxy | 300/300 (100.0%) | 87 | 12 | 1 |
 | GPT-5.6 Sol | Open-ended code | 300/300 (100.0%) | 89 | 10 | 1 |
-| GPT-5.6 Luna | Galaxy | 290/300 (96.7%) | 85 | 9 | 6 |
+| GPT-5.6 Luna | Galaxy | 290/300 (96.7%) | 85 | 10 | 5 |
 | GPT-5.6 Luna | Open-ended code | 300/300 (100.0%) | 78 | 19 | 3 |
-| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 300/300 (100.0%) | 77 | 15 | 8 |
+| DeepSeek V4 Pro 0813 (Codex) | Galaxy | 300/300 (100.0%) | 75 | 17 | 8 |
 | DeepSeek V4 Pro 0813 (Codex) | Open-ended code | 299/300 (99.7%) | 72 | 24 | 4 |
 
 Usage denominators are 300 runs/row; answer counts partition 100 triplicate task cells/row. Answers use archived submitted text with outer whitespace removed, not raw-file hashes. Text identity does not establish semantic equivalence or correctness. Among all 12 answers/task/environment, 62/100 Galaxy tasks and 58/100 open-ended code tasks have one distinct answer; answer sets differ across environments in 43/100 tasks.
@@ -275,12 +275,12 @@ Usage denominators are 300 runs/row; answer counts partition 100 triplicate task
 | --- | --- |
 | Detailed Galaxy histories, run-linked | 1,198/1,200 (99.8%) |
 | Metadata-only / unavailable run-linked histories | 2 / 0 |
-| Distinct non-fetch creating jobs | 16,686 |
-| Job states: ok / error / deleted / paused | 13,517 / 3,097 / 58 / 14 |
-| Error jobs / non-fetch jobs | 3,097/16,686 (18.6%) |
-| Runs with >=1 error job / detailed runs | 702/1,198 (58.6%) |
-| Error jobs/run: median (Q1-Q3); range | 1.0 (0.0-4.0); 0-32 |
-| Candidate recovery episodes / runs containing one | 213 / 107 |
+| Distinct non-fetch creating jobs | 16,253 |
+| Job states: ok / error / deleted / paused | 13,250 / 2,941 / 51 / 11 |
+| Error jobs / non-fetch jobs | 2,941/16,253 (18.1%) |
+| Runs with >=1 error job / detailed runs | 691/1,198 (57.7%) |
+| Error jobs/run: median (Q1-Q3); range | 1.0 (0.0-3.0); 0-28 |
+| Candidate recovery episodes / runs containing one | 215 / 107 |
 | Adjudicated recovery rate; failures before correct answer | Unavailable; Unavailable |
 | Certified Galaxy-only completion | Unavailable |
 
@@ -290,14 +290,14 @@ The archive contains 22,067 distinct creating jobs: 5,381 data-fetch and 16,686 
 
 | Recorded domain | Tasks | Single-answer tasks Galaxy / open-ended code | Galaxy runs with error | Token ratio median (Q1-Q3) | Token pairs |
 | --- | --- | --- | --- | --- | --- |
-| Single-cell | 21 | 13 / 12 | 165/252 (65.5%) | 4.66 (1.72-9.80) | 82 |
-| Epigenomics | 20 | 11 / 9 | 132/240 (55.0%) | 3.68 (1.92-8.78) | 77 |
-| Genomics | 20 | 16 / 18 | 116/240 (48.3%) | 8.32 (3.69-12.64) | 77 |
-| Transcriptomics | 17 | 6 / 9 | 106/204 (52.0%) | 6.67 (2.77-13.79) | 65 |
-| Population Genetics | 12 | 8 / 6 | 97/142 (68.3%) | 3.23 (1.38-7.00) | 45 |
-| Machine Learning | 7 | 7 / 2 | 66/84 (78.6%) | 1.71 (0.86-3.21) | 28 |
-| Spatial | 2 | 1 / 2 | 14/24 (58.3%) | 2.52 (1.52-4.73) | 8 |
-| Structure | 1 | 0 / 0 | 6/12 (50.0%) | 7.11 (1.79-14.34) | 4 |
+| Single-cell | 21 | 11 / 12 | 164/252 (65.1%) | 4.32 (1.68-9.64) | 82 |
+| Epigenomics | 20 | 10 / 9 | 129/240 (53.8%) | 3.65 (1.92-8.78) | 77 |
+| Genomics | 20 | 16 / 18 | 116/240 (48.3%) | 7.46 (3.69-12.61) | 77 |
+| Transcriptomics | 17 | 6 / 9 | 102/204 (50.0%) | 6.31 (2.77-12.79) | 65 |
+| Population Genetics | 12 | 7 / 6 | 95/142 (66.9%) | 2.22 (1.38-5.73) | 45 |
+| Machine Learning | 7 | 7 / 2 | 66/84 (78.6%) | 1.16 (0.78-2.77) | 28 |
+| Spatial | 2 | 1 / 2 | 13/24 (54.2%) | 2.02 (1.46-2.81) | 8 |
+| Structure | 1 | 0 / 0 | 6/12 (50.0%) | 1.94 (1.79-6.59) | 4 |
 
 Domains come from task metadata; these are not difficulty strata. All four paired configurations are included. Single-answer counts use 12 submitted answers per task/environment. Error denominators include only detailed Galaxy runs. Ratios require all six usage records; small domains are descriptive case groups, not evidence of domain superiority.
 
@@ -305,11 +305,11 @@ Domains come from task metadata; these are not difficulty strata. All four paire
 
 | Environment | Configuration | Eligible/total | Identical | Two identical | All distinct | Mean Jaccard |
 | --- | --- | --- | --- | --- | --- | --- |
-| Galaxy | GPT-5.5 | 99/100 | 2 | 3 | 94 | 0.089 |
+| Galaxy | GPT-5.5 | 99/100 | 2 | 5 | 92 | 0.095 |
 | Galaxy | GPT-5.6 Sol | 100/100 | 1 | 4 | 95 | 0.125 |
-| Galaxy | GPT-5.6 Luna | 97/100 | 1 | 5 | 91 | 0.190 |
-| Galaxy | DeepSeek V4 Pro 0813 (Codex) | 94/100 | 2 | 5 | 87 | 0.203 |
-| Galaxy | All configurations | 390/400 | 6 | 17 | 367 | 0.151 |
+| Galaxy | GPT-5.6 Luna | 97/100 | 1 | 6 | 90 | 0.192 |
+| Galaxy | DeepSeek V4 Pro 0813 (Codex) | 94/100 | 2 | 5 | 87 | 0.199 |
+| Galaxy | All configurations | 390/400 | 6 | 20 | 364 | 0.152 |
 | Open-ended code | GPT-5.5 | 96/100 | 3 | 16 | 77 | 0.562 |
 | Open-ended code | GPT-5.6 Sol | 95/100 | 1 | 16 | 78 | 0.597 |
 | Open-ended code | GPT-5.6 Luna | 94/100 | 1 | 10 | 83 | 0.583 |
@@ -322,11 +322,11 @@ One cell = task x configuration x environment with three replicate labels. This 
 
 | Configuration | Paired cells | Ratio median (Q1-Q3) | Ratio [95% confidence interval] | Median input Galaxy / open-ended code | Pairs with Galaxy > open-ended code |
 | --- | --- | --- | --- | --- | --- |
-| GPT-5.5 | 97 | 3.14 (1.68-5.81) | 3.14 [2.37, 3.75] | 1,734,835.0 / 491,109.0 | 85/97 (87.6%) |
-| GPT-5.6 Sol | 100 | 6.63 (3.13-12.05) | 6.63 [5.46, 8.58] | 3,748,257.5 / 530,535.0 | 96/100 (96.0%) |
-| GPT-5.6 Luna | 90 | 5.73 (2.09-16.09) | 5.73 [4.00, 8.38] | 10,238,154.5 / 1,448,621.0 | 80/90 (88.9%) |
-| DeepSeek V4 Pro 0813 (Codex) | 99 | 3.53 (1.58-8.36) | 3.53 [2.79, 4.42] | 8,478,973.0 / 2,407,919.0 | 86/99 (86.9%) |
-| All configurations | 386 | 4.42 (1.91-10.66) | 4.42 [3.53, 5.39] | 4,550,435.0 / 957,212.0 | 347/386 (89.9%) |
+| GPT-5.5 | 97 | 2.62 (1.45-4.82) | 2.62 [2.17, 3.22] | 1,532,621.0 / 491,109.0 | 80/97 (82.5%) |
+| GPT-5.6 Sol | 100 | 6.61 (3.13-11.87) | 6.61 [5.46, 8.43] | 3,748,257.5 / 530,535.0 | 96/100 (96.0%) |
+| GPT-5.6 Luna | 90 | 5.50 (2.03-16.09) | 5.50 [3.62, 8.30] | 10,090,810.0 / 1,448,621.0 | 80/90 (88.9%) |
+| DeepSeek V4 Pro 0813 (Codex) | 99 | 3.52 (1.54-8.51) | 3.52 [2.76, 4.42] | 8,290,100.0 / 2,407,919.0 | 85/99 (85.9%) |
+| All configurations | 386 | 4.16 (1.86-9.74) | 4.16 [3.39, 4.90] | 4,433,560.0 / 957,212.0 | 341/386 (88.3%) |
 
 Ratio = median input tokens of three Galaxy runs / median of three code runs for the same task and configuration; all six totals must be available. Q1-Q3 are quartile endpoints. Absolute medians use every available run in that row and are not the numerator/denominator of the paired median ratio. Cached input is already included. Output/reasoning are not added. Usage covers archived primary turns, not full campaign, compute or monetary cost. Failed runs are retained; missing usage is never zero. Fourteen of 400 pairs are excluded (3 GPT-5.5, 10 Luna, 1 DeepSeek). The runtime-and-reasoning-verified sensitivity contains only 99 DeepSeek pairs (median 3.53), so it changes the configuration population. Astra usage is available in 100/100 unpaired open-ended code runs (median input 314,244.5); no Galaxy ratio is possible.
 
@@ -344,10 +344,10 @@ Purposive positive and contradictory examples, not a random sample of 213 candid
 | Recorded tool / version | Non-fetch jobs | Error jobs |
 | --- | --- | --- |
 | filter_tabular/3.3.1 | 627 | 12 |
-| anndata_inspect/0.11.4+galaxy3 | 413 | 16 |
-| Cut1 | 378 | 14 |
-| datamash_ops/1.9+galaxy0 | 372 | 19 |
-| upload1 | 372 | 56 |
+| Cut1 | 373 | 14 |
+| anndata_inspect/0.11.4+galaxy3 | 372 | 15 |
+| datamash_ops/1.9+galaxy0 | 366 | 19 |
+| upload1 | 362 | 55 |
 | bedtools_intersectbed/2.31.1+galaxy0 | 346 | 26 |
 
 Top six tool IDs by job count among 16,686 deduplicated non-fetch jobs. AnnData inspection and bedtools intersection appear alongside filtering, column selection, Datamash and legacy upload. This is evidence of operation availability/use, not correctness, independent analyses or exclusive use of installed domain tools. Full IDs and event references are in the analysis JSON.
@@ -356,13 +356,13 @@ Top six tool IDs by job count among 16,686 deduplicated non-fetch jobs. AnnData 
 
 | Configuration | Environment | Accepted runs | Tasks with identical answer text | Runs with Galaxy job error | Runs with nonzero shell exit | Median input tokens (millions); coverage |
 | --- | --- | --- | --- | --- | --- | --- |
-| GPT-5.5 | Galaxy | Unavailable | 84/100 (84.0%) | 195/300 (65.0%) | 131/293 (44.7%) | 1.735; 297/300 |
+| GPT-5.5 | Galaxy | Unavailable | 82/100 (82.0%) | 186/300 (62.0%) | 120/293 (41.0%) | 1.533; 297/300 |
 | GPT-5.5 | Open-ended code | Unavailable | 82/100 (82.0%) | Not applicable | 218/299 (72.9%) | 0.491; 300/300 |
-| GPT-5.6 Sol | Galaxy | Unavailable | 87/100 (87.0%) | 146/300 (48.7%) | 91/288 (31.6%) | 3.748; 300/300 |
+| GPT-5.6 Sol | Galaxy | Unavailable | 87/100 (87.0%) | 146/300 (48.7%) | 92/288 (31.9%) | 3.748; 300/300 |
 | GPT-5.6 Sol | Open-ended code | Unavailable | 89/100 (89.0%) | Not applicable | 195/300 (65.0%) | 0.531; 300/300 |
-| GPT-5.6 Luna | Galaxy | Unavailable | 85/100 (85.0%) | 189/298 (63.4%) | 234/279 (83.9%) | 10.238; 290/300 |
+| GPT-5.6 Luna | Galaxy | Unavailable | 85/100 (85.0%) | 188/298 (63.1%) | 232/279 (83.2%) | 10.091; 290/300 |
 | GPT-5.6 Luna | Open-ended code | Unavailable | 78/100 (78.0%) | Not applicable | 238/300 (79.3%) | 1.449; 300/300 |
-| DeepSeek V4 Pro 0813 (Codex) | Galaxy | Unavailable | 77/100 (77.0%) | 172/300 (57.3%) | 220/295 (74.6%) | 8.479; 300/300 |
+| DeepSeek V4 Pro 0813 (Codex) | Galaxy | Unavailable | 75/100 (75.0%) | 171/300 (57.0%) | 217/295 (73.6%) | 8.290; 300/300 |
 | DeepSeek V4 Pro 0813 (Codex) | Open-ended code | Unavailable | 72/100 (72.0%) | Not applicable | 231/297 (77.8%) | 2.408; 299/300 |
 
 Each task contributes three runs/configuration/environment. Accepted-answer reliability is used for BixBench; CompBio can only report answer-text consistency, never correctness. Galaxy job errors and nonzero shell exits are different instruments. A shell exit may be a probe or failed search; Galaxy analysis is often offloaded to server jobs, so fewer shell exits do not establish easier execution. Shell denominators require at least one numeric recorded exit code: the superseded Claude Code traces contain no numeric exit codes and are unavailable, not zero failures. Tokens describe archived primary turns, not full execution cost. Missing data are excluded with explicit denominators; all observed outcomes are included.
@@ -585,7 +585,7 @@ IWC counterpart to B14 and C9, using continuous agreement instead of acceptance.
 | Paired input-token ratios | 250/250 all-configuration pairs | 386/400 all-configuration pairs | 40/40 all-configuration pairs | Comparable formula; report benchmark strata and shared-label comparisons |
 | Path agreement | Recomputed strict observed/nonempty eligibility | Same strict eligibility | Same strict eligibility | Compare benchmarks within each instrument; no Galaxy-versus-open-ended code consistency ranking |
 | Run-linked operational errors | Detailed histories in 714/750 Galaxy records | Detailed histories in 1,198/1,200 Galaxy records | Detailed histories in 118/120 Galaxy records | Available-case burden; collection and task composition confound contrasts |
-| User-defined-tool helper | Requested in 267/750 Galaxy transcripts | Requested in 808/1,188 Galaxy transcripts | Absent from 120/120 recorded helper lists | Zero named-helper detections are not proof of zero custom-code use or lack of necessity (X19) |
+| User-defined-tool helper | Requested in 267/750 Galaxy transcripts | Requested in 810/1,188 Galaxy transcripts | Absent from 120/120 recorded helper lists | Zero named-helper detections are not proof of zero custom-code use or lack of necessity (X19) |
 | Full cost / human review time | Unavailable / unmeasured | Unavailable / unmeasured | Unavailable / unmeasured | Neither monetary efficiency nor faster human review is established |
 
 The historical CompBio source composes final vectors from multiple campaigns, unlike a prospectively fixed independent replicate design. IWC has unbalanced 6 h and 12 h budgets and environment-specific prompts. Prompt additions, harnesses, tools, model verification, domain mix and campaign selection remain confounders. No cross-benchmark pooled accuracy denominator is constructed.
@@ -594,10 +594,10 @@ The historical CompBio source composes final vectors from multiple campaigns, un
 
 | Shared supplied configuration | Bix pairs; median Galaxy/open-ended code [confidence interval] | CompBio pairs; median Galaxy/open-ended code [confidence interval] | IWC pairs; median Galaxy/open-ended code [confidence interval] | CompBio/Bix median-ratio contrast [confidence interval] | IWC/Bix median-ratio contrast [confidence interval] |
 | --- | --- | --- | --- | --- | --- |
-| GPT-5.5 | 50; 3.86 [2.97, 5.81] | 97; 3.14 [2.37, 3.75] | 10; 1.66 [0.55, 3.55] | 0.81 [0.51, 1.11] | 0.43 [0.12, 0.87] |
-| GPT-5.6 Sol | 50; 5.03 [4.06, 6.07] | 100; 6.63 [5.46, 8.58] | 10; 2.77 [0.87, 4.70] | 1.32 [1.00, 1.83] | 0.55 [0.17, 0.99] |
-| GPT-5.6 Luna | 50; 7.63 [6.27, 13.60] | 90; 5.73 [4.00, 8.38] | 10; 2.41 [0.67, 5.04] | 0.75 [0.34, 1.20] | 0.32 [0.06, 0.70] |
-| All three shared configurations | 150; 5.28 [4.06, 7.07] | 287; 4.83 [3.83, 5.87] | 30; 1.88 [0.82, 4.70] | 0.91 [0.64, 1.28] | 0.36 [0.15, 0.91] |
+| GPT-5.5 | 50; 3.86 [2.97, 5.81] | 97; 2.62 [2.17, 3.22] | 10; 1.66 [0.55, 3.55] | 0.68 [0.45, 0.96] | 0.43 [0.12, 0.87] |
+| GPT-5.6 Sol | 50; 5.03 [4.06, 6.07] | 100; 6.61 [5.46, 8.43] | 10; 2.77 [0.87, 4.70] | 1.31 [1.00, 1.80] | 0.55 [0.17, 0.99] |
+| GPT-5.6 Luna | 50; 7.63 [6.27, 13.60] | 90; 5.50 [3.62, 8.30] | 10; 2.41 [0.67, 5.04] | 0.72 [0.32, 1.17] | 0.32 [0.06, 0.70] |
+| All three shared configurations | 150; 5.28 [4.06, 7.07] | 287; 4.60 [3.50, 5.64] | 30; 1.88 [0.82, 4.70] | 0.87 [0.59, 1.19] | 0.36 [0.15, 0.91] |
 
 The contrast columns divide two benchmark-specific medians of within-task ratios; they are not absolute-token ratios. A value above one means greater relative overhead than in BixBench. IWC has ten task clusters, so its intervals are wide. Its lower point estimate cannot be attributed to installed wrappers: prompts, budgets, task selection and open-ended code tails also differ (I9). Benchmark strata are resampled separately, preserving tasks/configurations within clusters. Selection differs and these are observational comparisons. Unless a table specifies otherwise, new intervals are exploratory 95% percentile cluster-bootstrap intervals (20,000 resamples; seed 20260922, with deterministic statistic-specific streams). BixBench resamples eligible source capsules (up to 33); CompBio resamples eligible tasks (up to 100), retaining configurations and replicate bundles. Estimates weight eligible task/configuration cells equally; capsule sizes remain unequal. Cross-benchmark draws are independent and stratified by benchmark. Intervals assume independent clusters, an assumption not established for shared biological inputs. They are pointwise, not multiplicity-adjusted simultaneous intervals. No confirmatory significance, equivalence, non-inferiority or causal claim is made; an interval spanning zero (differences) or one (ratios) is inconclusive.
 
@@ -605,7 +605,7 @@ The contrast columns divide two benchmark-specific medians of within-task ratios
 
 | Instrument / environment | Bix eligible cells; mean [confidence interval] | CompBio eligible cells; mean [confidence interval] | IWC eligible cells; mean [confidence interval] | CompBio - Bix [confidence interval] | IWC - Bix [confidence interval] |
 | --- | --- | --- | --- | --- | --- |
-| Galaxy | 138; 0.390 [0.284, 0.496] | 296; 0.134 [0.106, 0.166] | 29; 0.616 [0.493, 0.737] | -0.256 [-0.366, -0.145] | 0.225 [0.065, 0.386] |
+| Galaxy | 138; 0.390 [0.284, 0.496] | 296; 0.137 [0.108, 0.169] | 29; 0.616 [0.493, 0.737] | -0.254 [-0.364, -0.142] | 0.225 [0.065, 0.386] |
 | Open-ended code | 150; 0.675 [0.638, 0.713] | 285; 0.581 [0.555, 0.607] | 30; 0.689 [0.642, 0.740] | -0.094 [-0.141, -0.048] | 0.014 [-0.048, 0.077] |
 
 Descriptive population: three shared GPT labels; all three run fingerprints observed and nonempty. This holds the extraction rule and included supplied labels fixed; eligible configuration proportions can still differ. IWC's higher Galaxy tool-set agreement fits workflow-defined tool chains, but rests on ten tasks. It does not control biological task complexity, command-vocabulary coverage, custom-wrapper identity or campaign selection. Lower agreement describes more variable recorded toolsets/command indicators, not worse science. Instrument values must not be directly compared across the two rows.
@@ -615,25 +615,25 @@ Descriptive population: three shared GPT labels; all three run fingerprints obse
 | Benchmark | Galaxy runs with >=1 non-fetch error / detailed runs | Percentage [95% confidence interval] | Resampling clusters |
 | --- | --- | --- | --- |
 | BixBench50 | 147/428 (34.3%) | 34.3 [26.4, 42.7] | 33 |
-| CompBio | 530/898 (59.0%) | 59.0 [53.9, 64.0] | 100 |
+| CompBio | 520/898 (57.9%) | 57.9 [52.8, 62.9] | 100 |
 | IWC | 57/89 (64.0%) | 64.0 [40.0, 85.6] | 10 |
 
 Three shared GPT labels only; missing detailed histories are excluded explicitly. Each run contributes one binary indicator, preventing runs with many jobs from dominating this estimate. Histories may contain inherited/later state; this is recorded burden, not a causal benchmark/platform failure probability. No code-condition counterpart uses an equivalent job instrument.
 
 ### Table X5. Which operational error messages are observable?
 
-| Exploratory indicator / observability | Bix error jobs (n=552) | CompBio error jobs (n=3,097) | IWC error jobs (n=202) |
+| Exploratory indicator / observability | Bix error jobs (n=552) | CompBio error jobs (n=2,941) | IWC error jobs (n=202) |
 | --- | --- | --- | --- |
-| Dependency / executable | 15/552 (2.7%) | 42/3,097 (1.4%) | 0/202 (0.0%) |
-| Type / numeric / attribute | 47/552 (8.5%) | 100/3,097 (3.2%) | 4/202 (2.0%) |
-| File / path / access | 22/552 (4.0%) | 66/3,097 (2.1%) | 22/202 (10.9%) |
-| Argument / syntax / encoding | 13/552 (2.4%) | 19/3,097 (0.6%) | 0/202 (0.0%) |
-| Network / retrieval | 12/552 (2.2%) | 13/3,097 (0.4%) | 0/202 (0.0%) |
-| Memory / resource | 1/552 (0.2%) | 20/3,097 (0.6%) | 4/202 (2.0%) |
-| Error jobs with any retained stdout/stderr | 472/552 (85.5%) | 1,476/3,097 (47.7%) | 120/202 (59.4%) |
-| Error jobs without retained stdout/stderr | 80/552 (14.5%) | 1,621/3,097 (52.3%) | 82/202 (40.6%) |
-| Text present but no rule matched | 368/552 (66.7%) | 1,218/3,097 (39.3%) | 90/202 (44.6%) |
-| Error state with recorded exit code zero | 8/552 (1.4%) | 57/3,097 (1.8%) | 21/202 (10.4%) |
+| Dependency / executable | 15/552 (2.7%) | 54/2,941 (1.8%) | 0/202 (0.0%) |
+| Type / numeric / attribute | 47/552 (8.5%) | 98/2,941 (3.3%) | 4/202 (2.0%) |
+| File / path / access | 22/552 (4.0%) | 71/2,941 (2.4%) | 22/202 (10.9%) |
+| Argument / syntax / encoding | 13/552 (2.4%) | 17/2,941 (0.6%) | 0/202 (0.0%) |
+| Network / retrieval | 12/552 (2.2%) | 15/2,941 (0.5%) | 0/202 (0.0%) |
+| Memory / resource | 1/552 (0.2%) | 32/2,941 (1.1%) | 4/202 (2.0%) |
+| Error jobs with any retained stdout/stderr | 472/552 (85.5%) | 1,597/2,941 (54.3%) | 120/202 (59.4%) |
+| Error jobs without retained stdout/stderr | 80/552 (14.5%) | 1,344/2,941 (45.7%) | 82/202 (40.6%) |
+| Text present but no rule matched | 368/552 (66.7%) | 1,317/2,941 (44.8%) | 90/202 (44.6%) |
+| Error state with recorded exit code zero | 8/552 (1.4%) | 57/2,941 (1.9%) | 21/202 (10.4%) |
 
 All benchmark-specific paired configurations, not just shared GPT labels. Deduplicated non-fetch error jobs; case-insensitive regex matches on retained stderr/stdout excerpts, with overlapping categories. The exact codebook and every source event reference are in the analysis JSON. These are message indicators, not independently adjudicated root causes; missing/truncated logs suppress detection, and absent text does not mean no diagnostic existed on the server. No significance test compares these unequally observed taxonomies. Exit code zero does not override the recorded Galaxy error state. In IWC, fastp and Bowtie2 error jobs retain no text at all (X18), so the generic codebook under-detects its failures.
 
@@ -646,11 +646,11 @@ All benchmark-specific paired configurations, not just shared GPT labels. Dedupl
 | BixBench50 | deseq2/2.11.40.8+galaxy3 | 35/59 (59.3%) |
 | BixBench50 | featurewise_correlation/0.1.0+galaxy3 | 34/127 (26.8%) |
 | BixBench50 | Univariate/2.2.4 | 14/24 (58.3%) |
-| CompBio | udt-render-probe-v1 | 57/57 (100.0%) |
-| CompBio | upload1 | 56/372 (15.1%) |
-| CompBio | anndata_export/0.11.4+galaxy3 | 41/73 (56.2%) |
+| CompBio | upload1 | 55/362 (15.2%) |
+| CompBio | udt-render-probe-v1 | 51/51 (100.0%) |
 | CompBio | bcftools_norm/1.24+galaxy0 | 41/76 (53.9%) |
-| CompBio | CONVERTER_gz_to_uncompressed | 38/191 (19.9%) |
+| CompBio | anndata_export/0.11.4+galaxy3 | 40/71 (56.3%) |
+| CompBio | CONVERTER_gz_to_uncompressed | 37/182 (20.3%) |
 | IWC | fastp/1.3.6+galaxy0 | 44/94 (46.8%) |
 | IWC | edger/3.36.0+galaxy7 | 24/36 (66.7%) |
 | IWC | pepquery2/2.0.2+galaxy2 | 21/58 (36.2%) |
@@ -696,16 +696,16 @@ All 160 task evidence paths, hashes, included run IDs and original finding IDs a
 | phykit | 60/428 (14.0%) | 54/450 (12.0%) | 0/898 (0.0%) | 0/900 (0.0%) | 0/89 (0.0%) | 0/90 (0.0%) |
 | DESeq2 / PyDESeq2 | 29/428 (6.8%) | 78/450 (17.3%) | 1/898 (0.1%) | 0/900 (0.0%) | 10/89 (11.2%) | 18/90 (20.0%) |
 | gseapy | 24/428 (5.6%) | 36/450 (8.0%) | 5/898 (0.6%) | 0/900 (0.0%) | 0/89 (0.0%) | 0/90 (0.0%) |
-| samtools | 9/428 (2.1%) | 17/450 (3.8%) | 92/898 (10.2%) | 252/900 (28.0%) | 11/89 (12.4%) | 36/90 (40.0%) |
-| bcftools | 9/428 (2.1%) | 10/450 (2.2%) | 41/898 (4.6%) | 105/900 (11.7%) | 0/89 (0.0%) | 7/90 (7.8%) |
-| bedtools | 0/428 (0.0%) | 0/450 (0.0%) | 100/898 (11.1%) | 129/900 (14.3%) | 2/89 (2.2%) | 12/90 (13.3%) |
-| anndata | 0/428 (0.0%) | 10/450 (2.2%) | 64/898 (7.1%) | 89/900 (9.9%) | 6/89 (6.7%) | 9/90 (10.0%) |
-| scanpy | 0/428 (0.0%) | 3/450 (0.7%) | 33/898 (3.7%) | 79/900 (8.8%) | 0/89 (0.0%) | 9/90 (10.0%) |
-| datamash | 33/428 (7.7%) | 0/450 (0.0%) | 82/898 (9.1%) | 0/900 (0.0%) | 0/89 (0.0%) | 1/90 (1.1%) |
+| samtools | 9/428 (2.1%) | 17/450 (3.8%) | 90/898 (10.0%) | 252/900 (28.0%) | 11/89 (12.4%) | 36/90 (40.0%) |
+| bcftools | 9/428 (2.1%) | 10/450 (2.2%) | 38/898 (4.2%) | 105/900 (11.7%) | 0/89 (0.0%) | 7/90 (7.8%) |
+| bedtools | 0/428 (0.0%) | 0/450 (0.0%) | 97/898 (10.8%) | 129/900 (14.3%) | 2/89 (2.2%) | 12/90 (13.3%) |
+| anndata | 0/428 (0.0%) | 10/450 (2.2%) | 58/898 (6.5%) | 89/900 (9.9%) | 6/89 (6.7%) | 9/90 (10.0%) |
+| scanpy | 0/428 (0.0%) | 3/450 (0.7%) | 29/898 (3.2%) | 79/900 (8.8%) | 0/89 (0.0%) | 9/90 (10.0%) |
+| datamash | 33/428 (7.7%) | 0/450 (0.0%) | 81/898 (9.0%) | 0/900 (0.0%) | 0/89 (0.0%) | 1/90 (1.1%) |
 | bwa | 9/428 (2.1%) | 9/450 (2.0%) | 52/898 (5.8%) | 126/900 (14.0%) | 4/89 (4.5%) | 23/90 (25.6%) |
 | fastp | 0/428 (0.0%) | 0/450 (0.0%) | 0/898 (0.0%) | 44/900 (4.9%) | 18/89 (20.2%) | 25/90 (27.8%) |
-| bowtie2 | 0/428 (0.0%) | 1/450 (0.2%) | 24/898 (2.7%) | 123/900 (13.7%) | 18/89 (20.2%) | 20/90 (22.2%) |
-| minimap2 | 0/428 (0.0%) | 5/450 (1.1%) | 21/898 (2.3%) | 169/900 (18.8%) | 1/89 (1.1%) | 24/90 (26.7%) |
+| bowtie2 | 0/428 (0.0%) | 1/450 (0.2%) | 23/898 (2.6%) | 123/900 (13.7%) | 18/89 (20.2%) | 20/90 (22.2%) |
+| minimap2 | 0/428 (0.0%) | 5/450 (1.1%) | 20/898 (2.2%) | 169/900 (18.8%) | 1/89 (1.1%) | 24/90 (26.7%) |
 | MACS2 / MACS3 | 0/428 (0.0%) | 0/450 (0.0%) | 12/898 (1.3%) | 44/900 (4.9%) | 7/89 (7.9%) | 9/90 (10.0%) |
 | edgeR | 2/428 (0.5%) | 20/450 (4.4%) | 2/898 (0.2%) | 0/900 (0.0%) | 9/89 (10.1%) | 13/90 (14.4%) |
 | dada2 | 0/428 (0.0%) | 0/450 (0.0%) | 0/898 (0.0%) | 0/900 (0.0%) | 8/89 (9.0%) | 9/90 (10.0%) |
@@ -717,7 +717,7 @@ Three shared GPT configurations. The last six families were added for IWC workfl
 | Benchmark | Complete task/configuration pairs | Galaxy: runs with nonzero shell exit | Open-ended code: runs with nonzero shell exit | Galaxy minus open-ended code (percentage points) [95% interval] |
 | --- | --- | --- | --- | --- |
 | BixBench50 | 200 | 389/600 (64.8%) | 463/600 (77.2%) | -12.33 [-19.61, -4.50] |
-| CompBio | 363 | 645/1,089 (59.2%) | 810/1,089 (74.4%) | -15.15 [-19.38, -10.76] |
+| CompBio | 363 | 630/1,089 (57.9%) | 810/1,089 (74.4%) | -16.53 [-20.94, -11.93] |
 | IWC | 40 | 95/120 (79.2%) | 113/120 (94.2%) | -15.00 [-24.17, -5.81] |
 
 Each pair requires six transcripts with at least one numeric shell exit code per run. The superseded Claude Code configuration is excluded because its exit codes are unobserved. Intervals resample capsules/tasks with all eligible configuration bundles. Only the shell channel is compared: searches, probes and package checks can return nonzero, while Galaxy job failures can be returned as successful API calls. Thus this marker does not answer whether Galaxy has more scientific failures or is intrinsically harder. Higher Galaxy input-token use (B7/C6), server-job errors (B4/C3) and concrete wrapper-binding friction (X15) are distinct, supported forms of burden.
@@ -729,8 +729,8 @@ Each pair requires six transcripts with at least one numeric shell exit code per
 | BixBench50 | Galaxy | Prompt word count | Runs with Galaxy job error | 42 | 0.473 [0.159, 0.713] |
 | BixBench50 | Galaxy | Median recorded non-fetch jobs/run | Error jobs / recorded jobs | 42 | 0.067 [-0.286, 0.378] |
 | BixBench50 | Open-ended code | Prompt word count | Runs with nonzero shell exit | 50 | 0.502 [0.241, 0.680] |
-| CompBio | Galaxy | Prompt word count | Runs with Galaxy job error | 99 | 0.187 [-0.015, 0.382] |
-| CompBio | Galaxy | Median recorded non-fetch jobs/run | Error jobs / recorded jobs | 99 | 0.006 [-0.206, 0.208] |
+| CompBio | Galaxy | Prompt word count | Runs with Galaxy job error | 99 | 0.166 [-0.037, 0.362] |
+| CompBio | Galaxy | Median recorded non-fetch jobs/run | Error jobs / recorded jobs | 99 | 0.014 [-0.203, 0.225] |
 | CompBio | Open-ended code | Prompt word count | Runs with nonzero shell exit | 99 | 0.175 [-0.033, 0.366] |
 | IWC | Galaxy | Prompt word count | Runs with Galaxy job error | 9 | 0.103 [-0.695, 0.803] |
 | IWC | Galaxy | Median recorded non-fetch jobs/run | Error jobs / recorded jobs | 9 | 0.193 [-0.858, 0.802] |
@@ -748,11 +748,11 @@ Three shared GPT configurations; nine observed runs are required per task/enviro
 | BixBench50 | DeepSeek V4 Pro (Codex) | 14/150 (9.3%) | 6/50 (12.0%) | 12/14 | 6 | 12 |
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | 42/150 (28.0%) | 25/50 (50.0%) | 40/42 | 25 | 38 |
 | BixBench50 | All configurations | 267/750 (35.6%) | 41/50 (82.0%) | 249/267 | 41 | 246 |
-| CompBio | GPT-5.5 | 263/298 (88.3%) | 96/100 (96.0%) | 260/263 | 96 | 132 |
+| CompBio | GPT-5.5 | 262/298 (87.9%) | 96/100 (96.0%) | 259/262 | 96 | 165 |
 | CompBio | GPT-5.6 Sol | 239/300 (79.7%) | 91/100 (91.0%) | 239/239 | 91 | 224 |
-| CompBio | GPT-5.6 Luna | 176/290 (60.7%) | 72/100 (72.0%) | 175/176 | 71 | 114 |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | 130/300 (43.3%) | 62/100 (62.0%) | 128/130 | 61 | 97 |
-| CompBio | All configurations | 808/1,188 (68.0%) | 97/100 (97.0%) | 802/808 | 97 | 567 |
+| CompBio | GPT-5.6 Luna | 176/290 (60.7%) | 72/100 (72.0%) | 175/176 | 71 | 119 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | 133/300 (44.3%) | 63/100 (63.0%) | 131/133 | 62 | 103 |
+| CompBio | All configurations | 810/1,188 (68.2%) | 97/100 (97.0%) | 804/810 | 97 | 611 |
 | IWC | GPT-5.5 | 0/30 (0.0%) | 0/10 (0.0%) | Not applicable (no detected requests) | 0 | 0 |
 | IWC | GPT-5.6 Sol | 0/30 (0.0%) | 0/10 (0.0%) | Not applicable (no detected requests) | 0 | 0 |
 | IWC | GPT-5.6 Luna | 0/30 (0.0%) | 0/10 (0.0%) | Not applicable (no detected requests) | 0 | 0 |
@@ -771,11 +771,11 @@ An explicit request is a run_galaxy_udt_and_wait event. Linked execution require
 | BixBench50 | DeepSeek V4 Pro (Codex) | 50 | 44 | 2 | 4 | 2 / 2 |
 | BixBench50 | DeepSeek V4 Pro (Claude Code, superseded) | 50 | 25 | 21 | 4 | 21 / 21 |
 | BixBench50 | All configurations | 250 | 124 | 73 | 53 | 73 / 73 |
-| CompBio | GPT-5.5 | 98 | 4 | 19 | 75 | 2 / 2 |
+| CompBio | GPT-5.5 | 98 | 4 | 20 | 74 | 2 / 2 |
 | CompBio | GPT-5.6 Sol | 100 | 9 | 26 | 65 | 2 / 2 |
 | CompBio | GPT-5.6 Luna | 90 | 26 | 20 | 44 | 19 / 19 |
-| CompBio | DeepSeek V4 Pro 0813 (Codex) | 100 | 38 | 39 | 23 | 38 / 38 |
-| CompBio | All configurations | 388 | 77 | 104 | 207 | 61 / 61 |
+| CompBio | DeepSeek V4 Pro 0813 (Codex) | 100 | 37 | 38 | 25 | 37 / 37 |
+| CompBio | All configurations | 388 | 76 | 104 | 208 | 60 / 60 |
 | IWC | GPT-5.5 | 10 | 10 | 0 | 0 | 0 / 0 |
 | IWC | GPT-5.6 Sol | 10 | 10 | 0 | 0 | 0 / 0 |
 | IWC | GPT-5.6 Luna | 10 | 10 | 0 | 0 | 0 / 0 |
@@ -788,12 +788,12 @@ One cell is one task/configuration; all three transcripts must be present. The t
 
 | Recorded interface operation | BixBench runs | CompBio runs | IWC runs |
 | --- | --- | --- | --- |
-| Tool discovery | 693/750 (92.4%) | 919/1,188 (77.4%) | 118/120 (98.3%) |
-| Parameter/schema inspection | 544/750 (72.5%) | 840/1,188 (70.7%) | 118/120 (98.3%) |
-| History inspection | 685/750 (91.3%) | 1,119/1,188 (94.2%) | 117/120 (97.5%) |
-| Ordinary-tool submission requests | 551/750 (73.5%) | 770/1,188 (64.8%) | 112/120 (93.3%) |
-| User-defined-tool submission requests | 267/750 (35.6%) | 808/1,188 (68.0%) | 0/120 (0.0%) |
-| Explicit waiting/status requests | 89/750 (11.9%) | 231/1,188 (19.4%) | 43/120 (35.8%) |
+| Tool discovery | 693/750 (92.4%) | 899/1,188 (75.7%) | 118/120 (98.3%) |
+| Parameter/schema inspection | 544/750 (72.5%) | 822/1,188 (69.2%) | 118/120 (98.3%) |
+| History inspection | 685/750 (91.3%) | 1,108/1,188 (93.3%) | 117/120 (97.5%) |
+| Ordinary-tool submission requests | 551/750 (73.5%) | 758/1,188 (63.8%) | 112/120 (93.3%) |
+| User-defined-tool submission requests | 267/750 (35.6%) | 810/1,188 (68.2%) | 0/120 (0.0%) |
+| Explicit waiting/status requests | 89/750 (11.9%) | 221/1,188 (18.6%) | 43/120 (35.8%) |
 
 All Galaxy configurations with retrieved transcripts; nonexclusive run-level counts of named calls. A completed helper call does not by itself prove job success or scientific validity. History creation/copying is not universally measured by these named helpers; it is documented in selected traces and must not be inferred for every run from a linked history. These counts support feature use, not improved human readability. IWC user-defined-tool detections are zero and that helper is absent from recorded lists; this association does not establish why custom code was or was not used.
 
@@ -814,7 +814,7 @@ Purposive mechanism cases, not percentages of all custom-tool use. `results.deep
 | --- | --- | --- | --- | --- | --- |
 | BixBench50 | Galaxy | 225 | 135 | 105 | 99 |
 | BixBench50 | Open-ended code | 249 | 142 | 129 | 111 |
-| CompBio | Galaxy | 390 | 324 | 318 | Unavailable |
+| CompBio | Galaxy | 390 | 320 | 314 | Unavailable |
 | CompBio | Open-ended code | 382 | 303 | 296 | Unavailable |
 
 All benchmark-specific paired configurations; three observed nonempty fingerprints are required. Answer identity uses exact archived submitted text after outer whitespace removal; it does not merge numerically close strings. Path variation means tool-ID/command-token sets differ, not independently adjudicated biological algorithms. BixBench can confirm acceptance; CompBio cannot confirm validity. The counts support multiple observed execution routes to the same answer, with these measurement limits. IWC is excluded: its final chat message is not the scored artifact; declared routes versus continuous agreement are in I12.
@@ -841,9 +841,9 @@ These verdicts evaluate the motivating statements, not a prespecified hypothesis
 | BixBench50 | kegg_ora | Empty foreground after intersection | 10/62 (16.1%) | Selected gene set did not overlap the analysis universe/mappings; inspect upstream selection and identifiers. |
 | BixBench50 | deseq2 | Missing factor-list element | 34/79 (43.0%) | Factor configuration was absent or misbound; the message does not identify whether the agent, helper or wrapper caused it. |
 | BixBench50 | deseq2 | Duplicate row names or factor levels | 20/79 (25.3%) | Sample labels or factor encoding were not unique; validate the design table before submission. |
-| CompBio | CONVERTER_gz_to_uncompressed | Invalid gzip magic | 35/38 (92.1%) | Bytes were not recognized as gzip by the converter; check declared datatype against bytes before conversion. |
+| CompBio | CONVERTER_gz_to_uncompressed | Invalid gzip magic | 35/37 (94.6%) | Bytes were not recognized as gzip by the converter; check declared datatype against bytes before conversion. |
 | CompBio | bcftools_norm | Unrecognized or unindexable input | 28/41 (68.3%) | Input format or compression/index compatibility failed; check the variant-file format and index prerequisites. |
-| CompBio | anndata_export | DataFrame construction failure | 37/41 (90.2%) | The exported matrix did not fit the expected table representation; inspect matrix presence/type and export mode. |
+| CompBio | anndata_export | DataFrame construction failure | 36/40 (90.0%) | The exported matrix did not fit the expected table representation; inspect matrix presence/type and export mode. |
 | CompBio | deseq2 | No residual degrees of freedom | 3/4 (75.0%) | Model design could not estimate dispersion; validate replication and design rank before fitting. |
 | IWC | fastp | No retained stdout/stderr | 47/47 (100.0%) | This family has the largest observed IWC error count, but no retained stdout/stderr for those jobs; this is not an exposure-adjusted tool-quality ranking or proof that no diagnostic existed. |
 | IWC | edger | Contrast names a missing factor level | 11/24 (45.8%) | Contrast strings did not match design-level names; validate contrast levels against the factor encoding before launch. |
@@ -861,7 +861,7 @@ Counts are deduplicated creating jobs; tool versions are pooled within the named
 | Benchmark | Task origin | Recorded UDT helper list | Runs with detected request / retrieved transcripts | Tasks with detected request / listed tasks | Request-linked job detections / listed runs | Tool Shed jobs outside utility codebook / non-fetch jobs | Interactive-tool histories / detailed histories |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | BixBench50 | Platform-neutral | Not recorded; requests show availability | 267/750 (35.6%) | 41/50 (82.0%) | 249/750 (lower-bound count) | 1,393/5,042 (27.6%) | 0/714 (0.0%) |
-| CompBio | Platform-neutral | Not recorded; requests show availability | 808/1,188 (68.0%) | 97/100 (97.0%) | 802/1,200 (lower-bound count) | 6,707/16,686 (40.2%) | 0/1,198 (0.0%) |
+| CompBio | Platform-neutral | Not recorded; requests show availability | 810/1,188 (68.2%) | 97/100 (97.0%) | 804/1,200 (lower-bound count) | 6,439/16,253 (39.6%) | 0/1,198 (0.0%) |
 | IWC | Galaxy workflow-derived | Absent in 120/120 recorded lists | 0/120 (0.0%) | 0/10 (0.0%) | 0/120 (lower-bound count) | 935/1,352 (69.2%) | 2/118 (1.7%) |
 
 All benchmark-specific paired configurations. Requests, linkage and success use the X12 rules. BixBench and CompBio exposure lists were not archived; observed requests show that the helper was available in at least those runs. Request rates and listed-run linkage counts have different denominators. A linkage count divided by all listed runs is a detected lower bound, not an estimate that treats missing transcripts/histories as zero use. IWC has no named-helper detections and its recorded lists omit that helper; neither observation establishes absence of alternative custom-code interfaces. Tool Shed jobs outside the utility codebook (I11) form a larger observed job share in IWC, but this classifier does not prove native completion of every task. Task origin and helper exposure are not experimentally separated. Local shell and interactive computation remain possible; Galaxy-only execution is uncertified in every benchmark.

@@ -171,6 +171,11 @@ for bench, folder in FOLDERS.items():
                 row['rr_model'] = rr.get('model')
                 sh = rr.get('seed_history') or {}
                 row['rr_seed_owner'] = sh.get('seed_owner_username')
+            rerun = jload(snap / 'rerun_record.json')  # reviewed CompBio reruns (2026-10-05) carry no run_record.json
+            if rerun:
+                row['rerun_reason_class'] = rerun.get('reason_class')
+                row['rerun_completed_at'] = rerun.get('completed_at')
+                row['rr_campaign'] = row.get('rr_campaign') or campaign_from_path((si or {}).get('source'))
             tj = jload(find(snap, 'task.json') or Path('/nonexistent'))
             if tj:
                 row['task_timeout_minutes'] = tj.get('timeout_minutes')

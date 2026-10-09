@@ -1,0 +1,958 @@
+{
+  "1-40": [
+    {
+      "line": 1,
+      "text": "\"\"\"Caduceus model for Hugging Face."
+    },
+    {
+      "line": 2,
+      "text": ""
+    },
+    {
+      "line": 3,
+      "text": "\"\"\""
+    },
+    {
+      "line": 4,
+      "text": ""
+    },
+    {
+      "line": 5,
+      "text": "import inspect"
+    },
+    {
+      "line": 6,
+      "text": "import math"
+    },
+    {
+      "line": 7,
+      "text": "from functools import partial"
+    },
+    {
+      "line": 8,
+      "text": "from typing import Optional, Tuple, Union"
+    },
+    {
+      "line": 9,
+      "text": ""
+    },
+    {
+      "line": 10,
+      "text": "import torch"
+    },
+    {
+      "line": 11,
+      "text": "from mamba_ssm.modules.mamba_simple import Mamba"
+    },
+    {
+      "line": 12,
+      "text": "try:"
+    },
+    {
+      "line": 13,
+      "text": "    from mamba_ssm.modules.mamba_simple import Block  # Legacy mambav1 file structure"
+    },
+    {
+      "line": 14,
+      "text": "except ImportError:"
+    },
+    {
+      "line": 15,
+      "text": "    from mamba_ssm.modules.block import Block  # mambav2 file structure"
+    },
+    {
+      "line": 16,
+      "text": "from torch import nn"
+    },
+    {
+      "line": 17,
+      "text": "from torch.nn import functional as F"
+    },
+    {
+      "line": 18,
+      "text": "from transformers import PreTrainedModel"
+    },
+    {
+      "line": 19,
+      "text": "from transformers.modeling_outputs import BaseModelOutputWithNoAttention, MaskedLMOutput, SequenceClassifierOutput"
+    },
+    {
+      "line": 20,
+      "text": ""
+    },
+    {
+      "line": 21,
+      "text": "try:"
+    },
+    {
+      "line": 22,
+      "text": "    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn  # Legacy mambav1 file structure"
+    },
+    {
+      "line": 23,
+      "text": "except ImportError:"
+    },
+    {
+      "line": 24,
+      "text": "    try:"
+    },
+    {
+      "line": 25,
+      "text": "        from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn  # mambav2 file structure"
+    },
+    {
+      "line": 26,
+      "text": "    except ImportError:"
+    },
+    {
+      "line": 27,
+      "text": "        RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None"
+    },
+    {
+      "line": 28,
+      "text": ""
+    },
+    {
+      "line": 29,
+      "text": "from .configuration_caduceus import CaduceusConfig"
+    },
+    {
+      "line": 30,
+      "text": "from .modeling_rcps import RCPSAddNormWrapper, RCPSEmbedding, RCPSLMHead, RCPSMambaBlock"
+    },
+    {
+      "line": 31,
+      "text": ""
+    },
+    {
+      "line": 32,
+      "text": ""
+    },
+    {
+      "line": 33,
+      "text": "def create_block("
+    },
+    {
+      "line": 34,
+      "text": "        d_model,"
+    },
+    {
+      "line": 35,
+      "text": "        ssm_cfg=None,"
+    },
+    {
+      "line": 36,
+      "text": "        norm_epsilon=1e-5,"
+    },
+    {
+      "line": 37,
+      "text": "        rms_norm=False,"
+    },
+    {
+      "line": 38,
+      "text": "        residual_in_fp32=False,"
+    },
+    {
+      "line": 39,
+      "text": "        fused_add_norm=False,"
+    },
+    {
+      "line": 40,
+      "text": "        layer_idx=None,"
+    }
+  ],
+  "166-216": [
+    {
+      "line": 166,
+      "text": "class CaduceusMixerModel(nn.Module):"
+    },
+    {
+      "line": 167,
+      "text": "    def __init__("
+    },
+    {
+      "line": 168,
+      "text": "            self,"
+    },
+    {
+      "line": 169,
+      "text": "            config: CaduceusConfig,"
+    },
+    {
+      "line": 170,
+      "text": "            device=None,"
+    },
+    {
+      "line": 171,
+      "text": "            dtype=None,"
+    },
+    {
+      "line": 172,
+      "text": "    ) -> None:"
+    },
+    {
+      "line": 173,
+      "text": "        super().__init__()"
+    },
+    {
+      "line": 174,
+      "text": "        factory_kwargs = {\"device\": device, \"dtype\": dtype}"
+    },
+    {
+      "line": 175,
+      "text": ""
+    },
+    {
+      "line": 176,
+      "text": "        self.fused_add_norm = config.fused_add_norm"
+    },
+    {
+      "line": 177,
+      "text": "        self.rcps = config.rcps"
+    },
+    {
+      "line": 178,
+      "text": "        self.residual_in_fp32 = config.residual_in_fp32"
+    },
+    {
+      "line": 179,
+      "text": ""
+    },
+    {
+      "line": 180,
+      "text": "        self.embeddings = CaduceusEmbeddings(config, **factory_kwargs)"
+    },
+    {
+      "line": 181,
+      "text": ""
+    },
+    {
+      "line": 182,
+      "text": "        # Mamba changes the order of residual and layer norm:"
+    },
+    {
+      "line": 183,
+      "text": "        # Instead of LN -> Attn / MLP -> Add, we do:"
+    },
+    {
+      "line": 184,
+      "text": "        # Add -> LN -> Attn / MLP / Mixer, returning both the residual branch (output of Add) and"
+    },
+    {
+      "line": 185,
+      "text": "        # the main branch (output of MLP / Mixer). The model definition is unchanged."
+    },
+    {
+      "line": 186,
+      "text": "        # This is for performance reason: we can fuse add + layer_norm."
+    },
+    {
+      "line": 187,
+      "text": "        if config.fused_add_norm:"
+    },
+    {
+      "line": 188,
+      "text": "            if layer_norm_fn is None or rms_norm_fn is None:"
+    },
+    {
+      "line": 189,
+      "text": "                raise ImportError(\"Failed to import Triton LayerNorm / RMSNorm kernels\")"
+    },
+    {
+      "line": 190,
+      "text": ""
+    },
+    {
+      "line": 191,
+      "text": "        self.layers = nn.ModuleList("
+    },
+    {
+      "line": 192,
+      "text": "            ["
+    },
+    {
+      "line": 193,
+      "text": "                create_block("
+    },
+    {
+      "line": 194,
+      "text": "                    config.d_model,"
+    },
+    {
+      "line": 195,
+      "text": "                    ssm_cfg=config.ssm_cfg,"
+    },
+    {
+      "line": 196,
+      "text": "                    norm_epsilon=config.norm_epsilon,"
+    },
+    {
+      "line": 197,
+      "text": "                    rms_norm=config.rms_norm,"
+    },
+    {
+      "line": 198,
+      "text": "                    residual_in_fp32=config.residual_in_fp32,"
+    },
+    {
+      "line": 199,
+      "text": "                    fused_add_norm=config.fused_add_norm,"
+    },
+    {
+      "line": 200,
+      "text": "                    layer_idx=i,"
+    },
+    {
+      "line": 201,
+      "text": "                    bidirectional=config.bidirectional,"
+    },
+    {
+      "line": 202,
+      "text": "                    bidirectional_strategy=config.bidirectional_strategy,"
+    },
+    {
+      "line": 203,
+      "text": "                    bidirectional_weight_tie=config.bidirectional_weight_tie,"
+    },
+    {
+      "line": 204,
+      "text": "                    rcps=config.rcps,"
+    },
+    {
+      "line": 205,
+      "text": "                    **factory_kwargs,"
+    },
+    {
+      "line": 206,
+      "text": "                )"
+    },
+    {
+      "line": 207,
+      "text": "                for i in range(config.n_layer)"
+    },
+    {
+      "line": 208,
+      "text": "            ]"
+    },
+    {
+      "line": 209,
+      "text": "        )"
+    },
+    {
+      "line": 210,
+      "text": ""
+    },
+    {
+      "line": 211,
+      "text": "        norm_f = (nn.LayerNorm if not config.rms_norm else RMSNorm)("
+    },
+    {
+      "line": 212,
+      "text": "            config.d_model, eps=config.norm_epsilon, **factory_kwargs"
+    },
+    {
+      "line": 213,
+      "text": "        )"
+    },
+    {
+      "line": 214,
+      "text": "        self.norm_f = norm_f if (config.fused_add_norm or not config.rcps) else RCPSAddNormWrapper(norm_f)"
+    },
+    {
+      "line": 215,
+      "text": ""
+    },
+    {
+      "line": 216,
+      "text": "    def forward(self, input_ids, inputs_embeds=None, output_hidden_states=False):"
+    }
+  ],
+  "216-260": [
+    {
+      "line": 216,
+      "text": "    def forward(self, input_ids, inputs_embeds=None, output_hidden_states=False):"
+    },
+    {
+      "line": 217,
+      "text": "        \"\"\"Mixer forward.\"\"\""
+    },
+    {
+      "line": 218,
+      "text": "        all_hidden_states = []"
+    },
+    {
+      "line": 219,
+      "text": "        if inputs_embeds is not None:"
+    },
+    {
+      "line": 220,
+      "text": "            hidden_states = inputs_embeds"
+    },
+    {
+      "line": 221,
+      "text": "        else:"
+    },
+    {
+      "line": 222,
+      "text": "            hidden_states = self.embeddings(input_ids)"
+    },
+    {
+      "line": 223,
+      "text": ""
+    },
+    {
+      "line": 224,
+      "text": "        residual = None"
+    },
+    {
+      "line": 225,
+      "text": "        for layer in self.layers:"
+    },
+    {
+      "line": 226,
+      "text": "            if output_hidden_states:"
+    },
+    {
+      "line": 227,
+      "text": "                all_hidden_states.append(hidden_states)"
+    },
+    {
+      "line": 228,
+      "text": "            # TODO: Add support for gradient checkpointing"
+    },
+    {
+      "line": 229,
+      "text": "            hidden_states, residual = layer("
+    },
+    {
+      "line": 230,
+      "text": "                hidden_states, residual, inference_params=None"
+    },
+    {
+      "line": 231,
+      "text": "            )"
+    },
+    {
+      "line": 232,
+      "text": ""
+    },
+    {
+      "line": 233,
+      "text": "        if not self.fused_add_norm:"
+    },
+    {
+      "line": 234,
+      "text": "            if self.rcps:"
+    },
+    {
+      "line": 235,
+      "text": "                # Set prenorm=False here since we don't need the residual"
+    },
+    {
+      "line": 236,
+      "text": "                hidden_states = self.norm_f(hidden_states, residual=residual, prenorm=False)"
+    },
+    {
+      "line": 237,
+      "text": "            else:"
+    },
+    {
+      "line": 238,
+      "text": "                residual = (hidden_states + residual) if residual is not None else hidden_states"
+    },
+    {
+      "line": 239,
+      "text": "                hidden_states = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))"
+    },
+    {
+      "line": 240,
+      "text": "        else:"
+    },
+    {
+      "line": 241,
+      "text": "            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn"
+    },
+    {
+      "line": 242,
+      "text": "            if self.rcps:"
+    },
+    {
+      "line": 243,
+      "text": "                # Set prenorm=False here since we don't need the residual"
+    },
+    {
+      "line": 244,
+      "text": "                hidden_states_fwd = fused_add_norm_fn("
+    },
+    {
+      "line": 245,
+      "text": "                    hidden_states[..., :hidden_states.shape[-1] // 2],"
+    },
+    {
+      "line": 246,
+      "text": "                    self.norm_f.weight,"
+    },
+    {
+      "line": 247,
+      "text": "                    self.norm_f.bias,"
+    },
+    {
+      "line": 248,
+      "text": "                    eps=self.norm_f.eps,"
+    },
+    {
+      "line": 249,
+      "text": "                    residual=residual[..., :hidden_states.shape[-1] // 2],"
+    },
+    {
+      "line": 250,
+      "text": "                    prenorm=False,"
+    },
+    {
+      "line": 251,
+      "text": "                    residual_in_fp32=self.residual_in_fp32,"
+    },
+    {
+      "line": 252,
+      "text": "                )"
+    },
+    {
+      "line": 253,
+      "text": "                hidden_states_rc = fused_add_norm_fn("
+    },
+    {
+      "line": 254,
+      "text": "                    hidden_states[..., hidden_states.shape[-1] // 2:].flip(dims=[-2, -1]),"
+    },
+    {
+      "line": 255,
+      "text": "                    self.norm_f.weight,"
+    },
+    {
+      "line": 256,
+      "text": "                    self.norm_f.bias,"
+    },
+    {
+      "line": 257,
+      "text": "                    eps=self.norm_f.eps,"
+    },
+    {
+      "line": 258,
+      "text": "                    residual=residual[..., hidden_states.shape[-1] // 2:].flip(dims=[-2, -1]),"
+    },
+    {
+      "line": 259,
+      "text": "                    prenorm=False,"
+    },
+    {
+      "line": 260,
+      "text": "                    residual_in_fp32=self.residual_in_fp32,"
+    }
+  ],
+  "410-510": [
+    {
+      "line": 410,
+      "text": "class CaduceusForMaskedLM(CaduceusPreTrainedModel):"
+    },
+    {
+      "line": 411,
+      "text": "    \"\"\"HF-compatible Caduceus model for masked language modeling.\"\"\""
+    },
+    {
+      "line": 412,
+      "text": ""
+    },
+    {
+      "line": 413,
+      "text": "    def __init__(self, config: CaduceusConfig, device=None, dtype=None, **kwargs):"
+    },
+    {
+      "line": 414,
+      "text": "        super().__init__(config, **kwargs)"
+    },
+    {
+      "line": 415,
+      "text": "        factory_kwargs = {\"device\": device, \"dtype\": dtype}"
+    },
+    {
+      "line": 416,
+      "text": "        self.caduceus = Caduceus(config, **factory_kwargs, **kwargs)"
+    },
+    {
+      "line": 417,
+      "text": "        if config.rcps:"
+    },
+    {
+      "line": 418,
+      "text": "            self.lm_head = RCPSLMHead("
+    },
+    {
+      "line": 419,
+      "text": "                complement_map=self.config.complement_map,  # Use caduceus config as it might have been updated"
+    },
+    {
+      "line": 420,
+      "text": "                vocab_size=self.config.vocab_size,  # Use caduceus config as it might have been updated"
+    },
+    {
+      "line": 421,
+      "text": "                true_dim=config.d_model,"
+    },
+    {
+      "line": 422,
+      "text": "                dtype=dtype"
+    },
+    {
+      "line": 423,
+      "text": "            )"
+    },
+    {
+      "line": 424,
+      "text": "        else:"
+    },
+    {
+      "line": 425,
+      "text": "            self.lm_head = nn.Linear("
+    },
+    {
+      "line": 426,
+      "text": "                config.d_model,"
+    },
+    {
+      "line": 427,
+      "text": "                self.config.vocab_size,  # Use caduceus config as it might have been updated"
+    },
+    {
+      "line": 428,
+      "text": "                bias=False,"
+    },
+    {
+      "line": 429,
+      "text": "                **factory_kwargs"
+    },
+    {
+      "line": 430,
+      "text": "            )"
+    },
+    {
+      "line": 431,
+      "text": ""
+    },
+    {
+      "line": 432,
+      "text": "        # Initialize weights and apply final processing"
+    },
+    {
+      "line": 433,
+      "text": "        self.post_init()"
+    },
+    {
+      "line": 434,
+      "text": ""
+    },
+    {
+      "line": 435,
+      "text": "    def get_input_embeddings(self):"
+    },
+    {
+      "line": 436,
+      "text": "        return self.caduceus.backbone.embeddings.word_embeddings"
+    },
+    {
+      "line": 437,
+      "text": ""
+    },
+    {
+      "line": 438,
+      "text": "    def set_input_embeddings(self, value):"
+    },
+    {
+      "line": 439,
+      "text": "        if self.config.rcps:"
+    },
+    {
+      "line": 440,
+      "text": "            raise NotImplementedError(\"Setting input embeddings for RCPS LM is not supported.\")"
+    },
+    {
+      "line": 441,
+      "text": "        self.caduceus.backbone.embeddings.word_embeddings = value"
+    },
+    {
+      "line": 442,
+      "text": ""
+    },
+    {
+      "line": 443,
+      "text": "    def get_output_embeddings(self):"
+    },
+    {
+      "line": 444,
+      "text": "        return self.lm_head"
+    },
+    {
+      "line": 445,
+      "text": ""
+    },
+    {
+      "line": 446,
+      "text": "    def set_output_embeddings(self, new_embeddings):"
+    },
+    {
+      "line": 447,
+      "text": "        \"\"\"Overrides output embeddings.\"\"\""
+    },
+    {
+      "line": 448,
+      "text": "        if self.config.rcps:"
+    },
+    {
+      "line": 449,
+      "text": "            raise NotImplementedError(\"Setting output embeddings for RCPS LM is not supported.\")"
+    },
+    {
+      "line": 450,
+      "text": "        self.lm_head = new_embeddings"
+    },
+    {
+      "line": 451,
+      "text": ""
+    },
+    {
+      "line": 452,
+      "text": "    def maybe_weight_tie_mamba(self):"
+    },
+    {
+      "line": 453,
+      "text": "        self.caduceus.maybe_weight_tie_mamba()"
+    },
+    {
+      "line": 454,
+      "text": "    "
+    },
+    {
+      "line": 455,
+      "text": "    def tie_weights(self):"
+    },
+    {
+      "line": 456,
+      "text": "        \"\"\"Tie weights, accounting for RCPS.\"\"\""
+    },
+    {
+      "line": 457,
+      "text": "        self.maybe_weight_tie_mamba()"
+    },
+    {
+      "line": 458,
+      "text": "        if self.config.rcps:"
+    },
+    {
+      "line": 459,
+      "text": "            self.lm_head.set_weight(self.get_input_embeddings().weight)"
+    },
+    {
+      "line": 460,
+      "text": "        else:"
+    },
+    {
+      "line": 461,
+      "text": "            super().tie_weights()"
+    },
+    {
+      "line": 462,
+      "text": ""
+    },
+    {
+      "line": 463,
+      "text": "    def get_decoder(self):"
+    },
+    {
+      "line": 464,
+      "text": "        \"\"\"Get decoder (backbone) for the model.\"\"\""
+    },
+    {
+      "line": 465,
+      "text": "        return self.caduceus"
+    },
+    {
+      "line": 466,
+      "text": ""
+    },
+    {
+      "line": 467,
+      "text": "    def set_decoder(self, decoder):"
+    },
+    {
+      "line": 468,
+      "text": "        \"\"\"Set decoder (backbone) for the model.\"\"\""
+    },
+    {
+      "line": 469,
+      "text": "        self.caduceus = decoder"
+    },
+    {
+      "line": 470,
+      "text": "    "
+    },
+    {
+      "line": 471,
+      "text": "    def forward("
+    },
+    {
+      "line": 472,
+      "text": "        self,"
+    },
+    {
+      "line": 473,
+      "text": "        input_ids: torch.LongTensor = None,"
+    },
+    {
+      "line": 474,
+      "text": "        inputs_embeds: Optional[torch.FloatTensor] = None,"
+    },
+    {
+      "line": 475,
+      "text": "        labels: Optional[torch.LongTensor] = None,"
+    },
+    {
+      "line": 476,
+      "text": "        loss_weights: Optional[torch.FloatTensor] = None,"
+    },
+    {
+      "line": 477,
+      "text": "        output_hidden_states: Optional[bool] = None,"
+    },
+    {
+      "line": 478,
+      "text": "        return_dict: Optional[bool] = None,"
+    },
+    {
+      "line": 479,
+      "text": "    ) -> Union[Tuple, MaskedLMOutput]:"
+    },
+    {
+      "line": 480,
+      "text": "        \"\"\"HF-compatible forward method.\"\"\""
+    },
+    {
+      "line": 481,
+      "text": ""
+    },
+    {
+      "line": 482,
+      "text": "        output_hidden_states = ("
+    },
+    {
+      "line": 483,
+      "text": "            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states"
+    },
+    {
+      "line": 484,
+      "text": "        )"
+    },
+    {
+      "line": 485,
+      "text": "        return_dict = return_dict if return_dict is not None else self.config.use_return_dict"
+    },
+    {
+      "line": 486,
+      "text": ""
+    },
+    {
+      "line": 487,
+      "text": "        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)"
+    },
+    {
+      "line": 488,
+      "text": "        outputs = self.caduceus("
+    },
+    {
+      "line": 489,
+      "text": "            input_ids=input_ids,"
+    },
+    {
+      "line": 490,
+      "text": "            inputs_embeds=inputs_embeds,"
+    },
+    {
+      "line": 491,
+      "text": "            output_hidden_states=output_hidden_states,"
+    },
+    {
+      "line": 492,
+      "text": "            return_dict=return_dict,"
+    },
+    {
+      "line": 493,
+      "text": "        )"
+    },
+    {
+      "line": 494,
+      "text": ""
+    },
+    {
+      "line": 495,
+      "text": "        hidden_states = outputs[0]"
+    },
+    {
+      "line": 496,
+      "text": "        logits = self.lm_head(hidden_states)"
+    },
+    {
+      "line": 497,
+      "text": "        logits = logits.float()"
+    },
+    {
+      "line": 498,
+      "text": ""
+    },
+    {
+      "line": 499,
+      "text": "        loss = None"
+    },
+    {
+      "line": 500,
+      "text": "        if labels is not None:"
+    },
+    {
+      "line": 501,
+      "text": "            if loss_weights is not None:"
+    },
+    {
+      "line": 502,
+      "text": "                loss = weighted_cross_entropy(logits, labels, loss_weights, ignore_index=self.config.pad_token_id)"
+    },
+    {
+      "line": 503,
+      "text": "            else:"
+    },
+    {
+      "line": 504,
+      "text": "                loss = cross_entropy(logits, labels, ignore_index=self.config.pad_token_id)"
+    },
+    {
+      "line": 505,
+      "text": ""
+    },
+    {
+      "line": 506,
+      "text": "        if not return_dict:"
+    },
+    {
+      "line": 507,
+      "text": "            output = (logits,) + outputs[1:]"
+    },
+    {
+      "line": 508,
+      "text": "            return (loss,) + output if loss is not None else output"
+    },
+    {
+      "line": 509,
+      "text": ""
+    },
+    {
+      "line": 510,
+      "text": "        return MaskedLMOutput("
+    }
+  ]
+}
