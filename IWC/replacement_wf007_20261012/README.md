@@ -38,6 +38,7 @@ This archive holds the traces, Galaxy histories and derived records of the **sup
   - the execution-error and action workbooks;
   - the failure episodes and UDT methods;
   - the run evidence.
+- **Failed Galaxy requests.** Fig. 3f drops the superseded runs' 43 failed requests (7,141 → 7,098); `superseded_failures()` gives their classes, for tables that hold only counts.
 - **"Inspected tools never run".** `superseded_inspection()` takes the superseded runs' share (58 tools inspected, 19 never run) out of the IWC count of this measure. It counts the share with the same rule as `manuscript_material/scripts/build_data.py`, which reproduces the archive's IWC total (788 and 418).
 
 The derived tables upstream of the figures are not rebuilt; they still describe the superseded runs. Those tables are `manuscript_narrative/`, `manuscript_material/` and the run summaries. Their full rebuild would need the new traces and Galaxy histories.

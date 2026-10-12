@@ -100,3 +100,16 @@ def superseded_inspection():
         inspected += len(seen)
         never += len(seen - ran)
     return dict(inspected=inspected, never_run=never)
+
+
+def superseded_failures():
+    """Failed Galaxy-interface requests of the superseded runs, by benchmark, failure class and A1 subclass, as
+    manuscript_narrative/narrative_common.galaxy_failures() classifies them (four primary configurations): the replaced
+    task's share of the archive's failure-class table (token_failure_classes.csv), to be taken out of it."""
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, 'manuscript_narrative'))
+    import narrative_common as nc
+    f = nc.galaxy_failures()
+    f = f[f.cfg.isin(['GPT-5.5', 'GPT-5.6 Sol', 'GPT-5.6 Luna', 'DeepSeek V4 Pro'])]
+    f = f[is_replaced(f.benchmark, f.task)]
+    return f.groupby(['benchmark', 'failure_class', 'a1_subclass'], dropna=False).size().rename('calls').reset_index()

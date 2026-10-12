@@ -422,6 +422,8 @@ def panel_f():
                                   run=lambda x: x.run_id + '|' + x.task)
     # 6,904 in runs that were not rerun plus 237 in the 53 reviewed reruns (the replaced runs had 450; total was 7,354)
     assert len(f) == 7141, 'failed requests of the four primary configurations'
+    f = replaced_runs.drop_replaced(f)          # IWC wf_007: 43 in the superseded runs, which the site replaced
+    assert len(f) == 7098
     rows, book = [], []
     for name, codes, desc in FIXES:
         g = f[f.code.isin(codes)]
