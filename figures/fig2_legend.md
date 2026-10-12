@@ -3,7 +3,7 @@
 Dots, replicates.
 **b**, Galaxy minus custom code for each model and for the four models pooled (diamonds), for two estimands kept apart: the mean score (IWC agreement × 100) and the share of replicate sets (one task × model × condition, three runs) with all three runs correct (IWC, agreement ≥ 0.99).
 No difference was significant after Holm adjustment (smallest adjusted *P* = 0.19, GPT-5.5 on IWC); this does not establish equivalence, and no equivalence margin was prespecified.
-With ten IWC tasks, bootstrap intervals are too narrow: the pooled IWC agreement difference, +3.6 points (0.6 to 7.4), has an exact *P* of 0.055.
+With ten IWC tasks, bootstrap intervals are too narrow: the pooled IWC agreement difference, +3.6 points (0.6 to 7.3), has an exact *P* of 0.055.
 **c**, Correct runs of three for each task–model pair in custom code (columns) and Galaxy (rows), per benchmark; outlined cells have equal counts.
 Equal counts mean equal replicate success, not identical answers or methods.
 **d**, Primary cause of incorrect BixBench-Verified-50 runs, from an AI-assisted run-level audit. The runs are grouped by pair type: pairs in which Galaxy had more correct runs (the custom-code runs that failed), pairs in which custom code had more (the Galaxy runs that failed), and pairs with the same count.

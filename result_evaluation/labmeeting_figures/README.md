@@ -9,6 +9,8 @@ The last two move from accuracy to individual tasks.
 `fig2_task_similarity` shows which tasks each condition fails, and which failures are exclusive to one condition; `fig2_task_consistency` shows how many runs of each task each condition got right.
 `fig3_trajectory_similarity` looks inside the runs, at the steps each replicate took.
 All nine use the site-matched per-run scores in `figures/scored_runs.csv`: 3,840 runs on 160 tasks, 4 models × 2 conditions × 3 replicates.
+The IWC VGP mitogenome assembly task (`wf_007`) takes the 24 runs the results site published on 2026-10-12, reruns on another read set, in place of the archive's.
+Their scores and token counts come from the site's record (`IWC/replacement_wf007_20261012/`); the archive has no trace of them, so they are missing from every trace-based analysis.
 
 A run counts as correct when:
 - **BixBench-Verified-50 or CompBioBench:** its answer is accepted;
@@ -29,7 +31,7 @@ Every replicate covers every task once (per model and condition: BixBench 50 run
 The script checks this.
 The replicate figure adds the run-to-run spread.
 The largest spreads are:
-- **IWC:** SD 5.8 points, where one task is 10 points;
+- **IWC:** SD up to 11.5 points (DeepSeek V4 Pro custom code: 80, 100 and 80%), where one task is 10 points;
 - **BixBench and CompBioBench:** SD 0–4.6 points.
 
 ### Statistics used in `fig2_statistical_numbers`
@@ -57,7 +59,7 @@ Unadjusted P ranges from 0.25 to 1.00, and every Holm-adjusted P is 1.00.
 |---|---|---|---|
 | BixBench-Verified-50 | +0.5 pts (−3.9 to 4.8) | 0.88 | 1.00 |
 | CompBioBench | +0.3 pts (−1.8 to 2.6) | 0.82 | 1.00 |
-| IWC (≥ 0.99) | +3.3 pts (−0.8 to 8.3) | 0.38 | 1.00 |
+| IWC (≥ 0.99) | +5.8 pts (−0.8 to 15.0) | 0.38 | 1.00 |
 
 The BixBench and CompBioBench values match the manuscript Results (draft PR #12).
 For IWC the manuscript reports mean agreement (0.95 vs 0.98, +0.036); this figure reports accuracy at ≥ 0.99 agreement instead.
@@ -83,7 +85,7 @@ None of the 12 differences is significant: every Holm-adjusted P is 1.00, and th
 |---|---|---|---|
 | BixBench-Verified-50 | −1.5 pts (−5.7 to 2.0) | 0.63 | 1.00 |
 | CompBioBench | −1.8 pts (−4.8 to 1.0) | 0.32 | 0.95 |
-| IWC | +5.0 pts (0.0 to 12.5) | 0.50 | 1.00 |
+| IWC | +7.5 pts (0.0 to 17.5) | 0.50 | 1.00 |
 
 Counting tasks instead of runs turns the small BixBench and CompBioBench differences slightly in favour of custom code (per run: +0.5 and +0.3 points).
 Every interval still includes zero.
@@ -99,7 +101,7 @@ A model solves a task in a condition only when all 3 of its runs are correct.
 Everything else is unchanged from `fig2_statistical_unanimous`: tasks as the unit, bootstrap intervals, paired sign-flip test, Holm adjustment.
 The task counts match the "all three correct" row of `fig2_task_similarity_counts.csv`, and the script checks this.
 
-Again, none of the 12 differences is significant: every Holm-adjusted P is 1.00, and the smallest unadjusted P is 0.25.
+Again, none of the 12 differences is significant: every Holm-adjusted P is 1.00, and the smallest unadjusted P is 0.33.
 
 | Benchmark | Galaxy − custom code, all four models (95% CI) | P | Holm P (3) |
 |---|---|---|---|
@@ -130,7 +132,7 @@ The intervals and exact P values are in the three separate figures.
 |---|---|---|---|
 | BixBench-Verified-50 | +0.5 | −1.5 | +2.5 |
 | CompBioBench | +0.3 | −1.8 | +2.3 |
-| IWC | +3.3 | +5.0 | +10.0 |
+| IWC | +5.8 | +7.5 | +10.0 |
 
 The sign of the BixBench and CompBioBench differences depends on the counting rule, and no version is significant.
 The strict rule favours Galaxy on all three benchmarks: more tasks are solved in all three runs with Galaxy. In `fig2_task_similarity_counts.csv`, under that rule, 54 task × model pairs fail only with custom code and 36 only with Galaxy.
@@ -157,16 +159,16 @@ Names are listed when a side holds 8 tasks or fewer.
 Under the majority rule every side does: the largest is 7.
 
 Across the 640 task × model pairs (160 tasks × 4 models):
-- 543 (85%) are solved by both conditions and 57 are failed by both;
-- 16 are failed only with custom code and 24 only with Galaxy.
+- 540 (84%) are solved by both conditions and 59 are failed by both;
+- 17 are failed only with custom code and 24 only with Galaxy.
 
 The direction of the small difference depends on how "solved" is defined, so neither condition is consistently ahead:
 
 | A condition fails a task when | Only custom code fails | Both fail | Only Galaxy fails | Neither fails |
 |---|---|---|---|---|
-| none of its 3 runs is correct | 16 | 31 | 15 | 578 |
-| 0 or 1 of 3 runs are correct (figure) | 16 | 57 | 24 | 543 |
-| any of its 3 runs is wrong | 54 | 87 | 36 | 463 |
+| none of its 3 runs is correct | 18 | 31 | 15 | 576 |
+| 0 or 1 of 3 runs are correct (figure) | 17 | 59 | 24 | 540 |
+| any of its 3 runs is wrong | 54 | 89 | 36 | 461 |
 
 `bix-45-q1` is the one task that falls on the same side for three models: only Galaxy fails it, for GPT-5.6 Sol, GPT-5.6 Luna and DeepSeek V4 Pro.
 Three tasks fall on opposite sides for different models: `bix-43-q2`, `conservation-lookup-q1` and `lung-cancer-sc-q1`.
@@ -202,11 +204,11 @@ The script checks that every block equals the Venn count.
 |---|---|---|---|---|---|
 | BixBench-Verified-50 | 200 | 170 (85%) | 17 | 13 | 7 |
 | CompBioBench | 400 | 307 (77%) | 47 | 46 | 16 |
-| IWC | 40 | 32 (80%) | 6 | 2 | 0 |
-| All | 640 | 509 (80%) | 70 | 61 | 23 |
+| IWC | 40 | 30 (75%) | 8 | 2 | 1 |
+| All | 640 | 507 (79%) | 72 | 61 | 24 |
 
-Most pairs sit on the diagonal: 494 of the 640 are 3/3 or 0/0.
-Off the diagonal the two directions are nearly balanced, and 108 of the 131 off-diagonal pairs differ by a single run.
+Most pairs sit on the diagonal: 492 of the 640 are 3/3 or 0/0.
+Off the diagonal the two directions are nearly balanced, and 109 of the 133 off-diagonal pairs differ by a single run.
 Seven pairs are complete reversals, where one condition got all 3 runs right and the other got none.
 
 | Task | Model(s) | All 3 runs correct with |
@@ -392,7 +394,7 @@ Five more frame pairs were investigated from their traces.
 ### Cases 4–6: Galaxy solved the task, custom code did not
 
 These cases are the mirror image of cases 1–3. They are task × model pairs where Galaxy got 2 or 3 of 3 runs right and custom code 0 or 1, the left-hand side of `fig2_task_similarity`.
-There are 16 such pairs.
+There are 17 such pairs (16 before the site replaced the wf_007 runs).
 The question for each is what Galaxy provided that the custom-code runs lacked.
 The layout and the evidence rules are the same as for cases 1–3.
 
@@ -408,19 +410,12 @@ The question asks for the genus of the non-human organism in a nominally human R
 - **Other custom-code runs:** custom code can reach *pan* by racing ape references read by read. GPT-5.5 did this 3/3 and Sol 2/3.
 - **The sister task:** `contaminated-rna-q2` shows the same pattern for DeepSeek V4 Pro.
 
-**Case 5 (`fig3_case5_wf_007_vgp_mitogenome_assembly`, GPT-5.5; Galaxy 2/3, custom code 1/3).**
-The task is to assemble the *Agrius convolvuli* mitogenome from 14.9 Gb of PacBio HiFi reads. It is scored by 31-mer agreement with the IWC reference output, and counts as correct at ≥ 0.99, so the figure shows scores instead of answers.
-- **What Galaxy provided:** MitoHiFi 3.2.3 (`bgruening/mitohifi/mitohifi/3.2.3+galaxy2`), a complete pipeline running on usegalaxy.org compute.
-  - **What it does:** it finds a related mitogenome on NCBI (OP219771.1, 15,510 bp), filters the mitochondrial reads, assembles them with hifiasm, annotates the contigs and rotates the chosen one.
-  - **GPT-5.5 Galaxy r2:** got "37 genes, circular" and scored 1.000 (L72).
-- **Why GPT-5.5's custom code failed:**
-  - **No hifiasm:** the 8 GiB container killed hifiasm on the full reads and on 10% and 1% subsets (exit 137; r2 L53, L136, L150). r2 fell back to an unpolished Flye unit and scored 0.942.
-  - **A wrong circle:** r1 kept a 16,279-bp circle that its own check showed was supported only over the starting region (L354), and scored 0.
-- **Limits:**
-  - GPT-5.5's Galaxy r1 skipped MitoHiFi and failed (0).
-  - All six custom-code runs of GPT-5.6 Sol and Luna assembled the genome without MitoHiFi.
-  - So this is a convenience that rescued GPT-5.5 specifically, not something every model needed.
-- **Integrity:** DeepSeek V4 Pro's custom-code r3 fetched the published mitogenome (OZ203683.1) and edited its own assembly to match it. That is an answer substitution, and the figure says so. DeepSeek's Galaxy r3 also fetched it, but only for comparison.
+**Case 5 (`wf_007_vgp_mitogenome_assembly`, GPT-5.5): retired on 2026-10-12.**
+The case showed MitoHiFi on usegalaxy.org rescuing GPT-5.5, whose local hifiasm ran out of memory.
+The results site has since replaced all 24 wf_007 runs with reruns on another read set (ERR12833637; `IWC/replacement_wf007_20261012/`), and the archive has no trace of the new runs, so the case no longer describes scored runs.
+Under the new scores GPT-5.5 gets 1 of 3 Galaxy runs and 0 of 3 custom-code runs right, so the pair would not qualify either.
+The new wf_007 pairs on this side are GPT-5.6 Sol (Galaxy 3/3, custom code 1/3) and DeepSeek V4 Pro (2/3 and 1/3); without traces they cannot be traced.
+The figure and its text are in the git history of this folder.
 
 **Case 6 (`fig3_case6_contaminated-rna-q2`, DeepSeek V4 Pro; Galaxy 3/3, custom code 0/3).**
 The task is to name the contaminant species in a mostly human RNA-seq FASTQ. The accepted answer is *sus scrofa* (pig).
@@ -480,6 +475,7 @@ Every custom-code trace should be audited for answer lookups before the conditio
 
 Tokens per run are input (including cached context) plus output, from the run's final usage record (`manuscript_narrative/original_layout/analysis/token_run_observations.csv`).
 3,826 of the 3,840 scored runs have one; 14 CompBioBench runs do not, and they are left out of the token numbers but not the accuracies.
+The 24 IWC wf_007 runs take the usage the results site recorded for the runs that replaced them (`figures/replaced_runs.py`); having no trace in the archive, they are left out of the phase analysis.
 
 ### Where the token numbers come from, and how they are checked
 
@@ -488,7 +484,7 @@ Tokens per run are input (including cached context) plus output, from the run's 
   - These are the counts the model provider returned for each request (OpenAI for the GPT models, DeepSeek's API for DeepSeek V4 Pro), summed by Codex over the run.
   - Every request re-sends the whole conversation so far, so input counts that context again each time; cached input is the part served from the provider's prompt cache.
 - **The check in `make_token_figures.py`.** It re-reads every trace and stops if the table disagrees with it:
-  - the input and output totals of all 3,826 runs equal the trace's `turn.completed` usage;
+  - the input and output totals of all 3,802 runs with an archived trace equal the trace's `turn.completed` usage (the other 24 with tokens are the replaced wf_007 runs);
   - the same totals also equal the harness's `usage.json` for the 1,200 BixBench runs that have one, and the results site's run cards for the 900 BixBench archive runs of the GPT models.
 - **Cached input comes from the traces.** The table's cached value is wrong for 4 runs:
   - it is missing for one IWC run (GPT-5.6 Sol, Galaxy, `wf_010` r3);
@@ -515,10 +511,10 @@ This is the same method as the manuscript's Fig. 5a.
 |---|---|---|---|
 | BixBench-Verified-50 | 0.48M → 2.23M | ×5.3 (4.0 to 7.1), P < 0.001 | ×3.9, ×5.4, ×9.2, ×4.2, all adj. P < 0.001 |
 | CompBioBench | 0.97M → 4.46M | ×4.8 (4.0 to 5.8), P < 0.001 | ×3.4, ×7.7, ×5.7, ×3.6, all adj. P < 0.001 |
-| IWC | 2.05M → 4.73M | ×1.6 (0.8 to 3.1), P = 0.26 | ×1.0, ×2.2, ×1.7, ×1.7, none significant |
+| IWC | 1.95M → 4.69M | ×1.6 (0.8 to 3.2), P = 0.24 | ×1.1, ×2.2, ×1.8, ×1.5, none significant |
 
 Notes:
-- On IWC, custom code has the higher mean (7.7M vs 6.8M per run) because of a few very long runs. The median and the paired ratio favour custom code, but the difference is not significant.
+- On IWC, custom code has the higher mean (7.6M vs 7.0M per run) because of a few very long runs. The median and the paired ratio favour custom code, but the difference is not significant.
 - 96–98% of input tokens are read from the prompt cache in every benchmark and condition, so most of the extra Galaxy tokens are cached context being re-read. Tokens are therefore not cost: providers bill cached input at a much lower rate.
 
 ### Tokens and accuracy (`fig4_token_accuracy`)
@@ -530,10 +526,10 @@ Notes:
 |---|---|---|
 | BixBench-Verified-50 | 1.08 (0.83 to 1.43), 20 sets | 1.05 (0.66 to 1.85), 16 sets |
 | CompBioBench | 1.13 (0.84 to 1.50), 66 sets | 1.14 (0.77 to 1.71), 59 sets |
-| IWC | 1.17 (0.63 to 1.89), 8 sets | 2 sets, too few |
+| IWC | 0.78 (0.50 to 1.10), 8 sets | 1.02 (0.83 to 1.09), 4 sets |
 
 Within a task, failing runs used about as many tokens as correct ones, or slightly more; no pooled interval excludes 1.
-Of the per-model estimates, only DeepSeek V4 Pro with custom code on IWC is above 1 (1.58, 1.29 to 1.93), and that rests on 3 sets.
+Two per-model estimates exclude 1, in opposite directions, each on only 3 IWC sets with custom code: DeepSeek V4 Pro 1.45 (1.29 to 1.58) and GPT-5.6 Sol 0.36 (0.19 to 0.61).
 GPT-5.6 Luna with custom code on CompBioBench comes close (1.48, 1.00 to 2.22).
 Spending more tokens on a task did not make a run more likely to be correct, in either condition.
 IWC has few mixed sets because most IWC tasks are solved by all three replicates or by none.
@@ -565,7 +561,7 @@ Mean input tokens per run (millions) and share of the condition's input, custom 
 |---|---|---|---|---|---|
 | BixBench-Verified-50 | 0.01 (1%) → 1.75 (36%) | 0.83 (73%) → 1.18 (24%) | 0.15 (13%) → 1.30 (27%) | 0.16 (14%) → 0.65 (13%) | 1.15 → 4.88 |
 | CompBioBench | 0.03 (1%) → 1.59 (14%) | 3.70 (86%) → 4.62 (42%) | 0.45 (11%) → 4.12 (37%) | 0.13 (3%) → 0.80 (7%) | 4.30 → 11.13 |
-| IWC | 0.00 (0%) → 1.14 (17%) | 6.62 (86%) → 2.07 (30%) | 0.85 (11%) → 2.30 (34%) | 0.19 (2%) → 1.29 (19%) | 7.66 → 6.80 |
+| IWC (108 runs per condition with a trace) | 0.00 (0%) → 1.16 (17%) | 6.02 (86%) → 2.15 (31%) | 0.81 (12%) → 2.30 (33%) | 0.18 (3%) → 1.31 (19%) | 7.02 → 6.92 |
 
 Most of Galaxy's extra input goes to start-up and error correction:
 - **BixBench:** 1.7M of the 3.7M extra tokens per run are start-up and 1.2M are error correction; analysis itself adds 0.3M.
@@ -613,10 +609,10 @@ Caveats:
 
 - `make_labmeeting_figures.py`: computes everything and draws the eight Fig. 2 figures.
 - `make_trajectory_figures.py` and `trajectory_steps.py`: Fig. 3, from the frame, the job ledgers and the archived answers.
-- `make_case_figures.py`: the six Fig. 3 case studies; `fig3_cases.csv` lists the runs they show.
+- `make_case_figures.py`: the five Fig. 3 case studies (case 5 is retired); `fig3_cases.csv` lists the runs they show.
 - `make_token_figures.py` and `token_phases.py`: the four Fig. 4 token figures; `token_phases.py` splits a run's model requests into phases from its agent trace.
   - Cases 1–3, where custom code solved and Galaxy did not: `fig3_case1_bix-52-q7`, `fig3_case2_ml-model-track-overlap-q1`, `fig3_case3_overexpress-tf-q1`.
-  - Cases 4–6, where Galaxy solved and custom code did not: `fig3_case4_contaminated-rna-q3`, `fig3_case5_wf_007_vgp_mitogenome_assembly`, `fig3_case6_contaminated-rna-q2`.
+  - Cases 4 and 6, where Galaxy solved and custom code did not: `fig3_case4_contaminated-rna-q3`, `fig3_case6_contaminated-rna-q2`.
 - `fig2_*.png` (300 dpi), `.pdf`, `.svg`: the figures. The SVG and PDF keep text editable.
 - `fig2_raw_numbers.csv`: correct runs, all runs and accuracy for each benchmark, model and condition.
 - `fig2_replicate_numbers.csv`: each replicate's accuracy, with the mean, SD, minimum and maximum.

@@ -42,6 +42,7 @@ import numpy as np
 import panel_io  # noqa: E402  (figures/panel_io.py)
 import openpyxl
 import pandas as pd
+import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
@@ -108,7 +109,7 @@ def load_runs():
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = r.score >= r.benchmark.map(CORRECT_AT) - 1e-9
     t = pd.read_csv(os.path.join(AN, 'token_run_observations.csv'))
-    t = t[t.model_primary]
+    t = replaced_runs.replace_tokens(t[t.model_primary])     # IWC wf_007: the replacing runs' usage
     r = r.merge(t[KEY + ['input_tokens', 'cached', 'output_tokens']], on=KEY, how='left')
     ws = openpyxl.load_workbook(ACTIONS, read_only=True)['abf_runs']
     rows = list(ws.iter_rows(values_only=True))
@@ -118,6 +119,7 @@ def load_runs():
                                             'IWC': 'IWC'}),
                  cfg=a.model_configuration.replace({'DeepSeek V4 Pro (Codex)': 'DeepSeek V4 Pro'}),
                  env=a.execution_condition.map({'Galaxy condition': GAL, 'Open-ended code condition': CODE}))
+    a = replaced_runs.drop_replaced(a)                        # IWC wf_007: no actions recorded for the replacing runs
     r = r.merge(a[KEY + ['actions']], on=KEY, how='left')
     r['tokens_per_action'] = r.input_tokens / r.actions.where(r.actions > 0)
     r['uncached'] = r.input_tokens - r.cached
@@ -128,6 +130,7 @@ def load_calls():
     c = pd.read_csv(os.path.join(GC, 'calls.csv.gz'), low_memory=False,
                     usecols=['benchmark', 'task', 'model', 'replicate', 'tool', 'galaxy_server', 'chars_returned',
                              'tool_id_full'])
+    c = replaced_runs.drop_replaced(c)                        # IWC wf_007: superseded runs
     return c[c.model.isin(TRACE_MODEL) & c.galaxy_server].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
 
 
@@ -233,6 +236,10 @@ def replies(calls, r):
                              char_pct=100 * s.chars_returned.sum() / total))
     fr = pd.read_csv(os.path.join(AN, 'token_interface_friction.csv'))
     never = fr[fr.measure == 'Inspected tools never run in the same run'].set_index('benchmark')
+    gone = replaced_runs.superseded_inspection()              # IWC wf_007: the superseded runs' share
+    never.loc['IWC', 'count'] -= gone['never_run']
+    never.loc['IWC', 'denominator'] -= gone['inspected']
+    never['percent'] = 100 * never['count'] / never.denominator
     cached = (r.dropna(subset=['input_tokens']).assign(share=lambda x: x.cached / x.input_tokens)
               .groupby(['benchmark', 'env']).share.median() * 100)
     return pd.DataFrame(rows), never, cached
@@ -247,7 +254,7 @@ def evidence(calls):
     image = (design.docker_image.notna() | design.docker_image_id.notna() | design.iso_image_id.notna())
     image = dict(zip(zip(design.benchmark, design.task, design.run_id), image))
     steps, runs = [], []
-    for path in sorted(p for pattern in EVIDENCE for p in glob.glob(pattern)):
+    for path in sorted(p for pattern in EVIDENCE for p in glob.glob(pattern) if not replaced_runs.replaced_evidence(p)):
         d = json.load(open(path))
         for run in d['runs']:
             model = re.sub(r'_r\d+$', '', re.sub(r'^(galaxy|open_ended_code)_', '', run['run_id']))

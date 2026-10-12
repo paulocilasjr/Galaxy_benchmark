@@ -14,6 +14,8 @@ import re
 
 import pandas as pd
 
+import replaced_runs  # figures/replaced_runs.py
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'figures')
 SUMMARIES = os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
@@ -108,7 +110,7 @@ def main():
                                  replicate=int(s['replicate']), line=line_no, udt_id=rep.get('id'),
                                  container=container, container_versioned=bool(re.search(r':[^:/]+$', container)),
                                  method_class=cls, matched=hit))
-    out = pd.DataFrame(rows)
+    out = replaced_runs.drop_replaced(pd.DataFrame(rows))     # IWC wf_007: superseded runs (not scored)
     out.to_csv(os.path.join(OUT, 'udt_methods.csv'), index=False)
     print(len(out), 'UDT requests')
     print(out.method_class.value_counts().to_string())

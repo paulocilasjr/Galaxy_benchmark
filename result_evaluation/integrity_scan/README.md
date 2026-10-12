@@ -12,3 +12,9 @@ The output is `answer_source_scan.csv`, one row per run.
 This is a pattern scan, not an audit.
 A `source` flag can mean only that the run queried the source; for example, the CompBioBench leaderboard returns only metadata.
 Each flagged run still needs a check of whether it obtained an answer, and whether that answer was the one it submitted.
+
+Runs without an archived trace are listed with `trace = missing`:
+- 12 CompBioBench Galaxy runs;
+- the 24 IWC `wf_007` runs, which the results site replaced on 2026-10-12 with reruns the archive does not hold (`IWC/replacement_wf007_20261012/`).
+
+When a run folder keeps more than one trace, every attempt is scanned.

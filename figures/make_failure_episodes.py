@@ -21,6 +21,8 @@ import shlex
 
 import pandas as pd
 
+import replaced_runs  # figures/replaced_runs.py
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
@@ -120,6 +122,7 @@ def galaxy_episodes():
 
 def main():
     ep = pd.concat([galaxy_episodes(), shell_episodes()], ignore_index=True)
+    ep = replaced_runs.drop_replaced(ep)      # IWC wf_007: the superseded runs' episodes are not the scored runs'
     r = pd.read_csv(SCORED)
     r['run_correct'] = (r.score >= r.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     ep = ep.merge(r[['benchmark', 'task', 'cfg', 'env', 'replicate', 'run_correct', 'cluster']],

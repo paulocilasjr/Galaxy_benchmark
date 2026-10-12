@@ -598,45 +598,9 @@ CASE4 = dict(
               ('DeepSeek V4 Pro', GAL, 3): 'Kraken2 core_nt (confidence 0.5): Pan 1,554'})
 
 
-# ---------------------------------------------------------------- case 5 (Galaxy solved, custom code did not):
-# wf_007_vgp_mitogenome_assembly, GPT-5.5. What Galaxy provided: MitoHiFi 3.2.3 (read filtering, hifiasm, a related
-# reference found on NCBI, annotation and rotation) running on server compute; locally hifiasm ran out of memory.
-CASE5 = dict(
-    number=5, task='wf_007_vgp_mitogenome_assembly', benchmark='IWC', bench_name='IWC', model='GPT-5.5',
-    title='Galaxy ran a complete mitogenome pipeline (MitoHiFi) on server compute; locally, hifiasm ran out of memory',
-    question='Assemble the complete mitochondrial genome of Agrius convolvuli from the provided PacBio HiFi reads, as '
-             'one FASTA record. Scored by output agreement with the reference workflow (31-mer F1); correct at '
-             '≥ 0.99.',
-    simple=True, show_score=True,
-    groups=[('GPT-5.5', 'GPT-5.5', (CODE, GAL), 'all'),
-            ('GPT-5.6 Sol', 'GPT-5.6 Sol', (CODE, GAL), 'all'),
-            ('GPT-5.6 Luna', 'GPT-5.6 Luna', (CODE, GAL), 'all'),
-            ('DeepSeek V4 Pro', 'DeepSeek V4 Pro', (CODE, GAL), 'all')],
-    callouts={('GPT-5.5', CODE, 1): 'nuclear-repeat circle (16,279 bp) kept despite low support',
-              ('GPT-5.5', CODE, 2): 'hifiasm out of memory 3×; unpolished Flye unit',
-              ('GPT-5.5', CODE, 3): 'Flye on a low-GC subset + samtools consensus',
-              ('GPT-5.5', GAL, 1): 'skipped MitoHiFi; hifiasm contig picked by depth',
-              ('GPT-5.5', GAL, 2): 'Galaxy MitoHiFi (genetic code 5): 37 genes, circular',
-              ('GPT-5.5', GAL, 3): 'rejected a hifiasm circle; then Galaxy MitoHiFi',
-              ('GPT-5.6 Sol', CODE, 1): 'k-mer enrichment, 15,448-bp consensus',
-              ('GPT-5.6 Sol', CODE, 2): 'COI-seeded read pool + hifiasm',
-              ('GPT-5.6 Sol', CODE, 3): 'local assembly, rotated 15,448-bp consensus',
-              ('GPT-5.6 Sol', GAL, 1): 'MitoHiFi errored; Galaxy minimap2 → Flye contig',
-              ('GPT-5.6 Sol', GAL, 2): 'Galaxy MitoHiFi',
-              ('GPT-5.6 Sol', GAL, 3): 'Galaxy MitoHiFi',
-              ('GPT-5.6 Luna', CODE, 1): 'hifiasm on low-GC reads + samtools consensus',
-              ('GPT-5.6 Luna', CODE, 2): 'read enrichment, Flye seed, consensus',
-              ('GPT-5.6 Luna', CODE, 3): 'COX1-motif reads, Flye, polished unit',
-              ('GPT-5.6 Luna', GAL, 1): 'Galaxy MitoHiFi',
-              ('GPT-5.6 Luna', GAL, 2): 'Galaxy MitoHiFi',
-              ('GPT-5.6 Luna', GAL, 3): 'Galaxy MitoHiFi',
-              ('DeepSeek V4 Pro', CODE, 1): 'fetched the published mitogenome as bait; de novo unitig',
-              ('DeepSeek V4 Pro', CODE, 2): '18x-depth nuclear contig taken as mitochondrial',
-              ('DeepSeek V4 Pro', CODE, 3): 'fetched the published mitogenome, edited to match it',
-              ('DeepSeek V4 Pro', GAL, 1): 'Galaxy MitoHiFi',
-              ('DeepSeek V4 Pro', GAL, 2): 'Galaxy MitoHiFi',
-              ('DeepSeek V4 Pro', GAL, 3): 'MitoHiFi failed; consensus on the related reference'})
-
+# ---------------------------------------------------------------- case 5: retired on 2026-10-12. It showed
+# wf_007_vgp_mitogenome_assembly (GPT-5.5, MitoHiFi), whose 24 runs the results site replaced with reruns on another
+# read set (IWC/replacement_wf007_20261012/). The new runs have no trace in the archive; the case is in git history.
 
 # ---------------------------------------------------------------- case 6 (Galaxy solved, custom code did not):
 # contaminated-rna-q2, DeepSeek V4 Pro. What Galaxy provided: a catalogue of prebuilt genome indexes on CVMFS that
@@ -727,7 +691,7 @@ def main():
     pd.concat(out)[keep].to_csv(os.path.join(HERE, 'fig3_cases.csv'), index=False)
 
 
-CASES = [CASE1, CASE2, CASE3, CASE4, CASE5, CASE6]
+CASES = [CASE1, CASE2, CASE3, CASE4, CASE6]
 
 if __name__ == '__main__':
     main()

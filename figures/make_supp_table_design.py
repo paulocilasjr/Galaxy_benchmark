@@ -57,7 +57,10 @@ def main():
                                             f'{p.prompt_file_words.max():.0f})',
             'Distinct prompt files': p.prompt_file_sha256.nunique(),
             'Time budget': budget(p),
-            'Selection note': ('Host-read removal scored from run_record.json, the value the results site shows' if bm == 'IWC' else '') +
+            'Selection note': ('Host-read removal scored from run_record.json, the value the results site shows; '
+                               'VGP mitogenome assembly scored from the 24 runs the site published on 2026-10-12 '
+                               '(read set ERR12833637; not archived here, so its design values describe the superseded '
+                               'runs)' if bm == 'IWC' else '') +
                               ('Composite campaigns: some replicate vectors combine runs from different campaigns'
                                if bm == 'CompBio' else ''),
         })

@@ -40,6 +40,7 @@ f2, plt = lm.f2, lm.plt
 sys.path.insert(0, os.path.join(ROOT, 'figures'))
 with plt.rc_context():                            # make_fig5 sets the manuscript's style; keep the lab-meeting one
     import make_fig5 as f5  # noqa: E402  (token_rounds: the reduction experiments as in Fig. 5c)
+import replaced_runs as rr  # noqa: E402  (IWC wf_007 runs the results site replaced; figures/replaced_runs.py)
 from multiprocessing import Pool  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
@@ -84,7 +85,7 @@ def _usage(path):
 def load():
     r = f2.load_runs()
     t = pd.read_csv(TOKENS)
-    t = t[t.model_primary]
+    t = rr.replace_tokens(t[t.model_primary])        # IWC wf_007: the replacing runs' usage (no trace in the archive)
     r = r.merge(t[KEY + ['input_tokens', 'cached', 'output_tokens']], on=KEY, how='left')
     r['trace'] = [tp.trace_path(os.path.join(ROOT, DIRS[b], 'analysis', k, 'source_snapshots', 'huggingface_traces',
                                              'files', i)) for b, k, i in zip(r.benchmark, r.task, r.run_id)]
@@ -95,14 +96,16 @@ def load():
     for col, key in (('trace_input', 'input_tokens'), ('trace_cached', 'cached_input_tokens'),
                      ('trace_output', 'output_tokens')):
         r.loc[has, col] = [u.get(key) if n else np.nan for n, u in use]
-    tok = r.input_tokens.notna()
+    replaced = rr.is_replaced(r.benchmark, r.task)
+    assert r.trace[replaced].isna().all() and r.input_tokens[replaced].notna().all()
+    tok = r.input_tokens.notna() & ~replaced
     assert (r.trace_input[tok] == r.input_tokens[tok]).all() and (r.trace_output[tok] == r.output_tokens[tok]).all(), \
         'token table and trace usage disagree'
     assert r.loc[~tok, 'trace_input'].isna().all(), 'a trace has usage the token table lacks'
     fixed = tok & (r.cached != r.trace_cached)
-    print(f'token totals match the traces for all {tok.sum()} runs; cached input taken from the trace for '
-          f'{fixed.sum()} runs where the table differs')
-    r['cached'] = r.trace_cached.where(tok)
+    print(f'token totals match the traces for all {tok.sum()} traced runs; cached input taken from the trace for '
+          f'{fixed.sum()} runs where the table differs; {replaced.sum()} replaced IWC runs from the site record')
+    r['cached'] = r.trace_cached.where(tok).where(~replaced, r.cached)
     r['tokens'] = r.input_tokens + r.output_tokens
     return r.drop(columns=['trace_input', 'trace_cached', 'trace_output'])
 

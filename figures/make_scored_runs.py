@@ -10,8 +10,11 @@ displays (https://goeckslab.github.io/galaxy-agent-benchmark/):
 - CompBioBench: unchanged. The archive's grades sum to the official-leaderboard score of every replicate, which is the
   site's headline score; the site's per-item table, which uses alternative references on seven items, is not used.
 - IWC: the value shown for each run on the site's item pages. The host-read removal task (wf_003), excluded from the
-  archive's primary comparison, is included with its run_record.json value (the site's value); the other nine tasks keep
-  the archive's value, which the site displays.
+  archive's primary comparison, is included with its run_record.json value (the site's value). The VGP mitogenome
+  assembly task (wf_007) takes the runs the site published on 2026-10-12 in place of the archive's (new runs on read set
+  ERR12833637; IWC/replacement_wf007_20261012/runs.csv, see figures/replaced_runs.py): their run_id names the new run,
+  archive_score keeps the superseded run's value, and the archive holds no trace of them. The other eight tasks keep the
+  archive's value, which the site displays.
 
 The site results are read from site_snapshot/ (written by --fetch from the live site; no answers are stored). The script
 checks every run against the snapshot and stops on any mismatch.
@@ -31,6 +34,8 @@ import urllib.request
 from datetime import datetime, timezone
 
 import pandas as pd
+
+import replaced_runs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..'))
@@ -189,6 +194,22 @@ def build():
                        iwc_zero_task=bool((host.score == 0).any()), iwc_atac_task=False, archive_score=float('nan'),
                        score_source='run_record.json (shown on site); excluded from the archive')
     a = pd.concat([a, host[a.columns]], ignore_index=True)
+
+    # IWC wf_007: the runs the site published on 2026-10-12 replace the archive's
+    rec = replaced_runs.record().set_index(key)
+    m = replaced_runs.is_replaced(a.benchmark, a.task)
+    idx = pd.MultiIndex.from_frame(a.loc[m, key])
+    assert m.sum() == len(rec) == 24 and idx.isin(rec.index).all(), 'the replacement record must cover the task'
+    new = rec.reindex(idx)
+    assert (new.superseded_run_id.values == a.loc[m, 'run_id'].values).all(), 'record and archive must name the same runs'
+    a.loc[m, 'archive_score'] = a.loc[m, 'score'].values
+    a.loc[m, 'score'] = new.score.values
+    a.loc[m, 'run_id'] = new.run_id.values
+    a.loc[m, 'iwc_zero_task'] = bool((new.score == 0).any())
+    for col in ('udt_requested_archive', 'budget_matched'):              # recorded for the superseded runs only
+        a[col] = a[col].astype(object)
+        a.loc[m, col] = float('nan')
+    a.loc[m, 'score_source'] = 'site: run replaced on 2026-10-12 (ERR12833637); no trace in the archive'
     w = a.benchmark == 'IWC'
     mismatch = [(r.task, r.cfg, r.env, r.replicate) for r in a[w].itertuples()
                 if not shown(r.score, shown_iwc[(r.task, r.cfg, r.env, r.replicate)])]

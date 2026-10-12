@@ -36,6 +36,7 @@ import numpy as np
 import panel_io  # noqa: E402  (figures/panel_io.py)
 import openpyxl
 import pandas as pd
+import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
@@ -177,6 +178,7 @@ def load_calls():
     c = c[c.model.isin(TRACE_MODEL) & c.galaxy_server].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
     cov = pd.read_csv(os.path.join(GC, 'run_coverage.csv'))
     cov = cov[cov.model.isin(TRACE_MODEL)].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
+    c, cov = replaced_runs.drop_replaced(c), replaced_runs.drop_replaced(cov)   # IWC wf_007: superseded runs
     return c, cov[['benchmark', 'task', 'cfg', 'replicate']].drop_duplicates()
 
 
@@ -188,6 +190,7 @@ def read_sheet(path, name):
     if name in ('abc_runs', 'abc_every_error') and os.path.exists(extra):
         e = pd.concat([e, pd.read_csv(extra)], ignore_index=True)
     e = e[e.model_configuration != 'DeepSeek V4 Pro (Claude Code, superseded)']
+    e = replaced_runs.drop_replaced(e)                   # IWC wf_007: the superseded runs' records
     return e.assign(benchmark=e.benchmark.map({'BixBench-Verified-50': 'BixBench50', 'BixBench50': 'BixBench50',
                                                'CompBioBench': 'CompBio', 'IWC': 'IWC'}),
                     cfg=e.model_configuration.replace({'DeepSeek V4 Pro (Codex)': 'DeepSeek V4 Pro'}),

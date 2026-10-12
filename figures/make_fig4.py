@@ -37,6 +37,7 @@ import sys
 import numpy as np
 import panel_io  # noqa: E402  (figures/panel_io.py)
 import pandas as pd
+import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 from scipy.stats import rankdata
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -237,6 +238,7 @@ def load_calls():
     c['completed'] = c.job_states.fillna('').str.contains(r'(?:^|;)ok(?=;|$)')
     cov = pd.read_csv(os.path.join(GC, 'run_coverage.csv'))
     cov = cov[cov.model.isin(TRACE_MODEL)].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
+    c, cov = replaced_runs.drop_replaced(c), replaced_runs.drop_replaced(cov)   # IWC wf_007: superseded runs
     return c, cov[['benchmark', 'task', 'cfg', 'replicate']].drop_duplicates()
 
 
@@ -404,7 +406,7 @@ def job_steps(calls):
         else set()
     rows = []
     paths = EVIDENCE + [os.path.join(ROOT, 'IWC', 'analysis', '*', 'history_analysis_evidence.json')]
-    for path in sorted(p for pattern in paths for p in glob.glob(pattern)):
+    for path in sorted(p for pattern in paths for p in glob.glob(pattern) if not replaced_runs.replaced_evidence(p)):
         d = json.load(open(path))
         bm = 'BixBench50' if os.sep + 'BixBench_50' + os.sep in path else (
             'CompBio' if os.sep + 'CompBio' + os.sep in path else 'IWC')
