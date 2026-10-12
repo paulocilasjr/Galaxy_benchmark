@@ -15,10 +15,13 @@
   change for each task. The stage values are those of the manuscript's Fig. 5c (figures/make_fig5.py, token_rounds).
 
 Scores: figures/scored_runs.csv. Tokens: manuscript_narrative/original_layout/analysis/token_run_observations.csv
-(the run's final usage record). A run is correct when accepted or, for IWC, at >= 0.99 output agreement.
+(the run's final usage record). Every input and output total is checked against the trace's own usage events
+(turn.completed), and cached input is taken from those events: the table's cached value is missing for one run and
+counts only one of two turns for three runs. A run is correct when accepted or, for IWC, at >= 0.99 output agreement.
 Usage: python result_evaluation/labmeeting_figures/make_token_figures.py
 """
 import glob
+import gzip
 import json
 import os
 import sys
@@ -60,13 +63,48 @@ GRID_C = [0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7]
 
 
 # ---------------------------------------------------------------- data
+def _usage(path):
+    """Token usage summed over the trace's turn.completed events (one per turn; Codex reports each turn's total)."""
+    tot, turns = {}, 0
+    with (gzip.open if path.endswith('.gz') else open)(path, 'rt', errors='replace') as fh:
+        for line in fh:
+            if '"turn.completed"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get('type') == 'turn.completed':
+                turns += 1
+                for k, v in (e.get('usage') or {}).items():
+                    tot[k] = tot.get(k, 0) + (v or 0)
+    return turns, tot
+
+
 def load():
     r = f2.load_runs()
     t = pd.read_csv(TOKENS)
     t = t[t.model_primary]
     r = r.merge(t[KEY + ['input_tokens', 'cached', 'output_tokens']], on=KEY, how='left')
+    r['trace'] = [tp.trace_path(os.path.join(ROOT, DIRS[b], 'analysis', k, 'source_snapshots', 'huggingface_traces',
+                                             'files', i)) for b, k, i in zip(r.benchmark, r.task, r.run_id)]
+    has = r.trace.notna()
+    with Pool(min(8, os.cpu_count() or 1)) as pool:
+        use = pool.map(_usage, list(r.trace[has]), chunksize=16)
+    r.loc[has, 'turns'] = [n for n, _ in use]
+    for col, key in (('trace_input', 'input_tokens'), ('trace_cached', 'cached_input_tokens'),
+                     ('trace_output', 'output_tokens')):
+        r.loc[has, col] = [u.get(key) if n else np.nan for n, u in use]
+    tok = r.input_tokens.notna()
+    assert (r.trace_input[tok] == r.input_tokens[tok]).all() and (r.trace_output[tok] == r.output_tokens[tok]).all(), \
+        'token table and trace usage disagree'
+    assert r.loc[~tok, 'trace_input'].isna().all(), 'a trace has usage the token table lacks'
+    fixed = tok & (r.cached != r.trace_cached)
+    print(f'token totals match the traces for all {tok.sum()} runs; cached input taken from the trace for '
+          f'{fixed.sum()} runs where the table differs')
+    r['cached'] = r.trace_cached.where(tok)
     r['tokens'] = r.input_tokens + r.output_tokens
-    return r
+    return r.drop(columns=['trace_input', 'trace_cached', 'trace_output'])
 
 
 def cluster_boot_mean(values, clusters):
@@ -102,7 +140,8 @@ def token_usage_table(r):
                 row[f'{e}_q1_m'] = x.tokens.quantile(0.25) / 1e6
                 row[f'{e}_q3_m'] = x.tokens.quantile(0.75) / 1e6
                 row[f'{e}_mean_m'] = x.tokens.mean() / 1e6
-                row[f'{e}_cached_share'] = x.cached.sum() / x.input_tokens.sum()
+                c = x.cached.notna()
+                row[f'{e}_cached_share'] = x.cached[c].sum() / x.input_tokens[c].sum()
                 row[f'{e}_runs'] = len(x)
             rows.append(row)
     t = pd.DataFrame(rows)
@@ -151,10 +190,7 @@ def _requests(job):
 
 def run_requests(r):
     """Each run's model requests (characters of conversation before the request, phase), from its agent trace."""
-    d = r[r.input_tokens.notna()].copy()
-    d['trace'] = [tp.trace_path(os.path.join(ROOT, DIRS[b], 'analysis', t, 'source_snapshots', 'huggingface_traces',
-                                             'files', i)) for b, t, i in zip(d.benchmark, d.task, d.run_id)]
-    d = d[d.trace.notna()]
+    d = r[r.input_tokens.notna() & r.trace.notna()].copy()
     with Pool(min(8, os.cpu_count() or 1)) as pool:
         out = pool.map(_requests, list(zip(d.trace, d.env)), chunksize=8)
     d['chars'] = [np.array(c, float) for c, _ in out]

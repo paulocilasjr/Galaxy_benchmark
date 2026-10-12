@@ -481,6 +481,25 @@ Every custom-code trace should be audited for answer lookups before the conditio
 Tokens per run are input (including cached context) plus output, from the run's final usage record (`manuscript_narrative/original_layout/analysis/token_run_observations.csv`).
 3,826 of the 3,840 scored runs have one; 14 CompBioBench runs do not, and they are left out of the token numbers but not the accuracies.
 
+### Where the token numbers come from, and how they are checked
+
+- **Where the counts come from.** Every run was executed with the Codex CLI (`codex exec --json`), which writes the run's event stream to `codex_events.jsonl`.
+  - When the run ends, Codex writes a `turn.completed` event holding the run's input, cached input, output and reasoning tokens.
+  - These are the counts the model provider returned for each request (OpenAI for the GPT models, DeepSeek's API for DeepSeek V4 Pro), summed by Codex over the run.
+  - Every request re-sends the whole conversation so far, so input counts that context again each time; cached input is the part served from the provider's prompt cache.
+- **The check in `make_token_figures.py`.** It re-reads every trace and stops if the table disagrees with it:
+  - the input and output totals of all 3,826 runs equal the trace's `turn.completed` usage;
+  - the same totals also equal the harness's `usage.json` for the 1,200 BixBench runs that have one, and the results site's run cards for the 900 BixBench archive runs of the GPT models.
+- **Cached input comes from the traces.** The table's cached value is wrong for 4 runs:
+  - it is missing for one IWC run (GPT-5.6 Sol, Galaxy, `wf_010` r3);
+  - it counts only one of two turns for the three GPT-5.5 Galaxy runs of `bix-26-q3`.
+- **Runs without tokens.** Of the 14 runs without tokens:
+  - 12 have no archived trace;
+  - 1 ended in `turn.failed` with no usage;
+  - 1 trace stops mid-call.
+- **Which trace is read when a run keeps two.** The `wf_010` r3 run folder also keeps an earlier attempt, in a separate thread, that the provider's content filter stopped before it wrote a usage record. `token_phases.trace_path` reads the attempt with a `turn.completed` event, the one whose tokens are recorded. The integrity scan reads both.
+- **What is not counted.** Attempts that were superseded and rerun (13 BixBench runs record a replacement), or stopped without a usage record, are not in the totals. Neither is anything outside the model: Galaxy job compute and local tool runtime.
+
 ### How many more tokens Galaxy uses (`fig4_token_usage`)
 
 The bars show the median tokens per run, with the interquartile range as whiskers.
@@ -500,7 +519,7 @@ This is the same method as the manuscript's Fig. 5a.
 
 Notes:
 - On IWC, custom code has the higher mean (7.7M vs 6.8M per run) because of a few very long runs. The median and the paired ratio favour custom code, but the difference is not significant.
-- 93–98% of input tokens are read from the prompt cache in every benchmark and condition, so most of the extra Galaxy tokens are cached context being re-read.
+- 96–98% of input tokens are read from the prompt cache in every benchmark and condition, so most of the extra Galaxy tokens are cached context being re-read. Tokens are therefore not cost: providers bill cached input at a much lower rate.
 
 ### Tokens and accuracy (`fig4_token_accuracy`)
 
@@ -546,7 +565,7 @@ Mean input tokens per run (millions) and share of the condition's input, custom 
 |---|---|---|---|---|---|
 | BixBench-Verified-50 | 0.01 (1%) → 1.75 (36%) | 0.83 (73%) → 1.18 (24%) | 0.15 (13%) → 1.30 (27%) | 0.16 (14%) → 0.65 (13%) | 1.15 → 4.88 |
 | CompBioBench | 0.03 (1%) → 1.59 (14%) | 3.70 (86%) → 4.62 (42%) | 0.45 (11%) → 4.12 (37%) | 0.13 (3%) → 0.80 (7%) | 4.30 → 11.13 |
-| IWC | 0.00 (0%) → 1.19 (17%) | 6.62 (86%) → 2.05 (30%) | 0.85 (11%) → 2.25 (33%) | 0.19 (2%) → 1.31 (19%) | 7.66 → 6.80 |
+| IWC | 0.00 (0%) → 1.14 (17%) | 6.62 (86%) → 2.07 (30%) | 0.85 (11%) → 2.30 (34%) | 0.19 (2%) → 1.29 (19%) | 7.66 → 6.80 |
 
 Most of Galaxy's extra input goes to start-up and error correction:
 - **BixBench:** 1.7M of the 3.7M extra tokens per run are start-up and 1.2M are error correction; analysis itself adds 0.3M.

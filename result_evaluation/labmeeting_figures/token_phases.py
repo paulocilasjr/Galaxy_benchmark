@@ -34,12 +34,21 @@ ITEM_CAP = 40_000               # characters of one item that reach the model (t
 PHASES = ['start-up', 'analysis', 'error correction', 'output preparation']
 
 
+def completed(path):
+    """Whether the trace ends its run with a usage record (a turn.completed event)."""
+    with (gzip.open if path.endswith('.gz') else open)(path, 'rt', errors='replace') as fh:
+        return any('"turn.completed"' in line for line in fh)
+
+
 def trace_path(base):
-    for d, _, fs in os.walk(base):
-        for f in sorted(fs):
-            if f.startswith('codex_events.jsonl'):
-                return os.path.join(d, f)
-    return None
+    """The run's agent trace. A run folder can also keep an earlier attempt that ended without a usage record (one IWC
+    run: a first attempt stopped by the provider's content filter, in a separate thread); the scored attempt is the
+    one with a turn.completed event."""
+    found = sorted(os.path.join(d, f) for d, _, fs in os.walk(base) for f in fs if f.startswith('codex_events.jsonl'))
+    if len(found) > 1:
+        done = [p for p in found if completed(p)]
+        return (done or found)[0]
+    return found[0] if found else None
 
 
 def item_chars(it):

@@ -9,8 +9,9 @@ for r in csv.DictReader(open('figures/scored_runs.csv')):
     cands = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(base) for f in fs if f.startswith('codex_events'))
     if not cands:
         rows.append(dict(r, trace='missing', source=0, ideal=0)); continue
-    p = cands[0]
-    txt = (gzip.open(p, 'rt', errors='replace') if p.endswith('.gz') else open(p, errors='replace')).read()
+    # every attempt kept for the run (one IWC run also keeps a first attempt stopped by the content filter)
+    txt = '\n'.join((gzip.open(p, 'rt', errors='replace') if p.endswith('.gz') else open(p, errors='replace')).read()
+                    for p in cands)
     rows.append(dict(r, trace='ok', source=int(bool(SOURCE.search(txt))), ideal=int(bool(IDEAL.search(txt)))))
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'answer_source_scan.csv')
 with open(out, 'w', newline='') as f:
