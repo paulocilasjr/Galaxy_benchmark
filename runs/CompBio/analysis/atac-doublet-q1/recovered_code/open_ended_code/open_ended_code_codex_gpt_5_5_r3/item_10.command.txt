@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, collections, time, heapq, math
+frag='atac.doublet.q1.bed.gz'
+by=collections.defaultdict(lambda: collections.defaultdict(list))
+counts=collections.Counter()
+with gzip.open(frag,'rt') as f:
+    for line in f:
+        chrom,s,e,bc,c=line.rstrip().split('\\t')
+        if chrom in ('chrX','chrY','chrM'): # AMULET often autosomal only
+            continue
+        by[bc][chrom].append((int(s),int(e)))
+        counts[bc]+=1
+print('cells',len(by))
+
+def metrics(chrdict):
+    bp3=0; seg3=0; maxd=0; excess=0; loci3=0
+    # count starts/ends depth segments
+    for chrom, intervals in chrdict.items():
+        events=[]
+        for s,e in intervals:
+            if e<=s: continue
+            events.append((s,1)); events.append((e,-1))
+        events.sort()
+        d=0; prev=None; in3=False
+        i=0; n=len(events)
+        while i<n:
+            pos=events[i][0]
+            if prev is not None and pos>prev:
+                if d>=3:
+                    bp3 += pos-prev; excess += (d-2)*(pos-prev)
+                    if not in3:
+                        seg3 += 1; in3=True
+                else:
+                    in3=False
+            while i<n and events[i][0]==pos:
+                d += events[i][1]; i+=1
+            if d>maxd: maxd=d
+            prev=pos
+    return bp3,seg3,excess,maxd
+res=[]
+for bc,chrdict in by.items():
+    res.append((bc,counts[bc],*metrics(chrdict)))
+# print top by each metric
+for idx,name in [(2,'bp3'),(3,'seg3'),(4,'excess'),(5,'maxd')]:
+    print('\\nTOP',name)
+    for r in sorted(res,key=lambda x:x[idx],reverse=True)[:30]:
+        print(r)
+# zscore normalized by count maybe
+import numpy as np
+arr=np.array([[r[1],r[2],r[3],r[4],r[5]] for r in res],float)
+for idx,name in [(2,'bp3'),(3,'seg3'),(4,'excess')]:
+    vals=arr[:,idx-1] # because arr col 1=bp3
+print('done')
+PY"

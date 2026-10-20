@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess,re,collections,pickle
+known=set(pickle.load(open('known_all.pkl','rb')))
+# candidate header metadata
+obs=collections.defaultdict(collections.Counter)
+for line in subprocess.Popen(['samtools','view','-F','4','cand_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6:continue
+    flag=int(f[1]);mapq=int(f[4]);cigar=f[5]
+    if flag&0x900 or mapq<10:continue
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"',f[2])
+    if not m:continue
+    label=m.group(1);chrom=m.group(2);ref_start=int(m.group(3));pos=int(f[3])
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar);left=0
+    for n,op in ops:
+        n=int(n)
+        if op=='N':
+            gs=ref_start+1+(pos-1)+left; ge=gs+n-1
+            if (chrom,gs,ge) not in known:
+                obs[label][(gs,ge)]+=1
+            left+=n
+        elif op in 'MDN=X':left+=n
+# For each label, sort novel introns and find nearby pairs
+print('label\\tintron1\\tintron2\\tgap\\texon_len\\tcounts')
+for label,jc in obs.items():
+    js=sorted(jc)
+    for a,b in zip(js,js[1:]):
+        gap=b[0]-a[1]
+        exon_len=gap-1
+        if 20 <= exon_len <= 1000:
+            print(f'{label}\\t{a[0]}-{a[1]}\\t{b[0]}-{b[1]}\\t{gap}\\t{exon_len}\\t{jc[a]},{jc[b]}')
+PY"

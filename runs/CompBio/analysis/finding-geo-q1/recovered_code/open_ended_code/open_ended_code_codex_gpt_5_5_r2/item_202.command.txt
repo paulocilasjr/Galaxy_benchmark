@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from pathlib import Path
+rawfn='geo_check/gse114176/GSM3578982_raw_gene_bc_matrices_h5.h5'; localfn='finding.geo.q1.h5ad'
+with h5py.File(localfn,'r') as f:
+    Xloc=sp.csr_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=tuple(f['X'].attrs['shape']))
+    obs=[x.decode() for x in f['obs/_index'][:]]
+    genes_loc=[x.decode() for x in f['var/_index'][:]]
+loc_sums=np.asarray(Xloc.sum(axis=1)).ravel(); loc_genes=np.diff(Xloc.indptr)
+print('local n',Xloc.shape,'sum stats',loc_sums.min(),loc_sums.max(),loc_sums.sum(),'genes stats',loc_genes.min(),loc_genes.max())
+with h5py.File(rawfn,'r') as f:
+    g=f['output_genome2']; genes=[x.decode() for x in g['genes'][:]]; bars=[x.decode() for x in g['barcodes'][:]]
+    X=sp.csc_matrix((g['data'][:], g['indices'][:], g['indptr'][:]), shape=tuple(g['shape'][:]))
+keep=[i for i,gene in enumerate(genes) if gene in set(genes_loc)]
+Xk=X[keep,:]
+sums=np.asarray(Xk.sum(axis=0)).ravel(); ng=np.diff(Xk.tocsc().indptr)
+obs_set=set(obs)
+idx={b:i for i,b in enumerate(bars)}
+sel_obs_idx=np.array([idx[b] for b in obs])
+print('obs raw standard sums stats',sums[sel_obs_idx].min(),sums[sel_obs_idx].max(),sums[sel_obs_idx].sum(),'ng',ng[sel_obs_idx].min(),ng[sel_obs_idx].max())
+print('counts identical local?', np.array_equal(sums[sel_obs_idx], loc_sums), 'ng ident?', np.array_equal(ng[sel_obs_idx], loc_genes))
+# cells in raw but not local around thresholds
+for s_th in range(270,281):
+  for g_th in [0,50,100,120,125,128,129,130,150,200]:
+    mask=(sums>=s_th)&(ng>=g_th)
+    if mask.sum()==len(obs):
+        sel=[bars[i] for i in np.nonzero(mask)[0]]
+        print('candidate filter',s_th,g_th,'equal',sel==obs)
+# show high-count non-local cells if using min local thresholds
+mask=(sums>=loc_sums.min())&(ng>=loc_genes.min())
+extra=[i for i in np.nonzero(mask)[0] if bars[i] not in obs_set]
+missing=[b for b in obs if not ((sums[idx[b]]>=loc_sums.min()) and (ng[idx[b]]>=loc_genes.min()))]
+print('mask count',mask.sum(),'extra',len(extra),'missing',len(missing))
+print('first extra',[(bars[i],int(sums[i]),int(ng[i])) for i in extra[:20]])
+# compare exact matrix for obs order
+Xobs=Xk[:,sel_obs_idx].T.tocsr()
+D=(Xobs-Xloc).tocoo()
+print('matrix obs diff',D.nnz,'sum raw/local',int(Xobs.sum()),int(Xloc.sum()),'nnz raw/local',Xobs.nnz,Xloc.nnz)
+PY"

@@ -1,0 +1,73 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv, re, numpy as np
+from collections import defaultdict
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import rankdata
+
+sym_bins=defaultdict(set)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2]"'!='"'gene': continue
+        chrom=parts[0]; start=int(parts[3]); end=int(parts[4]); strand=parts[6]
+        m=re.search(r'gene_name \"(["'^"]+)"'"', parts[8])
+        if not m: continue
+        gn=m.group(1)
+        c=chrom[3:] if chrom.startswith('chr') else chrom
+        tss=start if strand=='+' else end
+        bstart=(tss//10000)*10000
+        sym_bins[gn].add(f'chr{c}_{bstart}_{bstart+10000}')
+
+atac_bins={}
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        atac_bins[row[0]]=np.array([float(x) for x in row[1:9]])
+rna_syms=[]; R=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        rna_syms.append(row[0]); R.append([float(x) for x in row[1:9]])
+R=np.array(R)
+
+pairs=[]
+for gi,gn in enumerate(rna_syms):
+    bins=sym_bins.get(gn,set())
+    present=[b for b in bins if b in atac_bins]
+    if not present: continue
+    A=np.mean([atac_bins[b] for b in present],axis=0)
+    pairs.append((R[gi],A))
+print('mapped',len(pairs))
+Rs=np.array([p[0] for p in pairs]); As=np.array([p[1] for p in pairs])
+# various transforms and standardization within gene across populations
+for name, rr, aa in [
+    ('log1p_center', np.log1p(Rs), np.log1p(As)),
+    ('log1p_rank', np.log1p(Rs), np.log1p(As)),
+    ('raw_center', Rs, As),
+]:
+    if name.endswith('rank'):
+        # rank within each row
+        r_rank=np.apply_along_axis(rankdata,1,rr)
+        a_rank=np.apply_along_axis(rankdata,1,aa)
+    else:
+        r_rank=rr
+        a_rank=aa
+    # center within rows
+    r_z=r_rank - r_rank.mean(axis=1,keepdims=True)
+    a_z=a_rank - a_rank.mean(axis=1,keepdims=True)
+    # normalize by sd? for Pearson, include denominator
+    r_den=np.sqrt((r_z*r_z).sum(axis=1,keepdims=True)); r_den[r_den==0]=1
+    a_den=np.sqrt((a_z*a_z).sum(axis=1,keepdims=True)); a_den[a_den==0]=1
+    r_n=r_z/r_den; a_n=a_z/a_den
+    # M mean per gene r_n[:,i]*a_n[:,j], equivalent pearson across populations for perm (times? sum not mean const)
+    M=(r_n[:,:,None]*a_n[:,None,:]).mean(axis=0)
+    print('\\n',name,'M')
+    print(np.round(M,4))
+    ri,cj=linear_sum_assignment(-M)
+    print('perm', {ri[k]:int(cj[k]) for k in range(8)},'score',M[ri,cj].sum())
+    # print top candidates per RNA row
+    for i in range(8):
+        order=np.argsort(-M[i])
+        print(i, [(int(j),round(M[i,j],4)) for j in order])
+PY"

@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,csv,re,urllib.request,urllib.parse,time
+from collections import defaultdict
+mapping=json.load(open('sei_cistrome_map.json'))
+base_enc=defaultdict(set)
+for fn in ['borzoi_targets_human.tsv','borzoi_targets_mouse.tsv']:
+ for r in csv.DictReader(open(fn),delimiter='\\t'):
+  if not r['description'].startswith(('CHIP:','DNASE:','ATAC:')): continue
+  m=re.search(r'/(?:encode|geo)/(["'^/]+)/'"',r['file'])
+  if m and r['identifier'].startswith('ENCFF'):
+   base_enc[m.group(1)].add(r['identifier'].rstrip('+-'))
+matched=[]
+for line in open('sei_repo/model/target.names'):
+ line=line.rstrip('\\n'); m=re.search(r'ID:(\\d+)\\s*"'$'"',line)
+ if not m: continue
+ s=mapping[m.group(1)]; typ=s['external_id_type']; ext=s['external_id']
+ if typ"'!='"'ENCODE': continue
+ mm=re.match(r'"'^(ENCSR'"\\d+[A-Z0-9]+)(?:_(\\d+))?"'$'"',ext)
+ if mm and mm.group(1) in base_enc:
+  matched.append((s['id'],ext,mm.group(1),mm.group(2),base_enc[mm.group(1)]))
+encs=sorted({e for x in matched for e in x[4]})
+bio={}
+for start in range(0,len(encs),100):
+ chunk=encs[start:start+100]
+ url='https://www.encodeproject.org/search/?type=File&format=json&frame=object&limit=all&'+urllib.parse.urlencode({'accession':chunk},doseq=True)
+ for attempt in range(3):
+  try:
+   req=urllib.request.Request(url,headers={'User-Agent':'curl/8'})
+   data=json.loads(urllib.request.urlopen(req,timeout=120).read().decode())
+   files=data.get('@graph',[])
+   for f in files: bio[f['accession']]=f.get('biological_replicates',[])
+   print('chunk',start,'got',len(files))
+   break
+  except Exception as e:
+   print('ERR',start,repr(e)[:200]); time.sleep(2)
+print('bio fetched',len(bio),'missing',len(set(encs)-set(bio)))
+json.dump(bio,open('borzoi_encff_bio.json','w'))
+# precise count
+count=0; rows_no=[]; rows_yes=[]
+for cid,ext,base,suf,encset in matched:
+ reps=set()
+ for e in encset:
+  reps |= {int(x) for x in bio.get(e,[])}
+ if reps:
+  if suf is None or int(suf) in reps:
+   count+=1; rows_yes.append((cid,ext,base,suf,encset,reps))
+  else:
+   rows_no.append((cid,ext,base,suf,encset,reps))
+ else:
+  rows_no.append((cid,ext,base,suf,encset,reps))
+print('precise ENCODE matches',count)
+print('no match rows',len(rows_no))
+print('sample no',rows_no[:20])
+PY"

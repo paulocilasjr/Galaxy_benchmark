@@ -1,0 +1,36 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np, time, gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+meta=pd.read_csv('inputs/sample_layout.csv')
+meta['count_id']=meta['SampleID'].str.replace('-','_',regex=False)
+meta=meta.set_index('count_id').loc[counts.columns]
+keep=(counts>10).any(axis=1)
+counts=counts.loc[keep]
+groups=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+submeta=meta[meta.Group.isin(groups)].copy()
+submeta['Group']=pd.Categorical(submeta['Group'],categories=groups,ordered=True)
+subcounts=counts.loc[:,submeta.index]
+print('fit input',subcounts.shape, flush=True)
+t=time.time()
+dds=DeseqDataSet(counts=subcounts.T,metadata=submeta[['Group']],design='~Group',refit_cooks=True,n_cpus=1,quiet=True)
+dds.deseq2()
+print('fit done',time.time()-t,flush=True)
+ds=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=0.05,quiet=True,n_cpus=1)
+ds.summary()
+res=ds.results_df
+sel=res[(res['padj']<=0.05)&(res['log2FoldChange'].abs()>=0.5)&(res['baseMean']>=10)]
+mapdf=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+# map one-to-one ENSG; keep mapped DE in result order
+mapped=sel.reset_index(names='ENSG').merge(mapdf,on='ENSG',how='left',sort=False)
+print('selected',len(sel),'mapped',mapped.gene_name.notna().sum(),'unmapped',mapped.gene_name.isna().sum(),'unique symbols',mapped.gene_name.dropna().nunique(), flush=True)
+fg=mapped.gene_name.dropna().tolist()
+print('first genes',fg[:20], flush=True)
+print('calling enrichr', flush=True)
+enr=gp.enrichr(gene_list=fg,gene_sets='Reactome_2022',organism='Human',outdir=None,no_plot=True,verbose=True)
+print('res shape',enr.results.shape, flush=True)
+print(enr.results[enr.results['Term'].str.contains('Cell Cycle',case=False,na=False)].to_string(index=False), flush=True)
+print('target exact',enr.results[enr.results['Term'].eq('TP53 Regulates Transcription Of Cell Cycle Genes R-HSA-6791312')].to_dict('records'), flush=True)
+PY"

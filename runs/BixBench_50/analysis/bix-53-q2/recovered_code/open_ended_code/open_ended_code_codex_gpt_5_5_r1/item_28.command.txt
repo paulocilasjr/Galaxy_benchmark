@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv')
+print(raw.shape)
+print(raw.columns.tolist())
+
+
+def run(samples):
+    count_cols = samples
+    counts = raw[['geneID'] + count_cols].set_index('geneID').T
+    # PyDESeq2 expects integer counts, samples as rows, genes as columns.
+    counts = counts.astype(int)
+    metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in count_cols]}, index=count_cols)
+    dds = DeseqDataSet(
+        counts=counts,
+        metadata=metadata,
+        design='~ condition',
+        ref_level=['condition', 'WL'],
+        min_replicates=7,
+        n_cpus=1,
+        quiet=False,
+    )
+    dds.deseq2()
+    print('varm keys', list(dds.varm.keys()))
+    print('var columns', list(dds.var.columns)[:20])
+    print('uns keys', list(dds.uns.keys()))
+    # Determine coefficient name for KL vs WL.
+    coeffs = None
+    for obj_name, obj in [('varm_LFC', dds.varm.get('LFC')), ('varm__normed_means', dds.varm.get('_normed_means'))]:
+        if obj is not None:
+            print(obj_name, type(obj), getattr(obj, 'shape', None))
+            try:
+                print(getattr(obj, 'columns', None))
+            except Exception:
+                pass
+    print('design columns', getattr(dds, 'design_matrix', None).columns.tolist())
+    stat = DeseqStats(dds, contrast=['condition', 'KL', 'WL'], alpha=0.05, n_cpus=1, quiet=False)
+    stat.summary()
+    print('pre shrink columns', stat.results_df.columns.tolist())
+    print(stat.results_df.head().to_string())
+    # Coeff string is the non-intercept design column if present.
+    coeff_candidates = [c for c in dds.design_matrix.columns if c "'!= '"'Intercept']
+    print('coeff candidates', coeff_candidates)
+    coeff = coeff_candidates[0]
+    stat.lfc_shrink(coeff=coeff)
+    res = stat.results_df.copy()
+    sig = res[(res['pvalue'] < 0.05) & (res['baseMean'] > 10) & (res['log2FoldChange'].abs() > 1)]
+    print('RESULT', samples, 'coeff', coeff, 'n', len(sig), 'non_na_p', res['pvalue'].notna().sum())
+    print(res[['baseMean','log2FoldChange','pvalue','padj']].describe().to_string())
+    return len(sig), res
+
+n_full, res_full = run(['KL1','KL2','KL3','WL1','WL2','WL3'])
+n_drop, res_drop = run(['KL1','KL2','WL1','WL2'])
+print('COUNTS', n_full, n_drop, 'direction', 'increase' if n_drop>n_full else 'decrease' if n_drop<n_full else 'no change')
+PY"

@@ -1,0 +1,35 @@
+/bin/bash -lc "Rscript --vanilla - <<'RS'
+# Model fitting and optimization diagnostics, mixture-only
+suppressPackageStartupMessages(library(splines))
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+ix <- d"'$StrainNumber == '"'287_98'
+p <- do.call(rbind, strsplit(d"'$Ratio[ix], '"':', fixed=TRUE))
+d <- d[ix,]
+d"'$freq287 <- as.numeric(p[,1])/(as.numeric(p[,1])+as.numeric(p[,2]))
+mods <- list(
+  quadratic = lm(Area ~ poly(freq287, 2, raw=TRUE), data=d),
+  cubic = lm(Area ~ poly(freq287, 3, raw=TRUE), data=d),
+  natural_spline_df4 = lm(Area ~ ns(freq287, df=4), data=d)
+)
+cat('"'Model criteria:\\n')
+print(data.frame(model=names(mods), AIC=sapply(mods,AIC), BIC=sapply(mods,BIC), RSS=sapply(mods,deviance), adjR2=sapply(mods,function(x) summary(x)"'$adj.r.squared)))
+cat('"'\\nCoefficients:\\n')
+print(lapply(mods, coef))
+# grid and continuous optimize over [min,max] and [0,1]
+for (nm in names(mods)) {
+  fit <- mods[[nm]]
+  f <- function(x) as.numeric(predict(fit, newdata=data.frame(freq287=x)))
+  opt_range <- optimize(f, interval=range(d"'$freq287), maximum=TRUE)
+  opt01 <- optimize(f, interval=c(0,1), maximum=TRUE)
+  grid <- seq(0,1,length.out=1000001)
+  pv <- predict(fit, data.frame(freq287=grid))
+  gi <- which.max(pv)
+  cat('"'\\n', nm, '\\n', sep='')
+  cat('opt mixture range x=', format(opt_range"'$maximum, digits=15), '"' area=', format(opt_range"'$objective,digits=15), '"'\\n', sep='')
+  cat('opt [0,1] x=', format(opt01"'$maximum, digits=15), '"' area=', format(opt01"'$objective,digits=15), '"'\\n', sep='')
+  cat('grid x=', format(grid[gi],digits=15), ' area=', format(pv[gi],digits=15), '\\n', sep='')
+}
+cat('\\nSummary:\\n')
+print(summary(mods"'$cubic))
+print(summary(mods$natural_spline_df4))
+RS'

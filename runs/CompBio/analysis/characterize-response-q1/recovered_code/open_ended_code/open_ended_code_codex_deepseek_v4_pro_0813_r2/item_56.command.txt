@@ -1,0 +1,53 @@
+/bin/bash -c "python3 - <<'PY'
+import gzip, pandas as pd, numpy as np, re
+# parse GEO matrix manually
+with gzip.open('GSE4479_series_matrix.txt.gz','rt') as f:
+    lines=f.readlines()
+# find table start
+start=None
+for i,l in enumerate(lines):
+    if l.startswith('"'!series_matrix_table_begin'"'):
+        start=i+1; break
+rows=[]
+for l in lines[start:]:
+    if l.startswith('"'!series_matrix_table_end'"'): break
+    rows.append(l.rstrip('\\n').split('\\t'))
+df=pd.DataFrame(rows[1:], columns=rows[0])
+print(df.shape)
+print(df.columns[:12])
+# metadata samples first 10, rest probe data
+probe_ids=df['ID_REF']
+expr=df.iloc[:,1:11].apply(pd.to_numeric, errors='coerce')
+# gene symbol column may be in df; check columns
+print(df.columns[-5:])
+# get symbol map likely from platform, but matrix may include? If only ID_REF, need platform annot. Check first rows
+print(df.head(3).iloc[:,:5])
+print(df.columns.tolist()[-10:])
+# save/calc using symbols if present
+if 'Gene Symbol' in df.columns:
+    sym=df['Gene Symbol']
+else:
+    sym=probe_ids
+# average septic vs sham
+septic=expr.iloc[:,:5].mean(axis=1)
+sham=expr.iloc[:,5:10].mean(axis=1)
+logfc=np.log2((septic+0.5)/(sham+0.5))
+d=pd.DataFrame({'sym':sym,'logfc':logfc,'septic':septic,'sham':sham})
+# aggregate by first symbol if multiple
+d=d.dropna(subset=['logfc'])
+d['sym']=d['sym'].astype(str).str.upper()
+# filter valid symbols (no '---')
+d=d[~d.sym.str.contains('---|///')]
+g=d.groupby('sym')['logfc'].mean().sort_values(ascending=False)
+print('top up'); print(g.head(150).to_string())
+print('top down'); print(g.tail(150).to_string())
+our=[x.upper() for x in open('characterize.response.q1.txt').read().strip().split('\\n')]
+m=g.to_dict()
+print('found',sum(x in m for x in our))
+print('our FC:')
+for x in our:
+ print(x, m.get(x))
+# overlap top up/down 112
+up112=set(g.index[:112]); down112=set(g.index[-112:])
+print('overlap up112',len(set(our)&up112),'down112',len(set(our)&down112))
+PY"

@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, statistics
+from collections import defaultdict, Counter
+path='single_cell_dynamics_question.csv'
+rows=[]
+with open(path,newline='') as f:
+    rd=csv.DictReader(f)
+    print('fields', rd.fieldnames)
+    for r in rd:
+        ex,ey,ez=(float(r[k]) for k in ('enh_x','enh_y','enh_z'))
+        px,py,pz=(float(r[k]) for k in ('prom_x','prom_y','prom_z'))
+        d=math.sqrt((ex-px)**2+(ey-py)**2+(ez-pz)**2)
+        rows.append((int(r['cell_id']),int(r['time']),d,int(r['transcription'])))
+print('n',len(rows),'cells',len(set(x[0] for x in rows)),'times',len(set(x[1] for x in rows)))
+ds=[r[2] for r in rows]
+y=[r[3] for r in rows]
+c=[d<=260 for d in ds]
+print('d min max mean median',min(ds),max(ds),sum(ds)/len(ds),statistics.median(ds))
+print('contact n frac',sum(c),sum(c)/len(c),'tx n frac',sum(y),sum(y)/len(y))
+print('contingency contact/tx',Counter((int(c0),y0) for c0,y0 in zip(c,y)))
+# grouped by cell/time
+a=defaultdict(list)
+for cell,t,d,tx in rows: a[cell].append((t,d, int(d<=260),tx))
+for cell in a: a[cell].sort()
+# within contemporaneous correlations
+import numpy as np
+D=np.array(ds); C=np.array(c,dtype=int); Y=np.array(y)
+print('corr D tx',np.corrcoef(D,Y)[0,1], 'corr contact tx',np.corrcoef(C,Y)[0,1])
+# mean d / tx by contact and tx
+for nm,arr in [('distance',D),('contact',C)]:
+    print(nm,'tx0 mean',arr[Y==0].mean(),'tx1 mean',arr[Y==1].mean())
+# lag correlations / conditional transitions for lags 1..20, directed predictors
+for lag in range(1,11):
+    priorC=[]; nowY=[]; priorY=[]; nowC=[]; priorD=[]; nowY2=[]; priorY2=[]; nowC2=[]
+    for vals in a.values():
+        cc=np.array([v[2] for v in vals]); yy=np.array([v[3] for v in vals]); dd=np.array([v[1] for v in vals])
+        priorC.extend(cc[:-lag]); nowY.extend(yy[lag:]); priorY.extend(yy[:-lag]); nowC.extend(cc[lag:]); priorD.extend(dd[:-lag]); nowY2.extend(yy[lag:]); priorY2.extend(yy[:-lag]); nowC2.extend(cc[lag:])
+    pc=np.array(priorC); ny=np.array(nowY); py=np.array(priorY); nc=np.array(nowC)
+    print('lag',lag,'P(Yt=1|Ct-lag=1)',ny[pc==1].mean(),'|C0',ny[pc==0].mean(),'diff',ny[pc==1].mean()-ny[pc==0].mean(),'P(Ct|Yprior=1)',nc[py==1].mean(),'|Y0',nc[py==0].mean(),'diff',nc[py==1].mean()-nc[py==0].mean())
+PY"

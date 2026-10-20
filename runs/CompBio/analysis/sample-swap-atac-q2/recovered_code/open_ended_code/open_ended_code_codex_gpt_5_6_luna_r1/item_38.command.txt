@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,numpy as np,pandas as pd
+# matrix
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+ rd=csv.reader(f,delimiter='\\t'); h=next(rd); names=h[3:]; keys=[]; vals=[]
+ for row in rd: keys.append((row[0],int(row[1]))); vals.append([int(x) for x in row[3:]])
+a=np.asarray(vals,dtype=float); totals=a.sum(0); logc=np.log1p(a/totals*1e6); keyidx={k:i for i,k in enumerate(keys)}
+print('matrix',a.shape,'totals',totals.astype(int))
+# marker sheets
+sheets=['Rod','Cone','GABA.amacrine','Horizontal','Gly.amacrine','Retinal.ganglion.cell','AII.amacrine','Astrocyte','Microglia','Muller.glia']
+sets={}
+for s in sheets:
+ d=pd.read_excel('mmc4.xlsx',sheet_name=s,header=None,skiprows=1,usecols=[0,1,2,3])
+ d.columns=['chr','start','end','gene']; d=d.dropna(subset=['chr','start','end'])
+ d['chr']=d['chr'].astype(str).map(lambda x:x if x.startswith('chr') else 'chr'+x)
+ d['bin']=(d['start'].astype(int)//10000)*10000
+ ks=list(dict.fromkeys(zip(d['chr'],d['bin'])))
+ ix=np.array([keyidx[k] for k in ks if k in keyidx],dtype=int)
+ sets[s]=ix
+ print(s,'peaks',len(d),'unique bins',len(ks),'found',len(ix))
+# mean logCpm / fold specificity
+print('\\nMean logCPM at marker bins (columns observed):')
+M=np.zeros((len(sheets),len(names)))
+for z,s in enumerate(sheets): M[z]=logc[sets[s]].mean(0)
+print(pd.DataFrame(M,index=sheets,columns=names).round(3).to_string())
+# per marker type, rank columns and contrast true candidate relative mean other
+print('\\nMarker-set contrast (column - mean other)')
+C=np.zeros_like(M)
+for i in range(len(names)):
+ C[:,i]=M[:,i]-np.delete(M,i,axis=1).mean(1)
+print(pd.DataFrame(C,index=sheets,columns=names).round(3).to_string())
+# best observed for each marker set
+print('\\nBest:',[(s,names[M[z].argmax()],M[z].max()-np.partition(M[z],-2)[-2]) for z,s in enumerate(sheets)])
+# score assignments with standardized per marker set; each cell type expected one sheet -> matching
+Z=(M-M.mean(1,keepdims=True))/M.std(1,keepdims=True)
+from itertools import permutations
+# use first 9 sheets relevant, omit Gly (not observed) maybe all types include GABA and AII but no Gly
+use=['Rod','Cone','GABA.amacrine','Horizontal','Retinal.ganglion.cell','AII.amacrine','Astrocyte','Microglia','Muller.glia']
+U=np.vstack([Z[sheets.index(s)] for s in use])
+best=[]
+for perm in permutations(range(len(names))):
+ score=sum(U[j,perm[j]] for j in range(len(use)))
+ best.append((score,perm))
+best.sort(reverse=True)
+print('\\nBest assignments score')
+for score,perm in best[:10]: print(round(score,3),dict(zip(use,[names[i] for i in perm])))
+PY"

@@ -1,0 +1,16 @@
+/bin/bash -lc "cat > refine_bw.py <<'PY'
+import json,glob,numpy as np,pyBigWig,concurrent.futures,gzip,os
+T=np.array([float(l.split()[3]) for l in gzip.open('reverse.encode.q1.tsv.gz','rt') if l.startswith('chr19\\t')])[:5860]
+def run(r):
+ p='screen/'+r['accession']+'.fine.json'
+ if os.path.exists(p): return json.load(open(p))
+ b=pyBigWig.open(r['url']);v=np.array([x or 0 for x in b.stats('chr19',0,58600000,nBins=5860,type='mean')]);b.close()
+ r['finecor']=np.corrcoef(T,v)[0,1];r['finelogcor']=np.corrcoef(np.log1p(T),np.log1p(v/v.mean()*T.mean()))[0,1];r['finevalues']=v.tolist();json.dump(r,open(p,'w'));return r
+if __name__=='__main__':
+ rs=[json.load(open(p)) for p in glob.glob('screen/*.json') if '.fine.' not in p];rs=sorted(rs,key=lambda r:r['cor'],reverse=True)[:40]
+ with concurrent.futures.ProcessPoolExecutor(max_workers=8) as pool:
+  out=list(pool.map(run,rs))
+ out.sort(key=lambda r:r['finecor'],reverse=True);json.dump(out,open('fine_ranked.json','w'))
+ for r in out[:20]:print(r['accession'],r['experiment'],r['cor'],r['finecor'],r['finelogcor'],flush=True)
+PY
+OPENBLAS_NUM_THREADS=1 python -u refine_bw.py > refine.log 2>&1"

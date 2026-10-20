@@ -1,0 +1,118 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+import csv, math, os, time
+from pathlib import Path
+import numpy as np
+from scipy.stats import spearmanr
+
+base = Path('inputs')
+ge_path = base/'CRISPRGeneEffect.csv'
+ex_path = base/'OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+start = time.time()
+
+def read_header(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))
+
+ge_header = read_header(ge_path)
+ex_header = read_header(ex_path)
+ge_genes_all = ge_header[1:]
+ex_index = {g:i for i,g in enumerate(ex_header[1:])}
+common_genes = [g for g in ge_genes_all if g in ex_index]
+print('common_genes', len(common_genes), flush=True)
+
+ge_col_idx = [ge_header.index(g) for g in common_genes]  # includes index col offset already
+ex_col_idx = [ex_index[g] + 1 for g in common_genes]
+
+# More efficient maps from CSV column position to output column.
+ge_pos_to_out = {pos:j for j,pos in enumerate(ge_col_idx)}
+ex_pos_to_out = {pos:j for j,pos in enumerate(ex_col_idx)}
+
+def count_rows(path):
+    with open(path, newline='') as f:
+        return sum(1 for _ in f) - 1
+
+n_ge = count_rows(ge_path)
+n_ex = count_rows(ex_path)
+print('rows', n_ge, n_ex, flush=True)
+
+def parse_float(s):
+    if s == '' or s == 'NA' or s == 'NaN' or s == 'nan':
+        return np.nan
+    return float(s)
+
+def read_matrix(path, pos_to_out, n_rows, n_cols):
+    arr = np.empty((n_rows, n_cols), dtype=np.float64)
+    ids = []
+    with open(path, newline='') as f:
+        r = csv.reader(f)
+        next(r)
+        for i, row in enumerate(r):
+            ids.append(row[0])
+            # fill row. Most columns are used; direct list comprehension over selected positions is faster than scanning dict.
+            # Using precomputed sorted positions preserves output assignment.
+            for pos, out in pos_to_out.items():
+                s = row[pos]
+                arr[i, out] = np.nan if s == '' else float(s)
+    return ids, arr
+
+ge_ids, ge = read_matrix(ge_path, ge_pos_to_out, n_ge, len(common_genes))
+print('loaded gene effect', ge.shape, 'elapsed', round(time.time()-start,1), flush=True)
+ex_ids, ex = read_matrix(ex_path, ex_pos_to_out, n_ex, len(common_genes))
+print('loaded expression', ex.shape, 'elapsed', round(time.time()-start,1), flush=True)
+
+ge_id_to_i = {m:i for i,m in enumerate(ge_ids)}
+shared_ids = [m for m in ex_ids if m in ge_id_to_i]
+ex_rows = np.array([i for i,m in enumerate(ex_ids) if m in ge_id_to_i], dtype=np.int64)
+ge_rows = np.array([ge_id_to_i[m] for m in shared_ids], dtype=np.int64)
+print('shared_models', len(shared_ids), flush=True)
+
+expr = ex[ex_rows, :]
+ess = -ge[ge_rows, :]
+# Free memory references not strictly needed but helpful.
+del ex, ge
+
+pvals = np.full(len(common_genes), np.nan, dtype=np.float64)
+rhos = np.full(len(common_genes), np.nan, dtype=np.float64)
+ns = np.zeros(len(common_genes), dtype=np.int32)
+for j in range(len(common_genes)):
+    x = expr[:, j]
+    y = ess[:, j]
+    mask = np.isfinite(x) & np.isfinite(y)
+    n = int(mask.sum())
+    ns[j] = n
+    if n < 3:
+        continue
+    xv = x[mask]
+    yv = y[mask]
+    # spearmanr returns nan for constant vectors, which should not be included as a successful test.
+    res = spearmanr(xv, yv)
+    r = res.statistic
+    p = res.pvalue
+    if np.isfinite(p):
+        rhos[j] = r
+        pvals[j] = p
+    if (j+1) % 2500 == 0:
+        print('tested', j+1, 'elapsed', round(time.time()-start,1), flush=True)
+
+valid = np.isfinite(pvals)
+m = int(valid.sum())
+print('valid_tests', m, 'min_n', int(ns[valid].min()), 'max_n', int(ns[valid].max()), flush=True)
+
+# Benjamini-Hochberg adjusted p-values.
+p = pvals[valid]
+order = np.argsort(p)
+ranked = p[order]
+adj_ranked = ranked * m / np.arange(1, m+1)
+adj_ranked = np.minimum.accumulate(adj_ranked[::-1])[::-1]
+adj_ranked = np.minimum(adj_ranked, 1.0)
+sig = int((adj_ranked <= 0.05).sum())
+percent = sig / m * 100.0
+print('significant', sig, 'percent', percent, flush=True)
+
+os.makedirs('codex_output', exist_ok=True)
+# Use enough precision to be canonical without rounding to a display-only value.
+with open('codex_output/answer.txt', 'w', newline='') as f:
+    f.write(f'{percent:.12g}%\\n')
+print('wrote', 'codex_output/answer.txt', flush=True)
+PY"

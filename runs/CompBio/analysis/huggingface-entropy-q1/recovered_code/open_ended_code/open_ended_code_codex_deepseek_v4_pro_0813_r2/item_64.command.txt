@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, pathlib, torch.nn.functional as F
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.modules.mamba_simple as ms
+saved={}; orig=ms.selective_scan_fn
+def wrap(u,delta,A,B,C,D=None,z=None,delta_bias=None,delta_softplus=False,return_last_state=False):
+    if not saved:
+        saved.update(u=u.detach().clone(),delta=delta.detach().clone(),A=A.detach().clone(),B=B.detach().clone(),C=C.detach().clone(),D=D.detach().clone(),z=z.detach().clone(),delta_bias=delta_bias.detach().clone())
+    return orig(u,delta,A,B,C,D,z,delta_bias,delta_softplus,return_last_state)
+ms.selective_scan_fn=wrap
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+B=2; batch=[]
+for i in range(B): x=ids[0].clone(); x[i]=3; batch.append(x)
+with torch.no_grad(): out=model(input_ids=torch.stack(batch))
+u=saved['u'].contiguous(); delta=saved['delta'].contiguous(); A=saved['A'].contiguous(); Bmat=saved['B'].contiguous(); Cmat=saved['C'].contiguous(); z=saved['z'].contiguous(); db=saved['delta_bias'].contiguous()
+print('input contig',u.is_contiguous(),delta.is_contiguous(),A.is_contiguous(),Bmat.is_contiguous(),Cmat.is_contiguous(),z.is_contiguous())
+delta3=F.softplus(delta+db[...,None])
+dA=torch.exp(torch.einsum('bdl,dn->bdln',delta3,A)).contiguous()
+dBu=torch.einsum('bdl,bnl,bdl->bdln',delta3,Bmat,u).contiguous()
+print('delta3 fin',torch.isfinite(delta3).all().item(),'dA fin',torch.isfinite(dA).all().item(),'dBu fin',torch.isfinite(dBu).all().item())
+x=torch.zeros_like(dA[:, :, 0]); ys=torch.empty(B,u.shape[1],u.shape[2],device=u.device,dtype=u.dtype)
+for i in range(u.shape[2]):
+ x=dA[:,:,i]*x+dBu[:,:,i]; y=torch.einsum('bdn,bn->bd',x,Cmat[:,:,i]); ys[:,:,i]=y
+print('ys fin',torch.isfinite(ys).all().item(),'nan',torch.isnan(ys).sum().item())
+PY"

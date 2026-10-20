@@ -1,0 +1,64 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+from scipy.optimize import minimize, nnls
+# depth arrays/start position counts? Use base depth as before
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+A={}
+for name in ['exo','endo','mix']:
+ d=np.zeros(len(seq))
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline(); lab,i=bestpos(s)
+   if lab=='+': d[i:i+50]+=1
+   else:
+    st=len(seq)-50-i; d[st:st+50]+=1
+ A[name]=d
+# Use normalized base-depth vectors over all positions
+X=A['exo']/A['exo'].sum(); Y=A['endo']/A['endo'].sum(); Z=A['mix']/A['mix'].sum()
+# least squares solve [X-Y, Z-X] [pi,delta] = Z-Y
+M=np.column_stack([X-Y, Z-X]); b=Z-Y
+coef,res,rank,sv=np.linalg.lstsq(M,b,rcond=None)
+print('LS pi,delta',coef,'res',res,'rank',rank)
+# bounded minimization with residual and nonneg E constraints via penalties
+# equation residual vector r = (1-pi)Y - (1-delta)Z + (pi-delta)X
+def residual(theta):
+ pi,delta=theta
+ r=(1-pi)*Y - (1-delta)*Z + (pi-delta)*X
+ return np.dot(r,r)
+# constraints: delta <= min Y_i/X_i where X>0; pi <= min Z_i/X_i where X>0
+max_delta=np.min(Y[X>0]/X[X>0]) if np.any(X>0) else 1
+max_pi=np.min(Z[X>0]/X[X>0]) if np.any(X>0) else 1
+print('bounds max_pi,max_delta',max_pi,max_delta)
+cons=({'type':'ineq','fun':lambda t:max_pi-t[0]},{'type':'ineq','fun':lambda t:max_delta-t[1]})
+# also pi,delta >=0 by bounds
+for init in [(0.1,0.1),(0.5,0.5),(0.9,0.9),(max_pi*0.5,max_delta*0.5)]:
+ r=minimize(residual,init,method='SLSQP',bounds=[(0,1),(0,1)],constraints=cons,options={'ftol':1e-15,'maxiter':1000})
+ print('bounded init',init,'theta',r.x,'res',r.fun)
+# direct grid with nonneg constraints and residual, plus also require E_X and E_Y close
+best=None
+for pi in np.linspace(0,max_pi,201):
+ for delta in np.linspace(0,max_delta,201):
+  r=np.sum(((1-pi)*Y - (1-delta)*Z + (pi-delta)*X)**2)
+  if best is None or r<best[0]: best=(r,pi,delta)
+print('grid best within bounds',best)
+# Also nonnegative least squares for M coef with intercept? no
+PY"

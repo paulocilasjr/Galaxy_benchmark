@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, pandas as pd, numpy as np
+m=pd.read_csv('source.meta.csv',low_memory=False)
+filt=m[m.Disease.isin(['LUAD','LUSC'])].copy().reset_index(drop=True)
+with h5py.File('lung.cancer.sc.h5ad','r') as h:
+ idx=np.array([x.decode() for x in h['obs/_index'][:]])
+ cats=np.array([x.decode() for x in h['obs/sampleID/categories'][:]])
+ codes=h['obs/sampleID/codes'][:]
+ sid=cats[codes]
+print('same length',len(filt),len(idx))
+# derive expected anonymized name from order first occurrence
+orig_order=list(pd.unique(filt.SampleID))
+mp={o:f'Patient_{i+1:03d}' for i,o in enumerate(orig_order)}
+exp=filt.SampleID.map(mp).to_numpy()
+print('sample order matches',np.array_equal(exp,sid), 'n samples',len(orig_order))
+# compare barcode suffixes all rows
+orig_suffix=np.array([c[len(s)+1:] for c,s in zip(filt.Cells.astype(str),filt.SampleID.astype(str))])
+h5_suffix=np.array([c[len(s)+1:] for c,s in zip(idx,sid)])
+print('barcodes same',np.array_equal(orig_suffix,h5_suffix), 'mismatches',np.sum(orig_suffix"'!=h5_suffix))
+print('"'\\nMappings candidates:')
+for p in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+ orig=orig_order[int(p[-3:])-1]
+ x=filt[exp==p]
+ print(p,orig,len(x),'Disease',x.Disease.value_counts().to_dict(),'Tissue',x.Tissue.value_counts().to_dict(),'Cell DC',int((x.CellName=='DC').sum()),'prop',round((x.CellName=='DC').mean()*100,4))
+ print(x.CellName.value_counts().to_dict())
+nonimmune=['AT1','AT2','Basal','Cilia','Club','EC','Fib','NE']
+den=filt.CellName.isin(nonimmune)
+num=den & (filt.CellName=='Basal') & (filt.Disease=='LUSC')
+print('\\nnonimmune',den.sum(),'LUSC basal',num.sum(),'pct',num.sum()/den.sum()*100,'nearest20',round((num.sum()/den.sum()*100)/20)*20)
+print('\\nDisease/type cross tab nonimmune')
+print(pd.crosstab(filt.loc[den,'CellName'],filt.loc[den,'Disease']))
+print('\\nfiltered sample tissue odd')
+print(filt.groupby(['SampleID','Tissue','Disease']).size().tail(10))
+PY"

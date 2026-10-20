@@ -1,0 +1,92 @@
+/bin/bash -c "cat > tmp/kegg_ora.py <<'PY'
+import pandas as pd
+from scipy.stats import hypergeom
+import numpy as np, math
+
+def bh(p):
+    p=np.asarray(p, dtype=float)
+    n=len(p)
+    if n==0: return p
+    order=np.argsort(p, kind='mergesort')
+    rank=np.empty(n, dtype=float)
+    rank[order]=np.arange(1,n+1)
+    adj=p*n/rank
+    # enforce monotonicity as in R p.adjust
+    out=adj.copy()
+    for i in range(n-2,-1,-1):
+        o=order[i]
+        if out[order[i+1]] < out[o]:
+            out[o]=out[order[i+1]]
+    return out
+
+# KEGG links
+links=[]
+for line in open('tmp/pau_pathway_links.txt'):
+    line=line.strip()
+    if not line: continue
+    a,b=line.split('\\t')
+    gene=a.split(':')[-1]
+    path=b.split(':')[-1]
+    links.append((path,gene))
+links_df=pd.DataFrame(links, columns=['path','gene'])
+
+# list pathways, description
+path_names={}
+for line in open('tmp/pau_pathway_list.txt'):
+    line=line.strip()
+    if not line: continue
+    pid,name=line.split('\\t',1)
+    path_names[pid]=name
+
+links_df=links_df[links_df['path'].isin(path_names)].drop_duplicates()
+
+path2genes={p: set(g['gene']) for p,g in links_df.groupby('path')}
+gene2paths={g: set(r['path']) for g,r in links_df.groupby('gene')}
+allext=sorted(set(links_df['gene']))
+print('links',len(links_df),'genes',len(allext),'pathways',len(path2genes))
+
+def run(fname):
+    d=pd.read_csv(fname)
+    d=d[(d.log2FoldChange.abs()>1.5) & (d.padj<0.05)]
+    genes=sorted(set(d.gene.dropna()))
+    qext2term={g: gene2paths.get(g,set()) for g in genes}
+    qext2term={g:ts for g,ts in qext2term.items() if ts}
+    n_map=len(qext2term)
+    # qTermID2ExtID with foreground only
+    qterm2ext={}
+    for g,ts in qext2term.items():
+        for t in ts:
+            qterm2ext.setdefault(t,set()).add(g)
+    term2ext={p: path2genes[p] for p in qterm2ext}
+    # filter by full set size after intersect allext (already)
+    kept=[p for p in term2ext if 10 <= len(term2ext[p]) <= 500]
+    qterm2ext={p:qterm2ext[p] for p in kept}
+    term2ext={p:term2ext[p] for p in kept}
+    terms=sorted(qterm2ext)
+    N=len(allext)
+    rows=[]
+    for p in terms:
+        k=len(qterm2ext[p])
+        M=len(term2ext[p])
+        n=n_map
+        pv=hypergeom.sf(k-1, N, M, n)
+        rows.append((p,k,M,pv))
+    df=pd.DataFrame(rows, columns=['ID','Count','Size','pvalue'])
+    df['p.adjust']=bh(df.pvalue.values)
+    df['qvalue']=df['p.adjust']
+    sig=df[df['p.adjust']<0.05].sort_values('p.adjust').copy()
+    sig['Description']=sig.ID.map(path_names)
+    print('\\n',fname,'DEGs',len(genes),'mapped foreground',n_map,'tested',len(df),'sig padj',len(sig))
+    print(sig[['ID','Description','Count','Size','pvalue','p.adjust']].to_string(index=False))
+    return set(sig.ID)
+
+a=run('tmp/GluFevsGluFePlus.csv')
+b=run('tmp/SuccvsGluFePlus.csv')
+inter=a&b
+only=a-b
+print('\\nintersection',len(inter),'iron-only',len(only))
+print('iron-only IDs:', sorted(only))
+print('intersection IDs:', sorted(inter))
+print('\\nANSWER',len(only))
+PY
+python3 tmp/kegg_ora.py"

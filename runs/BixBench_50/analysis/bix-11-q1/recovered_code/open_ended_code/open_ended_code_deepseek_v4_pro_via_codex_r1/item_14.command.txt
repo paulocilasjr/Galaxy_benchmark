@@ -1,0 +1,86 @@
+/bin/bash -c "python - <<'PY'
+import glob, os, statistics, math
+
+def parse_tree(text):
+    text=text.strip()
+    if text.endswith(';'):
+        text=text[:-1]
+    # Recursive parser returns (name, length, children)
+    def parse_node(s, i):
+        # skip ws
+        while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+        if i>=len(s): raise ValueError('eof')
+        if s[i]=='(':
+            i+=1
+            children=[]
+            while True:
+                child,i=parse_node(s,i)
+                children.append(child)
+                while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+                if i<len(s) and s[i]==',':
+                    i+=1; continue
+                if i<len(s) and s[i]==')':
+                    i+=1; break
+                raise ValueError(f'Expected , or ) at {i} {s[i:i+20]}')
+            # internal label optional
+            start=i
+            while i<len(s) and s[i] not in ':,' and s[i] not in '()' and s[i] not in ' \\t\\r\\n':
+                i+=1
+            name=s[start:i]
+            while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+            length=None
+            if i<len(s) and s[i]==':':
+                i+=1; start=i
+                while i<len(s) and s[i] not in ',()' and s[i] not in ' \\t\\r\\n': i+=1
+                val=s[start:i]
+                if val: length=float(val)
+            return (name,length,children), i
+        else:
+            start=i
+            while i<len(s) and s[i] not in ':,' and s[i] not in '()' and s[i] not in ' \\t\\r\\n':
+                i+=1
+            name=s[start:i]
+            while i<len(s) and s[i] in ' \\t\\r\\n': i+=1
+            length=None
+            if i<len(s) and s[i]==':':
+                i+=1; start=i
+                while i<len(s) and s[i] not in ',()' and s[i] not in ' \\t\\r\\n': i+=1
+                val=s[start:i]
+                if val: length=float(val)
+            return (name,length,[]), i
+    root,i=parse_node(text,0)
+    while i<len(text) and text[i] in ' \\t\\r\\n': i+=1
+    if i"'!=len(text): raise ValueError(f'"'trailing {text[i:]}')
+    return root
+
+def treeness(path):
+    txt=open(path).read()
+    root=parse_tree(txt)
+    total=0.0
+    internal=0.0
+    stack=[root]
+    while stack:
+        name,length,children=stack.pop()
+        if length is not None:
+            total += length
+            if children:
+                internal += length
+        stack.extend(children)
+    if total==0: return None
+    return internal/total
+
+for label, pattern in [('animals','tmp/scogs_animals/*.treefile'),('fungi','tmp/scogs_fungi/*.treefile')]:
+    files=glob.glob(pattern)
+    vals=[]; bad=[]
+    for f in files:
+        try:
+            vals.append(treeness(f))
+        except Exception as e:
+            bad.append((os.path.basename(f),repr(e)))
+    vals=[v for v in vals if v is not None]
+    med=statistics.median(vals)
+    print(label, 'n_files',len(files),'n_vals',len(vals),'median',med, 'mean',statistics.mean(vals), 'min',min(vals),'max',max(vals))
+    if bad: print('bad', bad[:10], 'count',len(bad))
+print('fungi - animals median', statistics.median([treeness(f) for f in glob.glob('tmp/scogs_fungi/*.treefile')]) - statistics.median([treeness(f) for f in glob.glob('tmp/scogs_animals/*.treefile')]))
+print('abs difference', abs(statistics.median([treeness(f) for f in glob.glob('tmp/scogs_fungi/*.treefile')]) - statistics.median([treeness(f) for f in glob.glob('tmp/scogs_animals/*.treefile')])))
+PY"

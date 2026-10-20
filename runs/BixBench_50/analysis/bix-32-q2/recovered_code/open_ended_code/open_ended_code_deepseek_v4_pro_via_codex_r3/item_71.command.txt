@@ -1,0 +1,29 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import hypergeom
+def bh(p):
+ p=np.asarray(p,float); o=np.argsort(p); n=len(p); scaled=p[o]*n/np.arange(1,n+1); adj_sorted=np.minimum.accumulate(scaled[::-1])[::-1]; out=np.empty(n); out[o]=adj_sorted; return np.minimum(1,out)
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path']); link['gene']=link['gene'].str.split(':',expand=True)[1]; link['path']=link['path'].str.split(':',expand=True)[1]
+files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+res={}
+for strain,fn in files.items():
+ df=pd.read_csv('/workspace/tmp/'+fn); allmeas=set(df.gene)
+ for direction,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+  gene=set(df.loc[expr,'gene']); mapped=[g for g in gene if g in set(link.gene)]; n=len(mapped); rows=[]
+  for p,gdf in link.groupby('path'):
+   term=set(gdf.gene); m=len(term)
+   if m<10 or m>500: continue
+   q=len(term&gene)
+   if q==0: continue
+   mi=len(term&allmeas); pv=hypergeom.sf(q-1,len(allmeas),mi,n); rows.append((p,pv,q,m))
+  d=pd.DataFrame(rows,columns=['path','pval','q','m']); d['padj']=bh(d.pval.values)
+  res[(strain,direction)]=d
+for dir in ['up','down']:
+ sets=[]
+ for st in ['97','98','99']:
+  d=res[(st,dir)]; sets.append(set(d.loc[d.padj<=.05,'path']))
+ common=set.intersection(*sets)
+ print(dir,len(common),sorted(common))
+ for p in sorted(common):
+  print(' ',p,[res[(st,dir)].set_index('path').loc[p,['q','m','padj']].to_dict() for st in ['97','98','99']])
+PY"

@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, pysam
+fasta=pysam.FastaFile('hg38.fa')
+data=[]
+with gzip.open('std_part.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'):continue
+  p=line.rstrip().split('\\t'); data.append((p[0],int(p[1]),int(p[2])))
+  if len(data)>=50000:break
+
+def extract(ch,c,flank=45):
+ lo=c-flank;hi=c+flank+1
+ if lo<0:return None
+ try:s=fasta.fetch(ch,lo,hi).upper()
+ except:return None
+ return s if len(s)==2*flank+1 else None
+
+def best(pos_type,coord):
+ vals=[]
+ for d in range(-5,6):
+  counts=[[0]*4 for _ in range(21)]
+  for ch,s,e in data:
+   c=s if pos_type=='start' else e-1
+   seq=extract(ch,c)
+   if seq is None:continue
+   center=45-d;lo=center-10;hi=lo+21
+   for j,b in enumerate(seq[lo:hi]):
+    idx='ACGT'.find(b)
+    if idx>=0: counts[j][idx]+=1
+  total=[0]*4
+  for pos in counts:
+   for i in range(4):total[i]+=pos[i]
+  N=sum(total); bg=[(x+1)/(N+4) for x in total]
+  kl=0
+  for pos in counts:
+   n=sum(pos)
+   if n==0:continue
+   for i in range(4):
+    p=pos[i]/n
+    if p>0:kl += p*math.log(p/bg[i])
+  vals.append((d,kl))
+ return vals
+print('start s best')
+for d,kl in sorted(best('start',None),key=lambda x:x[1],reverse=True)[:10]:print(d,kl)
+PY"

@@ -1,0 +1,44 @@
+/bin/bash -c "python - <<'PY'
+import time, pandas as pd, numpy as np, gc, os
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+def mem_mb():
+    try:
+        with open('/sys/fs/cgroup/memory.current') as f:
+            return int(f.read())/1e6
+    except Exception:
+        return float('nan')
+
+t0=time.time()
+print('mem start', mem_mb(), flush=True)
+counts=pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0, dtype=np.int32)
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+meta=meta.loc[counts.columns].copy()
+print('loaded mem', mem_mb(), 'shape', counts.shape, flush=True)
+nz=(counts.to_numpy(dtype=np.int32).sum(axis=1)>0)
+counts=counts.loc[nz]
+print('after drop zero mem', mem_mb(), 'shape', counts.shape, flush=True)
+counts=counts.T
+meta['batch']=pd.Categorical(meta['batch'])
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+gc.collect()
+print('before init mem', mem_mb(), 'counts dtype', counts.dtypes.unique(), flush=True)
+dds=DeseqDataSet(counts=counts, metadata=meta[['batch','sex']], design='~batch+sex', n_cpus=1, low_memory=True, quiet=True)
+print('after init mem', mem_mb(), flush=True)
+del counts
+gc.collect()
+print('after del counts mem', mem_mb(), flush=True)
+dds.deseq2()
+print('deseq2 done mem', mem_mb(), 'elapsed', time.time()-t0, flush=True)
+stats=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=1, quiet=True)
+stats.summary()
+print('summary done mem', mem_mb(), 'elapsed', time.time()-t0, flush=True)
+print('FAM138A unshrunk', stats.results_df.loc['FAM138A'].to_dict(), flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+print('shrink done mem', mem_mb(), 'elapsed', time.time()-t0, flush=True)
+res=stats.results_df.copy()
+print('FAM138A final', res.loc['FAM138A'].to_dict(), flush=True)
+res[['baseMean','log2FoldChange','lfcSE','stat','pvalue','padj']].to_csv('/workspace/tmp/de_results_categorical_lowmem_n1.csv')
+print('saved filtered count', ((res['log2FoldChange'].abs()>0.5)&(res['baseMean']>10)).sum(), 'elapsed', time.time()-t0, flush=True)
+PY"

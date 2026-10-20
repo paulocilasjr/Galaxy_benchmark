@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+sel = layout[layout['Group'].isin(['DMSO','CBD_IC50'])].copy()
+print(sel[['SampleID','col','Group']].to_string(index=False))
+missing = [c for c in sel['col'] if c not in counts.columns]
+print('missing', missing)
+counts_sub = counts[sel['col'].tolist()].T
+counts_sub.index = sel['col'].tolist()
+# Drop only genes with no counts in the analyzed samples; they cannot be tested.
+counts_sub = counts_sub.loc[:, counts_sub.sum(axis=0) > 0]
+meta = sel.set_index('col')[['Group']].rename(columns={'Group':'condition'})
+meta['condition'] = pd.Categorical(meta['condition'], categories=['DMSO','CBD_IC50'])
+print('samples', counts_sub.shape[0], 'genes_nonzero', counts_sub.shape[1])
+
+dds = DeseqDataSet(counts=counts_sub, metadata=meta, design='~condition', ref_level=['condition','DMSO'], quiet=True, n_cpus=2)
+dds.deseq2()
+st = DeseqStats(dds, contrast=['condition','CBD_IC50','DMSO'], alpha=0.05, quiet=True, n_cpus=2)
+st.summary()
+res = st.results_df.copy()
+print(res.head().to_string())
+print(res.columns.tolist())
+res = res.replace([np.inf, -np.inf], np.nan)
+up = res[(res['padj'] < 0.05) & (res['log2FoldChange'] > 0.5)]
+down = res[(res['padj'] < 0.05) & (res['log2FoldChange'] < -0.5)]
+print('tested rows', len(res), 'padj_non_na', res['padj'].notna().sum())
+print('sig up', len(up), 'sig down', len(down))
+print('top up', up.sort_values('padj').head(10).index.tolist())
+print('top down', down.sort_values('padj').head(10).index.tolist())
+PY"

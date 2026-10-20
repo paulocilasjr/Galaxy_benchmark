@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np,sqlite3
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+org=sqlite3.connect('.go_tmp/org.sqlite'); go=sqlite3.connect('.go_tmp/go.sqlite')
+ensmap=pd.read_sql_query('select distinct e.ensembl_id, g.gene_id from ensembl e join genes g on e._id=g._id',org)
+gomap=pd.read_sql_query('select distinct g.gene_id, b.go_id from go_bp_all b join genes g on b._id=g._id',org)
+terms=pd.read_sql_query(\"select go_id,term from go_term where ontology='BP'\",go)
+term_name=dict(zip(terms.go_id,terms.term))
+rootid=go.execute(\"select _id from go_term where go_id='GO:0008152'\").fetchone()[0]
+metabolic={r[0] for r in go.execute('select t.go_id from go_bp_offspring x join go_term t on x._offspring_id=t._id where x._id=?',(rootid,))}
+metabolic.add('GO:0008152')
+# Universe all nonzero count rows mapped to Entrez, same mapping policy as foreground
+modeled=set(counts.index[counts.sum(axis=1)>0])
+map_by_ens=ensmap.groupby('ensembl_id').gene_id.apply(set).to_dict()
+def mapgenes(gs): return set().union(*(map_by_ens.get(x,set()) for x in gs)) if gs else set()
+univ=mapgenes(modeled)
+gomap=gomap[gomap.gene_id.isin(univ)]
+sets=gomap.groupby('go_id').gene_id.apply(set).to_dict()
+sets={goid:s for goid,s in sets.items() if 10<=len(s)<=500}
+print('modeled ensembl',len(modeled),'mapped universe Entrez',len(univ),'GO BP sets tested',len(sets),'metabolic ontology terms total',len(metabolic))
+def ora(fg):
+ fg=fg & univ; N=len(univ); n=len(fg); rows=[]
+ for goid,s in sets.items():
+  k=len(fg&s)
+  if k:
+   rows.append((goid,term_name.get(goid,''),k,len(s),hypergeom.sf(k-1,N,len(s),n)))
+ z=pd.DataFrame(rows,columns=['go_id','term','hits','setsize','p'])
+ z['padj']=multipletests(z.p,method='fdr_bh')[1]
+ z['fold_enrich']=(z.hits/n)/(z.setsize/N)
+ z['metabolic']=z.go_id.isin(metabolic)
+ return z.sort_values(['padj','p','go_id'])
+for contrast in ['standard','starved']:
+ de=pd.read_csv(f'tmp_{contrast}_de.csv',index_col=0)
+ sig=de[(de.padj<.05)&(de.log2FoldChange.abs()>.5)]
+ print('\\n###',contrast)
+ for direction,ids in [('up',set(sig.index[sig.log2FoldChange>.5])),('down',set(sig.index[sig.log2FoldChange<-.5]))]:
+  fg=mapgenes(ids); z=ora(fg); zs=z[z.padj<.05]; zm=zs[zs.metabolic]
+  print(direction,'DE_ens',len(ids),'FG_entrez',len(fg&univ),'sig_GO',len(zs),'sig_metabolic_desc',len(zm),'median_metabolic_padj',zm.padj.median() if len(zm) else None)
+  print('TOP ALL')
+  print(z.head(15)[['go_id','term','hits','setsize','padj','fold_enrich','metabolic']].to_string(index=False))
+  print('TOP SIG METABOLIC')
+  print(zm.head(25)[['go_id','term','hits','setsize','padj','fold_enrich']].to_string(index=False))
+PY"

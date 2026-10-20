@@ -1,0 +1,28 @@
+/bin/bash -c "python3 - <<'EOF'
+import pandas as pd, numpy as np, os
+from sklearn.neighbors import NearestNeighbors
+res=pd.read_csv('diff_peaks.tsv', sep='\\t')
+gc=pd.read_csv('union_gc.txt', sep='\\t', skiprows=1, header=None, names=['chr','start','end','pct_at','pct_gc','A','C','G','T','N','oth','len'])
+for c in ['start','end','pct_gc','len']: gc[c]=pd.to_numeric(gc[c], errors='coerce')
+res=res.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end'])
+res['is_gained_all']=((res.log2FC>1.5)&(res.cpm_max>=3)&(res.perturb_count>=10)).astype(int)
+cand=res[res.is_gained_all==0].dropna(subset=['pct_gc','len'])
+X=cand[['pct_gc']].values.astype(float)
+# use std from candidates
+Xs=(X-X.mean())/X.std()
+rng=np.random.default_rng(42)
+for k in [500,1000,2000,5000]:
+    g=pd.read_csv(f'gained_top{k}.bed', sep='\\t', header=None, names=['chr','start','end'])
+    g=g.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end']).dropna()
+    Ys=((g[['pct_gc']].values.astype(float)-X.mean())/X.std())
+    nn=NearestNeighbors(n_neighbors=5, algorithm='kd_tree').fit(Xs)
+    dist,idx=nn.kneighbors(Ys)
+    chosen=idx[rng.random(len(g))<0, 0] if False else idx[:,0]
+    # random among 5 for diversity
+    chosen=np.array([idx[i, rng.integers(0, idx.shape[1])] for i in range(len(g))])
+    bg=cand.iloc[np.unique(chosen)][['chr','start','end']].drop_duplicates()
+    bg.to_csv(f'gc_bg{k}.bed', sep='\\t', header=False, index=False)
+    bggc=bg.merge(gc,on=['chr','start','end'])
+    print(k,'g',len(g),'bg',len(bg),'gc mean',round(bggc.pct_gc.mean(),3),'med',round(bggc.pct_gc.median(),3),'g gc mean',round(g.pct_gc.mean(),3),'len med',round(bggc.len.median(),1))
+EOF
+ls -lh gc_bg*.bed"

@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import time
+import numpy as np
+import pandas as pd
+
+t0=time.time()
+eff_all_cols = pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0).columns
+expr_all_cols = pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns
+sym=lambda c: str(c).split(' (')[0]
+eff_syms=eff_all_cols[1:].map(sym)
+expr_syms=expr_all_cols[1:].map(sym)
+common=sorted(set(eff_syms)&set(expr_syms))
+print('common',len(common),flush=True)
+eff_keep=[eff_all_cols[0]]+[eff_all_cols[i+1] for i,s in enumerate(eff_syms) if s in common]
+expr_keep=[expr_all_cols[0]]+[expr_all_cols[i+1] for i,s in enumerate(expr_syms) if s in common]
+eff=pd.read_csv('inputs/CRISPRGeneEffect.csv',usecols=eff_keep,index_col=0,dtype={c:np.float32 for c in eff_keep[1:]})
+expr=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv',usecols=expr_keep,index_col=0,dtype={c:np.float32 for c in expr_keep[1:]})
+eff.columns=[sym(c) for c in eff.columns]
+expr.columns=[sym(c) for c in expr.columns]
+common_ids=eff.index.intersection(expr.index)
+eff=eff.loc[common_ids,common]
+expr=expr.loc[common_ids,common]
+print('aligned',eff.shape,'elapsed',round(time.time()-t0,1),flush=True)
+print('NaNs eff',int(eff.isna().sum().sum()),'expr',int(expr.isna().sum().sum()),flush=True)
+print('Computing pairwise Spearman via corrwith...',flush=True)
+rho=eff.corrwith(expr,method='spearman')
+print('done elapsed',round(time.time()-t0,1),flush=True)
+finite=rho.notna() & np.isfinite(rho)
+print('finite',int(finite.sum()),'of',len(rho),flush=True)
+min_gene=rho[finite].idxmin()
+min_val=rho[finite].min()
+print('min',min_gene,min_val,flush=True)
+print(rho.sort_values().head(20))
+# save
+import os
+os.makedirs('codex_output',exist_ok=True)
+open('codex_output/answer.txt','w').write(min_gene+'\\n')
+print('wrote answer.txt')
+PY"

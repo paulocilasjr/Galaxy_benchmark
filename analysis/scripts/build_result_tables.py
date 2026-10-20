@@ -1,0 +1,1102 @@
+"""Retrospective tables from archived evidence; no execution, retrieval or regrading.
+
+Covers BixBench50, CompBio and IWC. IWC scores and usage come from the IWC
+scientific audit because its task evidence leaves those fields unpopulated.
+
+Requires NumPy. Run from any directory. Outputs docs/reports/Result_table.md and a separate
+cross-benchmark audit package. Existing task evidence is read-only.
+"""
+from collections import Counter, defaultdict
+import hashlib
+import ast
+import importlib.util
+import itertools
+import json
+from pathlib import Path
+import platform
+import re
+import statistics as st
+from types import SimpleNamespace
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+OUT = ROOT / "analysis/BixBench50_CompBio_analysis"
+SEED, RESAMPLES = 20260922, 20000
+CONDITIONS = ("galaxy", "open_ended_code")
+COMMON = ("codex_gpt_5_5", "codex_gpt_5_6_sol", "codex_gpt_5_6_luna")
+DEEP_B = "deepseek_v4_pro_via_codex"
+DEEP_C = "codex_deepseek_v4_pro_0813"
+OLD = "deepseek_v4_pro_via_claude_code_superseded"
+ASTRA = "codex_gpt_6_astra"
+DEEP_I = "codex_deepseek_v4_pro"
+MODELS = {"BixBench50": (*COMMON, DEEP_B, OLD), "CompBio": (*COMMON, DEEP_C), "IWC": (*COMMON, DEEP_I)}
+FOLDERS = {"BixBench50": "runs/BixBench_50", "CompBio": "runs/CompBio", "IWC": "runs/IWC"}
+TASKS = {"BixBench50": 50, "CompBio": 100, "IWC": 10}
+# IWC run IDs omit the Codex prefix; map them onto the shared configuration keys.
+IWC_MODELS = {"gpt_5_5": COMMON[0], "gpt_5_6_sol": COMMON[1], "gpt_5_6_luna": COMMON[2], DEEP_I: DEEP_I}
+IWC_HOST = "wf_003_host_contamination_removal"
+IWC_SEED = 20260923
+# Tool Shed repositories treated as text/table utilities rather than domain analysis wrappers.
+UTILITY_REPOS = {"text_processing", "query_tabular", "filter_tabular", "regex_find_replace", "table_compute",
+                 "column_maker", "datamash", "tabular_to_csv", "csv_to_tabular", "xlsx2tsv"}
+
+
+def domain_wrapper(tool):
+    parts = tool.split("/")
+    return "toolshed" in tool and len(parts) > 3 and parts[3] not in UTILITY_REPOS
+LABELS = dict(zip(COMMON, ("GPT-5.5", "GPT-5.6 Sol", "GPT-5.6 Luna")))
+LABELS.update({DEEP_B: "DeepSeek V4 Pro (Codex)", DEEP_C: "DeepSeek V4 Pro 0813 (Codex)",
+               OLD: "DeepSeek V4 Pro (Claude Code, superseded)", ASTRA: "GPT-6 Astra (unpaired)",
+               DEEP_I: "DeepSeek V4 Pro (Codex, IWC)"})
+ENV = {"galaxy": "Galaxy", "open_ended_code": "Open-ended code"}
+spec = importlib.util.spec_from_file_location("bix_paths", ROOT / "runs/BixBench_50/solution_path_consistency_analysis.py")
+paths = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(paths)
+deep_spec = importlib.util.spec_from_file_location("result_table_deep_analysis", ROOT / "analysis/scripts/result_table_deep_analysis.py")
+deep = importlib.util.module_from_spec(deep_spec)
+deep_spec.loader.exec_module(deep)
+
+
+def reader_labels(text):
+    """Expand display labels only; preserve identifiers and Claude Code's name."""
+    text = re.sub(r'\bG\b', 'Galaxy', text)
+    text = re.sub(r'(?<!Claude )\bCode\b', 'open-ended code', text)
+    text = re.sub(r'\bCI\b', 'confidence interval', text)
+    text = re.sub(r'\bpp\b', 'percentage points', text)
+    return re.sub(r'\bNA\b', 'Unavailable', text)
+
+
+def read(path):
+    return json.loads((ROOT / path).read_text())
+
+
+def sha(path):
+    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+def summary(values):
+    values = list(values)
+    if not values:
+        return {"n": 0, "median": None, "mean": None, "q1": None, "q3": None}
+    return dict(n=len(values), median=float(np.median(values)), mean=float(np.mean(values)),
+                q1=float(np.quantile(values, .25)), q3=float(np.quantile(values, .75)),
+                min=float(min(values)), max=float(max(values)))
+
+
+def bootstrap(rows, value, key, statistic="mean"):
+    """Resample entire clusters; retained rows, including models, stay together."""
+    groups = defaultdict(list)
+    for r in rows:
+        if r[value] is not None:
+            groups[r["cluster"]].append(r[value])
+    groups = [groups[k] for k in sorted(groups)]
+    assert len(groups) > 1, (key, len(groups))
+    a = np.full((len(groups), max(map(len, groups))), np.nan)
+    for i, g in enumerate(groups):
+        a[i, :len(g)] = g
+    rng = np.random.default_rng([SEED, int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)])
+    fn = np.nanmean if statistic == "mean" else np.nanmedian
+    draws = []
+    for start in range(0, RESAMPLES, 250):
+        selected = rng.integers(len(groups), size=(min(250, RESAMPLES-start), len(groups)))
+        draws.extend(fn(a[selected].reshape(len(selected), -1), axis=1))
+    draws = np.array(draws)
+    assert np.isfinite(draws).all()
+    return {"estimate": float(fn(a)), "ci95": np.quantile(draws, [.025, .975]).tolist(),
+            "clusters": len(groups), "n": sum(map(len, groups))}, draws
+
+
+def fmt(value, digits=2):
+    return "NA" if value is None else f"{value:,.{digits}f}"
+
+
+def ci(result, digits=2):
+    return f"{fmt(result['estimate'], digits)} [{fmt(result['ci95'][0], digits)}, {fmt(result['ci95'][1], digits)}]"
+
+
+def frac(n, d):
+    return f"{int(n):,}/{int(d):,} ({100*n/d:.1f}%)" if d else "NA"
+
+
+def iqr(s, digits=2):
+    return f"{fmt(s['median'], digits)} ({fmt(s['q1'], digits)}-{fmt(s['q3'], digits)})"
+
+
+def task_link(benchmark, task):
+    return f"[{task}]({FOLDERS[benchmark]}/analysis/{task}/history_analysis.md)"
+
+
+def iwc_runtime(record):
+    runtime = record["runtime"]
+    return runtime if isinstance(runtime, dict) else ast.literal_eval(runtime)
+
+
+def load_data(b, c, w):
+    capsule = {t["task"]: t["capsule"] for t in b["tasks"]}
+    expected_hashes = {("BixBench50", t["task"]): t["evidence_sha256"] for t in b["source_hashes"]}
+    expected_hashes.update({("CompBio", t["task"]): t["evidence_sha256"] for t in c["task_manifest"]})
+    expected_hashes.update({("IWC", path.split("/")[1]): v["sha256"] for path, v in w["sources"].items()
+                            if path.endswith("/history_analysis_evidence.json")})
+    audit = {(r["task"], r["run_id"]): r for r in w["runs"]}
+    manifests, runs, cells, jobs = [], [], [], {}
+    for benchmark, folder in FOLDERS.items():
+        for path in sorted((ROOT / folder / "analysis").glob("*/history_analysis_evidence.json")):
+            rel = str(path.relative_to(ROOT))
+            d = read(rel)
+            task = d["task"]["task_id"]
+            assert sha(rel) == expected_hashes[benchmark, task], rel
+            cluster = capsule[task] if benchmark == "BixBench50" else task
+            manifests.append({"benchmark": benchmark, "task": task, "path": rel, "sha256": sha(rel),
+                              "included_run_ids": [r["run_id"] for r in d["runs"]],
+                              "finding_ids": [f["finding_id"] for f in d["manuscript_findings"]]})
+            grouped = defaultdict(list)
+            for r in d["runs"]:
+                cond = r["condition"]
+                model = r["run_id"].removeprefix(cond + "_").rsplit("_r", 1)[0]
+                iwc = audit[task, r["run_id"]] if benchmark == "IWC" else None
+                if iwc:
+                    model = IWC_MODELS[model]
+                fingerprint = set()
+                run_jobs = {}
+                for e in r["events"]:
+                    if e["execution_location"] == "galaxy_job":
+                        tool = paths.galaxy_tool(e.get("tool"))
+                        if tool:
+                            fingerprint.add(tool)
+                        if e["event_type"] == "analysis" and e.get("tool") != "__DATA_FETCH__":
+                            job_key = (benchmark, r["environment"].get("galaxy_server"), e["native_job_id"])
+                            ref = {"task": task, "run_id": r["run_id"], "event_id": e["event_id"], "evidence": rel}
+                            if job_key in jobs:
+                                assert (jobs[job_key]["tool"], jobs[job_key]["status"]) == (e["tool"], e["status"])
+                                jobs[job_key]["refs"].append(ref)
+                            else:
+                                jobs[job_key] = {"benchmark": benchmark, "server": job_key[1], "native_job_id": job_key[2],
+                                    "tool": e["tool"], "status": e["status"], "exit_code": e.get("exit_code"),
+                                    "stderr": e.get("stderr_excerpt") or "", "stdout": e.get("stdout_excerpt") or "", "refs": [ref]}
+                            run_jobs[job_key] = e
+                    elif cond == "open_ended_code" and e.get("command"):
+                        fingerprint.update("bio." if t.lower().rstrip(".") == "bio" else t.lower().rstrip(".")
+                                           for t in paths.VOCAB.findall(e["command"]))
+                ec = r["evidence_completeness"]
+                observed = ec["public_history_contents"] == "retrieved" if cond == "galaxy" else ec["agent_transcript"] == "retrieved"
+                errors = sum(e["status"] in ("error", "failed") for e in run_jobs.values())
+                usage = iwc["usage"] if iwc else {"input_tokens": r["usage"].get("provider_reported_input_tokens"),
+                                                 "output_tokens": r["usage"].get("provider_reported_output_tokens")}
+                metadata = r["model"]
+                if iwc:
+                    runtime = iwc_runtime(iwc)
+                    metadata = {**metadata, "verified_runtime_id": runtime.get("model"),
+                                "reasoning_setting": runtime.get("model_reasoning_effort"), "verification_source": "runs/IWC/iwc_scientific_audit.json"}
+                rr = {"benchmark": benchmark, "task": task, "cluster": cluster, "model": model, "condition": cond,
+                      "run_id": r["run_id"], "replicate": r["replicate_id"], "evidence": rel,
+                      "domain": d["task"].get("domain"), "model_metadata": metadata,
+                      # IWC scores are continuous output agreement; its final message is not the scored answer.
+                      "score": iwc["score"] if iwc else r["outcome"]["original_evaluator_score"],
+                      "answer": None if iwc else r["outcome"]["submitted_answer"],
+                      "answer_sha256": r["outcome"].get("submitted_answer_sha256"),
+                      "verifier": iwc["evaluation_version"] if iwc else r["outcome"].get("original_evaluator_mode"),
+                      "run_record_score": iwc["run_record_acc"] if iwc else None,
+                      "score_conflict": iwc["score_conflict_gt_1e_9"] if iwc else None,
+                      "evaluation_error": iwc["evaluation_error"] if iwc else None,
+                      "galaxy_helpers_exposed": iwc_runtime(iwc).get("galaxy_mcp_tools") if iwc else None,
+                      "input_tokens": usage.get("input_tokens"),
+                      "output_tokens": usage.get("output_tokens"),
+                      "coverage": ec, "fingerprint": sorted(fingerprint), "path_observed": observed,
+                      "jobs": len(run_jobs) if cond == "galaxy" and observed else None,
+                      "errors": errors if cond == "galaxy" and observed else None,
+                      "has_error": int(errors > 0) if cond == "galaxy" and observed else None,
+                      "nonzero_shell": r["derived_metrics"].get("nonzero_exit_shell_calls") if ec["agent_transcript"] == "retrieved" else None,
+                      "recovery_candidates": len(r["recovery_episodes"])}
+                if benchmark == 'BixBench50':
+                    assert rr['score'] in (0, 1)
+                elif benchmark == 'IWC':
+                    assert rr['score'] is None or 0 <= rr['score'] <= 1
+                else:
+                    assert rr['score'] is None
+                deep.enrich_run(d, r, rr)
+                runs.append(rr)
+                grouped[model, cond].append(rr)
+            for (model, cond), rs in sorted(grouped.items()):
+                complete = len(rs) == 3 and {r["replicate"] for r in rs} == {1, 2, 3}
+                eligible = complete and all(r["path_observed"] and r["fingerprint"] for r in rs)
+                fps = [set(r["fingerprint"]) for r in rs]
+                scores = [r["score"] for r in rs]
+                answers = [r["answer"] for r in rs]
+                cells.append({"benchmark": benchmark, "task": task, "cluster": cluster, "condition": cond, "model": model,
+                              "run_ids": [r["run_id"] for r in rs], "eligible": eligible,
+                              "agreement": paths.agreement(fps) if eligible else "not_evaluable",
+                              "jaccard": st.mean(paths.jaccard(x, y) for x, y in itertools.combinations(fps, 2)) if eligible else None,
+                              "accepted": int(sum(scores)) if benchmark != "IWC" and complete and all(s is not None for s in scores) else None,
+                              "agreement_scores": scores if benchmark == "IWC" and complete and all(s is not None for s in scores) else None,
+                              "answer_distinct": len(set(answers)) if complete and all(a is not None for a in answers) else None,
+                              "any_error": any(r["has_error"] for r in rs) if all(r["has_error"] is not None for r in rs) else None})
+    assert len(manifests) == 160 and len(runs) == 4240
+    assert len({(r['benchmark'], r['task'], r['run_id']) for r in runs}) == 4240
+    return manifests, runs, cells, list(jobs.values())
+
+
+def compute(b, c, runs, cells, jobs):
+    results = {"accuracy": {}, "tokens": {}, "path_summaries": [], "cross_tokens": [], "cross_paths": [], "failure_rates": []}
+    br = [r for r in runs if r["benchmark"] == "BixBench50"]
+    bc = [x for x in cells if x["benchmark"] == "BixBench50"]
+    for label, models in [(m, (m,)) for m in MODELS['BixBench50']] + [("all", MODELS['BixBench50']), ("codex_four", (*COMMON, DEEP_B)), ("shared_three", COMMON)]:
+        sub = [x for x in bc if x['model'] in models]
+        paired = defaultdict(dict)
+        for x in sub:
+            paired[x['task'], x['model']][x['condition']] = x
+        differences = [{"cluster": pair['galaxy']['cluster'], "delta": 100*(pair['galaxy']['accepted']-pair['open_ended_code']['accepted'])/3}
+                       for pair in paired.values()]
+        result, _ = bootstrap(differences, 'delta', 'accuracy_'+label)
+        result['conditions'] = {cond: {"accepted": int(sum(r['score'] for r in br if r['condition']==cond and r['model'] in models)),
+                                      "n": sum(r['condition']==cond and r['model'] in models for r in br)} for cond in CONDITIONS}
+        results['accuracy'][label] = result
+    pair_records = []
+    grouped = defaultdict(list)
+    for r in runs:
+        if r['model'] in MODELS[r['benchmark']]:
+            grouped[r['benchmark'], r['task'], r['model']].append(r)
+    for (benchmark, task, model), rs in sorted(grouped.items()):
+        assert len(rs) == 6
+        if any(r['input_tokens'] is None for r in rs):
+            continue
+        medians = {cond: st.median(r['input_tokens'] for r in rs if r['condition']==cond) for cond in CONDITIONS}
+        assert medians['open_ended_code'] > 0
+        pair_records.append({"benchmark": benchmark, "task": task, "model": model, "cluster": rs[0]['cluster'],
+                             "ratio": medians['galaxy']/medians['open_ended_code'], "medians": medians,
+                             "run_ids": [r['run_id'] for r in rs]})
+    assert Counter(p['benchmark'] for p in pair_records) == {'BixBench50': 250, 'CompBio': 386, 'IWC': 40}
+    token_draws = {}
+    for benchmark in FOLDERS:
+        for label, models in [(m, (m,)) for m in MODELS[benchmark]] + [('all', MODELS[benchmark]), ('shared_three', COMMON)]:
+            sub = [p for p in pair_records if p['benchmark']==benchmark and p['model'] in models]
+            estimate, token_draws[benchmark, label] = bootstrap(sub, 'ratio', benchmark+'_tokens_'+label, 'median')
+            results['tokens'][benchmark+'_'+label] = {**summary(p['ratio'] for p in sub), **estimate,
+                "greater_than_one": sum(p['ratio']>1 for p in sub)}
+        for cond in CONDITIONS:
+            for label, models in [(m, (m,)) for m in MODELS[benchmark]] + [('all', MODELS[benchmark]), ('shared_three', COMMON)]:
+                sub = [x for x in cells if x['benchmark']==benchmark and x['condition']==cond and x['model'] in models]
+                ev = [x for x in sub if x['eligible']]
+                results['path_summaries'].append({"benchmark": benchmark, "condition": cond, "model": label,
+                    "total": len(sub), "evaluable": len(ev), "counts": dict(Counter(x['agreement'] for x in sub)),
+                    "mean_jaccard": st.mean(x['jaccard'] for x in ev)})
+    for label, models in [(m, (m,)) for m in COMMON] + [('shared_three', COMMON)]:
+        estimates, draws = {}, {}
+        for benchmark in FOLDERS:
+            estimates[benchmark] = results['tokens'][benchmark+'_'+label]
+            draws[benchmark] = token_draws[benchmark, label]
+        effect = draws['CompBio']/draws['BixBench50']
+        iwc_effect = draws['IWC']/draws['BixBench50']
+        results['cross_tokens'].append({"model": label, **estimates,
+            "ratio_of_medians": estimates['CompBio']['estimate']/estimates['BixBench50']['estimate'],
+            "ci95": np.quantile(effect,[.025,.975]).tolist(),
+            "iwc_ratio_of_medians": estimates['IWC']['estimate']/estimates['BixBench50']['estimate'],
+            "iwc_ci95": np.quantile(iwc_effect,[.025,.975]).tolist()})
+    for cond in CONDITIONS:
+        estimates, draws = {}, {}
+        for benchmark in FOLDERS:
+            sub = [x for x in cells if x['benchmark']==benchmark and x['condition']==cond and x['model'] in COMMON and x['eligible']]
+            estimates[benchmark], draws[benchmark] = bootstrap(sub,'jaccard','cross_paths_'+benchmark+'_'+cond)
+        results['cross_paths'].append({"condition": cond, **estimates,
+            "difference": estimates['CompBio']['estimate']-estimates['BixBench50']['estimate'],
+            "ci95": np.quantile(draws['CompBio']-draws['BixBench50'],[.025,.975]).tolist(),
+            "iwc_difference": estimates['IWC']['estimate']-estimates['BixBench50']['estimate'],
+            "iwc_ci95": np.quantile(draws['IWC']-draws['BixBench50'],[.025,.975]).tolist()})
+    for benchmark in FOLDERS:
+        sub = [r for r in runs if r['benchmark']==benchmark and r['condition']=='galaxy' and r['model'] in COMMON and r['has_error'] is not None]
+        result, _ = bootstrap(sub,'has_error','error_rate_'+benchmark)
+        results['failure_rates'].append({"benchmark": benchmark, **result, "with_error": sum(r['has_error'] for r in sub)})
+    # Error-message indicators are overlapping, descriptive and not adjudicated causes.
+    patterns = {
+        'Dependency / executable': r'command not found|modulenotfounderror|importerror|no module named|cannot open shared object|error while loading shared libraries',
+        'Type / numeric / attribute': r'typeerror|attributeerror|invalid numeric|could not convert|cannot convert|unsupported operand|ufunc',
+        'File / path / access': r'filenotfounderror|no such file or directory|permission denied|could not open|cannot open file',
+        'Argument / syntax / encoding': r'syntaxerror|unrecognized arguments|invalid option|invalid argument|invalid base64|incorrect padding',
+        'Network / retrieval': r'httperror|urlerror|connectionerror|connection refused|connection reset|name resolution|unable to resolve host|http error|curl:|wget:',
+        'Memory / resource': r'memoryerror|out of memory|oom.kill|cannot allocate memory|disk quota|no space left',
+    }
+    for job in jobs:
+        text = job['stderr']+'\n'+job['stdout']
+        job['has_error_text'] = bool(text.strip())
+        job['error_indicators'] = [name for name, pattern in patterns.items() if re.search(pattern,text,re.I)] if job['status']=='error' else []
+        family = job['tool'].split('/')[-2] if 'toolshed' in job['tool'] else job['tool']
+        job['specific_error_signatures'] = [label for benchmark, tool, label, pattern, _ in deep.ERROR_RULES
+            if job['benchmark']==benchmark and family==tool and job['status']=='error' and re.search(pattern,text,re.I|re.S)]
+        # Source event references retain the full evidence; do not duplicate logs.
+        del job['stderr'], job['stdout']
+    results['error_codebook'] = patterns
+    results['error_indicators'] = {benchmark: {name: sum(j['status']=='error' and name in j['error_indicators'] for j in jobs if j['benchmark']==benchmark)
+                                                for name in patterns} for benchmark in FOLDERS}
+    results['token_pairs'] = pair_records
+    results['iwc'] = compute_iwc(runs, cells)
+    return results
+
+
+def iwc_pairs(runs, models, tasks):
+    """Task-weighted paired agreement: replicate means within task, then equal task weight."""
+    grouped = defaultdict(list)
+    for r in runs:
+        if r['benchmark'] == 'IWC':
+            grouped[r['task'], r['model'], r['condition']].append(r['score'])
+    rows = []
+    for task in tasks:
+        for model in models:
+            g, o = grouped[task, model, 'galaxy'], grouped[task, model, 'open_ended_code']
+            if len(g) != 3 or len(o) != 3 or None in g + o:
+                continue
+            rows.append({'cluster': task, 'task': task, 'model': model, 'galaxy': st.mean(g), 'open_ended_code': st.mean(o),
+                         'delta': st.mean(g) - st.mean(o), 'zero_run': 0 in g + o})
+    return rows
+
+
+def compute_iwc(runs, cells):
+    """IWC endpoint is continuous 0-1 agreement; it is never binarized into acceptance here."""
+    tasks = sorted({r['task'] for r in runs if r['benchmark'] == 'IWC'})
+    nine = [t for t in tasks if t != IWC_HOST]
+    out = {'tasks': tasks, 'common_nine_tasks': nine, 'comparisons': [], 'cells': []}
+    for label, models in [(m, (m,)) for m in MODELS['IWC']] + [('all', MODELS['IWC']), ('shared_three', COMMON)]:
+        entry = {'model': label}
+        for population, population_tasks in [('common_nine', nine), ('available_pairs', tasks)]:
+            rows = iwc_pairs(runs, models, population_tasks)
+            estimate, _ = bootstrap(rows, 'delta', f'iwc_{population}_{label}')
+            entry[population] = {**estimate, 'galaxy': st.mean(x['galaxy'] for x in rows),
+                                 'open_ended_code': st.mean(x['open_ended_code'] for x in rows),
+                                 'tasks': sorted({x['task'] for x in rows}), 'pairs': rows}
+        rows = entry['common_nine']['pairs']
+        loo = [st.mean(x['delta'] for x in rows if x['task'] != t) for t in nine]
+        kept = [x for x in rows if not any(y['zero_run'] for y in rows if y['task'] == x['task'])]
+        entry['leave_one_task_out'] = {'minimum': min(loo), 'maximum': max(loo), 'values': dict(zip(nine, loo)),
+            'sign_stable': all((v > 0) == (entry['common_nine']['estimate'] > 0) for v in loo)}
+        entry['excluding_zero_run_tasks'] = {'estimate': st.mean(x['delta'] for x in kept) if kept else None,
+            'removed_tasks': sorted({x['task'] for x in rows} - {x['task'] for x in kept})}
+        out['comparisons'].append(entry)
+    for x in cells:
+        if x['benchmark'] == 'IWC':
+            scores = x['agreement_scores']
+            out['cells'].append({'task': x['task'], 'model': x['model'], 'condition': x['condition'], 'evaluable': scores is not None,
+                'all_at_least_0_99': all(v >= .99 for v in scores) if scores else None,
+                'none_at_least_0_99': not any(v >= .99 for v in scores) if scores else None,
+                'any_below_0_5': any(v < .5 for v in scores) if scores else None,
+                'range': max(scores) - min(scores) if scores else None})
+    return out
+
+
+def report(b, c, w, runs, cells, jobs, results):
+    doc, tables = [], {}
+
+    def put(text):
+        doc.append(reader_labels(text).strip()+'\n')
+
+    def table(label, title, headers, rows, legend):
+        title, legend = reader_labels(title), reader_labels(legend)
+        headers = [reader_labels(h) for h in headers]
+        rows = [[reader_labels(str(v)) for v in row] for row in rows]
+        assert all(len(row)==len(headers) for row in rows), label
+        tables[label] = {"title": title, "headers": headers, "rows": rows, "legend": legend}
+        def clean(v):
+            return str(v).replace('|', '&#124;').replace('\n', ' ')
+        put(f"### Table {label}. {title}\n\n"+'| '+' | '.join(headers)+' |\n'+
+            '| '+' | '.join(['---']*len(headers))+' |\n'+
+            '\n'.join('| '+' | '.join(map(clean,row))+' |' for row in rows)+'\n\n'+legend)
+
+    def subset(benchmark, condition=None, model=None):
+        return [r for r in runs if r['benchmark']==benchmark and (condition is None or r['condition']==condition)
+                and (r['model'] in MODELS[benchmark] if model is None else r['model']==model)]
+
+    def path_rows(benchmark):
+        return [[ENV[s['condition']], LABELS.get(s['model'],'All configurations'), f"{s['evaluable']}/{s['total']}",
+                 s['counts'].get('identical',0),s['counts'].get('two_of_three',0),s['counts'].get('all_distinct',0),
+                 fmt(s['mean_jaccard'],3)] for s in results['path_summaries'] if s['benchmark']==benchmark and s['model']!='shared_three']
+
+    def execution_rows(benchmark):
+        rr = subset(benchmark,'galaxy'); jj = [j for j in jobs if j['benchmark']==benchmark]
+        ev = [r for r in rr if r['errors'] is not None]
+        states = Counter(j['status'] for j in jj)
+        return [['Detailed Galaxy histories, run-linked',frac(len(ev),len(rr))],
+                ['Metadata-only / unavailable run-linked histories',f"{sum(r['coverage']['public_history_contents']=='history_metadata_only' for r in rr)} / {sum(r['coverage']['public_history_contents']=='unavailable' for r in rr)}"],
+                ['Distinct non-fetch creating jobs',f"{len(jj):,}"],
+                ['Job states: ok / error / deleted / paused',' / '.join(f"{states[k]:,}" for k in ['ok','error','deleted','paused'])],
+                ['Error jobs / non-fetch jobs',frac(states['error'],len(jj))],
+                ['Runs with >=1 error job / detailed runs',frac(sum(r['has_error'] for r in ev),len(ev))],
+                ['Error jobs/run: median (Q1-Q3); range',iqr(summary(r['errors'] for r in ev),1)+f"; 0-{max(r['errors'] for r in ev)}"],
+                ['Candidate recovery episodes / runs containing one',f"{sum(r['recovery_candidates'] for r in rr)} / {sum(r['recovery_candidates']>0 for r in rr)}"],
+                ['Adjudicated recovery rate; failures before correct answer','NA; NA'],
+                ['Certified Galaxy-only completion','NA']]
+
+    def token_rows(benchmark):
+        rows=[]
+        for model in (*MODELS[benchmark],'all'):
+            t=results['tokens'][benchmark+'_'+model]
+            g=subset(benchmark,'galaxy',None if model=='all' else model)
+            o=subset(benchmark,'open_ended_code',None if model=='all' else model)
+            g=[r['input_tokens'] for r in g if r['input_tokens'] is not None]
+            o=[r['input_tokens'] for r in o if r['input_tokens'] is not None]
+            rows.append([LABELS.get(model,'All configurations'),t['n'],iqr(t),ci(t),
+                         f"{fmt(st.median(g),1)} / {fmt(st.median(o),1)}",frac(t['greater_than_one'],t['n'])])
+        return rows
+
+    def tool_rows(benchmark):
+        jj=[j for j in jobs if j['benchmark']==benchmark]
+        counts=Counter(j['tool'] for j in jj)
+        errors=Counter(j['tool'] for j in jj if j['status']=='error')
+        top=sorted(counts,key=lambda t:(-counts[t],t))[:6]
+        return [[tool.split('/')[-2]+'/'+tool.split('/')[-1] if 'toolshed' in tool else tool,
+                 counts[tool],errors[tool]] for tool in top]
+
+    uncertainty = ("Unless a table specifies otherwise, new intervals are exploratory 95% percentile cluster-bootstrap intervals (20,000 resamples; seed 20260922, "
+        "with deterministic statistic-specific streams). BixBench resamples eligible source capsules (up to 33); CompBio resamples eligible tasks (up to 100), "
+        "retaining configurations and replicate bundles. Estimates weight eligible task/configuration cells equally; capsule sizes remain unequal. "
+        "Cross-benchmark draws are independent and stratified by benchmark. Intervals assume independent clusters, an assumption not established "
+        "for shared biological inputs. They are pointwise, not multiplicity-adjusted simultaneous intervals. No confirmatory significance, equivalence, "
+        "non-inferiority or causal claim is made; an interval spanning zero (differences) or one (ratios) is inconclusive.")
+    path_legend = ("One cell = task x configuration x environment with three replicate labels. This report harmonizes BOTH benchmarks: "
+        "all three fingerprints must be observed and nonempty. Identical / two identical / all distinct partition evaluable cells. "
+        "Jaccard = intersection/union, averaged over the three replicate pairs and then over eligible cells. "
+        "Galaxy uses version-stripped job tool IDs (excluding data fetch, retaining legacy upload); code uses the archived closed command vocabulary. "
+        "These instruments cannot rank scientific consistency across environments; order, most parameters and biological validity are unmeasured. "
+        "BixBench counts differ from its legacy report because that report also admitted partly missing/empty fingerprints.")
+    token_legend = ("Ratio = median input tokens of three Galaxy runs / median of three code runs for the same task and configuration; "
+        "all six totals must be available. Q1-Q3 are quartile endpoints. Absolute medians use every available run in that row and are "
+        "not the numerator/denominator of the paired median ratio. Cached input is already included. Output/reasoning are not added. "
+        "Usage covers archived primary turns, not full campaign, compute or monetary cost. Failed runs are retained; missing usage is never zero.")
+    put("# Benchmark Results Tables\n\nRetrospective synthesis of the archived BixBench-50, CompBioBench and IWC analyses. "
+        "`BixBench50` below maps to the repository's `runs/BixBench_50/` directory. "
+        "**Scope:** IWC is the workflow-derived task stratum; BixBench and CompBio contain platform-neutral biomedical questions. "
+        "Task origin is confounded with task selection, endpoints, prompts, budgets and exposed interfaces. These archives do not directly test whether workflow-derived tasks cause better Galaxy results or reduce the need for custom code. "
+        "The tables distinguish evaluator acceptance or agreement, observed execution, and unresolved scientific interpretation. Proposed improvements are hypotheses for prospective evaluation, not measured benefits.\n\n"
+        "**Readout:** Galaxy and open-ended code are recorded condition assignments, not certifications of where every analytical operation ran. "
+        "Intervals are 95% confidence intervals unless specified. Q1 and Q3 are the first and third quartiles. Unavailable never means zero. "
+        "Displayed values are rounded: 1.0000 does not necessarily mean exact agreement. "
+        "All GPT-5 configurations use the supplied Codex labels. Replicate numbers are not matched seeds. "
+        "CompBio vectors are final campaign selections, including continuations/recoveries; they do not measure first-attempt performance. "
+        "IWC scores are continuous output agreement (0-1), not acceptance; they are never pooled with BixBench acceptance or binarized.\n\n"
+        "[Reproduce and inspect](analysis/BixBench50_CompBio_analysis/README.md) | "
+        "[Calculations and table values](analysis/BixBench50_CompBio_analysis/analysis.json) | "
+        "[Task/run/finding source manifest](analysis/BixBench50_CompBio_analysis/source_manifest.json).")
+    put("**Question guide:** condition-exclusive evaluator acceptance and a recorded version contrast (B11-B13); configuration outcomes and token use (B14-B15, C9); "
+        "common software and environmental friction (X9-X10); recurring diagnostics and task specification/workload (X5-X6, X11, X18); "
+        "user-defined tool necessity versus choice (X12-X15); different routes to the same answer and evidence for the motivating observations (X16-X17). "
+        "IWC: agreement and sensitivity (I1-I5), score provenance (I6), observed helper and Tool Shed use (I11, X19), "
+        "and non-interchangeable benchmark endpoints (X20). "
+        "Tables report observations unless explicitly labelled as inference or a proposed intervention.")
+    put("## 1) Bixbench50 analysis\n\n**Finding:** high observed acceptance is compatible with Galaxy execution, "
+        "but the environment difference is uncertain and sensitive to the superseded harness. "
+        "The archive contains 50 questions in 33 capsules, five configurations, two environments and three replicates (1,500 scored runs).")
+    rows=[]
+    for model in (*MODELS['BixBench50'],'all','codex_four'):
+        a=results['accuracy'][model]; g=a['conditions']['galaxy'];o=a['conditions']['open_ended_code']
+        rows.append([LABELS.get(model,{'all':'All five','codex_four':'Four Codex configurations'}[model] if model not in LABELS else model),
+                     frac(g['accepted'],g['n']),frac(o['accepted'],o['n']),ci(a)])
+    table('B1','Original-evaluator acceptance and paired environment difference',
+          ['Configuration','Galaxy accepted','Code accepted','G - Code, pp [95% CI]'], rows,
+          "Original binary evaluator scores are retained, including six scored missing answers (five G, one Code). "
+          "No regrading was performed. The superseded Claude Code configuration contributes 16 of the 24 extra accepted G runs; "
+          "excluding it leaves eight. The original 100,000-resample audit interval was -1.41 to +7.91 pp; the fresh calculation above uses the common settings below.\n\n"+uncertainty)
+    rows=[]
+    for model in MODELS['BixBench50']:
+        for cond in CONDITIONS:
+            xs=[x for x in cells if x['benchmark']=='BixBench50' and x['model']==model and x['condition']==cond]
+            counts=Counter(x['accepted'] for x in xs)
+            rows.append([LABELS[model],ENV[cond],counts[3],counts[1]+counts[2],counts[0],frac(50-counts[0],50)])
+    table('B2','Repeatability of accepted answers', ['Configuration','Environment','3/3 accepted','1-2/3 accepted','0/3 accepted','At least one accepted'],rows,
+          "Each row contains 50 task cells; the middle three categories are mutually exclusive. At least one is an overlapping endpoint, "
+          "not single-run accuracy. These are replicate-labelled archived runs, not best-of-three adaptive attempts.")
+    rows=[]
+    for task,question in [('bix-30-q3','Multiple-testing miRNA ratio'),('bix-43-q2','gseapy enrichment odds ratio'),('bix-45-q1','RCV Mann-Whitney p-value'),('bix-53-q2','Differential expression after replicate exclusion'),('bix-61-q5','Transition/transversion ratio')]:
+        t=next(t for t in b['tasks'] if t['task']==task)
+        rows.append([task_link('BixBench50',task),question,f"{t['accuracy']['galaxy']['accepted']}/15",f"{t['accuracy']['open_ended_code']['accepted']}/15",f"{t['error_jobs']}/{t['jobs']}"])
+    table('B3','Largest acceptance discordances and tasks rejected throughout',
+          ['Task','Question','G accepted','Code accepted','G error/non-fetch jobs'],rows,
+          "Selection rule: absolute acceptance difference >=5/15 or zero acceptance in both environments; all five qualifying tasks are shown. "
+          "Task-linked jobs are deduplicated within task. Operationally successful jobs do not establish a correct answer: "
+          "RCV and transition/transversion results were rejected despite no recorded job errors. "
+          "RCV means relative composition variability. "
+          "The source reports implicate threshold choices, upstream gene sets and RCV input construction; those mechanisms are not independently adjudicated here.")
+    table('B4','Galaxy execution, missing evidence and recovery candidates',['Measure','Observed'],execution_rows('BixBench50'),
+          "Jobs are deduplicated by server/native job ID and exclude data-fetch jobs, but include preparation and legacy upload. "
+          "Histories may contain inherited/later state. A candidate is later same-tool/input success, not verified recovery of a scientific objective. "
+          "31/32 collection-limited runs had accepted answers. The original fresh-history check is false for all 750 G runs, "
+          "despite retrieved history evidence; Galaxy-only completion remains unresolved.")
+    table('B5','Observable triplicate path agreement under the harmonized rule',
+          ['Environment','Configuration','Eligible/total','Identical','Two identical','All distinct','Mean Jaccard'],path_rows('BixBench50'),path_legend)
+    rows=[]
+    for cond in CONDITIONS:
+        for score in [3,1,0]:
+            xs=[x for x in cells if x['benchmark']=='BixBench50' and x['condition']==cond and x['eligible'] and
+                (x['accepted'] in [1,2] if score==1 else x['accepted']==score)]
+            rows.append([ENV[cond],{3:'All three',1:'One or two',0:'None'}[score],len(xs),len({x['task'] for x in xs}),
+                         frac(sum(x['agreement']=='identical' for x in xs),len(xs)),fmt(st.mean(x['jaccard'] for x in xs),3)])
+    table('B6','Does a consistent recorded path imply acceptance?',
+          ['Environment','Accepted replicates','Eligible cells','Tasks','Identical fingerprints','Mean Jaccard'],rows,
+          "Descriptive association conditional on observable nonempty paths. Cells share tasks; failure-prone task composition can drive the pattern. "
+          "Agreement is neither correctness nor causal evidence that varied methods help. The retained rows allow inspection of both accepted and rejected consistent paths.")
+    table('B7','Input-token burden by configuration',
+          ['Configuration','Paired cells','Ratio median (Q1-Q3)','Ratio [95% CI]','Median input G / Code','Pairs with G > Code'],token_rows('BixBench50'),token_legend)
+    modes=defaultdict(list)
+    for r in subset('BixBench50'):
+        modes[r['verifier']].append(r)
+    rows=[[str(mode),frac(sum(r['score']==1 for r in rs),len(rs)),sum(r['condition']=='galaxy' for r in rs),sum(r['condition']=='open_ended_code' for r in rs)] for mode,rs in sorted(modes.items(),key=lambda x:str(x[0]))]
+    table('B8','Evaluator-mode composition and acceptance',['Recorded verifier','Accepted/all','G runs','Code runs'],rows,
+          "Modes are observational and task/configuration-dependent; these are not randomized verifier comparisons. "
+          "The source audit reports byte-identical answers with different scores under different modes. Rounded-numeric scoring occurs "
+          "only in the two DeepSeek configurations. These evaluator effects limit interpreting rejection as a demonstrated analytical mistake.")
+    table('B9','Most frequently recorded Galaxy operations',['Recorded tool / version','Non-fetch jobs','Error jobs'],tool_rows('BixBench50'),
+          "Top six tool IDs by job count (ties sorted by full ID), among 5,042 deduplicated non-fetch jobs. "
+          "Spreadsheet conversion, column selection and filtering accompany KEGG over-representation and PhyKIT metrics. "
+          "KEGG is the Kyoto Encyclopedia of Genes and Genomes. "
+          "Counts include preparation and inherited/later history state; operation frequency is not success attribution. "
+          "Full IDs and event references are in the analysis JSON.")
+    rows=[]
+    for cond in CONDITIONS:
+        other=next(x for x in CONDITIONS if x!=cond)
+        tasks=b['tasks']
+        rows.append([ENV[cond],frac(sum(t['accuracy'][cond]['accepted']>0 for t in tasks),50),
+                     frac(sum(t['accuracy'][cond]['accepted']==15 for t in tasks),50),
+                     sum(t['accuracy'][cond]['accepted']>0 and t['accuracy'][other]['accepted']==0 for t in tasks),
+                     b['model_task_comparisons']['galaxy_higher' if cond=='galaxy' else 'code_higher']])
+    table('B10','Task coverage versus within-configuration advantage',
+          ['Environment','Tasks with any accepted run','All 15 runs accepted','Tasks accepted only here','Task/configuration pairs with more accepted runs'],rows,
+          "Task coverage pools five configurations and three replicates (15 runs/task/environment), whereas the last column compares "
+          "three-replicate counts within each of 250 matched task/configuration pairs. There are 198 tied pairs, "
+          "and two tasks with no accepted answer in either environment. These endpoints do not describe the reliability of a single run.")
+    deep.render(SimpleNamespace(**globals()),'BixBench50',table,runs,cells,jobs,results)
+    put("## 2) CompBio analysis\n\n**Finding:** the archive supports execution, answer-text consistency and token analyses, "
+        "but does not support task-level accuracy or correct-answer recovery rates. It includes 2,400 records in four paired configurations "
+        "over 100 tasks, plus 100 unpaired GPT-6 Astra records. All 2,500 item-level evaluator scores are unavailable.")
+    rows=[]
+    for model in (*MODELS['CompBio'],ASTRA):
+        row=[LABELS[model]]
+        for cond in CONDITIONS:
+            vs=[v for v in c['score_vectors'] if v['model']==model and v['condition']==cond]
+            parts=[]
+            for v in sorted(vs,key=lambda v:v['replicate']):
+                flag='O' if v['score_type']=='official_labelled' else 'P'
+                flag += '; hash mismatch' if v['hash_matches'] is False else '; vector absent' if v['hash_matches'] is None else ''
+                parts.append(f"{v['replicate']}: {v['score']}/100 ({flag})")
+            row.append('; '.join(parts) if parts else 'Not represented')
+        rows.append(row)
+    table('C1','Source-reported answer-vector scores, with provenance status',['Configuration','Galaxy','Code'],rows,
+          "O = archive-labelled official, not an independently verified leaderboard receipt; P = predicted. "
+          "15 vectors are O and 10 P; 13 advertised hashes match retained bytes, nine mismatch and three vectors are absent. "
+          "All parsed answers match for the 22 available vectors. Sol G r1/r3 were previously 92/100 P; dated metadata changes them "
+          "to 93/100 O and 91/100 O. Neither version is silently discarded. No pooled accuracy, uncertainty interval, or "
+          "task-level all/some/none-correct inference is computed from this mixture. "
+          "Source: [aggregate audit](runs/CompBio/compBio_overview_audit.json), `score_vectors` and `score_conflicts`.")
+    rows=[]
+    for model in MODELS['CompBio']:
+        for cond in CONDITIONS:
+            rs=subset('CompBio',cond,model);xs=[x for x in cells if x['benchmark']=='CompBio' and x['model']==model and x['condition']==cond]
+            counts=Counter(x['answer_distinct'] for x in xs)
+            rows.append([LABELS[model],ENV[cond],frac(sum(r['input_tokens'] is not None for r in rs),len(rs)),
+                         counts[1],counts[2],counts[3]])
+    table('C2','Usage completeness and repeated-answer consistency',
+          ['Configuration','Environment','Usage coverage','1 distinct answer','2 distinct','3 distinct'],rows,
+          "Usage denominators are 300 runs/row; answer counts partition 100 triplicate task cells/row. "
+          "Answers use archived submitted text with outer whitespace removed, not raw-file hashes. "
+          "Text identity does not establish semantic equivalence or correctness. Among all 12 answers/task/environment, "
+          "62/100 G tasks and 58/100 Code tasks have one distinct answer; answer sets differ across environments in 43/100 tasks.")
+    table('C3','Galaxy execution and recovery evidence',['Measure','Observed'],execution_rows('CompBio'),
+          "The archive contains 22,067 distinct creating jobs: 5,381 data-fetch and 16,686 non-fetch (including 372 upload1 jobs). "
+          "Non-fetch jobs are not independent scientific attempts. Nonzero shell exits occur in 676/1,188 available G transcripts "
+          "and 882/1,200 Code transcripts; probes/searches can return nonzero, so these are not comparative scientific-failure rates. "
+          "The two metadata-only histories contain 196 error-state datasets in state_ids but zero in state_details, plus 17 "
+          "unaccounted elements. Those dataset states are not added to creating-job totals.")
+    domains=defaultdict(list)
+    for t in c['tasks']:
+        domains[t['domain']].append(t)
+    rows=[]
+    for domain,ts in sorted(domains.items(),key=lambda x:(-len(x[1]),x[0])):
+        ids={t['task'] for t in ts}; rr=[r for r in subset('CompBio','galaxy') if r['task'] in ids and r['errors'] is not None]
+        ratios=[p['ratio'] for p in results['token_pairs'] if p['benchmark']=='CompBio' and p['task'] in ids]
+        rows.append([domain,len(ts),f"{sum(len(t['answers']['galaxy'])==1 for t in ts)} / {sum(len(t['answers']['open_ended_code'])==1 for t in ts)}",
+                     frac(sum(r['has_error'] for r in rr),len(rr)),iqr(summary(ratios)),len(ratios)])
+    table('C4','Biological domain, answer convergence and operational burden',
+          ['Recorded domain','Tasks','Single-answer tasks G / Code','G runs with error','Token ratio median (Q1-Q3)','Token pairs'],rows,
+          "Domains come from task metadata; these are not difficulty strata. All four paired configurations are included. "
+          "Single-answer counts use 12 submitted answers per task/environment. Error denominators include only detailed G runs. "
+          "Ratios require all six usage records; small domains are descriptive case groups, not evidence of domain superiority.")
+    table('C5','Observable triplicate path agreement',
+          ['Environment','Configuration','Eligible/total','Identical','Two identical','All distinct','Mean Jaccard'],path_rows('CompBio'),path_legend)
+    table('C6','Input-token burden by configuration',
+          ['Configuration','Paired cells','Ratio median (Q1-Q3)','Ratio [95% CI]','Median input G / Code','Pairs with G > Code'],token_rows('CompBio'),
+          token_legend+" Fourteen of 400 pairs are excluded (3 GPT-5.5, 10 Luna, 1 DeepSeek). "
+          "The runtime-and-reasoning-verified sensitivity contains only 99 DeepSeek pairs (median 3.53), so it changes the configuration population. "
+          "Astra usage is available in 100/100 unpaired Code runs (median input 314,244.5); no G ratio is possible.")
+    table('C7','Adjudicated examples: correction versus changed objective',
+          ['Task / run','Failure','Later operation','Supported conclusion'],[
+          [task_link('CompBio','bedtools-chromhmm-q1')+'; DeepSeek G r2','round(c1/c5*100): string columns',
+           'round(float(c1)/float(c5)*100); job ok','Operational type correction; biological denominator and answer correctness not validated'],
+          [task_link('CompBio','perturb-seq-align-q1')+'; DeepSeek G r3','AnnData chunk_X: sparse-matrix attribute error',
+           'Successful var metadata query','Same tool/input, different operation; not recovery of chunk_X']],
+          "Purposive positive and contradictory examples, not a random sample of 213 candidates. "
+          "Exact event IDs, parameter changes, timestamps and excerpts are preserved in `case_reviews` in the "
+          "[CompBio audit](runs/CompBio/compBio_overview_audit.json). No recovery success percentage is inferred from these two cases.")
+    table('C8','Most frequently recorded Galaxy operations',['Recorded tool / version','Non-fetch jobs','Error jobs'],tool_rows('CompBio'),
+          "Top six tool IDs by job count among 16,686 deduplicated non-fetch jobs. AnnData inspection and bedtools intersection "
+          "appear alongside filtering, column selection, Datamash and legacy upload. This is evidence of operation availability/use, "
+          "not correctness, independent analyses or exclusive use of installed domain tools. Full IDs and event references are in the analysis JSON.")
+    deep.render(SimpleNamespace(**globals()),'CompBio',table,runs,cells,jobs,results)
+    put("## 3) IWC analysis\n\n**Finding:** recorded output agreement is high on many IWC tasks, but is not uniformly high across runs. "
+        "In the exploratory nine-task subset, Galaxy-minus-code mean differences range from about 0.001 to 0.082. "
+        "The two larger differences are concentrated in tasks with zero-scored code runs; Sol and Luna change sign under leave-one-task-out analysis, and Luna's contrast reverses when conflicted host-removal scores are included. "
+        "No explicit user-defined-tool helper requests were detected, but this does not establish native-tool sufficiency or Galaxy-only analysis. "
+        "The archive contains 10 workflow tasks, four configurations, two environments and three replicates (240 runs). "
+        "The endpoint is continuous task-specific output agreement (0-1), not binary acceptance, and is never pooled with BixBench acceptance.")
+    iwc=results['iwc']
+    cmp={x['model']:x for x in iwc['comparisons']}
+    def iscores(cond,model=None,tasks=None):
+        return [r['score'] for r in subset('IWC',cond,model) if r['score'] is not None and (tasks is None or r['task'] in tasks)]
+    rows=[]
+    for model in (*MODELS['IWC'],'all'):
+        m=None if model=='all' else model
+        g,o=iscores('galaxy',m,iwc['common_nine_tasks']),iscores('open_ended_code',m,iwc['common_nine_tasks'])
+        rows.append([LABELS.get(model,'All four'),
+                     f"{len(g)}; {fmt(st.mean(g),4)} ({fmt(st.median(g),4)})",
+                     f"{len(o)}; {fmt(st.mean(o),4)} ({fmt(st.median(o),4)})",
+                     f"{sum(v==0 for v in g)}/{len(g)} / {sum(v==0 for v in o)}/{len(o)}",
+                     ci(cmp[model]['common_nine'],4)])
+    table('I1','Matched output agreement on the common nine IWC tasks',
+          ['Configuration','Galaxy: numeric runs; mean (median)','Code: numeric runs; mean (median)','Exactly zero scores: G / Code',
+           'G - Code, nine matched tasks [95% CI]'],rows,
+          "Agreement is the saved `iwc-final-answer-v2.2` `reference_accuracy`. Its definition and tolerance are task-specific (I3), so a mean is a task-weighted summary, not biological accuracy. "
+          "Every column uses the same nine tasks: 27 runs per environment/configuration, 108 per environment in All four. Host removal is excluded from both environments for all models because of null and conflicted route scores (I6). "
+          "This is a post hoc sensitivity population, not a prespecified primary endpoint; all-ten-task summaries remain in I3 and I13. Three unsupported-route scores remain unknown, never zero. "
+          "Differences average replicates within task, then weight tasks equally. "
+          "For All four, it averages the 36 task/configuration differences. Intervals resample the nine tasks, 20,000 times, seed 20260922. "
+          "The IWC report's 10,000-resample intervals (seed 20260923) differ slightly; the point estimates are identical and checked by the generator. "
+          "With nine clusters, percentile coverage is approximate. No equivalence margin was prespecified.")
+    rows=[]
+    for model in MODELS['IWC']:
+        for cond in CONDITIONS:
+            xs=[x for x in iwc['cells'] if x['model']==model and x['condition']==cond and x['evaluable'] and x['task'] in iwc['common_nine_tasks']]
+            values=iscores(cond,model,iwc['common_nine_tasks'])
+            ranges=summary(x['range'] for x in xs)
+            rows.append([LABELS[model],ENV[cond],f"{len(xs)}/9",iqr(ranges,4),fmt(ranges['max'],4),
+                         f"{fmt(min(values),4)} to {fmt(max(values),4)}",f"{sum(v==0 for v in values)}/{len(values)}"])
+    table('I2','Continuous replicate dispersion on the same nine tasks',
+          ['Configuration','Environment','Evaluable task cells','Within-cell range: median (Q1-Q3)','Largest within-cell range','Observed score range','Exactly zero scores / runs'],rows,
+          "One cell is one task, configuration and environment with three numeric replicates; all columns use the I1 population. "
+          "Within-cell range is maximum minus minimum across the three scores, summarized over nine cells. These continuous summaries introduce no pass threshold. "
+          "Small dispersion can accompany consistently low agreement and is not correctness. With only three runs per cell, this is descriptive repeatability, not a stable variance estimate. "
+          "Host-removal exclusions are retained in I6; replicate labels are not matched seeds.")
+    objects={'wf_001_short_read_qc_trim':'Transformation and retained paired-read-ID F1','wf_002_rnaseq_de_visualization':'Composite DE gene agreement',
+             'wf_003_host_contamination_removal':'Transformation-aware paired-read score; route-registered','wf_005_amplicon_dada2_pe_denoising':'Exact ASV and sample-abundance F1',
+             'wf_006_atacseq_chromatin_accessibility':'Peak-interval F1, reciprocal overlap >=0.5','wf_007_vgp_mitogenome_assembly':'Canonical 31-mer multiset F1',
+             'wf_008_amr_gene_detection':'Resistance-determinant F1, allele-specific','wf_009_clinicalmp_peptide_verification':'Peptide-UniProt accession pair F1',
+             'wf_010_pseudobulk_scrna_de':'Count-matrix and calibrated DE agreement','wf_011_bioproject_metadata_sequence_retrieval':'Project/run/layout, metadata and run-content F1'}
+    ij=[j for j in jobs if j['benchmark']=='IWC']
+    rows=[]
+    for task in iwc['tasks']:
+        g=[r for r in subset('IWC','galaxy') if r['task']==task];o=[r for r in subset('IWC','open_ended_code') if r['task']==task]
+        gs=[r['score'] for r in g if r['score'] is not None];os_=[r['score'] for r in o if r['score'] is not None]
+        tj=[j for j in ij if any(ref['task']==task for ref in j['refs'])]
+        rows.append([task_link('IWC',task),objects[task],f"{fmt(st.mean(gs),4)} ({fmt(min(gs),3)})",f"{fmt(st.mean(os_),4)} ({fmt(min(os_),3)})",
+                     f"{len(gs)} / {len(os_)}",f"{sum(v==0 for v in gs)} / {sum(v==0 for v in os_)}",
+                     f"{sum(j['status']=='error' for j in tj)}/{len(tj)}",sum(bool(r['score_conflict']) for r in g+o)])
+    table('I3','Task-level agreement, zero-scored runs and Galaxy job errors',
+          ['Task','Scored object','G mean (minimum)','Code mean (minimum)','Numeric runs G / Code','Zero-scored runs G / Code','G error/non-fetch jobs','Score conflicts'],rows,
+          "All ten tasks are shown because IWC has too few tasks for a selection rule. Each environment has 12 runs per task (four configurations x three replicates). "
+          "Minimums expose low-scoring runs that means can conceal; no distributional modality is assumed. Host removal has different model composition (12 versus nine numeric runs) and is not a matched contrast. Jobs are deduplicated within task and include legacy upload. "
+          "Error jobs coexist with near-ceiling agreement: short-read QC has 22 Galaxy error jobs yet a minimum Galaxy agreement of 0.996. "
+          "Score conflicts are records whose evaluator and run-record scores differ by more than 1e-9, or where one is null. "
+          "Definitions come from retained evaluator `metric` records and are abbreviated here.")
+    rows=[]
+    for model in (*MODELS['IWC'],'all'):
+        x=cmp[model];loo=x['leave_one_task_out'];z=x['excluding_zero_run_tasks'];a=x['available_pairs']
+        rows.append([LABELS.get(model,'All four'),fmt(x['common_nine']['estimate'],4),f"{fmt(loo['minimum'],4)} to {fmt(loo['maximum'],4)}",
+                     'Yes' if loo['sign_stable'] else 'No',
+                     f"{fmt(z['estimate'],4)} ({len(z['removed_tasks'])} removed)" if z['estimate'] is not None else 'NA',
+                     f"{fmt(a['estimate'],4)} ({len(a['tasks'])} tasks; {a['n']} pairs)"])
+    table('I4','How much of the environment difference rests on a few runs?',
+          ['Configuration','G - Code, nine tasks','Leave-one-task-out range','Sign stable','Excluding tasks with a zero-scored run','Retaining host removal where fully scored'],rows,
+          "Four decimals are kept because several differences are about 1e-3. Sign stable means all nine leave-one-task-out estimates share the full estimate's sign. "
+          "The zero-run column drops every task with a zero-scored run for that configuration in either environment. "
+          "It is an outcome-selected influence diagnostic, not a mechanism test or an improved performance estimate; it never replaces the full estimate. "
+          "The last column adds host removal wherever all six runs are numeric. This drops the unmatched GPT-5.5 cell, and Luna then includes the two conflicted Galaxy records (I6). "
+          "The All four available-pair row weights 39 task/configuration pairs equally, so host removal has three configurations and other tasks four; it is not equal task weighting over ten tasks. "
+          "The two larger positive differences shrink when tasks containing zero-scored runs are removed. Across configurations, the remaining differences range from 0.0010 to 0.0124.")
+    below=[r for r in subset('IWC') if r['score'] is not None and r['score']<.5]
+    reasons={'wf_005_amplicon_dada2_pe_denoising':'Evaluator error: required per-sample columns missing; the submitted sample identifiers changed letter case',
+             'wf_007_vgp_mitogenome_assembly':'Sequence-content (31-mer) agreement of zero; no evaluator error text',
+             'wf_010_pseudobulk_scrna_de':'Evaluator error: FDR is not a Benjamini-Hochberg adjustment of submitted p-values (maximum deviation 0.00342; tolerance 1e-6)',
+             IWC_HOST:'Score conflict: saved 0.273 versus run-record value; no evaluator route record despite a BWA-family declaration'}
+    assert len(below)==8 and all(r['score']==0 or r['score_conflict'] for r in below)
+    rows=[]
+    for r in sorted(below,key=lambda r:(r['task'],r['condition'],r['model'],r['replicate'])):
+        rows.append([task_link('IWC',r['task'])+f"; {LABELS[r['model']]} r{r['replicate']}",ENV[r['condition']],
+                     f"{fmt(r['score'],3)} / {fmt(r['run_record_score'],4)}",reasons[r['task']],
+                     r['errors'] if r['condition']=='galaxy' and r['errors'] is not None else 'Not applicable'])
+    table('I5','Completion is not correctness: every run scoring below 0.5',
+          ['Task / run','Environment','Saved score / run-record score','Recorded evaluator reason or status','Galaxy error jobs in run'],rows,
+          "All 240 harness records report `complete`; completion alone does not establish final-artifact validity. The <0.5 selection is an auditor screening rule for inspection, not a benchmark failure threshold. "
+          "Five of the eight runs are Code runs. The only zero-scored Galaxy run is mitogenome assembly GPT-5.5 r1, and the same configuration and replicate also scored zero in Code. "
+          "The other two Galaxy rows are score-conflicted host-removal records, not established scientific failures; final adjudicated values are unknown. "
+          "Reasons summarize saved evaluator fields where present; casing is documented in the IWC report. No answer was repaired or regraded.")
+    conflicts=Counter(r['task'] for r in subset('IWC') if r['score_conflict'])
+    nulls=[r for r in subset('IWC') if r['score'] is None]
+    luna=cmp[COMMON[2]]
+    table('I6','Score provenance that changes an IWC conclusion',['Issue','Records','Consequence'],[
+          ['Unsupported-route nulls',f"{len(nulls)} (GPT-5.5 Code host removal r1-r3)",'Kept as unknown; the matched cell is unevaluable and host removal is excluded from the exploratory nine-task contrast'],
+          ['Host-removal evaluator/run-record conflicts',f"{conflicts[IWC_HOST]}, including the three nulls",
+           f"Luna's difference is {fmt(luna['common_nine']['estimate'],3)} without host removal and {fmt(luna['available_pairs']['estimate'],3)} with it"],
+          ['Chromatin-accessibility conflicts',str(conflicts['wf_006_atacseq_chromatin_accessibility']),'Saved evaluator version reported; lineage freeze required'],
+          ['All conflicts',f"{sum(conflicts.values())}/240",'Neither source is chosen as more favourable; both are retained in the audit']],
+          "This table plays the role of C1: score lineage is part of the result. The conflict tolerance is an absolute difference above 1e-9, or numeric versus null. "
+          "Source: [IWC scientific audit](runs/IWC/iwc_scientific_audit.json), `runs[*].score`, `run_record_acc` and `score_conflict_gt_1e_9`.")
+    table('I7','Galaxy execution, missing evidence and recovery candidates',['Measure','Observed'],execution_rows('IWC'),
+          "Harmonized with B4/C3: jobs are deduplicated by server and native job ID, data fetch is excluded and legacy upload is kept. "
+          "That gives 1,352 jobs, the IWC report's 1,330 non-acquisition jobs plus 22 upload1 jobs; error and deleted counts are identical. "
+          "The two metadata-only histories are amplicon-denoising runs capped at 300 contents by the collector. Their failure counts are unknown, not zero. "
+          "The 41 candidates collapse to 27 distinct successful endpoints and are not verified recoveries. No equivalent detector exists for Code.")
+    table('I8','Observable triplicate path agreement under the harmonized rule',
+          ['Environment','Configuration','Eligible/total','Identical','Two identical','All distinct','Mean Jaccard'],path_rows('IWC'),
+          path_legend.replace("BOTH benchmarks","all three benchmarks").replace(" BixBench counts differ from its legacy report because that report also admitted partly missing/empty fingerprints.","")+
+          " The legacy IWC fingerprint output is not used. Declared biological routes are in I12.")
+    gsum=sum(r['input_tokens'] for r in subset('IWC','galaxy'));osum=sum(r['input_tokens'] for r in subset('IWC','open_ended_code'))
+    table('I9','Input-token burden by configuration',
+          ['Configuration','Paired cells','Ratio median (Q1-Q3)','Ratio [95% CI]','Median input G / Code','Pairs with G > Code'],token_rows('IWC'),
+          token_legend+" IWC usage is the audited terminal record, one per run, 240/240. "
+          f"Typical usage is higher in G, but summed input is lower: {gsum/1e6:,.1f} million in G versus {osum/1e6:,.1f} million in Code, because of a long Code upper tail. "
+          "The ratio medians reproduce the IWC report's 1.66-2.77 within-task ratios. With ten task clusters, every IWC interval includes one, "
+          "so the typical direction is uncertain across the resampled task population. These intervals do not estimate monetary or causal overhead.")
+    table('I10','Most frequently recorded Galaxy operations',['Recorded tool / version','Non-fetch jobs','Error jobs'],tool_rows('IWC'),
+          f"Top six tool IDs by job count among {len(ij):,} deduplicated non-fetch jobs. Five of the six are domain workflow wrappers (read trimming, amplicon denoising, "
+          "peptide verification, SRA metadata search), versus two of six in B9 and C8, where table utilities dominate. This fits tasks derived from Galaxy workflows. "
+          "The top operation is still a text utility (awk). Counts include inherited or later history state; frequency is not success attribution.")
+    ok_toolshed=defaultdict(set);interactive=defaultdict(set)
+    for j in ij:
+        for ref in j['refs']:
+            if domain_wrapper(j['tool']) and j['status']=='ok':
+                ok_toolshed[ref['task'],ref['run_id']].add(j['native_job_id'])
+            if j['tool'].startswith('interactive_tool'):
+                interactive[ref['task'],ref['run_id']].add(j['native_job_id'])
+    rows=[]
+    for model in (*MODELS['IWC'],'all'):
+        rr=subset('IWC','galaxy',None if model=='all' else model);ev=[r for r in rr if r['errors'] is not None]
+        s=[r['score'] for r in rr if r['score'] is not None]
+        rows.append([LABELS.get(model,'All four'),
+                     f"{sum('run_galaxy_udt_and_wait' in r['galaxy_helpers_exposed'] for r in rr)}/{len(rr)}",
+                     sum(r['udt_request_count'] or 0 for r in rr),sum(len(r['udt_matched_job_ids']) for r in rr),
+                     frac(sum(bool(ok_toolshed[r['task'],r['run_id']]) for r in ev),len(ev)),
+                     frac(sum(bool(interactive[r['task'],r['run_id']]) for r in ev),len(ev)),
+                     f"{iqr(summary(s),4)}; {len(s)}"])
+    assert all(r['udt_request_count']==0 and not r['udt_matched_job_ids'] for r in subset('IWC','galaxy'))
+    table('I11','Observed helper exposure and Tool Shed use in IWC',
+          ['Configuration','UDT helper in recorded list','Detected named-helper requests','Request-linked UDT jobs','Detailed histories with an ok Tool Shed job outside utility codebook',
+           'Interactive-tool histories / detailed histories','All-run G agreement: median (Q1-Q3); numeric n'],rows,
+          "No named `run_galaxy_udt_and_wait` event or request-linked UDT job was detected. That helper is absent from all 120 recorded `galaxy_mcp_tools` lists. "
+          "A helper-list omission is evidence about the recorded interface, not proof that every API or shell route to custom code was unavailable or unused. "
+          "The Tool Shed classifier excludes the declared `UTILITY_REPOS` text/table codebook; it is not an independent audit of domain-tool coverage or task completion. "
+          "Each of 118 detailed histories contains at least one qualifying successful job, which does not demonstrate that all required operations used such jobs. "
+          "Two pseudobulk histories include Jupyter interactive-tool jobs. Local shell analysis, arbitrary code within utilities, and inherited jobs are not excluded. "
+          "Native-tool sufficiency, agent preference and strict Galaxy-only execution remain unestablished; two metadata-only histories are excluded from job denominators (X19).")
+    groups=defaultdict(list)
+    for x in w['route_cells']:
+        groups[x['task'],x['condition']].append(x)
+    rows=[]
+    for (task,cond),xs in sorted(groups.items()):
+        complete=[x for x in xs if x['complete']]
+        s=[run['score'] for x in xs for run in x['runs'] if run['score'] is not None]
+        rows.append([task_link('IWC',task),ENV[cond],f"{len(complete)}/{len(xs)}",
+                     ' / '.join(str(sum(x['distinct_routes']==k for x in complete)) for k in (1,2,3)),
+                     fmt(st.mean(s),4) if s else 'NA',len(s)])
+    table('I12','Declared solution routes versus agreement',
+          ['Task','Environment','Cells with three declarations','Cells with one / two / three routes','Mean agreement','Numeric runs contributing to mean'],rows,
+          "Method declarations were extracted on four tasks; 95/96 are available. Route counts use complete three-declaration cells, whereas means use all numeric runs in each row, including the incompletely declared cell. "
+          "Host-removal means have unequal model composition. Routes are normalized declarations (for example Bowtie2 plus MACS2, DESeq2 or edgeR), "
+          "not verified executions. Different declared routes coexist with near-ceiling agreement, which supports scoring valid alternatives against route-specific references. "
+          "Route-specific references also mean agreement is conditional on route registration (I6).")
+    rows=[]
+    for model in MODELS['IWC']:
+        for cond in CONDITIONS:
+            rs=subset('IWC',cond,model);xs=[x for x in iwc['cells'] if x['model']==model and x['condition']==cond and x['evaluable']]
+            s=[r['score'] for r in rs if r['score'] is not None]
+            errors=[r for r in rs if r['has_error'] is not None];shells=[r for r in rs if r['has_nonzero_shell'] is not None]
+            tokens=[r['input_tokens'] for r in rs if r['input_tokens'] is not None]
+            rows.append([LABELS[model],ENV[cond],f"{fmt(st.mean(s),4)}; {len(s)}/{len(rs)}",f"{iqr(summary(x['range'] for x in xs),4)}; {len(xs)} cells",
+                         frac(sum(r['has_error'] for r in errors),len(errors)) if cond=='galaxy' else 'Not applicable',
+                         frac(sum(r['has_nonzero_shell'] for r in shells),len(shells)),f"{fmt(st.median(tokens)/1e6,3)}; {len(tokens)}/{len(rs)}"])
+    table('I13','All-task agreement, replicate dispersion, operational markers and tokens',
+          ['Configuration','Environment','Mean agreement; numeric runs','Within-cell range: median (Q1-Q3); evaluable cells','Runs with Galaxy job error','Runs with nonzero shell exit','Median input tokens (millions); coverage'],rows,
+          "IWC counterpart to B14 and C9, using continuous agreement instead of acceptance. Luna ran at `max` reasoning and the others at `high`, so configuration and reasoning are confounded. "
+          "Budgets were unbalanced: 6 h or 12 h ceilings differ by configuration and environment. Galaxy job errors and nonzero shell exits are different instruments, as in B14. "
+          "These are all-ten-task available-case summaries, not the matched population in I1: GPT-5.5 code has nine scored tasks, other rows ten. Do not subtract unequal-population means. "
+          "These are selected-corpus associations, not general model rankings or measured monetary costs.")
+    udt_all={x['benchmark']:x for x in results['deep']['udt'] if x['model']=='all'}
+    put("## 4) BixBench50 + CompBio + IWC analysis\n\n**Finding:** median within-task input-token ratios exceed one in each archive. "
+        "Pointwise bootstrap intervals exclude one for the reported BixBench and CompBio configuration ratios, but include one for IWC. This is not a monetary-cost or causal overhead estimate. "
+        "No common performance gap is estimable: BixBench measures evaluator acceptance, CompBio lacks item-level scores, and IWC measures continuous agreement with unresolved score conflicts. "
+        "IWC helper-list omissions and observed Tool Shed jobs do not isolate tool coverage from agent capability. "
+        "Shared evidence supports prioritizing observability, validated input/operation contracts and frozen score lineage. "
+        "It does not establish a cross-benchmark accuracy benefit or that provenance benefits outweigh resource cost.")
+    iwc_g=subset('IWC','galaxy')
+    table('X1','What can be combined fairly?', ['Endpoint / population','BixBench50','CompBio','IWC','Combined interpretation'],[
+          ['Task origin','Platform-neutral analysis questions','Platform-neutral computational-biology questions','Derived from published Galaxy IWC workflows',
+           'Origin is a descriptive stratum, confounded with endpoint, task set, prompts and tool exposure'],
+          ['Archived inventory','50 tasks; 1,500 runs','100 tasks; 2,500 runs','10 tasks; 240 runs','160 task packages; 4,240 records, not 4,240 independent observations'],
+          ['Shared supplied GPT labels (descriptive cross-benchmark set)','3 configurations; 900 runs','3 configurations; 1,800 runs','3 configurations; 180 runs',
+           '2,880 records; IWC runtime and reasoning are audited, the others are not all established'],
+          ['DeepSeek','V4 Pro / Codex; superseded Claude Code separate','V4 Pro 0813 / Codex','V4 Pro / Codex (runtime `deepseek-v4-pro`)','Version equivalence unverified; excluded from shared-label cross-benchmark effects'],
+          ['Scored endpoint','1,500 binary acceptance scores','0/2,500 item scores',f"{sum(r['score'] is not None for r in subset('IWC'))}/240 continuous agreement scores; 17 conflicts",
+           'No pooled accuracy, correct-per-token or recovery estimate; agreement is never converted to acceptance'],
+          ['Paired input-token ratios','250/250 all-configuration pairs','386/400 all-configuration pairs','40/40 all-configuration pairs','Comparable formula; report benchmark strata and shared-label comparisons'],
+          ['Path agreement','Recomputed strict observed/nonempty eligibility','Same strict eligibility','Same strict eligibility','Compare benchmarks within each instrument; no G-versus-Code consistency ranking'],
+          ['Run-linked operational errors','Detailed histories in 714/750 G records','Detailed histories in 1,198/1,200 G records',
+           f"Detailed histories in {sum(r['errors'] is not None for r in iwc_g)}/{len(iwc_g)} G records",'Available-case burden; collection and task composition confound contrasts'],
+          ['User-defined-tool helper',f"Requested in {udt_all['BixBench50']['request_runs']:,}/{udt_all['BixBench50']['transcripts']:,} G transcripts",
+           f"Requested in {udt_all['CompBio']['request_runs']:,}/{udt_all['CompBio']['transcripts']:,} G transcripts",
+           f"Absent from {sum('run_galaxy_udt_and_wait' not in r['galaxy_helpers_exposed'] for r in iwc_g)}/{len(iwc_g)} recorded helper lists",
+           'Zero named-helper detections are not proof of zero custom-code use or lack of necessity (X19)'],
+          ['Full cost / human review time','Unavailable / unmeasured','Unavailable / unmeasured','Unavailable / unmeasured','Neither monetary efficiency nor faster human review is established']],
+          "The historical CompBio source composes final vectors from multiple campaigns, unlike a prospectively fixed independent replicate design. "
+          "IWC has unbalanced 6 h and 12 h budgets and environment-specific prompts. "
+          "Prompt additions, harnesses, tools, model verification, domain mix and campaign selection remain confounders. "
+          "No cross-benchmark pooled accuracy denominator is constructed.")
+    rows=[]
+    for x in results['cross_tokens']:
+        effect={'estimate':x['ratio_of_medians'],'ci95':x['ci95']}
+        rows.append([LABELS.get(x['model'],'All three shared configurations'),
+                     f"{x['BixBench50']['n']}; {ci(x['BixBench50'])}",f"{x['CompBio']['n']}; {ci(x['CompBio'])}",f"{x['IWC']['n']}; {ci(x['IWC'])}",
+                     ci(effect),ci({'estimate':x['iwc_ratio_of_medians'],'ci95':x['iwc_ci95']})])
+    table('X2','Does relative input-token overhead generalize across benchmarks?',
+          ['Shared supplied configuration','Bix pairs; median G/Code [CI]','CompBio pairs; median G/Code [CI]','IWC pairs; median G/Code [CI]',
+           'CompBio/Bix median-ratio contrast [CI]','IWC/Bix median-ratio contrast [CI]'],rows,
+          "The contrast columns divide two benchmark-specific medians of within-task ratios; they are not absolute-token ratios. "
+          "A value above one means greater relative overhead than in BixBench. IWC has ten task clusters, so its intervals are wide. "
+          "Its lower point estimate cannot be attributed to installed wrappers: prompts, budgets, task selection and Code tails also differ (I9). "
+          "Benchmark strata are resampled separately, "
+          "preserving tasks/configurations within clusters. Selection differs and these are observational comparisons. "+uncertainty)
+    rows=[]
+    for x in results['cross_paths']:
+        rows.append([ENV[x['condition']],f"{x['BixBench50']['n']}; {ci(x['BixBench50'],3)}",
+                     f"{x['CompBio']['n']}; {ci(x['CompBio'],3)}",f"{x['IWC']['n']}; {ci(x['IWC'],3)}",
+                     ci({'estimate':x['difference'],'ci95':x['ci95']},3),ci({'estimate':x['iwc_difference'],'ci95':x['iwc_ci95']},3)])
+    table('X3','Does the same path instrument reproduce its agreement across benchmarks?',
+          ['Instrument / environment','Bix eligible cells; mean [CI]','CompBio eligible cells; mean [CI]','IWC eligible cells; mean [CI]','CompBio - Bix [CI]','IWC - Bix [CI]'],rows,
+          "Descriptive population: three shared GPT labels; all three run fingerprints observed and nonempty. "
+          "This holds the extraction rule and included supplied labels fixed; eligible configuration proportions can still differ. "
+          "IWC's higher Galaxy tool-set agreement fits workflow-defined tool chains, but rests on ten tasks. "
+          "It does not control biological task complexity, command-vocabulary coverage, "
+          "custom-wrapper identity or campaign selection. Lower agreement describes more variable recorded toolsets/command indicators, "
+          "not worse science. Instrument values must not be directly compared across the two rows.")
+    rows=[]
+    for x in results['failure_rates']:
+        e={'estimate':100*x['estimate'],'ci95':[100*v for v in x['ci95']]}
+        rows.append([x['benchmark'],frac(x['with_error'],x['n']),ci(e,1),x['clusters']])
+    table('X4','Run-level operational burden with the shared configuration mix',
+          ['Benchmark','G runs with >=1 non-fetch error / detailed runs','Percentage [95% CI]','Resampling clusters'],rows,
+          "Three shared GPT labels only; missing detailed histories are excluded explicitly. Each run contributes one binary indicator, "
+          "preventing runs with many jobs from dominating this estimate. Histories may contain inherited/later state; this is recorded burden, "
+          "not a causal benchmark/platform failure probability. No code-condition counterpart uses an equivalent job instrument.")
+    errors={benchmark:[j for j in jobs if j['benchmark']==benchmark and j['status']=='error'] for benchmark in FOLDERS}
+    rows=[]
+    for name in results['error_codebook']:
+        rows.append([name,*[frac(results['error_indicators'][bm][name],len(errors[bm])) for bm in FOLDERS]])
+    rows.extend([
+        ['Error jobs with any retained stdout/stderr',*[frac(sum(j['has_error_text'] for j in errors[bm]),len(errors[bm])) for bm in FOLDERS]],
+        ['Error jobs without retained stdout/stderr',*[frac(sum(not j['has_error_text'] for j in errors[bm]),len(errors[bm])) for bm in FOLDERS]],
+        ['Text present but no rule matched',*[frac(sum(j['has_error_text'] and not j['error_indicators'] for j in errors[bm]),len(errors[bm])) for bm in FOLDERS]],
+        ['Error state with recorded exit code zero',*[frac(sum(j['exit_code']==0 for j in errors[bm]),len(errors[bm])) for bm in FOLDERS]],
+    ])
+    table('X5','Which operational error messages are observable?',
+          ['Exploratory indicator / observability',*[f"{ {'BixBench50':'Bix','CompBio':'CompBio','IWC':'IWC'}[bm]} error jobs (n={len(errors[bm]):,})" for bm in FOLDERS]],rows,
+          "All benchmark-specific paired configurations, not just shared GPT labels. Deduplicated non-fetch error jobs; "
+          "case-insensitive regex matches on retained stderr/stdout excerpts, with overlapping categories. "
+          "The exact codebook and every source event reference are in the analysis JSON. "
+          "These are message indicators, not independently adjudicated root causes; missing/truncated logs suppress detection, "
+          "and absent text does not mean no diagnostic existed on the server. No significance test compares these unequally observed taxonomies. "
+          "Exit code zero does not override the recorded Galaxy error state. "
+          "In IWC, fastp and Bowtie2 error jobs retain no text at all (X18), so the generic codebook under-detects its failures.")
+    rows=[]
+    for benchmark in FOLDERS:
+        jj=[j for j in jobs if j['benchmark']==benchmark]
+        counts=Counter(j['tool'] for j in jj);fails=Counter(j['tool'] for j in jj if j['status']=='error')
+        top=sorted(fails,key=lambda t:(-fails[t],t))[:5]
+        for tool in top:
+            short=tool.split('/')[-2]+'/'+tool.split('/')[-1] if 'toolshed' in tool else tool
+            rows.append([benchmark,short,frac(fails[tool],counts[tool])])
+    table('X6','Where recorded error jobs concentrate', ['Benchmark','Recorded tool / version','Error / all jobs for tool'],rows,
+          "Top five tool IDs ranked by error-job count within each benchmark (ties ordered by full ID); "
+          "all non-fetch jobs and all configurations. These are triage targets, not tool-quality rankings: exposure, parameters, "
+          "input quality, custom wrappers and task mix differ. In particular, udt-render-probe-v1 identifies a diagnostic probe; "
+          "its error states cannot be assumed to be failed biomedical analyses. IWC error concentrations sit in domain workflow wrappers, the tools its tasks were built around. "
+          "Full tool IDs and creating-job references are retained in `jobs` in the analysis JSON.")
+    table('X7','Galaxy improvements suggested by the observed evidence',
+          ['Priority / owner','Evidence and limitation','Proposed capability or integration','Prospective success measure'],[
+          ['1. Galaxy API + agent client: complete audit capture',
+           'B4/C3/I7: 32 Bix, 2 CompBio and 2 IWC metadata-only histories; CompBio state summaries disagree',
+           'Paginate/resume history collection; reconcile dataset/job states; export run-scoped graph with inherited-job flags and immutable submission/evaluator receipts',
+           'Missing-job rate, state disagreements, receipt/hash linkage, blinded audit reconstruction errors'],
+          ['1. Tool wrappers + agent client: typed preflight',
+           'C7: string division corrected; X5: numeric/type and dependency indicators; X18: IWC edgeR contrast-level and unset-threshold signatures',
+           'Expose column types, sparse/dense matrix capabilities, required executable/version and typed argument checks before launch',
+           'Avoidable error jobs per task and accepted-answer rate in a paired ablation; track false rejections'],
+          ['1. Agent client + Galaxy: objective-aware recovery',
+           '93 Bix, 213 CompBio and 41 IWC candidates (27 distinct IWC successes); chunk_X to var is a counterexample',
+           'Attach objective IDs and output postconditions to attempts; show input/parameter diffs and require same-objective validation before marking recovery',
+           'Adjudicated recovery precision, unresolved objectives, attempts/tokens before a supported result'],
+          ['2. Workflow authors + evaluators: scientific input contracts',
+           'B3: rejected RCV and transition/transversion answers despite successful jobs; I5: completed IWC runs failed identifier, FDR and content contracts',
+           'Persist cohort/callset, reference release, coordinates, filter thresholds and denominator; validate final result against the declared contract',
+           'Scientifically wrong completed runs, parameter/reference mismatches and correct alternatives retained'],
+          ['2. Galaxy API + agent client: compact state and usage ledger',
+           'B7/C6/I9/X2: median token ratios above one in all three archives; stage attribution is unavailable',
+           'Cache tool schemas, fetch state deltas, batch status queries and attach provider request usage to stages with a mixed/unattributed category',
+           'Input/output/cache tokens and latency per task, with acceptance and evidence completeness held to prespecified targets'],
+          ['2. Galaxy reports + user interface: evidence-linked result review',
+           'B6/C2: consistency does not imply correctness; no human review study',
+           'Show answer, supporting datasets, tool/parameter versions, unresolved errors and score provenance in one reviewable report',
+           'Blinded randomized review time, reconstruction accuracy and reviewer agreement under equal information access'],
+          ['1. Evaluators + benchmark maintainers: frozen score lineage',
+           'I6: 17 IWC evaluator/run-record conflicts; five host-removal records change the sign of one configuration difference',
+           'Freeze evaluator version, reference and route registry; emit one authoritative score with a receipt linking both sources',
+           'Conflict count, sign changes under alternative lineage, and reproducible regrading from receipts'],
+          ['2. Agent client + evaluators: matched UDT exposure on Galaxy-native tasks',
+           'I11/X19: the IWC helper list omitted the user-defined-tool helper, so native-tool preference cannot be separated from interface design',
+           'Run a matched IWC arm with the helper exposed and record catalog search results and rejected alternatives',
+           'User-defined-tool request rate under matched exposure, agreement and tokens; audit all execution locations in both arms']],
+          "Priorities are analyst proposals, not measured intervention effects or claims that these features are wholly absent. "
+          "Galaxy already documents [history API and exports](https://docs.galaxyproject.org/en/release_26.1/_modules/galaxy/webapps/galaxy/api/histories.html), "
+          "[error troubleshooting](https://training.galaxyproject.org/training-material/faqs/galaxy/analysis_troubleshooting.html), "
+          "[datatype handling](https://training.galaxyproject.org/training-material/faqs/galaxy/datatypes_understanding_datatypes.html) and "
+          "[workflow reports](https://training.galaxyproject.org/training-material/faqs/galaxy/workflows_report_view.html). "
+          "The proposed work is to assess and extend these capabilities at the agent interface. "
+          "Collection limits belong to this audit's collector and are not established Galaxy server limits. "
+          "Documentation checked 2026-09-23; no deployed-server feature audit was performed.")
+    table('X8','Claim strength, remaining questions and evidence needed',
+          ['Question','Supported answer / strength','Evidence','What would resolve the gap?'],[
+          ['Does Galaxy improve accuracy?', 'Bix difference is small/uncertain and harness-sensitive; CompBio unassessable; '
+           'IWC mean agreement differences are positive on nine matched tasks but carried by a few zero-scored Code runs, sign-unstable for Sol and Luna, and reversed for Luna with host removal',
+           'B1-B3; I1-I4; X20; finding_accuracy in source manifest', 'Fixed prospective design, compatible prompts/runtime settings, item evaluator receipts and predefined equivalence/superiority estimand'],
+          ['Is input-token usage typically higher in Galaxy?', 'Observed median ratios exceed one in all archives; pointwise intervals exclude one for BixBench/CompBio but not IWC. IWC summed input is larger in Code; no monetary comparison',
+           'B7/C6/I9/X2; token_pairs and finding_cost_readability', 'All campaigns/subagents, cache accounting, per-call stage usage and compute/storage costs'],
+          ['Are consistent paths or answers valid?', 'Consistency is observable; validity is a separate endpoint',
+           'B6/C2/C5/X3; cells and finding_variability', 'CompBio item scores; common adjudicated biological-method codebook and intermediate outputs'],
+          ['Can error causes and recovery be quantified?', 'Job burden and message indicators yes; comparative scientific recovery rate no',
+           'B4/C3/C7/I7/X4-X6; jobs and finding_execution', 'Complete diagnostics, common-stage attempt mapping, objective-linked endpoints and random adjudication of candidates/noncandidates'],
+          ['Does Galaxy make human review easier?', 'Inspectable provenance exists; improved review performance is unmeasured',
+           'Source task packages; X7', 'Randomized blinded reconstruction study with equal evidence access and reviewer agreement'],
+          ['Do results generalize by difficulty?', 'No independent difficulty annotation or controlled prompt-version comparison',
+           'docs/HISTORY_ANALYSIS_INSTRUCTIONS.md; task metadata', 'Prospectively defined task-complexity strata and independent benchmark replication'],
+          ['Do workflow-derived tasks need fewer user-defined tools?', 'Not established. Zero named-helper detections and omission from recorded lists do not demonstrate necessity, preference or native-tool sufficiency',
+           'I11; X12; X19', 'Matched IWC arm with the helper exposed, fixed catalog snapshot and recorded rejected alternatives'],
+          ['Is Galaxy more consistent on workflow-derived tasks?', 'Not established. Continuous replicate dispersion is configuration- and task-dependent; tool fingerprints and score repeatability are different instruments',
+           'I2; I4; X20', 'More IWC tasks, balanced budgets and prompts, and a prespecified consistency endpoint']],
+          "All 160 task evidence paths, hashes, included run IDs and original finding IDs are linked in the "
+          "[source manifest](analysis/BixBench50_CompBio_analysis/source_manifest.json). Table-specific display values and calculated "
+          "statistics, run/cell denominators, job references and exclusion rules are in the "
+          "[analysis JSON](analysis/BixBench50_CompBio_analysis/analysis.json). Source task evidence is unchanged; no hidden references, "
+          "recovered agent code, new Galaxy runs or new correctness judgements were used.")
+    deep.render(SimpleNamespace(**globals()),'combined',table,runs,cells,jobs,results)
+    origin={'BixBench50':'Platform-neutral','CompBio':'Platform-neutral','IWC':'Galaxy workflow-derived'}
+    rows=[]
+    for benchmark in FOLDERS:
+        rr=subset(benchmark,'galaxy');u=udt_all[benchmark];jj=[j for j in jobs if j['benchmark']==benchmark]
+        recorded=[r for r in rr if r['galaxy_helpers_exposed'] is not None]
+        exposure=(f"Absent in {sum('run_galaxy_udt_and_wait' not in r['galaxy_helpers_exposed'] for r in recorded)}/{len(recorded)} recorded lists"
+                  if recorded else 'Not recorded; requests show availability')
+        rows.append([benchmark,origin[benchmark],exposure,frac(u['request_runs'],u['transcripts']),frac(len(u['request_tasks']),TASKS[benchmark]),
+                     f"{u['job_linked_runs']:,}/{len(rr):,} (lower-bound count)",frac(sum(domain_wrapper(j['tool']) for j in jj),len(jj)),
+                     frac(sum(any(t.startswith('interactive_tool') for t in r['galaxy_full_tool_ids']) for r in rr if r['has_error'] is not None),
+                          sum(r['has_error'] is not None for r in rr))])
+    table('X19','Task origin, recorded helper exposure and detected tool use',
+          ['Benchmark','Task origin','Recorded UDT helper list','Runs with detected request / retrieved transcripts','Tasks with detected request / listed tasks','Request-linked job detections / listed runs','Tool Shed jobs outside utility codebook / non-fetch jobs','Interactive-tool histories / detailed histories'],rows,
+          "All benchmark-specific paired configurations. Requests, linkage and success use the X12 rules. "
+          "BixBench and CompBio exposure lists were not archived; observed requests show that the helper was available in at least those runs. "
+          "Request rates and listed-run linkage counts have different denominators. A linkage count divided by all listed runs is a detected lower bound, not an estimate that treats missing transcripts/histories as zero use. "
+          "IWC has no named-helper detections and its recorded lists omit that helper; neither observation establishes absence of alternative custom-code interfaces. "
+          "Tool Shed jobs outside the utility codebook (I11) form a larger observed job share in IWC, but this classifier does not prove native completion of every task. "
+          "Task origin and helper exposure are not experimentally separated. Local shell and interactive computation remain possible; Galaxy-only execution is uncertified in every benchmark.")
+    acc=results['accuracy']['shared_three'];iw=next(x for x in results['iwc']['comparisons'] if x['model']=='shared_three')
+    def run_frac(benchmark,cond,test,tasks=None):
+        rr=[r for r in subset(benchmark,cond) if r['model'] in COMMON and r['score'] is not None
+            and (tasks is None or r['task'] in tasks)]
+        return frac(sum(test(r['score']) for r in rr),len(rr))
+    table('X20','Distinct benchmark endpoints in the shared-label descriptive set',
+          ['Benchmark','Analysis population per environment','Endpoint','G','Code','G - Code [95% CI]','Zero recorded scores: G / Code (benchmark-specific meaning)'],[
+          ['BixBench50','50 tasks; 3 configurations; 450 runs','Binary evaluator acceptance',frac(acc['conditions']['galaxy']['accepted'],acc['conditions']['galaxy']['n']),
+           frac(acc['conditions']['open_ended_code']['accepted'],acc['conditions']['open_ended_code']['n']),ci(acc)+' pp',
+           f"{run_frac('BixBench50','galaxy',lambda v:v==0)} / {run_frac('BixBench50','open_ended_code',lambda v:v==0)}"],
+          ['CompBio','100 tasks; 3 configurations; 900 records','Item scores unavailable','NA','NA','NA','NA'],
+          ['IWC','9 tasks; 3 configurations; 81 runs','Continuous agreement (mean)',fmt(iw['common_nine']['galaxy'],4),fmt(iw['common_nine']['open_ended_code'],4),
+           ci(iw['common_nine'],4),
+           f"{run_frac('IWC','galaxy',lambda v:v==0,iwc['common_nine_tasks'])} / {run_frac('IWC','open_ended_code',lambda v:v==0,iwc['common_nine_tasks'])}"]],
+          "Three shared supplied GPT labels, not verified identical runtime/reasoning settings across benchmarks. Endpoints differ, so read rows side by side, never pooled or ranked. "
+          "BixBench differences are percentage points of acceptance; IWC differences are agreement units on 0-1. "
+          "All IWC columns use the same nine-task subset as I1; host-removal nulls and conflicts are documented in I6, not relabelled as failures. "
+          "A BixBench zero denotes evaluator rejection; an IWC zero can reflect a contract check or output disagreement and is not an interchangeable scientific-failure endpoint. "
+          "CompBio answer-text identity is omitted from this outcome table because it is neither a ceiling score nor correctness (see C2). "
+          "Task sets, prompts, budgets, interfaces and endpoints differ; whether workflow-derived task origin narrows an environment effect is not identifiable from this comparison.")
+    return '\n'.join(doc), tables
+
+
+def main():
+    b=read('runs/BixBench_50/bixBench50_overview_audit.json')
+    c=read('runs/CompBio/compBio_overview_audit.json')
+    w=read('runs/IWC/iwc_scientific_audit.json')
+    manifest,runs,cells,jobs=load_data(b,c,w)
+    results=compute(b,c,runs,cells,jobs)
+    results['deep']=deep.compute(SimpleNamespace(**globals()),runs,cells,jobs)
+    # Cross-check archived aggregates before generating publication tables.
+    for benchmark,audit in [('BixBench50',b),('CompBio',c)]:
+        jj=[j for j in jobs if j['benchmark']==benchmark]
+        expected=audit['jobs']['unique'] if benchmark=='BixBench50' else audit['execution']['nonfetch_jobs']
+        assert len(jj)==expected,(benchmark,len(jj),expected)
+        expected_states=audit['jobs']['states'] if benchmark=='BixBench50' else audit['execution']['nonfetch_states']
+        assert dict(Counter(j['status'] for j in jj))==expected_states
+        expected_ratio=audit['token_ratios']['median'] if benchmark=='BixBench50' else audit['tokens']['pooled']['median']
+        assert abs(results['tokens'][benchmark+'_all']['median']-expected_ratio)<1e-10
+    for cond in CONDITIONS:
+        assert results['accuracy']['all']['conditions'][cond]==b['accuracy'][cond]
+    assert all(r['score'] is None for r in runs if r['benchmark']=='CompBio')
+    # IWC: the harmonized rule keeps legacy upload1, so it adds 22 uploads to the audit's 1,330 non-acquisition jobs.
+    iwc_audit_jobs=[v for v in w['jobs'].values() if not v['acquisition']]
+    iwc_jobs=[j for j in jobs if j['benchmark']=='IWC']
+    assert len(iwc_jobs)==len(iwc_audit_jobs)+sum(j['tool']=='upload1' for j in iwc_jobs)
+    assert Counter(j['status'] for j in iwc_jobs if j['tool']!='upload1')==Counter(v['status'] for v in iwc_audit_jobs)
+    assert sum(r['score'] is not None for r in runs if r['benchmark']=='IWC')==237
+    names={COMMON[0]:'GPT-5.5',COMMON[1]:'GPT-5.6 Sol',COMMON[2]:'GPT-5.6 Luna',DEEP_I:'Codex + DeepSeek V4 Pro'}
+    for x in results['iwc']['comparisons']:
+        if x['model'] in names:
+            assert abs(x['common_nine']['estimate']-w['comparisons']['common_nine_tasks'][names[x['model']]]['estimate'])<1e-12
+            ratios=[p['ratio'] for p in results['token_pairs'] if p['benchmark']=='IWC' and p['model']==x['model']]
+            assert abs(st.median(ratios)-w['token_results'][names[x['model']]]['input_tokens_task_median_ratios']['median'])<1e-12
+    assert sum(r['recovery_candidates'] for r in runs if r['benchmark']=='IWC')==len(w['recovery_candidates'])
+    for row in c['solution_paths']['by_condition_and_model']:
+        own=next(s for s in results['path_summaries'] if s['benchmark']=='CompBio' and s['condition']==row['condition'] and s['model']==('all' if row['model']=='ALL' else row['model']))
+        assert own['evaluable']==row['evaluable_cells']
+        assert abs(own['mean_jaccard']-row['mean_jaccard'])<1e-12
+    text,tables=report(b,c,w,runs,cells,jobs,results)
+    source_paths=['docs/HISTORY_ANALYSIS_INSTRUCTIONS.md','analysis/scripts/build_result_tables.py','analysis/scripts/result_table_deep_analysis.py',
+                  'runs/BixBench_50/bixBench50_overview_audit.json','runs/CompBio/compBio_overview_audit.json',
+                  'runs/BixBench_50/solution_path_consistency_analysis.py',
+                  'runs/BixBench_50/result_section_bixbench50.md','runs/CompBio/result_section_compbio.md',
+                  'runs/IWC/iwc_scientific_audit.json','runs/IWC/iwc_sensitivity_results.json','runs/IWC/result_section_iwc.md',
+                  'analysis/BixBench50_CompBio_analysis/report_revisions/Result_table.pre_claim_revision_20260923.md']
+    OUT.mkdir(exist_ok=True)
+    source_manifest={"format": "cross-benchmark-aggregate-manifest-v1", "not_task_evidence_schema": True,
+                     "sources": [{"path":p,"sha256":sha(p)} for p in source_paths],"tasks":manifest,
+                     "reviewed_trace_sources": [{"path":x['source'],"sha256":x['sha256'],"lines":[m['line'] for m in x['messages']]}
+                                                for x in results['deep']['case_sources']]}
+    native={benchmark:{(j['server'],j['native_job_id']) for j in jobs if j['benchmark']==benchmark} for benchmark in FOLDERS}
+    shared_jobs=set().union(*(native[x]&native[y] for x,y in itertools.combinations(FOLDERS,2)))
+    data={"format":"cross-benchmark-analysis-v1", "software":{"python":platform.python_version(),"numpy":np.__version__},
+          "bootstrap":{"resamples":RESAMPLES,"seed":SEED,"method":"percentile; NumPy linear quantiles; statistic-key SHA256 stream",
+                       "units":{"BixBench50":"capsule","CompBio":"task","IWC":"task"},"status":"exploratory pointwise intervals"},
+          "common_configurations":list(COMMON),"results":results,"tables":tables,"runs":runs,"cells":cells,"jobs":jobs,
+          "validation":{"source_evidence_hashes_checked":len(manifest),"run_ids_unique":len(runs),
+                        "archived_accuracy_jobs_token_medians_reproduced":True,"compbio_path_summaries_reproduced":True,
+                        "iwc_jobs_scores_token_ratios_common_nine_differences_reproduced":True,
+                        "cross_benchmark_shared_native_jobs":len(shared_jobs),"compbio_item_scores_remain_null":True}}
+    (OUT/'source_manifest.json').write_text(json.dumps(source_manifest,indent=2,ensure_ascii=True)+'\n')
+    (OUT/'analysis.json').write_text(json.dumps(data,indent=2,ensure_ascii=True,allow_nan=False)+'\n')
+    # links in the report are written relative to the repository root; the report lives in docs/reports/
+    import os
+    text = re.sub(r'\]\((?!https?:|#|/)([^)]+)\)', lambda m: '](' + os.path.relpath(m.group(1), 'docs/reports') + ')', text)
+    (ROOT/'docs/reports/Result_table.md').write_text(text)
+    print(json.dumps({"tables":len(tables),"runs":len(runs),"task_packages":len(manifest),"shared_native_jobs":len(shared_jobs),
+                      "report":"docs/reports/Result_table.md","analysis_bytes":(OUT/'analysis.json').stat().st_size},indent=2))
+
+
+if __name__=='__main__':
+    main()

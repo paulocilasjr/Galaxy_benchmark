@@ -9,4 +9,4 @@ What changed afterwards (see `figures/figure_review_response.md`, section "Score
 - the population sensitivities of Extended Data Fig. 2b are recomputed;
 - the 71% in the Fig. 3f and Extended Data Fig. 6d subtitles (a pandas-3 bug) became 89%.
 
-These scripts read `manuscript_narrative/original_layout/analysis/accuracy_primary_runs.csv`. To regenerate one of them, copy its `make_*.py` back into `figures/` first: the scripts locate the repository root relative to their own folder and write into `figures/`.
+These scripts read `manuscript/manuscript_narrative/original_layout/analysis/accuracy_primary_runs.csv`. To regenerate one of them, copy its `make_*.py` back into `figures/` first: the scripts locate the repository root relative to their own folder and write into `figures/`.

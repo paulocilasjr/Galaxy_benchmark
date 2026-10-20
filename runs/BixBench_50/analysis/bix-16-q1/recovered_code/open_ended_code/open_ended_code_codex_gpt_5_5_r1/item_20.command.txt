@@ -1,0 +1,98 @@
+/bin/bash -lc "python - <<'PY'
+import csv, time
+from pathlib import Path
+import numpy as np
+from scipy.stats import rankdata
+
+crispr_path = Path('inputs/CRISPRGeneEffect.csv')
+expr_path = Path('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+
+def read_header(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))
+
+def read_ids(path):
+    ids=[]
+    with open(path, newline='') as f:
+        r=csv.reader(f); next(r)
+        for row in r: ids.append(row[0])
+    return ids
+
+print('reading headers/ids', flush=True)
+ch = read_header(crispr_path); eh = read_header(expr_path)
+crispr_ids = read_ids(crispr_path); expr_ids = read_ids(expr_path)
+cmap = {g:i for i,g in enumerate(ch[1:])}
+emap = {g:i for i,g in enumerate(eh[1:])}
+common_genes = [g for g in eh[1:] if g in cmap]
+crispr_id_set = set(crispr_ids)
+common_models = [m for m in expr_ids if m in crispr_id_set]
+print('common models', len(common_models), 'common genes', len(common_genes), flush=True)
+
+e_usecols = [emap[g]+1 for g in common_genes]
+c_usecols = [cmap[g]+1 for g in common_genes]
+
+print('loading selected expression as float32', flush=True)
+t0=time.time()
+expr_all = np.loadtxt(expr_path, delimiter=',', skiprows=1, usecols=e_usecols, dtype=np.float32)
+expr_row = {m:i for i,m in enumerate(expr_ids)}
+erows = np.array([expr_row[m] for m in common_models], dtype=np.int64)
+X = np.array(expr_all[erows, :], dtype=np.float32, copy=True)
+del expr_all
+print('X', X.shape, 'nan', int(np.isnan(X).sum()), 'sec', time.time()-t0, flush=True)
+
+print('streaming CRISPR selected columns as float32 with blanks -> NaN', flush=True)
+t0=time.time()
+model_to_outrow = {m:i for i,m in enumerate(common_models)}
+Y = np.empty((len(common_models), len(common_genes)), dtype=np.float32)
+Y.fill(np.nan)
+rows_filled = 0
+with open(crispr_path, newline='') as f:
+    r = csv.reader(f)
+    next(r)
+    for row in r:
+        out_i = model_to_outrow.get(row[0])
+        if out_i is None:
+            continue
+        # Store positive-going essentiality: -GeneEffect. Blank remains NaN.
+        vals = []
+        for pos in c_usecols:
+            s = row[pos]
+            vals.append(-float(s) if s else np.nan)
+        Y[out_i, :] = vals
+        rows_filled += 1
+print('Y', Y.shape, 'rows_filled', rows_filled, 'nan', int(np.isnan(Y).sum()), 'sec', time.time()-t0, flush=True)
+
+print('pairwise Spearman scan', flush=True)
+t0=time.time()
+corr = np.full(len(common_genes), np.nan, dtype=np.float64)
+nobs = np.zeros(len(common_genes), dtype=np.int32)
+for j in range(len(common_genes)):
+    x = X[:, j]
+    y = Y[:, j]
+    mask = np.isfinite(x) & np.isfinite(y)
+    n = int(mask.sum())
+    nobs[j] = n
+    if n >= 2:
+        rx = rankdata(x[mask], method='average')
+        ry = rankdata(y[mask], method='average')
+        rx -= rx.mean(); ry -= ry.mean()
+        den = np.sqrt(np.sum(rx*rx) * np.sum(ry*ry))
+        if den > 0:
+            corr[j] = np.sum(rx*ry) / den
+    if (j+1) % 5000 == 0:
+        print('scanned', j+1, 'sec', time.time()-t0, flush=True)
+
+valid = np.isfinite(corr)
+valid_idxs = np.flatnonzero(valid)
+min_idx = valid_idxs[np.argmin(corr[valid])]
+label = common_genes[min_idx]
+symbol = label.rsplit(' (', 1)[0]
+print('valid_corrs', int(valid.sum()))
+print('min_label', label)
+print('symbol', symbol)
+print('rho', repr(float(corr[min_idx])))
+print('nobs_min', int(nobs[min_idx]))
+print('top10')
+for idx in valid_idxs[np.argsort(corr[valid])[:10]]:
+    print(common_genes[idx], float(corr[idx]), int(nobs[idx]))
+PY"

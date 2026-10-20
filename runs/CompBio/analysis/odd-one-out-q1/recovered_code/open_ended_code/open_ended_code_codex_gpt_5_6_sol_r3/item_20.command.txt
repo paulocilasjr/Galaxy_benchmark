@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,numpy as np
+from make_bins import CHROMS,OFFSETS,BIN,length
+A=np.stack([np.load(f'{i}.bins1k.npy') for i in range(1,11)]).astype(float)
+features={x:np.zeros(length,bool) for x in ['prom1k','prom5k','prom20k','gene','exon']}
+tss=set(); genes=[]
+with gzip.open('refGene.txt.gz','rt') as h:
+ for line in h:
+  f=line.rstrip().split('\\t'); chrom=f[2]
+  if chrom not in OFFSETS: continue
+  strand=f[3]; s,e=int(f[4]),int(f[5]); pos=s if strand=='+' else e
+  tss.add((chrom,pos,strand))
+  genes.append((chrom,s,e,strand))
+  off=OFFSETS[chrom]; maxb=(CHROMS[chrom]+999)//1000
+  def mark(key,a,b): features[key][off+max(0,a//1000):off+min(maxb,(b+999)//1000)]=1
+  mark('gene',s,e)
+  mark('prom1k',max(0,pos-1000),min(CHROMS[chrom],pos+1000))
+  mark('prom5k',max(0,pos-5000),min(CHROMS[chrom],pos+5000))
+  mark('prom20k',max(0,pos-20000),min(CHROMS[chrom],pos+20000))
+  for a,b in zip(f[9].rstrip(',').split(','),f[10].rstrip(',').split(',')): mark('exon',int(a),int(b))
+print('TSS',len(tss),'mask bins',{k:int(v.sum()) for k,v in features.items()})
+for k,m in features.items(): print(k,np.round(A[:,m].sum(1)/A.sum(1),4))
+# enrichment relative to genomic bin fraction
+for k,m in features.items(): print(k,'enr',np.round((A[:,m].sum(1)/A.sum(1))/(m.sum()/length),2))
+# strand-oriented TSS profiles, unique all RefSeq, -100..100kb
+prof=np.zeros((10,201))
+for chrom,pos,strand in tss:
+ b=OFFSETS[chrom]+pos//1000
+ if b-100<OFFSETS[chrom] or b+101>OFFSETS[chrom]+(CHROMS[chrom]+999)//1000: continue
+ x=A[:,b-100:b+101]
+ if strand=='-':x=x[:,::-1]
+ prof+=x
+for i in range(10):
+ p=prof[i]
+ base=np.r_[p[:50],p[-50:]].mean()
+ print(i+1,'TSS center/base',round(p[99:102].mean()/base,2),'plusminus5/base',round(p[95:106].mean()/base,2),'peakoffset',int(np.argmax(p)-100),'profile deciles',np.round([p[a:b].mean()/base for a,b in [(0,50),(50,90),(90,99),(99,102),(102,111),(111,151),(151,201)]],2))
+PY"

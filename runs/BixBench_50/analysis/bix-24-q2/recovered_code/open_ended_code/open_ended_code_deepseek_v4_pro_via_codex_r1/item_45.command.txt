@@ -1,0 +1,37 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, mygene, time, json, os
+res=pd.read_csv('/workspace/de_cbd_vs_dmso.csv',index_col=0)
+bg=res[res['padj'].notna()].index.tolist()
+print('bg n', len(bg))
+mg=mygene.MyGeneInfo()
+out={}
+chunks=[bg[i:i+1000] for i in range(0,len(bg),1000)]
+for ci,ch in enumerate(chunks):
+    try:
+        rr=mg.querymany(ch, scopes='ensembl.gene', fields='symbol,entrezgene,go.BP', species='human', returnall=False, verbose=False)
+    except Exception as e:
+        print('chunk error',ci,e)
+        continue
+    for r in rr:
+        q=r.get('query')
+        sym=r.get('symbol')
+        entrez=r.get('entrezgene')
+        bp=[]
+        go=r.get('go')
+        if isinstance(go,dict):
+            bp=go.get('BP') or []
+        elif isinstance(go,list):
+            pass
+        out[q]={'symbol':sym,'entrez':entrez,'bp':bp}
+    if (ci+1)%10==0: print('chunk',ci+1,'of',len(chunks), 'time', time.strftime('%H:%M:%S'))
+print('mapped entries',len(out),'notfound',sum(1 for x in bg if x not in out))
+# save simple mapping
+with open('/workspace/ensembl_mapping.json','w') as f: json.dump(out,f)
+# symbols summary
+syms=[v['symbol'] for v in out.values() if v.get('symbol')]
+print('with symbol',len(syms),'unique symbols',len(set(syms)))
+print('with entrez',sum(1 for v in out.values() if v.get('entrez') is not None))
+print('with BP',sum(1 for v in out.values() if v.get('bp')))
+print('sample')
+for x in bg[:5]: print(x,out.get(x))
+PY"

@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, tempfile, subprocess, os, sys, math
+from pathlib import Path
+sys.path.insert(0, '/workspace/.pydeps')
+from scipy.stats import mannwhitneyu
+
+PHYKIT = '/workspace/.pydeps/bin/phykit'
+archives = {
+    'animals': Path('inputs/scogs_animals.zip'),
+    'fungi': Path('inputs/scogs_fungi.zip'),
+}
+
+def phykit_rate_from_member(zip_path, member, tmpdir):
+    p = Path(tmpdir) / Path(member).name
+    with zipfile.ZipFile(zip_path) as zf:
+        p.write_bytes(zf.read(member))
+    try:
+        env = dict(os.environ)
+        env['PYTHONPATH'] = '/workspace/.pydeps' + (':' + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+        cp = subprocess.run([PHYKIT, 'evo_rate', str(p)], check=True, text=True, capture_output=True, env=env)
+        return float(cp.stdout.strip())
+    finally:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+
+def collect(zip_path):
+    rates = {}
+    with zipfile.ZipFile(zip_path) as zf:
+        members = sorted(n for n in zf.namelist() if n.endswith('.faa.mafft.clipkit.treefile'))
+    with tempfile.TemporaryDirectory(dir='/workspace') as td:
+        for m in members:
+            gene = m.split('.faa')[0]
+            rates[gene] = phykit_rate_from_member(zip_path, m, td)
+    return rates
+
+animals = collect(archives['animals'])
+fungi = collect(archives['fungi'])
+print('n animals', len(animals), 'n fungi', len(fungi), 'intersection', len(set(animals)&set(fungi)))
+print('first animal rates', list(animals.items())[:5])
+print('first fungi rates', list(fungi.items())[:5])
+res_all = mannwhitneyu(list(animals.values()), list(fungi.values()), alternative='two-sided', method='auto')
+common = sorted(set(animals)&set(fungi))
+res_common = mannwhitneyu([animals[g] for g in common], [fungi[g] for g in common], alternative='two-sided', method='auto')
+print('U_all_animals_first', res_all.statistic, 'p', res_all.pvalue)
+print('U_common_animals_first', res_common.statistic, 'p', res_common.pvalue)
+# also manual rank U to verify statistic
+for label, x, y in [('all', list(animals.values()), list(fungi.values())), ('common', [animals[g] for g in common], [fungi[g] for g in common])]:
+    vals = [(v,0) for v in x] + [(v,1) for v in y]
+    vals.sort(key=lambda t:t[0])
+    ranks=[0]*len(vals)
+    i=0
+    while i<len(vals):
+        j=i+1
+        while j<len(vals) and vals[j][0]==vals[i][0]: j+=1
+        avg=(i+1+j)/2
+        for k in range(i,j): ranks[k]=avg
+        i=j
+    R1=sum(r for r,(v,g) in zip(ranks, vals) if g==0)
+    U=R1-len(x)*(len(x)+1)/2
+    print('manual', label, U)
+PY"

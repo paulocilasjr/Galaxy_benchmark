@@ -1,0 +1,25 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,json,gzip,concurrent.futures
+from pathlib import Path
+variants=[]
+with gzip.open('vcf.infer.build.q1.vcf.gz','rt') as f:
+ for l in f:
+  if not l.startswith('#'):
+   x=l.split('\\t');variants.append((int(x[1]),x[3]))
+regions=[(60000,260000),(10000000,10200000),(40000000,40200000)]
+def check(build):
+ results=[]
+ for start,end in regions:
+  url=f'https://api.genome.ucsc.edu/getData/sequence?genome={build};chrom=chr20;start={start};end={end}'
+  try:
+   raw=urllib.request.urlopen(url,timeout=60).read()
+   Path(f'{build}_{start}_{end}.json').write_bytes(raw)
+   seq=json.loads(raw)['dna'].upper()
+   subset=[(p,r) for p,r in variants if start<p<=end]
+   match=sum(seq[p-start-1]==r for p,r in subset)
+   results.append((start,len(subset),match))
+  except Exception as e: results.append(str(e))
+ return build,results
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+ for result in pool.map(check,['hg18','hg19','hg38','hs1']):print(result,flush=True)
+PY"

@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+types=sorted(meta.cell_type.unique())
+X=sc.values.astype(float)
+means=np.vstack([X[meta.cell_type.values==t].mean(axis=0) for t in types]).T
+bar=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+mtx=mmread('matrix.mtx.gz').tocsc()
+pos=pd.read_csv('tissue_positions.csv')
+pos_by_bar=pos.set_index('barcode')
+# target and neighbors by coordinate
+idx=bar.index('Spot_710-1')
+row=int(pos_by_bar.loc['Spot_710-1','array_row']); col=int(pos_by_bar.loc['Spot_710-1','array_col'])
+print('target row col', row, col)
+for b in pos[(pos.array_row.between(row-2,row+2)) & (pos.array_col.between(col-2,col+2))].barcode:
+    k=bar.index(b)
+    y=np.asarray(mtx[:,k].todense()).ravel().astype(float)
+    w,_=nnls(means,y)
+    print(b, tuple(pos_by_bar.loc[b,['array_row','array_col']]), 'total', int(y.sum()), 'w', dict(zip(types, np.round(w,2))), 'present0.25', ','.join([types[i] for i,v in enumerate(w) if v>0.25]))
+# all weights distribution: how many significant per spot and values around leakage
+Ws=[]
+for k in range(len(bar)):
+    y=np.asarray(mtx[:,k].todense()).ravel().astype(float)
+    w,_=nnls(means,y)
+    Ws.append(w)
+Ws=np.vstack(Ws)
+print('\\nall weight quantiles')
+for j,t in enumerate(types):
+    vals=np.sort(Ws[:,j])
+    print(t, 'q', np.round(np.quantile(vals,[0,.1,.25,.5,.75,.9,.95,.99,1]),3), 'nonzero>.25', int((vals>.25).sum()), 'nonzero>.5', int((vals>.5).sum()))
+print('target weights precise', dict(zip(types, Ws[idx])))
+# find combinations rounding >0.25 count
+from collections import Counter
+comb=Counter(tuple(types[i] for i,v in enumerate(w) if v>0.25) for w in Ws)
+print('\\ncomb top')
+for k,v in comb.most_common(20): print(v,k)
+PY"

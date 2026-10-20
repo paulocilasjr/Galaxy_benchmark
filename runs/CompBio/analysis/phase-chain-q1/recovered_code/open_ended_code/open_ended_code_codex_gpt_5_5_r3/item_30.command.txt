@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('aln.bam','rb'); chrom='AL008638.1'; start=63583; end=65081
+# report all positions/events where a non-error allele has at least 20% support and >=20 reads
+candidates=[]
+for p in range(start,end+1):
+    cnt=collections.Counter(); dels=0; depth=0; indels=collections.Counter(); insseq=collections.Counter()
+    for col in bam.pileup(chrom,p-1,p,truncate=True,min_base_quality=0,ignore_overlaps=False,stepper='all'):
+        for pr in col.pileups:
+            if pr.is_refskip: continue
+            depth+=1
+            if pr.is_del: dels+=1
+            else:
+                cnt[pr.alignment.query_sequence[pr.query_position].upper()]+=1
+                if pr.indel>0:
+                    s=pr.alignment.query_sequence[pr.query_position+1:pr.query_position+1+pr.indel].upper()
+                    insseq[s]+=1
+            if pr.indel: indels[pr.indel]+=1
+    alle=cnt.copy()
+    if dels: alle['D']+=dels
+    if depth:
+        major=[(a,n) for a,n in alle.items() if n>=20 and n/depth>=0.2]
+        if len(major)>=2:
+            candidates.append((p,'bases',depth,dict(alle)))
+        for s,n in insseq.items():
+            if len(s)==1 and n>=20 and n/depth>=0.2:
+                candidates.append((p,'ins',depth,s,n))
+        for k,n in indels.items():
+            if k<0 and abs(k)==1 and n>=20 and n/depth>=0.2:
+                candidates.append((p,'delstart',depth,k,n))
+print('\\n'.join(map(str,candidates)))
+PY"

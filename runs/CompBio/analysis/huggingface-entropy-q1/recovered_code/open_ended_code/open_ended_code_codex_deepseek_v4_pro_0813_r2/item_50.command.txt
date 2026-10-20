@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import torch, torch.nn.functional as F, time
+torch.manual_seed(0)
+dev='mps'
+B,D,L,N=10,512,1000,16
+u=torch.randn(B,D,L,device=dev)
+delta=torch.randn(B,D,L,device=dev)
+A=-torch.arange(1,N+1,dtype=torch.float32,device=dev).repeat(D,1)
+Bmat=torch.randn(B,N,L,device=dev)
+Cmat=torch.randn(B,N,L,device=dev)
+Dvec=torch.randn(D,device=dev)
+# mimic
+delta=F.softplus(delta)
+deltaA=torch.exp(torch.einsum('bdl,dn->bdln',delta,A))
+print('deltaA finite', torch.isfinite(deltaA).all().item())
+deltaB_u=torch.einsum('bdl,bnl,bdl->bdln',delta,Bmat,u)
+print('deltaB finite',torch.isfinite(deltaB_u).all().item(), torch.isnan(deltaB_u).sum().item(), deltaB_u.min().item(), deltaB_u.max().item())
+x=torch.zeros(B,D,N,device=dev)
+ys=[]
+for i in range(10):
+ x=deltaA[:,:,i]*x+deltaB_u[:,:,i]
+ y=torch.einsum('bdn,bn->bd',x,Cmat[:,:,i])
+ ys.append(y)
+y=torch.stack(ys,dim=2)
+print('y finite', torch.isfinite(y).all().item())
+print('sample deltaA',deltaA[0,0,:5].cpu())
+print('sample dB',deltaB_u[0,0,:5].cpu())
+PY"

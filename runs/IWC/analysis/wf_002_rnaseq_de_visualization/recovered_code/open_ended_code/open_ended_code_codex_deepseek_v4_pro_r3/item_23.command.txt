@@ -1,0 +1,80 @@
+/usr/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+from pathlib import Path
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from statsmodels.stats.multitest import multipletests
+
+inputs = {
+ 'SRR5085167':'/workspace/data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat',
+ 'SRR5085168':'/workspace/data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat',
+ 'SRR5085169':'/workspace/data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat',
+ 'SRR5085170':'/workspace/data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat',
+}
+
+dfs=[]
+for sample, path in inputs.items():
+    df=pd.read_csv(path, sep='\\t')
+    if list(df.columns) "'!= ['"'Geneid', sample]:
+        raise ValueError(f'Unexpected columns for {sample}: {list(df.columns)}')
+    dfs.append(df.set_index('Geneid').rename(columns={sample: sample}))
+
+counts_genes = dfs[0].join(dfs[1:], how='outer')
+assert not counts_genes.index.duplicated().any()
+assert counts_genes.shape[0] == 7127
+
+# Required prefilter: >=10 raw counts in at least two of the four samples.
+keep = (counts_genes >= 10).sum(axis=1) >= 2
+counts_filtered = counts_genes.loc[keep].T.astype(int)
+metadata = pd.DataFrame({
+    'condition': ['reference','reference','changed','changed']
+}, index=counts_filtered.index)
+
+dds = DeseqDataSet(
+    counts=counts_filtered,
+    metadata=metadata,
+    design='~condition',
+    refit_cooks=False,
+    quiet=True,
+)
+dds.deseq2()
+
+stat = DeseqStats(
+    dds,
+    contrast=['condition','changed','reference'],
+    cooks_filter=False,
+    independent_filter=False,
+    quiet=True,
+)
+stat.summary()
+res = stat.results_df[['log2FoldChange','pvalue']].rename(columns={
+    'log2FoldChange':'log2_fold_change',
+    'pvalue':'p_value',
+})
+res.index.name='gene_id'
+
+# Recompute BH FDR over the full retained set, independent of any tool filtering.
+res['fdr'] = multipletests(res['p_value'].astype(float).to_numpy(), method='fdr_bh')[1]
+
+# Validate constraints.
+assert res.index.is_unique
+assert len(res) == len(counts_filtered.columns)
+assert res['log2_fold_change'].notna().all() and np.isfinite(res['log2_fold_change']).all()
+assert res['p_value'].notna().all() and res['p_value'].between(0,1).all()
+assert res['fdr'].notna().all() and res['fdr'].between(0,1).all()
+
+out_dir = Path('/workspace/final_answer')
+out_dir.mkdir(parents=True, exist_ok=True)
+res.to_csv(out_dir/'differential_expression.tsv', sep='\\t', index=True, float_format='%.10g')
+
+method = {'method':'DESeq2'}
+import json
+(out_dir/'method.json').write_text(json.dumps(method) + '\\n')
+
+print('retained_genes', len(res))
+print(res[['log2_fold_change','p_value','fdr']].describe(percentiles=[]))
+print('min_pvalue', res['p_value'].min(), 'max_pvalue', res['p_value'].max())
+print('output files:')
+print((out_dir/'differential_expression.tsv').read_text().splitlines()[:3])
+print((out_dir/'method.json').read_text())
+PY"

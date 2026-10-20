@@ -1,0 +1,51 @@
+/bin/bash -c "cat > /workspace/tmp/ora.R <<'RS'
+files <- c('97'='/workspace/tmp/res_1vs97.csv','98'='/workspace/tmp/res_1vs98.csv','99'='/workspace/tmp/res_1vs99.csv')
+link <- read.delim('/workspace/tmp/pau_link_pathway.tsv', header=FALSE, stringsAsFactors=FALSE)
+link[,1] <- sub('"'^pau:'"','',link[,1])
+link[,2] <- sub('"'^path:'"','',link[,2])
+allkg <- unique(link[,1])
+path_sizes <- table(link[,2])
+paths <- names(path_sizes)
+res <- list()
+for (st in names(files)) {
+  d <- read.csv(files[[st]], stringsAsFactors=FALSE)
+  for (dir in c('up','down')) {
+    if (dir=='up') gene <- d"'$gene[d$log2FoldChange > 1.5] else gene <- d$gene[d$log2FoldChange < -1.5]
+    gene <- unique(gene)
+    mapped <- gene[gene %in% allkg]
+    n <- length(mapped)
+    rows <- list()
+    for (p in paths) {
+      m <- as.numeric(path_sizes[[p]])
+      if (m < 10 || m > 500) next
+      term_genes <- link[link[,2]==p,1]
+      q <- sum(gene %in% term_genes)
+      if (q == 0) next
+      pv <- phyper(q-1, m, length(allkg)-m, n, lower.tail=FALSE)
+      rows[[p]] <- c(m=m,q=q,n=n,pv=as.numeric(pv))
+    }
+    if (length(rows)>0) {
+      mat <- do.call(rbind, rows)
+      padj <- p.adjust(mat[,'"'pv'], method='BH')
+      mat <- cbind(mat, padj=padj)
+      res[[paste(st,dir,sep='_')]] <- mat
+      cat(st,dir,'tested',nrow(mat),'mapped',n,'sig',sum(padj<=0.05),'\\n')
+    } else {
+      res[[paste(st,dir,sep='_')]] <- matrix(numeric(0),ncol=4,dimnames=list(NULL,c('m','q','n','pv')))
+    }
+  }
+}
+for (dir in c('up','down')) {
+  sets <- lapply(c('97','98','99'), function(st) {
+    mat <- res[[paste(st,dir,sep='_')]]
+    if(length(mat)>0) rownames(mat)[mat[,'padj']<=0.05] else character()
+  })
+  common <- Reduce(intersect, sets)
+  cat('\\nCOMMON',dir,length(common),'\\n')
+  print(common)
+}
+up <- Reduce(intersect, lapply(c('97','98','99'), function(st) {m<-res[[paste(st,'up',sep='_')]]; if(length(m)>0) rownames(m)[m[,'padj']<=0.05] else character()}))
+down <- Reduce(intersect, lapply(c('97','98','99'), function(st) {m<-res[[paste(st,'down',sep='_')]]; if(length(m)>0) rownames(m)[m[,'padj']<=0.05] else character()}))
+cat('TOTAL',length(union(up,down)),'\\n')
+RS
+Rscript /workspace/tmp/ora.R"

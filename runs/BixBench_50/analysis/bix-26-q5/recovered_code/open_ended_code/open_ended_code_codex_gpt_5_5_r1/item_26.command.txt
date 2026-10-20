@@ -1,0 +1,56 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(path) {
+  x <- readRDS(path)
+  data.frame(
+    gene = attr(x, \"rownames\"),
+    log2FoldChange = x@listData"'$log2FoldChange,
+    padj = x@listData$padj,
+    stringsAsFactors = FALSE
+  )
+}
+link_lines <- readLines("https://rest.kegg.jp/link/pathway/pau", warn = FALSE)
+links <- do.call(rbind, strsplit(link_lines, "'"\\t\", fixed = TRUE))
+map <- unique(data.frame(gene = sub(\""'^pau:", "", links[,1]), pathway = sub("''^path:", "", links[,2]), stringsAsFactors = FALSE))
+ora <- function(res, minGSSize = 1L, maxGSSize = Inf, universe_mode = c("tested_mapped", "kegg_all"), include_zero = FALSE) {
+  universe_mode <- match.arg(universe_mode)
+  fg0 <- res$gene[!is.na(res$padj) & abs(res$log2FoldChange) > 1.5 & res$padj < 0.05]
+  universe <- if (universe_mode == "tested_mapped") intersect(res$gene, unique(map$gene)) else unique(map$gene)
+  fg <- intersect(fg0, universe)
+  m2 <- map[map$gene %in% universe, ]
+  gs <- lapply(split(m2$gene, m2$pathway), unique)
+  gs <- gs[lengths(gs) >= minGSSize & lengths(gs) <= maxGSSize]
+  hits <- vapply(gs, function(g) sum(g %in% fg), integer(1))
+  if (!include_zero) {
+    gs <- gs[hits > 0]
+    hits <- hits[hits > 0]
+  }
+  M <- length(unique(universe)); N <- length(unique(fg)); K <- lengths(gs)
+  p <- phyper(hits - 1, K, M - K, N, lower.tail = FALSE)
+  # For zero-hit terms, phyper(-1,...) gives 1 as desired.
+  p[hits == 0] <- 1
+  padj <- p.adjust(p, method = "BH")
+  data.frame(pathway = names(gs), k = hits, K = K, N = N, M = M, pvalue = p, padj = padj, stringsAsFactors = FALSE)[order(padj, p, names(gs)), ]
+}
+glu <- read_res("inputs/res_GluFevsGluFePlus.rds")
+succ <- read_res("inputs/res_SuccvsGluFePlus.rds")
+cat("fg counts raw", sum(!is.na(glu$padj) & abs(glu$log2FoldChange)>1.5 & glu$padj<0.05), sum(!is.na(succ$padj) & abs(succ$log2FoldChange)>1.5 & succ$padj<0.05), "'"\\n\")
+cat(\"fg counts mapped\", sum(glu"'$gene[!is.na(glu$padj) & abs(glu$log2FoldChange)>1.5 & glu$padj<0.05] %in% unique(map$gene)), sum(succ$gene[!is.na(succ$padj) & abs(succ$log2FoldChange)>1.5 & succ$padj<0.05] %in% unique(map$gene)), "'"\\n\")
+cat(\"mapped tested\", length(intersect(glu"'$gene, unique(map$gene))), length(intersect(succ$gene, unique(map$gene))), "'"\\n\")
+for (mode in c(\"tested_mapped\", \"kegg_all\")) {
+  for (minmax in c(\"all\", \"cp\")) {
+    for (zero in c(FALSE, TRUE)) {
+      min <- if (minmax == \"cp\") 10L else 1L
+      max <- if (minmax == \"cp\") 500L else Inf
+      eg <- ora(glu, min, max, mode, zero)
+      es <- ora(succ, min, max, mode, zero)
+      sg <- eg"'$pathway[eg$padj < 0.05]
+      ss <- es$pathway[es$padj < 0.05]
+      ans <- setdiff(sg, ss)
+      cat("MODE", mode, "FILTER", minmax, "ZERO", zero, "tested", nrow(eg), nrow(es), "sig_glu", length(sg), "sig_succ", length(ss), "setdiff", length(ans), "'"\\n\")
+      cat(\"only_glu\", paste(ans, collapse=\",\"), \"\\n\")
+      cat(\"sig_glu\", paste(sg, collapse=\",\"), \"\\n\")
+      cat(\"sig_succ\", paste(ss, collapse=\",\"), \"\\n\")
+    }
+  }
+}
+RS"

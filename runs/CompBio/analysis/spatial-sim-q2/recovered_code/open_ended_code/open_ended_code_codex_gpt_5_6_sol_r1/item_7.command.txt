@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.stats import ranksums, spearmanr
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+X=mmread('matrix.mtx.gz').tocsr().T.toarray() # spots genes
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode').loc[[x.strip() for x in __import__('gzip').open('barcodes.tsv.gz','rt')]]
+types=sorted(meta.cell_type.unique())
+# cell normalized reference
+Y=sc.values.astype(float)
+Yn=Y/Y.sum(1,keepdims=True)*1e4
+A=np.stack([Yn[meta.cell_type.values==t].mean(0) for t in types],axis=1)
+# choose differential genes max/min and variable
+fold=(A+0.1)/(np.median(A,axis=1,keepdims=True)+0.1)
+sel=np.unique(np.concatenate([np.argsort(fold[:,j])[-100:] for j in range(6)]))
+print('types',types,'selected',len(sel))
+# raw normalized NNLS selected genes
+Xn=X/X.sum(1,keepdims=True)*1e4
+P=np.array([nnls(A[sel],x[sel])[0] for x in Xn])
+P=P/P.sum(1,keepdims=True)
+for j,t in enumerate(types):
+ q=np.quantile(P[:,j],[0,.1,.25,.5,.75,.9,.99,1]); print(t, np.round(q,3),'center',np.round(np.average(pos[['array_row','array_col']],axis=0,weights=P[:,j]),2))
+# top assignments grid symbols
+sym={t:t[0] for t in types}; sym['Tumor_Core']='C';sym['T_Cell']='T';sym['Fibroblast_Stroma']='F';sym['Endothelial']='E';sym['Macrophage']='M';sym['B_Cell']='B'
+lab=np.array(types)[P.argmax(1)]
+grid=np.empty((30,30),object)
+for (r,c),l in zip(pos[['array_row','array_col']].values,lab):grid[r,c]=sym[l]
+print('\\nDominant grid rows:')
+for r in range(30): print(''.join(grid[r]))
+# adjacency average compositions conditioned tumor proportion high vs low, and spatial weighted correlation
+coords=pos[['array_row','array_col']].values
+D=np.sqrt(((coords[:,None]-coords[None,:])**2).sum(2)); np.fill_diagonal(D,np.inf)
+tc=P[:,types.index('Tumor_Core')]
+for th in [.1,.2,.3,.4,.5,.6]:
+ mask=tc>th
+ print('\\nth',th,'n',mask.sum())
+ for j,t in enumerate(types):
+  if t=='Tumor_Core':continue
+  md=D[:,mask].min(1)
+  vals=md[P[:,j]>.2]
+  print(t,'n',len(vals),'meanD',round(vals.mean(),2),'medD',round(np.median(vals),2),'near comp',round(P[(D[:,mask].min(1)<=1.01)&~mask,j].mean(),3),'all',round(P[~mask,j].mean(),3))
+PY"

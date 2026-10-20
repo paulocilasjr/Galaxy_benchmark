@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from pathlib import Path
+seqs={}
+for line in Path('read.proportions.q1.fa').read_text().splitlines():
+    if line.startswith('>'):
+        cid=line[1:].strip(); seqs[cid]=[]
+    else:
+        seqs[cid].append(line.strip())
+for c in seqs: seqs[c]=''.join(seqs[c])
+K=36
+# build kmers forward and reverse
+comp=str.maketrans('ACGT','TGCA')
+from collections import defaultdict
+counts=defaultdict(int)
+for c,s in seqs.items():
+    for i in range(len(s)-K+1):
+        counts[(c,s[i:i+K])]+=1
+    rc=s.translate(comp)[::-1]
+    for i in range(len(rc)-K+1):
+        counts[(c,rc[i:i+K])]+=1
+print('kmers',len(counts))
+n=0; mapped=defaultdict(int); ambiguous=0; unmapped=0
+lens=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        seq=f.readline().strip(); plus=f.readline(); qual=f.readline()
+        n+=1; lens.append(len(seq))
+        found=[]
+        for c in seqs:
+            if (c,seq) in counts:
+                found.append(c)
+        if len(found)==1:
+            mapped[found[0]]+=1
+        elif len(found)>1: ambiguous+=1
+        else: unmapped+=1
+print('n',n,'lens',set(lens),'mapped',dict(mapped),'ambiguous',ambiguous,'unmapped',unmapped,'total mapped',sum(mapped.values()))
+# sample unmapped reads
+import itertools
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    for i in range(n):
+        h=f.readline(); seq=f.readline().strip(); f.readline(); f.readline()
+        if all((c,seq) not in counts for c in seqs):
+            print('unmapped',i,h.strip(),seq)
+            if i>20: break
+PY"

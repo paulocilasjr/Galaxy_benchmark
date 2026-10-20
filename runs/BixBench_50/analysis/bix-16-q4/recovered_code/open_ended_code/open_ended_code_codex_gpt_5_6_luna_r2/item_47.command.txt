@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import csv, gc
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata, t, spearmanr
+
+def hdr(p):
+    with open(p,newline='') as f:return next(csv.reader(f))
+def ids(p):
+    with open(p) as f:
+        next(f)
+        return [line.split(',',1)[0] for line in f]
+dp='inputs/CRISPRGeneEffect.csv'; ep='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+hd,he=hdr(dp),hdr(ep); eset=set(he[1:]); common=[g for g in hd[1:] if g in eset]
+di,ei=ids(dp),ids(ep); es=set(ei); shared=[x for x in di if x in es]
+df=pd.read_csv(dp,usecols=common,dtype=np.float64); ef=pd.read_csv(ep,usecols=common,dtype=np.float64)
+df.index=di; ef.index=ei
+x=-df.loc[shared,common].to_numpy(); y=ef.loc[shared,common].to_numpy()
+del df,ef; gc.collect()
+m=x.shape[1]; p=np.empty(m); rho=np.empty(m); n=np.empty(m,dtype=int)
+for j in range(m):
+    ok=np.isfinite(x[:,j])&np.isfinite(y[:,j]); n[j]=ok.sum(); a=rankdata(x[ok,j]); b=rankdata(y[ok,j]); a-= (n[j]+1)/2; b-= (n[j]+1)/2
+    rho[j]=np.dot(a,b)/np.sqrt(np.dot(a,a)*np.dot(b,b)); z=abs(rho[j])*np.sqrt((n[j]-2)/((1-rho[j])*(1+rho[j]))); p[j]=2*t.sf(z,n[j]-2)
+order=np.argsort(p,kind='mergesort'); ranks=np.arange(1,m+1,dtype=float); q0=p[order]*m/ranks; q0=np.minimum.accumulate(q0[::-1])[::-1]; q=np.empty(m); q[order]=q0
+sig=q < 0.05
+k=int(sig.sum()); ps=np.sort(q)
+print('m',m,'shared',len(shared),'n-range',n.min(),np.median(n),n.max(),'missing',int(np.isnan(x).sum()))
+print('k',k,'percent',repr(k/m*100),'q_at_k',repr(ps[k-1]),'q_next',repr(ps[k]))
+# independent spot checks against scipy's public test implementation
+for j in [0, 777, 12345, m-1]:
+    s=spearmanr(x[:,j],y[:,j],nan_policy='omit')
+    assert abs(s.statistic-rho[j])<1e-14 and abs(s.pvalue-p[j])<1e-12,(j,s.statistic,rho[j],s.pvalue,p[j])
+print('scipy_spot_checks','ok')
+PY"

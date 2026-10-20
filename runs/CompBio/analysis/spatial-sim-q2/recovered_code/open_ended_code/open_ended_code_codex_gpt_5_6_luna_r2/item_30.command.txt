@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import numpy as np,csv
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.stats import mannwhitneyu
+sc=np.loadtxt('data/spatial_q_sc_counts.csv',delimiter=',',skiprows=1,usecols=range(1,1001))
+with open('data/spatial_q_sc_metadata.csv') as f: rows=list(csv.reader(f))[1:]
+labels=np.array([r[1] for r in rows]); types=sorted(set(labels)); S=np.array([sc[labels==t].mean(0) for t in types]); sp=mmread('data/matrix.mtx.gz').toarray();
+blocks=[(0,50),(50,100),(100,150),(150,200),(200,250),(250,300)]
+# block model
+X=np.array([[S[i,a:b].sum() for i in range(6)] for a,b in blocks]);Y=np.array([sp[a:b].sum(0) for a,b in blocks]).T; Cb=np.array([nnls(X,Y[j])[0] for j in range(900)])
+Cf=np.array([nnls(S.T,sp[:,j])[0] for j in range(900)])
+# correlated marker gene score model with block means? Cb enough
+with open('data/tissue_positions.csv') as f: pos=list(csv.DictReader(f)); xy=np.array([[int(p['array_row']),int(p['array_col'])] for p in pos],float); D=np.sqrt(((xy[:,None]-xy[None,:])**2).sum(2))
+for mode,C in [('block',Cb),('full',Cf)]:
+ print('\\nMODE',mode)
+ for tumth in [.1,.5,.8,1.1]:
+  tum=C[:,types.index('Tumor_Core')]>tumth
+  if tum.sum()<2: continue
+  d=D[:,tum].min(1)
+  print(' tumor th',tumth,'n',tum.sum(),end='')
+  for t in ['B_Cell','Endothelial','Fibroblast_Stroma','Macrophage','T_Cell']:
+   i=types.index(t); pr=C[:,i]>.5; vals=d[pr]; oth=d[~pr]; p=mannwhitneyu(vals,oth,alternative='less').pvalue
+   print(' |',t,'n',pr.sum(),'mean',round(vals.mean(),2),'p',f'{p:.1e}',end='')
+  print()
+PY"

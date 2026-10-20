@@ -18,13 +18,13 @@ ANSWER_SOURCES=re.compile(r'futurehouse/BixBench|BixBench\.jsonl|phylobio/BixBen
 BENCH=re.compile(r'bixbench|compbiobench|compbio[-_ ]?bench|BixBench-Verified|bix-\d+-q\d+', re.I)
 ASK_ANSWER=re.compile(r'\banswer|ideal|ground.?truth|solution|key\b', re.I)
 gt={}
-for f in glob.glob(os.path.join(ROOT,'ground_truth/BixBench/task_*.json')):
+for f in glob.glob(os.path.join(ROOT,'benchmark/ground_truth/BixBench/task_*.json')):
     d=json.load(open(f)); gt[d['question_id']]=str(d.get('ideal') or '')
 qtext={}
-for f in glob.glob(os.path.join(ROOT,'experiments/BixBench/task_*.json')):
+for f in glob.glob(os.path.join(ROOT,'benchmark/experiments/BixBench/task_*.json')):
     d=json.load(open(f)); qtext[d['question_id']]=re.sub(r'\s+',' ',str(d.get('prompt_task') or ''))[:60]
 rows=[]
-for raw in gzip.open(os.path.join(ROOT,'manuscript_material/source_data/derived/run_summaries.jsonl.gz'),'rt'):
+for raw in gzip.open(os.path.join(ROOT,'manuscript/manuscript_material/source_data/derived/run_summaries.jsonl.gz'),'rt'):
     s=json.loads(raw)
     if s['model'] not in PRIMARY or not s.get('trace'): continue
     path=s['trace'] if os.path.exists(s['trace']) else s['trace']+'.gz'

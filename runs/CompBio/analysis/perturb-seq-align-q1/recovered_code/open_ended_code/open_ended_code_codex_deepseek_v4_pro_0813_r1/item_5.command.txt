@@ -1,0 +1,62 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from scipy.stats import pearsonr
+
+def load(f):
+    with h5py.File(f,'r') as h:
+        X=sp.csr_matrix((h['X/data'][:], h['X/indices'][:], h['X/indptr'][:]), shape=(len(h['var/_index']), len(h['obs/_index']))).T.tocsr()
+        guides=h['obs/guide/categories'][:].astype(str)
+        codes=h['obs/guide/codes'][:]
+        if 'obs/target_gene/categories' in h:
+            targets=h['obs/target_gene/categories'][:].astype(str)
+            tcodes=h['obs/target_gene/codes'][:]
+        else:
+            targets=None; tcodes=None
+    return X, guides, codes, targets, tcodes
+
+Xr, gr, cr, tr, tcr = load('perturb.seq.align.q1.ref.h5ad')
+Xq, gq, cq, tq, tcq = load('perturb.seq.align.q1.query.h5ad')
+print(Xr.shape,Xq.shape)
+
+def norm_log(X):
+    sums=np.asarray(X.sum(1)).ravel().astype(float)
+    sums[sums==0]=1
+    return np.log1p(X.multiply(1/sums[:,None]*1e6).tocsr())
+
+Lr=norm_log(Xr).toarray()
+Lq=norm_log(Xq).toarray()
+ur=np.array([Lr[cr==i].mean(0) for i in range(len(gr))])
+uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntr=np.where(np.char.startswith(gr,'NT-'))[0]; ntq=np.where(np.char.startswith(gq,'NT-'))[0]
+ref_ctrl=ur[ntr].mean(0); q_ctrl=uq[ntq].mean(0)
+# variable genes based on ref guide means (exclude NT maybe)
+gene_var=ur.var(0)
+ngenes=2000
+top=np.argsort(gene_var)[::-1][:ngenes]
+Er=ur-ref_ctrl; Eq=uq-q_ctrl
+pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')]
+pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+print('perturb ref',len(pr),'perturb query',len(pq))
+# pairwise correlations vectorized
+x=Er[np.ix_(pr,top)] # pq? no
+# use numpy corrcoef on rows after standardizing maybe pearson formula
+def corr_rows(A,B):
+    A=A-A.mean(1,keepdims=True); B=B-B.mean(1,keepdims=True)
+    denom=np.sqrt((A*A).sum(1,keepdims=True))*np.sqrt((B*B).sum(1,keepdims=True))
+    denom[denom==0]=1e-12
+    return (A@B.T)/denom
+C=corr_rows(Eq[pq][:,top], Er[pr][:,top])
+for ii,q in enumerate(pq):
+    j=C[ii].argmax()
+    print('query',gq[q], 'best_ref',gr[pr[j]], 'target',tr[tcr==pr[j]][0] if tr is not None else '?', 'corr',C[ii,j].round(3))
+print('\\nDesired:')
+for target in ['PABPC1','NUDT21','LEO1']:
+    rinds=[ri for ri in pr if tr[tcr==ri][0]==target]
+    print('target',target,'ref', [gr[ri] for ri in rinds])
+    for ri in rinds:
+        j=pr.index(ri)
+        scores=C[:,j]
+        order=np.argsort(scores)[::-1][:10]
+        for k in order:
+            print(' ',gq[pq[k]], scores[k].round(3))
+PY"

@@ -1,0 +1,13 @@
+/bin/bash -lc "python - <<'PY'
+import torch
+from pure_caduceus import load_model
+m=load_model().eval(); ids=torch.tensor([[7,8,9,10]*25])
+# get dt cpu and use same ops on mps
+mm=m.layers[0].mixer.mamba_fwd
+with torch.no_grad():
+ h=m.embeddings(ids); xz=mm.in_proj(h); x=xz.chunk(2,-1)[0].transpose(1,2); x=torch.nn.functional.conv1d(torch.nn.functional.pad(x,(3,0)),mm.conv1d.weight,mm.conv1d.bias,groups=512); x=mm.act(x); xd=mm.x_proj(x.transpose(1,2).reshape(100,512)); dt= torch.nn.functional.linear(torch.split(xd,[16,16,16],-1)[0],mm.dt_proj.weight).reshape(1,100,512).transpose(1,2); bias=mm.dt_proj.bias
+ print('cpu q', (dt+bias[None,:,None]).min().item(),(dt+bias[None,:,None]).max().item(), 'sp',torch.nn.functional.softplus(dt+bias[None,:,None]).min().item(),torch.nn.functional.softplus(dt+bias[None,:,None]).max().item())
+ mm=mm.to('mps'); h=m.embeddings(ids).to('mps'); xz=mm.in_proj(h); x=xz.chunk(2,-1)[0].transpose(1,2); x=torch.nn.functional.conv1d(torch.nn.functional.pad(x,(3,0)),mm.conv1d.weight,mm.conv1d.bias,groups=512); x=mm.act(x); xd=mm.x_proj(x.transpose(1,2).reshape(100,512)); dt=torch.nn.functional.linear(torch.split(xd,[16,16,16],-1)[0],mm.dt_proj.weight).reshape(1,100,512).transpose(1,2); bias=mm.dt_proj.bias
+ q=dt+bias[None,:,None]; print('mps q',q.min().item(),q.max().item(),'contig',q.is_contiguous(),'dt',dt.is_contiguous(),'bias',bias.is_contiguous(),flush=True)
+ for name,y in [('sp',torch.nn.functional.softplus(q)),('spc',torch.nn.functional.softplus(q.contiguous())),('spT',torch.nn.functional.softplus(q.transpose(1,2).contiguous()).transpose(1,2)),('manual',torch.log1p(torch.exp(q)))]: print(name,y.min().item(),y.max().item(),bool(torch.isfinite(y).all()),flush=True)
+PY"

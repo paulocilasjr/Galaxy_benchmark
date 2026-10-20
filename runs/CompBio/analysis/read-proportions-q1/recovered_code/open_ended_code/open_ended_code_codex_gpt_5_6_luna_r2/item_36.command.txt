@@ -1,0 +1,56 @@
+/bin/bash -lc "python -u - <<'PY'
+from pathlib import Path
+import gzip,collections,math,time,numpy as np
+from scipy.optimize import minimize
+D={}; name=None;ss=[]
+for line in Path('read.proportions.q1.fa').read_text().splitlines():
+ if line.startswith('>'):
+  if name:D[name]=''.join(ss)
+  name=line[1:].split()[0];ss=[]
+ else:ss.append(line.strip())
+D[name]=''.join(ss);N=list(D);T=2965;rl=36
+tr=str.maketrans('ACGTN','TGCAN');rc=lambda s:s.translate(tr)[::-1]
+lookup={}
+for j,nm in enumerate(N):
+ s=D[nm]
+ for p in range(T):
+  q=s[p:p+rl]
+  for x in (q,rc(q)):lookup[x]=lookup.get(x,0)|(1<<j)
+obs=collections.Counter()
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while h:=f.readline():
+  q=f.readline().strip();f.readline();f.readline();mask=0
+  for j,nm in enumerate(N):
+   if q in D[nm] or rc(q) in D[nm]:mask|=1<<j
+  obs[mask]+=1
+masks=sorted(set(lookup.values())|set(obs)-{0});mi={m:i for i,m in enumerate(masks)}
+C=np.zeros((4,len(masks),2),dtype=np.int64);bases='ACGT';st=time.time()
+for j,nm in enumerate(N):
+ s=D[nm]
+ for p in range(T):
+  t=s[p:p+rl];C[j,mi[lookup.get(t,0)],0]+=1
+  for a in range(rl):
+   for b in bases:
+    if b==t[a]:continue
+    mask=lookup.get(t[:a]+b+t[a+1:],0)
+    if mask:C[j,mi[mask],1]+=1
+print('C built',time.time()-st,'masks',masks,flush=True)
+y=np.array([obs[m] for m in masks]+[obs[0]],dtype=float)
+def P(e):
+ w=np.array([(1-e)**rl,(1-e)**(rl-1)*(e/3)])
+ p=(C*w).sum(axis=2)/T
+ p0=1-p.sum(axis=1)
+ return p,p0
+def unpack(z):
+ a=np.r_[z[:3],0.];a-=a.max();p=np.exp(a);p/=p.sum();e=1/(1+np.exp(-z[3]));return p,e
+def nll(z):
+ pi,e=unpack(z);p,p0=P(e);v=np.r_[pi@p,pi@p0];return -np.sum(y*np.log(np.maximum(v,1e-300)))
+for init in [[.5,.2,.2,.1],[.35,.25,.25,.15],[.25,.25,.25,.25]]:
+ for e0 in [.001,.005,.008,.01,.02]:
+  z=np.r_[np.log(init[:3])-math.log(init[3]),math.log(e0/(1-e0))]
+  o=minimize(nll,z,method='BFGS',options={'maxiter':500});print('fit',init,e0,o.fun,unpack(o.x),o.success,flush=True)
+for e in [.001,.005,.008,.01,.015,.02,.03]:
+ def fn(a):
+  v=np.exp(np.r_[a,0]-max(np.r_[a,0]));pi=v/v.sum();p,p0=P(e);z=np.r_[pi@p,pi@p0];return -np.sum(y*np.log(np.maximum(z,1e-300)))
+ o=minimize(fn,np.log([.5,.2,.2]),method='BFGS');v=np.exp(np.r_[o.x,0]-max(np.r_[o.x,0]));pi=v/v.sum();print('fixed',e,pi,o.fun,flush=True)
+PY"

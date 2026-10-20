@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import json, glob
+from collections import Counter
+# tax data
+parent={}; rank={}; names={}
+with open('nodes.dmp') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t|\\t'); parent[int(p[0])]=int(p[1]); rank[int(p[0])]=p[2]
+with open('names.dmp') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t|\\t')
+        if len(p)>=4 and p[3].split('\\t|')[0]=='scientific name': names[int(p[0])]=p[1]
+merged={}
+with open('merged.dmp') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t|\\t'); merged[int(p[0])]=int(p[1].split('\\t|')[0])
+def lca_pair(a,b):
+    if a==b:return a
+    sa=set(); x=a
+    while True:
+        sa.add(x)
+        if x==1:break
+        x=parent.get(x,1)
+    y=b
+    while True:
+        if y in sa:return y
+        if y==1:return 1
+        y=parent.get(y,1)
+def lca(ts):
+    ts=[t for t in ts if t]
+    if not ts:return None
+    cur=ts[0]
+    for t in ts[1:]:cur=lca_pair(cur,t)
+    return cur
+# species of interest mapping by top hit
+top_species=Counter(); lca_species=Counter(); lca_genus=Counter(); lca_family=Counter()
+for path in sorted(glob.glob('blast_out/chunk_*.json')):
+    data=json.load(open(path))
+    for rep in data['BlastOutput2']:
+        hits=rep['report']['results']['search'].get('hits',[])
+        if not hits: continue
+        top=hits[0].get('description',[{}])[0]; sc=top.get('sciname','')
+        top_species[sc]+=1
+        taxids=[]
+        for h in hits:
+            d=h.get('description',[{}])[0]; tid=d.get('taxid')
+            if tid:
+                if isinstance(tid,str):tid=int(tid)
+                tid=merged.get(tid,tid); taxids.append(tid)
+        l=lca(taxids)
+        if l is None: continue
+        lca_species[names.get(l,'')]+=1
+        # get genus: ascend to rank genus from lca if lca below? If lca is species/subspecies, ascend to genus
+        x=l
+        while x and rank.get(x) not in ('genus','subgenus') and x"'!=1:
+            x=parent.get(x,1)
+        if rank.get(x)=='"'genus': lca_genus[names.get(x,'')]+=1
+        # family ascend
+        x=l
+        while x and rank.get(x) not in ('family','subfamily') and x"'!=1:
+            x=parent.get(x,1)
+        if rank.get(x)=='"'family': lca_family[names.get(x,'')]+=1
+print('Top-hit non-human species with their LCA counts')
+for sc,n in top_species.most_common(80):
+    genus=sc.split()[0].lower() if sc else ''
+    lc=lca_species.get(sc,0); lg=lca_genus.get(genus,0)
+    print(f'{n:6d} {sc:40s} lca_species={lc:4d} lca_genus_{genus}={lg}')
+print('\\nStrong LCA genus counts (>2):')
+for g,n in lca_genus.most_common(30): print(n,g)
+PY"

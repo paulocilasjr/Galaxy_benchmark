@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,re,gzip
+# load sei rows by id
+sei={r['id']:r for r in (json.loads(l) for l in open('data/sei_cistrome_samples.jsonl'))}
+# target names id -> line
+seilines={}
+for line in open('[REDACTED LOCAL PATH]'):
+ m=re.search(r'ID:(\\d+)"'$'"',line.rstrip())
+ if m: seilines[int(m.group(1))]=line.rstrip()
+# Build borzoi normalized id -> description, plus experiment GEO mapping by encff
+borz_desc={}
+enc_to_acc={}
+for path in ['[REDACTED LOCAL PATH]','[REDACTED LOCAL PATH]']:
+ f=gzip.open(path,'rt'); f.readline()
+ for line in f:
+  p=line.rstrip('\\n').split('\\t'); ident=p[1]; desc=p[8]
+  norm=re.sub(r'[+-]"'$'"','',ident)
+  borz_desc[norm]=desc
+# encff metadata
+enc_rows=[json.loads(l) for l in open('data/borzoi_encff_metadata.jsonl')]
+exps={g['accession']:g for g in [json.loads(l) for l in open('data/borzoi_experiments_metadata.jsonl')]}
+# create file->geos
+file_geo={}
+for r in enc_rows:
+ acc=r.get('dataset','').rstrip('/').split('/')[-1]
+ g=exps.get(acc)
+ geos=[d.split(':')[1] for d in g.get('dbxrefs',[]) if d.startswith('GEO:GSM')] if g else []
+ file_geo[r['accession']]=geos
+# matched ids from previous logic simplified
+geo_bor=set(x for x in borz_desc if x.startswith('GSM'))
+for r in enc_rows:
+ acc=r['dataset'].rstrip('/').split('/')[-1]; g=exps.get(acc)
+ if g:
+  for d in g.get('dbxrefs',[]):
+   if d.startswith('GEO:GSM'): geo_bor.add(d.split(':',1)[1])
+enc_bor=set()
+for r in enc_rows:
+ acc=r['dataset'].rstrip('/').split('/')[-1]
+ for n in r.get('biological_replicates') or []: enc_bor.add(f'{acc}_{n}')
+matched=[]
+for rid,r in sei.items():
+ ext=r.get('external_id')
+ if r.get('external_id_type')=='GEO' and ext in geo_bor:
+  matched.append(rid)
+ elif r.get('external_id_type')=='ENCODE' and ext in enc_bor:
+  matched.append(rid)
+print('matched count',len(matched))
+for rid in matched[:10]:
+ r=sei[rid]; ext=r['external_id']; typ=r['external_id_type']
+ print('\\nSei',rid,seilines[rid])
+ print('Cistrome',ext,typ)
+ if typ=='GEO':
+  # find borzoi direct GSM desc or encff file(s) mapping to this GSM
+  if ext in borz_desc:
+   print('Borzoi direct',borz_desc[ext])
+  files=[a for a,gs in file_geo.items() if ext in gs]
+  print('matching encff count',len(files),'first',files[:3], [borz_desc.get(f) for f in files[:3]])
+ else:
+  files=[r['accession'] for r in enc_rows if f\"{r.get('dataset','').rstrip('/').split('/')[-1]}_{ (r.get('biological_replicates') or [None])[0]}\"==ext]
+  # better just search any rep
+  files=[]
+  for fr in enc_rows:
+   acc=fr['dataset'].rstrip('/').split('/')[-1]
+   for n in fr.get('biological_replicates') or []:
+    if f'{acc}_{n}'==ext: files.append(fr['accession'])
+  print('matching encff files',len(files),'first',files[:3], [borz_desc.get(f) for f in files[:3]])
+PY"

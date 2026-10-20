@@ -1,0 +1,52 @@
+/bin/bash -c "cat > markers.py <<'PY'
+import scanpy as sc, pandas as pd, numpy as np
+adata=sc.read_h5ad('combined.h5ad')
+print(adata.shape, adata.obs.columns)
+print(adata.obs.groupby(['sample','leiden']).size().unstack().fillna(0).astype(int).to_string())
+markers={
+'astrocyte':['GFAP','AQP4','S100B','SLC1A3','GJA1','SLC1A2'],
+'microglial cell':['P2RY12','TMEM119','CX3CR1','CSF1R','AIF1','C1QA','C1QB'],
+'RPE cell':['RPE65','BEST1','SERPINF1','TYRP1','PMEL','MLANA'],
+'cone cell':['ARR3','GNAT2','PDE6H','OPN1SW','OPN1MW','OPN1LW','CRX','RCVRN'],
+'rod cell':['RHO','NRL','PDE6A','GNAT1','NR2E3','SAG','CNGB1','RCVRN'],
+'horizontal cell':['ONECUT1','LHX1','CALB1','GAD2','SYT1'],
+'bipolar cell':['VSX2','OTX2','GRIK1','TRPM1','CABP5','ISL1'],
+'RGC':['RBPMS','THY1','SNCG','NEFL','NEFM','POU4F1','POU4F2','SLC17A6'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','TRBC2','LCK','CD2','IL7R'],
+'macrophage':['LYZ','CD14','MRC1','CD68','FCGR3A','S100A8','S100A9'],
+'Schwann cell':['MPZ','PMP22','SOX10','MBP','PLP1','NGFR'],
+'Pericyte':['PDGFRB','RGS5','ACTA2','NOTCH3','CSPG4'],
+'B cell':['CD79A','CD79B','MS4A1','CD19','BANK1','PAX5'],
+'fibroblast':['DCN','COL1A1','COL1A2','LUM','VIM','FBLN1'],
+'muller glia cell':['RLBP1','GLUL','SLC1A3','CLU','DKK3','VIM','APOE'],
+'endothelial cell':['PECAM1','VWF','CLDN5','CDH5','EGFL7','KDR','FLT1'],
+}
+# mean log expression per cluster
+means=pd.DataFrame(index=adata.obs['leiden'].cat.categories if hasattr(adata.obs['leiden'],'cat') else sorted(set(adata.obs['leiden'])))
+# normalize data? adata.X is log1p already. use adata.raw? raw is log norm? Actually raw assigned after log1p so raw.X log.
+for name, genes in markers.items():
+    present=[g for g in genes if g in adata.var_names]
+    if present:
+        means[name]=np.asarray(adata[:,present].X.mean(axis=1)).ravel() if not hasattr(adata[:,present].X,'A') else np.asarray(adata[:,present].X.mean(axis=1)).ravel()
+# Better per cluster
+cluster_means=[]
+for cl in sorted(adata.obs['leiden'].unique(), key=lambda x:int(x)):
+    sub=adata[adata.obs['leiden']==cl]
+    row={}
+    for name, genes in markers.items():
+        present=[g for g in genes if g in adata.var_names]
+        vals=np.asarray(sub[:,present].X.mean(axis=0)).ravel()
+        row[name]=vals.mean()
+    cluster_means.append((cl,row))
+cm=pd.DataFrame([r for c,r in cluster_means], index=[c for c,r in cluster_means])
+print('\\nMarker score by cluster (mean log expr):')
+print(cm.round(3).to_string())
+# top marker per cluster via rank genes groups wilcoxon
+sc.tl.rank_genes_groups(adata, 'leiden', method='wilcoxon', use_raw=False, n_genes=20)
+res=adata.uns['rank_genes_groups']
+for group in adata.obs['leiden'].cat.categories:
+    genes=res['names'][group][:10]
+    scores=res['scores'][group][:10]
+    print(group, list(zip(genes, scores)))
+PY
+python3 markers.py"

@@ -1,0 +1,37 @@
+/bin/bash -lc "cat > fetch_cluster_exp.py <<'PY'
+import asyncio, aiohttp, json, urllib.parse, time, sys, pickle
+names=[line.strip() for line in open('selected_genes.txt') if line.strip()]
+base='https://bis.zju.edu.cn/uuatac/data/axolotl/cluster-exp/'
+results={}
+errors=[]
+sem=asyncio.Semaphore(30)
+async def fetch_one(session,name):
+    url=base+urllib.parse.quote(name,safe='')+'.json'
+    try:
+        async with sem:
+            async with session.get(url,timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status"'!=200:
+                    text=await resp.text()
+                    raise Exception(f'"'HTTP {resp.status} {text[:100]}')
+                data=await resp.json()
+                d={item['name']:item['value'] for item in data}
+                results[name]=d
+    except Exception as e:
+        errors.append((name,str(e)))
+async def main():
+    connector=aiohttp.TCPConnector(limit=30)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks=[asyncio.create_task(fetch_one(session,n)) for n in names]
+        done=0
+        t0=time.time()
+        for i,coro in enumerate(asyncio.as_completed(tasks)):
+            await coro
+            done+=1
+            if done%1000==0:
+                print('done',done,'errors',len(errors),'elapsed',round(time.time()-t0,1), flush=True)
+    print('final',done,'errors',len(errors))
+    with open('cluster_exp_dict.pkl','wb') as f: pickle.dump(results,f)
+    with open('cluster_exp_errors.json','w') as f: json.dump(errors,f)
+asyncio.run(main())
+PY
+python3 fetch_cluster_exp.py"

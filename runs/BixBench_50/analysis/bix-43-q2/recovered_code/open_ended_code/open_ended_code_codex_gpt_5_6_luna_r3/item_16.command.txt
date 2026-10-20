@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time, warnings
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+meta=pd.read_csv('inputs/sample_layout.csv')
+meta['count_id']=meta['SampleID'].str.replace('-','_',regex=False)
+meta=meta.set_index('count_id').loc[counts.columns].copy()
+keep=(counts>10).any(axis=1)
+counts=counts.loc[keep]
+print('prefilter',counts.shape,'metadata groups',meta.Group.value_counts().to_dict())
+
+def run(groups,name):
+    submeta=meta[meta.Group.isin(groups)].copy()
+    subcounts=counts.loc[:,submeta.index]
+    # force order/ref as requested
+    submeta['Group']=pd.Categorical(submeta['Group'],categories=groups,ordered=True)
+    print('\\nRUN',name,subcounts.shape,'groups',submeta.Group.value_counts().to_dict())
+    t=time.time()
+    dds=DeseqDataSet(counts=subcounts.T,metadata=submeta[['Group']],design='~Group',refit_cooks=True,n_cpus=1,quiet=True)
+    dds.deseq2()
+    print('fit seconds',time.time()-t,'var',list(dds.var_names)[:3], 'layers',list(dds.layers.keys()))
+    stat=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=0.05,quiet=True,n_cpus=1)
+    stat.summary()
+    print('res columns',stat.results_df.columns.tolist(),'shape',stat.results_df.shape)
+    print(stat.results_df.head().to_string())
+    df=stat.results_df.copy()
+    # inspect columns
+    print('pval counts',df['pvalue'].notna().sum(),'padj notna',df['padj'].notna().sum(),'padj<=05', (df.padj<=.05).sum())
+    sel=df[(df.padj<=.05)&(df.log2FoldChange.abs()>=.5)&(df.baseMean>=10)]
+    print('selected',len(sel),'up',sum(sel.log2FoldChange>=.5),'down',sum(sel.log2FoldChange<=-.5))
+    print('selected IDs',sel.index[:20].tolist())
+    return df
+for groups,name in [(['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h'],'four'),(list(meta.Group.cat.categories if isinstance(meta.Group.dtype,pd.CategoricalDtype) else meta.Group.unique()),'all')]:
+    run(groups,name)
+PY"

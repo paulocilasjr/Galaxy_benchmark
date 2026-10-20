@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from scipy.io import mmread
+
+def load(p):
+ with gzip.open(p,'rt') as f:return mmread(f).tocsr()
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:
+ next(f); genes=[l.rstrip('\\n').split('\\t')[1] for l in f]
+pos={g:i for i,g in enumerate(genes)}
+a=load('subtype.inflammation.q1.1.mtx.gz'); b=load('subtype.inflammation.q1.2.mtx.gz')
+# marker groups, include robust retina markers
+sets={
+'rod cell':['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','RCVRN','GNB1','GNAT1','ROM1','GRK1','RLBP1','PDE6G','CNGB1','IFT27','FAM161A','EYS','TF'],
+'cone cell':['ARR3','OPN1SW','OPN1MW','OPN1LW','GNAT2','PDE6C','RXRG','THRB','GNGT2','GUCA1C','CPLX4','UNC119','ATXN7','KCNV2'],
+'astrocyte':['GFAP','AQP4','SLC1A3','S100B','ALDOC','VIM','CLU','GJA1','HEPN1','KCNJ10'],
+'muller glia cell':['RLBP1','SLC1A3','GLUL','VIM','AQP4','SOX9','CLU','KCNJ10','RAX','SLC6A9'],
+'microglial cell':['P2RY12','TMEM119','CX3CR1','C1QA','C1QB','C1QC','AIF1','TYROBP','LST1','CSF1R','TREM2','CTSS','FCER1G','CST3','APOE'],
+'macrophage':['LYZ','TYROBP','FCER1G','LST1','CTSS','CD68','CST3','MS4A7','ITGAM','MRC1','MARCO','FCGR3A','S100A8','S100A9','CTSD','SPI1'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','IL7R','LTB','LCK','CD247','MALAT1'],
+'B cell':['MS4A1','CD79A','CD37','CD74','HLA-DRA','CD79B','CD37','CD83','CD22'],
+'RGC':['RBPMS','THY1','POU4F1','POU4F2','SNCG','NEFL','NEFM','ISL1','GAP43','TUBB3'],
+'bipolar cell':['VSX2','GRM6','TRPM1','CABP5','PCP2','PRKCA','VSX2','SCGN','GNB3','OTX2','CACNA1F'],
+'horizontal cell':['LHX1','ONECUT1','ONECUT2','CALB1','PROX1','GAD1','GAD2','TF','CACNA1A'],
+'RPE cell':['RPE65','BEST1','MITF','PMEL','TYR','DCT','MERTK','LRAT','RLBP1','RDH5'],
+'endothelial cell':['KDR','ESM1','PECAM1','VWF','CLDN5','EMCN','RAMP2','KLF2','ENG','CDH5','FLT1'],
+'Pericyte':['KCNJ8','CSPG4','PDGFRB','RGS5','ABCC9','MCAM','COL4A1','COL4A2','ACTA2','DES'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','PDGFRA','FBLN1','C7','DPT'],
+'Schwann cell':['MPZ','SOX10','S100B','PLP1','MAL','MBP','GFRA3','NCAM1','CLDN11','EGR2'],
+}
+infl=['IL1B','CCL2','CCL7','CXCL9','CXCL10','CXCL11','IL6','CSF3','S100A8','S100A9','NFKBIA','CCL3','CCL4','CCL20','CD69','TNF','TNFRSF9','HLA-DRA','HLA-DRB1','CD74','MARCO']
+
+def report(label,x):
+ lib=np.asarray(x.sum(0)).ravel(); n=x.shape[1]
+ # score weighted normalized counts marker; simple count per marker, log-normalized
+ arr=x.astype(np.float32).multiply(1e4/lib).tocsr()
+ print('\\n===',label,'===')
+ # gene rows for inflammatory score using per-cell normalized sum
+ iscore=np.asarray(arr[[pos[g] for g in infl],:].sum(0)).ravel()
+ # top 30 per group of broad inflammation score; cells with any IL1B/CCL2 etc
+ for cutoff in [0,5,10,20]:
+  ids=np.flatnonzero(iscore>=cutoff)
+  print('score >=',cutoff,'cells',len(ids),'median lib',np.median(lib[ids]) if len(ids) else 0)
+ # score by marker set mean of log1p normalized expression (only existing)
+ scores={}
+ for typ,gs in sets.items():
+  ii=[pos[g] for g in gs if g in pos]
+  scores[typ]=np.asarray(arr[ii,:].sum(0)).ravel()/len(ii)
+ scorem=np.vstack(list(scores.values())); typelist=list(scores)
+ ids=np.argsort(iscore)[-50:][::-1]
+ print('top inflammatory cells:')
+ for j in ids[:25]:
+  if iscore[j]<=0: continue
+  best=np.argsort(scorem[:,j])[-4:][::-1]
+  inflgenes=[]
+  for g in infl:
+   v=x[pos[g],j]
+   if v: inflgenes.append(f'{g}:{int(v)}')
+  print('cell',int(j),'infl',round(iscore[j],1),'lib',int(lib[j]),'types',[(typelist[k],round(scorem[k,j],1)) for k in best], 'markers', inflgenes)
+ # aggregate inflammation by assigned marker class; assign all cells based score; report means frac
+ assign=scorem.argmax(0)
+ for k,t in enumerate(typelist):
+  ids=np.flatnonzero(assign==k)
+  if len(ids)==0: continue
+  # compare to other assigned group? output
+  print(f'{t:20s} n={len(ids):4d} inflmean={iscore[ids].mean():7.2f} med={np.median(iscore[ids]):6.2f} >0={np.mean(iscore[ids]>0):.3f} >10={np.mean(iscore[ids]>=10):.3f}')
+report('eye1',a); report('eye2',b)
+PY"

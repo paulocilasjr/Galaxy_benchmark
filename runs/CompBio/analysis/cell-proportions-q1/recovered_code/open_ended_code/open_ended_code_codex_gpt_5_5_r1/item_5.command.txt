@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from scipy.io import mmread
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import silhouette_score
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
+
+X=np.asarray(mmread('cell.proportions.q1.mtx.gz')).T
+lib=X.sum(1); genes=(X>0).sum(1)
+sf=lib/np.median(lib)
+Y=np.log1p(X/sf[:,None])
+idx=np.argsort(Y.var(0))[-500:]
+Z=StandardScaler().fit_transform(Y[:,idx])
+pca=PCA(n_components=30, random_state=0).fit_transform(Z)
+for k in [3,4,5,6]:
+    lab=KMeans(k, n_init=100, random_state=0).fit_predict(pca[:,:10])
+    print('\\nK',k,'sil',silhouette_score(pca[:,:10], lab))
+    rows=[]
+    for c in range(k):
+        m=lab==c
+        rows.append((m.sum(), c, lib[m].mean(), np.median(lib[m]), genes[m].mean(), np.median(genes[m]), pca[m,0].mean(), pca[m,1].mean(), pca[m,2].mean()))
+    for r in sorted(rows, reverse=True):
+        print('size %4d c%d lib mean/med %.1f/%.1f genes %.1f/%.1f pc %.2f %.2f %.2f'%r)
+
+# top PCs maybe cluster separated exact groups by hierarchical on centroids at k=6
+lab6=KMeans(6, n_init=100, random_state=0).fit_predict(pca[:,:10])
+cent=np.vstack([pca[lab6==c,:10].mean(0) for c in range(6)])
+print('\\ncentroid dist k6')
+print(np.round(np.linalg.norm(cent[:,None,:]-cent[None,:,:], axis=2),2))
+# GMM bic on pca
+print('\\nGMM BIC/AIC')
+for k in range(1,10):
+    gm=GaussianMixture(n_components=k, covariance_type='diag', n_init=10, random_state=1).fit(pca[:,:10])
+    lab=gm.predict(pca[:,:10])
+    print(k, 'bic', round(gm.bic(pca[:,:10])), 'aic', round(gm.aic(pca[:,:10])), 'sizes', sorted(np.bincount(lab), reverse=True))
+PY"

@@ -1,0 +1,69 @@
+/bin/bash -lc "cat > build_celltrack.py <<'PY'
+import gzip, csv, numpy as np, collections, time
+# Load input keys
+fn='sample.swap.atac.q1.tsv.gz'
+keys=[]
+with gzip.open(fn,'rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r)
+    for row in r:
+        keys.append((row[0],int(row[1])))
+key_to_idx={k:i for i,k in enumerate(keys)}
+n=len(keys)
+print('n bins',n)
+# Load cell meta, subanno counts/frags per sample
+samples=[]
+compo_count=collections.defaultdict(collections.Counter)
+compo_frag=collections.defaultdict(collections.Counter)
+with open('cell_meta.tsv') as f:
+    r=csv.DictReader(f,delimiter='\\t')
+    for row in r:
+        s=row['sample']; c=row['subanno']; nf=float(row['nFrags'])
+        if s not in samples: samples.append(s)
+        compo_count[s][c]+=1
+        compo_frag[s][c]+=nf
+# ensure order alphabetical like input? Input names alphabetical
+samples=sorted(set(samples))
+print('samples',samples)
+celltypes=[]
+# use peakSet prefixes to get ordered list
+with gzip.open('peakSet.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); header=next(r)
+    for row in r:
+        prefix=row[3].split('._.')[0]
+        if prefix not in celltypes: celltypes.append(prefix)
+print('celltypes',len(celltypes),celltypes[:10])
+# Map celltype names to index
+ct_idx={c:i for i,c in enumerate(celltypes)}
+celltrack=np.zeros((n,len(celltypes)),dtype=np.float32)
+count=0
+with gzip.open('peakSet.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); header=next(r)
+    for row in r:
+        chrom=row[0]; start=int(row[1]); score=float(row[4]); prefix=row[3].split('._.')[0]
+        ci=ct_idx[prefix]
+        bin_start=(start//10000)*10000
+        ridx=key_to_idx.get((chrom,bin_start))
+        if ridx is None and bin_start==0:
+            ridx=key_to_idx.get((chrom,10000))
+        if ridx is not None:
+            celltrack[ridx,ci]+=score
+        count+=1
+print('processed peaks',count)
+# Build composition matrices count and frag weighted (normalized by sum per sample)
+C=np.zeros((len(samples),len(celltypes)),dtype=np.float64)
+F=np.zeros((len(samples),len(celltypes)),dtype=np.float64)
+for si,s in enumerate(samples):
+    for c,v in compo_count[s].items():
+        C[si,ct_idx[c]]=v
+    for c,v in compo_frag[s].items():
+        F[si,ct_idx[c]]=v
+C /= C.sum(axis=1,keepdims=True)
+F /= F.sum(axis=1,keepdims=True)
+# Reference bulk profiles
+ref_count=celltrack.astype(np.float64) @ C.T  # n x samples
+ref_frag=celltrack.astype(np.float64) @ F.T
+np.savez_compressed('celltrack_data.npz', celltrack=celltrack, ref_count=ref_count, ref_frag=ref_frag, celltypes=np.array(celltypes,dtype=str), samples=np.array(samples,dtype=str), C=C, F=F)
+print('saved ref shapes',ref_count.shape,ref_frag.shape)
+PY
+python3 build_celltrack.py"

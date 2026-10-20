@@ -1,0 +1,75 @@
+python3 << 'PYEOF'
+# Investigate discrepancy with bcftools - check what bcftools counts differently
+# Look for non-standard bases or symbols
+
+vcf_path = '/workspace/inputs/SRR35233585_raw_variants.vcf'
+
+non_standard = []
+with open(vcf_path) as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts = line.strip().split('\t')
+        if len(parts) < 5:
+            continue
+        ref = parts[3]
+        alt = parts[4]
+        for a in alt.split(','):
+            # Check if bcftools considers it a SNP but we filtered it
+            if len(ref) == 1 and len(a) == 1:
+                if ref not in 'ACGT' or a not in 'ACGT':
+                    non_standard.append((ref, a))
+            # Or if we consider it a SNP but ref/alt has symbols
+            if len(ref) == 1 and len(a) == 1:
+                pass
+
+print(f"Non-standard single-base ref/alt pairs: {len(non_standard)}")
+if non_standard:
+    from collections import Counter
+    print(Counter(non_standard))
+
+# Also check for lowercase
+lowercase_count = 0
+with open(vcf_path) as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts = line.strip().split('\t')
+        ref = parts[3]
+        alt = parts[4]
+        if ref != ref.upper() or alt != alt.upper():
+            lowercase_count += 1
+            
+print(f"Records with lowercase bases: {lowercase_count}")
+
+# Check the exact records that bcftools counts as SNPs vs what we don't
+# bcftools SNP count: 67063, my count would be...
+my_snp_count = 0
+my_ts = 0
+my_tv = 0
+
+with open(vcf_path) as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts = line.strip().split('\t')
+        ref = parts[3]
+        alt = parts[4]
+        for a in alt.split(','):
+            if len(ref) == 1 and len(a) == 1:
+                # be more permissive - count anything single-char as SNP
+                my_snp_count += 1
+                # use uppercase for comparison
+                ru = ref.upper()
+                au = a.upper()
+                if ru in 'ACGT' and au in 'ACGT':
+                    if (ru, au) in {('A','G'),('G','A'),('C','T'),('T','C')}:
+                        my_ts += 1
+                    else:
+                        my_tv += 1
+
+print(f"My permissive SNP count (all alts): {my_snp_count}")
+print(f"My permissive ts: {my_ts}, tv: {my_tv}")
+print(f"My permissive Ts/Tv: {my_ts/my_tv:.4f}")
+
+PYEOF

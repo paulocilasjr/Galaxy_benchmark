@@ -1,0 +1,108 @@
+/bin/bash -lc "python - <<'PY'
+# inspect first few values with two independent approaches
+import zipfile, re
+p='1428854at2759.faa.mafft.clipkit.treefile'
+with zipfile.ZipFile('inputs/scogs_animals.zip') as z:s=z.read(p).decode().strip()
+print(s)
+# use simple known distances manually parse via regex-ish? print branch lengths
+print(re.findall(r'(?::)([0-9.]+)',s))
+# use custom from prior copied
+class Node:
+ def __init__(self,name=None,length=0.0):self.children=[];self.name=name;self.length=length
+def parse_newick(s):
+ s=s.strip();i=0
+ def skip():
+  nonlocal i
+  while i<len(s) and s[i].isspace():i+=1
+ def label():
+  nonlocal i
+  skip();start=i
+  while i<len(s) and s[i] not in '(),:;[]' and not s[i].isspace():i+=1
+  return s[start:i] or None
+ def number():
+  nonlocal i
+  skip();start=i
+  while i<len(s) and s[i] not in ',();[]' and not s[i].isspace():i+=1
+  return float(s[start:i]) if i>start else 0.0
+ def subtree():
+  nonlocal i
+  skip()
+  if i<len(s) and s[i]=='(':
+   i+=1;n=Node()
+   while 1:
+    n.children.append(subtree());skip()
+    if i<len(s) and s[i]==',':i+=1;continue
+    if i<len(s) and s[i]==')':i+=1;break
+    raise ValueError((i,s[i:i+30]))
+   n.name=label();skip()
+  else:n=Node(name=label())
+  skip()
+  if i<len(s) and s[i]==':':i+=1;n.length=number()
+  skip()
+  while i<len(s) and s[i]=='[':
+   j=s.find(']',i+1);i=j+1;skip()
+  return n
+ return subtree()
+def calc(root):
+ vals=[]
+ def rec(n):
+  if not n.children:return [(n.name,0.0)]
+  groups=[]
+  for c in n.children:groups.append([(name,d+c.length) for name,d in rec(c)])
+  all_leaves=[]
+  for g in groups:
+   for x in g:
+    for y in all_leaves:vals.append(x[1]+y[1])
+    all_leaves.append(x)
+  out=[]
+  for g in groups:out.extend(g)
+  return out
+ rec(root);return vals,sum(vals)/len(vals)
+root=parse_newick(s);vals,m=calc(root);print('float',vals,m)
+# decimal copy
+from decimal import Decimal
+class N:
+ def __init__(self,name=None): self.name=name;self.children=[];self.length=Decimal(0)
+def pd(s):
+ i=0
+ def skip():
+  nonlocal i
+  while i<len(s) and s[i].isspace():i+=1
+ def lab():
+  nonlocal i
+  skip();st=i
+  while i<len(s) and s[i] not in '(),:;[]' and not s[i].isspace():i+=1
+  return s[st:i] or None
+ def num():
+  nonlocal i
+  skip();st=i
+  while i<len(s) and s[i] not in ',();[]' and not s[i].isspace():i+=1
+  return Decimal(s[st:i])
+ def sub():
+  nonlocal i
+  skip()
+  if s[i]=='(':
+   i+=1;n=N()
+   while 1:
+    n.children.append(sub());skip()
+    if s[i]==',':i+=1;continue
+    if s[i]==')':i+=1;break
+   n.name=lab()
+  else:n=N(lab())
+  skip()
+  if i<len(s) and s[i]==':':i+=1;n.length=num()
+  skip();return n
+ return sub()
+def calcd(root):
+ vals=[]
+ def rec(n):
+  if not n.children:return [(n.name,Decimal(0))]
+  all=[]
+  for c in n.children:
+   g=[(x,d+c.length) for x,d in rec(c)]
+   for x,d in g:vals.extend(d+e for _,e in all)
+   all.extend(g)
+  return all
+ rec(root);return vals,sum(vals,Decimal(0))/len(vals)
+root=pd(s); vals2,m2=calcd(root); print('decimal',vals2,m2)
+PY"

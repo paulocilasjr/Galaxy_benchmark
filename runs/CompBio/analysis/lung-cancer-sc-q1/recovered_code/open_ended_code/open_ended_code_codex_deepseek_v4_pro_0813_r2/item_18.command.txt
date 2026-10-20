@@ -1,0 +1,84 @@
+/bin/bash -c "cat > classify_quick.py <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp, pandas as pd, time
+A=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+X=A.X[:].tocsr()
+obs=A.obs['sampleID'].values
+symbols=A.var['symbol'].astype(str).values
+lib=np.asarray(X.sum(1)).ravel()
+norm=X.copy().astype(np.float64)
+norm.data=np.log1p(norm.data / lib[norm.indices] * 10000)
+
+def get(g):
+    idx=np.where(symbols==g)[0]
+    if len(idx)==0: return np.zeros(X.shape[0])
+    col=norm[:,idx[0]]
+    return np.asarray(col.todense()).ravel() if sp.issparse(col) else np.asarray(col).ravel()
+
+# save key cols to memory? Make dict
+genes=['PTPRC','EPCAM','KRT5','KRT6A','KRT14','TP63','SOX2','DSC3','NKX2-1','NAPSA','SFTPB','CD3D','CD79A','MS4A1','CD68','LYZ','FCER1A','CD1C','CLEC9A','LILRA4','VWF','PECAM1','DCN','COL1A1','TPSAB1','KIT','MZB1','JCHAIN','CD14','FCGR3A','HLA-DRA','CD74','IDO1','FLT3','IRF8','BATF3','XCR1','CD207','CD209','CCR7','LAMP3']
+d={g:get(g) for g in genes}
+df=pd.DataFrame(d)
+# broad scores
+# Dendritic score: cDC1 CLEC9A/XCR1/BATF3, cDC2 CD1C/FCER1A, pDC LILRA4/IRF8, mature LAMP3/CCR7; exclude CD68? Use max of normalized markers.
+dc_markers=['FCER1A','CD1C','CLEC9A','LILRA4','IDO1','FLT3','XCR1','BATF3','LAMP3','CCR7','CD207','CD209']
+df['DC_score']=df[dc_markers].max(axis=1)
+# basal score mean/max
+basal_markers=['KRT5','KRT6A','KRT14','TP63','SOX2','DSC3']
+alv_markers=['NKX2-1','NAPSA','SFTPB']
+df['basal_score']=df[basal_markers].mean(axis=1)
+df['alv_score']=df[alv_markers].mean(axis=1)
+# cell type calls
+def call(row):
+    # immune lineages first
+    if row['PTPRC']>0.5 or row['CD3D']>0.5 or row['CD79A']>0.5 or row['MS4A1']>0.5 or row['CD68']>0.5 or row['LYZ']>0.5 or row['TPSAB1']>0.5 or row['MZB1']>0.5 or row['JCHAIN']>0.5 or row['DC_score']>0.5:
+        if row['DC_score']>0.5:
+            return 'DC'
+        if row['CD3D']>0.5:
+            return 'T_NK'
+        if row['CD79A']>0.5 or row['MS4A1']>0.5 or row['MZB1']>0.5 or row['JCHAIN']>0.5:
+            return 'B_plasma'
+        if row['TPSAB1']>0.5 or row['KIT']>0.5:
+            return 'Mast'
+        if row['CD68']>0.5 or row['LYZ']>0.5:
+            return 'Myeloid'
+        return 'Immune_other'
+    if row['VWF']>0.5 or row['PECAM1']>0.5:
+        return 'Endothelial'
+    if row['DCN']>0.5 or row['COL1A1']>0.5:
+        return 'Fibroblast'
+    if row['EPCAM']>0.5:
+        if row['basal_score']>0.5 and row['basal_score']>=row['alv_score']:
+            return 'Basal_epi'
+        if row['alv_score']>0.5 and row['alv_score']>row['basal_score']:
+            return 'Alveolar_epi'
+        return 'Other_epi'
+    return 'Other_nonimmune'
+df['celltype']=df.apply(call,axis=1)
+df['sample']=obs
+# sample counts
+ct=pd.crosstab(df['sample'],df['celltype'])
+# relevant
+print('total cell type counts all')
+print(df['celltype'].value_counts())
+print('\\nRelevant samples cell types:')
+rel=['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']
+for s in rel:
+    sub=df[df.sample==s]
+    print('\\n',s,'n',len(sub))
+    print(sub['celltype'].value_counts().to_string())
+    print('DC score >0.5', (sub.DC_score>0.5).sum(), 'PTPRC+', (sub.PTPRC>0.5).sum())
+    print('DC markers positive counts')
+    for g in ['FCER1A','CD1C','CLEC9A','LILRA4']:
+        print(g, (sub[g]>0.5).sum())
+# Save df for later
+df.to_parquet('quick_calls.parquet')
+ct.to_csv('quick_celltype_counts.csv')
+# print LUSC candidate sample compositions for basal epi
+print('\\nBasal_epi counts by sample >0')
+basal=ct.get('Basal_epi',pd.Series(dtype=int))
+print(basal[basal>0].sort_values(ascending=False).to_string())
+print('\\nAlveolar_epi counts by sample >0')
+alv=ct.get('Alveolar_epi',pd.Series(dtype=int))
+print(alv[alv>0].sort_values(ascending=False).to_string())
+PY
+python classify_quick.py"

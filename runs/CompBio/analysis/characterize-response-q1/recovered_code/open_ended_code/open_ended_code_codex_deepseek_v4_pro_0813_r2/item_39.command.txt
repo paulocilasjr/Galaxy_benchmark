@@ -1,0 +1,39 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, gzip
+fn='GSE233796_Med12_BMDCs.csv.gz'
+df=pd.read_csv(fn)
+print(df.shape)
+print(df.columns)
+print(df.head())
+# compute mean counts, log2FC Med12/NT with pseudocount maybe
+ko=df[['DCs_Med12KO_1','DCs_Med12KO_2','DCs_Med12KO_3']].astype(float)
+nt=df[['DCs_NT_1','DCs_NT_2','DCs_NT_3']].astype(float)
+ko_mean=ko.mean(axis=1)+0.5
+nt_mean=nt.mean(axis=1)+0.5
+df['logFC']=np.log2(ko_mean/nt_mean)
+# aggregate genes max or mean? maybe first transcript rows; use mean/sum
+g=df.groupby('Gene_name')['logFC'].mean().sort_values(ascending=False)
+print('top up')
+print(g.head(150))
+print('top down')
+print(g.tail(150))
+# compare our genes positions
+our=[x.capitalize() for x in open('characterize.response.q1.txt').read().strip().split('\\n')]
+# convert common names, our mouse symbols may need capitalization matching; use upper
+our_upper=[x.upper() for x in our]
+# map df gene upper to logfc mean
+gdf=df.groupby('Gene_name')['logFC'].mean().reset_index()
+gdf['up']=gdf.Gene_name.str.upper()
+m={r.up:r.logFC for r in gdf.itertuples()}
+pos=[]
+for x in our_upper:
+    if x in m: pos.append(m[x])
+    else: pos.append(None)
+print('our genes found',sum(x is not None for x in pos),'of',len(pos))
+print('our top FCs:')
+for x,v in zip(our,pos): print(x,v)
+# how many our genes in top 112 by abs logfc? Determine sign
+thr_pos= g.sort_values(ascending=False).index[:len(our)].str.upper().tolist()
+thr_neg= g.sort_values(ascending=True).index[:len(our)].str.upper().tolist()
+print('overlap top up',len(set(our_upper)&set(thr_pos)),'top down',len(set(our_upper)&set(thr_neg)))
+PY"

@@ -1,0 +1,102 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, statistics, itertools, math
+
+class Node:
+    __slots__=('name','length','children')
+    def __init__(self,name='',length=0.0,children=None):
+        self.name=name; self.length=length; self.children=children or []
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    i=0
+    n=len(s)
+    def parse_sub():
+        nonlocal i
+        children=[]
+        name=''
+        length=0.0
+        if i<n and s[i]=='(':
+            i+=1
+            while True:
+                children.append(parse_sub())
+                if i<n and s[i]==',':
+                    i+=1; continue
+                if i<n and s[i]==')':
+                    i+=1; break
+                raise ValueError(f'expected , or ) at {i} in {s}')
+        # parse optional label until : , ) end
+        start=i
+        while i<n and s[i] not in ':,()':
+            i+=1
+        name=s[start:i].strip()
+        if i<n and s[i]==':':
+            i+=1
+            start=i
+            while i<n and s[i] not in ',()':
+                i+=1
+            val=s[start:i].strip()
+            length=float(val) if val else 0.0
+        return Node(name,length,children)
+    root=parse_sub()
+    if i"'!=n:
+        raise ValueError(f'"'trailing at {i}/{n}: {s[i:]}')
+    return root
+
+def leaves_and_dists(root):
+    leaves=[]
+    paths={}
+    def rec(node, dist, path):
+        curdist=dist + (node.length or 0.0)
+        curpath=path+[(node, curdist)]
+        if not node.children:
+            label=node.name
+            leaves.append(label)
+            paths[label]=curpath
+        else:
+            for ch in node.children:
+                rec(ch, curdist, curpath)
+    # root branch length included if present in all paths; cancels in pair distances via LCA
+    rec(root, 0.0, [])
+    return leaves, paths
+
+def patristic_mean(root):
+    leaves, paths=leaves_and_dists(root)
+    if len(leaves)<2: return None, len(leaves)
+    vals=[]
+    for a,b in itertools.combinations(leaves,2):
+        pa=paths[a]; pb=paths[b]
+        k=0; last=0.0
+        while k<min(len(pa),len(pb)) and pa[k][0] is pb[k][0]:
+            last=pa[k][1]; k+=1
+        da=pa[-1][1]; db=pb[-1][1]
+        vals.append(da+db-2*last)
+    return sum(vals)/len(vals), len(leaves)
+
+def collect(zip_path):
+    rows=[]
+    with zipfile.ZipFile(zip_path) as z:
+        for name in sorted(n for n in z.namelist() if n.endswith('.treefile')):
+            txt=z.read(name).decode().strip()
+            mean, nt=patristic_mean(parse_newick(txt))
+            rows.append((name, mean, nt, txt))
+    return rows
+
+for group,path in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+    rows=collect(path)
+    vals=[r[1] for r in rows]
+    vals4=[r[1] for r in rows if r[2]==4]
+    vals3=[r[1] for r in rows if r[2]==3]
+    print(group, 'n',len(vals), 'ntaxa_counts', {k:sum(r[2]==k for r in rows) for k in sorted(set(r[2] for r in rows))})
+    print(' median_all', statistics.median(vals))
+    print(' median_4', statistics.median(vals4) if vals4 else None, 'n4', len(vals4))
+    print(' median_3', statistics.median(vals3) if vals3 else None, 'n3', len(vals3))
+    print(' minmax', min(vals), max(vals))
+
+animals=collect('inputs/scogs_animals.zip'); fungi=collect('inputs/scogs_fungi.zip')
+ma=statistics.median([r[1] for r in animals]); mf=statistics.median([r[1] for r in fungi])
+print('fungi/animals', mf/ma)
+print('animals/fungi', ma/mf)
+ma4=statistics.median([r[1] for r in animals if r[2]==4]); mf4=statistics.median([r[1] for r in fungi if r[2]==4])
+print('4 fungi/animals', mf4/ma4, 'medians', mf4, ma4)
+PY"

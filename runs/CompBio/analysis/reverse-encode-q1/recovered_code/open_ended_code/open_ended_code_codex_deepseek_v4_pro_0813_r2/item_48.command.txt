@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import sqlite3,re,json
+con=sqlite3.connect('CONTENTS.sqlite3')
+rows=con.execute(\"select accession,biosample_summary,description from contents where assay_term_name='DNase-seq' and description like '%v3.0.0-alpha.2%'\").fetchall()
+print('rows',len(rows))
+# parse patterns {ENCFFxxxxxx|...} and has N mapped reads / unique mapped reads / etc
+out=[]
+pat=re.compile(r'\\{((?:ENCFF|ENCAN|ENCPL)[A-Z0-9]+)\\|["'^}]+'"\\}\\s+processed by DNase-seq ENCODE4 v3\\.0\\.0-alpha\\.2 GRCh38 pipeline["'^.]*?has'"\\s+([\\d,]+)\\s+mapped reads')
+pat2=re.compile(r'Alignment file \\{((?:ENCFF)[A-Z0-9]+)\\|')
+for acc,bio,desc in rows:
+    files=set()
+    for m in re.finditer(r'Alignment file \\{((?:ENCFF)[A-Z0-9]+)\\|["'^}]*'"\\}', desc):
+        files.add(m.group(1))
+    # also any {ENCFF...}
+    # extract counts associated with each file phrase
+    counts=[]
+    for f in files:
+        # search desc for f then later mapped reads
+        idx=desc.find(f)
+        if idx==-1: continue
+        seg=desc[idx:idx+500]
+        m=re.search(r'has\\s+([\\d,]+)\\s+mapped reads',seg)
+        if m: counts.append((f,int(m.group(1).replace(',',''))))
+    out.append((acc,bio,list(sorted(files)),counts))
+print('parsed')
+# save
+json.dump(out,open('dnase_v3_alignments.json','w'),indent=1)
+# summarize counts vs target
+target=152551718
+for acc,bio,files,counts in out:
+    total=sum(c for f,c in counts)
+    if any(c==target for f,c in counts) or total==target:
+        print('MATCH',acc,bio,files,counts,total)
+# print count distribution and top 20 closest total
+rows2=[]
+for acc,bio,files,counts in out:
+    total=sum(c for f,c in counts)
+    if total: rows2.append((abs(total-target),acc,bio,files,counts,total))
+rows2.sort()
+for r in rows2[:30]: print(r)
+PY"

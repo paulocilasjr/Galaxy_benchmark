@@ -1,0 +1,104 @@
+/bin/bash -lc "python - <<'PY'
+# Build gene-body activity pairs and PCA match, plus kmeans etc
+import gzip,csv,re,numpy as np
+from collections import defaultdict
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from scipy.optimize import linear_sum_assignment
+
+# parse genes
+gene_list=defaultdict(list)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        m=re.search(r'gene_name \"(["'^"]+)"'"',p[8]); b=re.search(r'gene_biotype \"(["'^"]+)"'"',p[8])
+        if not m: continue
+        gene_list[m.group(1)].append((p[0],int(p[3]),int(p[4]),p[6],b.group(1) if b else ''))
+def choose(ents):
+    pc=[e for e in ents if e[4]=='protein_coding']
+    return max(pc if pc else ents,key=lambda e:e[2]-e[1])
+genes={}
+for gn,ents in gene_list.items():
+    c,s,e,st,bt=choose(ents)
+    if not c.startswith('chr'): c='chr'+c
+    tss=s if st=='+' else e
+    genes[gn]=(c,s,e,st,tss)
+
+chr_starts=defaultdict(list); chr_vals=defaultdict(list)
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        c,s,e=row[0].split('_'); s=int(s)
+        chr_starts[c].append(s); chr_vals[c].append(np.array([float(x) for x in row[1:9]]))
+for c in chr_starts:
+    idx=np.argsort(chr_starts[c]); chr_starts[c]=np.array(chr_starts[c])[idx]; chr_vals[c]=np.array(chr_vals[c])[idx]
+
+def act(c,s,e):
+    st=chr_starts.get(c); va=chr_vals.get(c)
+    if st is None: return None
+    li=np.searchsorted(st,s-10000,side='right'); ri=np.searchsorted(st,e,side='right')
+    if li>=ri:return None
+    return va[li:ri].sum(axis=0)
+
+rna_syms=[]; R=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t'); next(r)
+    for row in r:
+        rna_syms.append(row[0]); R.append([float(x) for x in row[1:9]])
+R=np.array(R)
+pairs=[]
+for gi,gn in enumerate(rna_syms):
+    g=genes.get(gn)
+    if not g: continue
+    a=act(g[0],g[1],g[2])
+    if a is None: continue
+    pairs.append((R[gi],a))
+Rs=np.array([p[0] for p in pairs]); As=np.array([p[1] for p in pairs])
+# filter genes with some variability to improve
+rr=np.log1p(Rs); aa=np.log1p(As)
+rvar=rr.var(axis=1); avar=aa.var(axis=1)
+keep=(rvar>np.quantile(rvar,0.1)) & (avar>np.quantile(avar,0.1))
+print('keep',keep.sum())
+rr=rr[keep]; aa=aa[keep]
+# standardize features (genes) across columns for PCA
+sc=StandardScaler()
+rr_z=sc.fit_transform(rr.T).T  # columns samples, features rows; StandardScaler on samples -> features standardized
+aa_z=sc.fit_transform(aa.T).T
+pca=PCA(n_components=3)
+rp=pca.fit_transform(rr_z.T)  # n_samples x comp
+ap=pca.fit_transform(aa_z.T)
+print('RNA PCs')
+print(np.round(rp,3))
+print('ATAC PCs')
+print(np.round(ap,3))
+# match by euclidean after allowing global signs/permutation of components? simple euclidean
+dist=np.array([[np.linalg.norm(rp[i]-ap[j]) for j in range(8)] for i in range(8)])
+print('dist')
+print(np.round(dist,3))
+ri,cj=linear_sum_assignment(dist)
+print('perm', {i:int(cj[i]) for i in range(8)})
+# Procrustes align ATAC PCs to RNA PCs using orthogonal transform
+# Since dim small, try all sign flips and permutations of PC components (n=3)
+from itertools import permutations, product
+best=None
+for perm in permutations(range(3)):
+    for signs in product([1,-1], repeat=3):
+        Q=np.zeros((3,3))
+        for k,pk in enumerate(perm):
+            Q[pk,k]=signs[k]
+        ap2=ap@Q.T
+        cost=np.sum((rp-ap2)**2)
+        if best is None or cost<best[0]:
+            best=(cost,perm,signs,ap2)
+cost,perm,signs,ap2=best
+print('procrustes best cost',cost,'perm/signs',perm,signs)
+print('aligned atac PCs')
+print(np.round(ap2,3))
+dist2=np.array([[np.linalg.norm(rp[i]-ap2[j]) for j in range(8)] for i in range(8)])
+ri,cj=linear_sum_assignment(dist2)
+print('procrustes perm', {i:int(cj[i]) for i in range(8)})
+print('dist2')
+print(np.round(dist2,3))
+PY"

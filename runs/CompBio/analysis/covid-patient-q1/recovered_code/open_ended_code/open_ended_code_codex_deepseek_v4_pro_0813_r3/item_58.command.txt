@@ -1,0 +1,53 @@
+/bin/bash -c "cat > summarize_blood.py <<'PY'
+import tarfile, gzip, io, json, time
+outer=tarfile.open('GSE157344_RAW.tar','r')
+members=outer.getmembers()
+blood=[]
+for m in members:
+    if m.name.startswith('GSM') and '_Sangue' in m.name and m.name.endswith('_out.tar.gz'):
+        blood.append(m.name)
+print('n blood',len(blood), flush=True)
+summ=[]
+for name in blood:
+    t=time.time()
+    f=outer.extractfile(name)
+    inner=tarfile.open(fileobj=f, mode='r:gz')
+    im=inner.getmembers()
+    matrix_m=None; barcodes_m=None; features_m=None
+    for x in im:
+        if 'matrix.mtx' in x.name: matrix_m=x
+        if 'barcodes.tsv' in x.name: barcodes_m=x
+        if 'features.tsv' in x.name: features_m=x
+    # barcodes count
+    nb=0
+    if barcodes_m:
+        bf=inner.extractfile(barcodes_m); gz=gzip.GzipFile(fileobj=bf)
+        nb=sum(1 for _ in gz); gz.close(); bf.close()
+    nf=0
+    if features_m:
+        ff=inner.extractfile(features_m); gz=gzip.GzipFile(fileobj=ff)
+        nf=sum(1 for _ in gz); gz.close(); ff.close()
+    mf=inner.extractfile(matrix_m); gz=gzip.GzipFile(fileobj=mf)
+    header=[]; 
+    while len(header)<1:
+        line=gz.readline()
+        if not line: break
+        if line.startswith(b'%'): continue
+        header.append(line.strip())
+    if header:
+        parts=header[0].split(); genes=int(parts[0]); cells=int(parts[1]); nnz_header=int(parts[2])
+    else:
+        genes=cells=nnz_header=-1
+    total=0; nnz=0
+    for line in gz:
+        parts=line.split()
+        if len(parts)>=3:
+            total+=float(parts[2]); nnz+=1
+    gz.close(); mf.close(); inner.close(); f.close()
+    summ.append({'name':name,'nbarcodes':nb,'nfeatures':nf,'genes':genes,'cells':cells,'nnz_header':nnz_header,'nnz':nnz,'total_umi':total})
+    print(name, 'barcodes',nb,'features',nf,'cells',cells,'nnz',nnz,'total',total, 'time',round(time.time()-t,1), flush=True)
+outer.close()
+json.dump(summ, open('blood_summary.json','w'))
+print('saved')
+PY
+python summarize_blood.py"

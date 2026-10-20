@@ -1,0 +1,46 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+refs={'+':seq,'-':rc}; pos=defaultdict(list)
+for lab,t in refs.items():
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+cds=(597,2037)
+def region(i):
+ if i+50<=cds[0]: return '5UTR'
+ if i>=cds[1]: return '3UTR'
+ if i<cds[0] and i+50>cds[0]: return 'span5'
+ if i<cds[1] and i+50>cds[1]: return 'span3'
+ return 'CDS'
+for name in ['exo','endo','mix']:
+ c=Counter(); strand=Counter(); coords=[]
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline()
+   lab,i=bestpos(s); strand[lab]+=1; c[region(i)]+=1; coords.append(i)
+ print(name,dict(c),'strand',dict(strand),'coord mean',np.mean(coords),'min/max',min(coords),max(coords))
+# split by file groups using mix indices
+records=[]
+with open('exogenous.mix.reads.q2.mix.fq') as f:
+ while True:
+  h=f.readline()
+  if not h:break
+  s=f.readline().strip(); f.readline(); f.readline(); lab,i=bestpos(s); records.append((lab,i))
+for grp,sl in [('0-395',slice(0,395)),('396-592',slice(395,592)),('593-691',slice(592,691))]:
+ c=Counter(region(i) for lab,i in records[sl]); print(grp,dict(c))
+PY"

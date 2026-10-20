@@ -1,0 +1,104 @@
+python3 << 'PYEOF'
+import openpyxl
+import os
+import glob
+
+# Get carrier samples
+wb_trio = openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx')
+ws_trio = wb_trio['Sheet1']
+carrier_samples = set()
+for row in ws_trio.iter_rows(min_row=2, values_only=True):
+    if row[3] == 'Carrier':
+        carrier_samples.add(str(row[0]).strip())
+
+# Map sample IDs to files
+variant_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS/'
+all_files = glob.glob(os.path.join(variant_dir, '*.xlsx'))
+sample_to_file = {}
+for fpath in all_files:
+    fname = os.path.basename(fpath)
+    parts = fname.replace('.xlsx', '').split('_')
+    last_part = parts[-1]
+    if '-' in last_part:
+        sid = last_part.split('-')[0]
+    else:
+        sid = last_part
+    sample_to_file[sid] = fpath
+
+# SO terms to exclude
+exclude_so_terms = ['intron_variant', 'intergenic', 'UTR']
+
+# Print ALL passing variants
+print("All passing variants:")
+print(f"{'Sample':<8} {'Gene':<15} {'SO':<30} {'VAF':<10} {'ClinVar':<25} {'Zygosity':<15}")
+print("-" * 110)
+
+for sid in sorted(carrier_samples):
+    if sid not in sample_to_file:
+        continue
+    
+    fpath = sample_to_file[sid]
+    wb = openpyxl.load_workbook(fpath)
+    ws = wb[wb.sheetnames[0]]
+    
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        zygosity = str(row[4]) if row[4] is not None else ''
+        vaf_str = row[9]
+        so = str(row[13]) if row[13] is not None else ''
+        clinvar = str(row[25]) if row[25] is not None else ''
+        in_chip = str(row[29]) if row[29] is not None else ''
+        gene = str(row[12]) if row[12] is not None else ''
+        
+        # Apply same filters
+        if in_chip != 'True':
+            continue
+        if vaf_str is None:
+            continue
+        try:
+            vaf = float(vaf_str)
+        except (ValueError, TypeError):
+            continue
+        if vaf >= 0.3:
+            continue
+        if zygosity == 'Reference':
+            continue
+        
+        so_lower = so.lower()
+        is_excluded = any(term.lower() in so_lower for term in exclude_so_terms)
+        if is_excluded:
+            continue
+        
+        if clinvar == '' or clinvar == 'None':
+            continue
+        
+        # Also print variants that pass all filters EXCEPT clinvar check, to see what we're missing
+        print(f"{sid:<8} {gene:<15} {so:<30} {vaf:<10.6f} {clinvar:<25} {zygosity:<15}")
+
+# Now also check: sample 396 had no output - why?
+print("\n\n=== Sample 396 debug ===")
+if '396' in sample_to_file:
+    wb = openpyxl.load_workbook(sample_to_file['396'])
+    ws = wb[wb.sheetnames[0]]
+    
+    vaf_lt_03 = 0
+    vaf_ge_03 = 0
+    vaf_none = 0
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        if row[9] is None:
+            vaf_none += 1
+        else:
+            if float(row[9]) < 0.3:
+                vaf_lt_03 += 1
+            else:
+                vaf_ge_03 += 1
+    
+    print(f"VAF <0.3: {vaf_lt_03}, VAF >=0.3: {vaf_ge_03}, VAF None: {vaf_none}")
+    
+    # Check all VAF < 0.3 variants
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        if row[9] is not None and float(row[9]) < 0.3:
+            clinvar = str(row[25]) if row[25] is not None else 'None'
+            so = str(row[13]) if row[13] is not None else 'None'
+            zygosity = str(row[4]) if row[4] is not None else 'None'
+            print(f"  VAF={row[9]}, SO={so}, ClinVar={clinvar}, Zyg={zygosity}")
+PYEOF

@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > scan_all_with_old_ctcf.py <<'PY'
+import json, requests
+from pathlib import Path
+from Bio.Seq import Seq
+import MOODS.scan as ms
+import MOODS.tools as mt
+import MOODS.parsers as mp
+
+seq=''.join(l.strip() for l in Path('dna_with_secret_motif.fasta').read_text().splitlines() if not l.startswith('>'))
+seq_rc=str(Seq(seq).reverse_complement())
+allm=json.loads(Path('motifs.json').read_text())
+# add MA0139 versions, remove any MA1929 for CTCF? keep all but add
+existing={m['matrix_id'] for m in allm}
+for mid in ['MA0139.1','MA0139.2']:
+    d=requests.get(f'https://jaspar.elixir.no/api/v1/matrix/{mid}/',timeout=10).json()
+    allm.append(d)
+pfmdir=Path('pfms'); pfmdir.mkdir(exist_ok=True)
+items=[]
+for m in allm:
+    fn=pfmdir/f'{m[\"matrix_id\"]}.pfm'
+    if not fn.exists():
+        lines=[f'>{m[\"matrix_id\"]} {m[\"name\"]}']
+        for a in 'ACGT':
+            lines.append('\\t'.join(str(int(x)) for x in m['pfm'][a]))
+        fn.write_text('\\n'.join(lines)+'\\n')
+    items.append((fn,m))
+bg=mt.flat_bg(4)
+for p in [0.05,0.01,1e-3,1e-4]:
+    mats=[]; names=[]
+    for fn,m in items:
+        mats.append(mp.pfm_to_log_odds(str(fn), bg, 1))
+        names.append(f'{m[\"matrix_id\"]} {m[\"name\"]} v{m[\"version\"]}')
+    thresholds=[mt.threshold_from_p(m,bg,p) for m in mats]
+    scanner=ms.Scanner(7); scanner.set_motifs(mats,bg,thresholds)
+    rp=scanner.scan(seq); rm=scanner.scan(seq_rc)
+    counts=[len(rp[i])+len(rm[i]) for i in range(len(mats))]
+    print(f'\\n--- p={p:g} top 15 ---')
+    for n,c in sorted(zip(names,counts), key=lambda x:x[1], reverse=True)[:15]:
+        print(f'{c:8d} {n}')
+PY
+python3 scan_all_with_old_ctcf.py"

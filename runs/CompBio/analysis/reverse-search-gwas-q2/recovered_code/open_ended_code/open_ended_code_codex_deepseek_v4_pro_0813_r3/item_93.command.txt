@@ -1,0 +1,71 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math, requests, time, re
+from collections import defaultdict
+rows=[]
+with gzip.open('reverse.search.gwas.q2.gz','rt') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>=10 and p[9]"'!='"'NA':
+            try: pv=float(p[9])
+            except: continue
+            rows.append((pv, tuple(p)))
+rows.sort(key=lambda x:x[0]); sel=rows[:150]
+s=requests.Session(); s.headers['User-Agent']='Mozilla/5.0 research'
+def get(url, retries=2):
+    for i in range(retries):
+        try:
+            r=s.get(url, timeout=20)
+            if r.status_code==200: return r.json()
+            if r.status_code==404: return None
+        except Exception: time.sleep(1+i)
+    return None
+def pnum(a):
+    m=a.get('pvalueMantissa'); e=a.get('pvalueExponent')
+    if m is None or e is None: return None
+    try: return float(m)*10**float(e)
+    except: return None
+study_cache={}; cand=defaultdict(int); examples=defaultdict(list)
+for idx,(pv,p) in enumerate(sel):
+    rs=p[1]
+    obj=get(f'https://www.ebi.ac.uk/gwas/rest/api/singleNucleotidePolymorphisms/{rs}/associations?projection=associationBySnp')
+    if not obj: continue
+    assocs=obj.get('_embedded',{}).get('associations',[])
+    file_beta=float(p[7]); file_se=float(p[8]); file_eaf=float(p[6]); file_lp=-math.log10(pv)
+    for a in assocs:
+        cp=pnum(a); beta=a.get('betaNum'); se=a.get('standardError'); rf=a.get('riskFrequency')
+        rfval=None
+        if isinstance(rf,(int,float)): rfval=float(rf)
+        elif isinstance(rf,str):
+            try: rfval=float(rf)
+            except: pass
+        # match p exponent and mantissa within 0.7 log10
+        pm=False
+        if cp is not None and cp>0:
+            if math.floor(math.log10(cp))==math.floor(math.log10(pv)) and abs(math.log10(cp)-math.log10(pv))<0.75: pm=True
+        bm=False; sem=False; fm=False
+        if beta is not None and abs(abs(beta)-abs(file_beta))/abs(file_beta)<0.10: bm=True
+        if se is not None:
+            try:
+                if abs(float(se)-file_se)/file_se<0.10: sem=True
+            except: pass
+        if rfval is not None:
+            if abs(rfval-file_eaf)<0.05 or abs((1-rfval)-file_eaf)<0.05: fm=True
+        if pm or (bm and sem) or (bm and fm) or (sem and fm):
+            href=a.get('_links',{}).get('study',{}).get('href')
+            info=''
+            if href:
+                if href in study_cache: info=study_cache[href]
+                else:
+                    so=get(href)
+                    if so:
+                        dt=so.get('diseaseTrait',{}); trait=dt.get('trait') if isinstance(dt,dict) else None
+                        info=f\"{so.get('accessionId')} | {trait} | pmid={so.get('pubmedId')} | N={so.get('initialSampleSize')}\"
+                    study_cache[href]=info
+            cand[info]+=1; examples[info].append((rs,file_lp,cp,file_beta,beta,file_se,se,file_eaf,rfval))
+    time.sleep(0.03)
+print('--- candidates ---')
+for info,c in sorted(cand.items(), key=lambda x:-x[1]):
+    print('\\n',c,info)
+    for ex in examples[info][:8]: print('  ',ex)
+PY"

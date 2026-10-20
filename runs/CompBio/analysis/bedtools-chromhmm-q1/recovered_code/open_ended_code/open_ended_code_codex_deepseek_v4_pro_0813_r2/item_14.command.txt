@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, subprocess, tempfile, os
+from pathlib import Path
+tmp=tempfile.mkdtemp(prefix='bedcalc_', dir='/tmp')
+peaks_path=os.path.join(tmp,'peaks.bed')
+annot_path=os.path.join(tmp,'annot.bed')
+state_path=os.path.join(tmp,'state.bed')
+# write sorted merged peaks
+with gzip.open('ENCFF333TAT.bed.gz','rt') as f:
+    lines=[line.rstrip('\\n').split('\\t')[:3] for line in f]
+lines.sort(key=lambda p:(p[0], int(p[1]), int(p[2])))
+# dedup merge by chromosome
+with open(peaks_path,'w') as out:
+    cur_chr=None; cs=ce=None
+    for c,s,e in lines:
+        s=int(s); e=int(e)
+        if c"'!=cur_chr or s>ce:
+            if cur_chr is not None:
+                out.write(f'"'{cur_chr}\\t{cs}\\t{ce}\\n')
+            cur_chr,cs,ce=c,s,e
+        else:
+            if e>ce: ce=e
+    if cur_chr is not None:
+        out.write(f'{cur_chr}\\t{cs}\\t{ce}\\n')
+# write annotation sorted
+ann=[]
+with gzip.open('E055_15_coreMarks_dense.bed.gz','rt') as f:
+    for line in f:
+        if line.startswith('track') or line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        ann.append((p[0],int(p[1]),int(p[2]),p[3]))
+ann.sort(key=lambda x:(x[0],x[1],x[2]))
+with open(annot_path,'w') as out, open(state_path,'w') as sout:
+    for c,s,e,n in ann:
+        line=f'{c}\\t{s}\\t{e}\\t{n}\\n'
+        out.write(line)
+        if n=='14_ReprPCWk':
+            sout.write(f'{c}\\t{s}\\t{e}\\n')
+for bname, bpath in [('all',annot_path),('state',state_path)]:
+    cov_path=os.path.join(tmp,f'cov_{bname}.tsv')
+    subprocess.run(['bedtools','coverage','-a',peaks_path,'-b',bpath],stdout=open(cov_path,'w'),check=True)
+    total=0; peaks_len=0
+    with open(cov_path) as f:
+        for line in f:
+            p=line.rstrip().split('\\t')
+            total += int(p[4])
+            peaks_len += int(p[2])-int(p[1])
+    print(bname,'coverage bases',total,'peak total',peaks_len)
+print('tmp',tmp)
+PY"

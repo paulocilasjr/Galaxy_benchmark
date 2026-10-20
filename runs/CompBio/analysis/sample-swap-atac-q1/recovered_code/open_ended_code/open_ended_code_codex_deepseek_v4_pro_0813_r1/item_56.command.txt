@@ -1,0 +1,37 @@
+/bin/bash -lc "cat > nnls_deconv.py <<'PY'
+import numpy as np, time
+from scipy.optimize import nnls
+from scipy.linalg import cholesky, solve_triangular
+# Load X and celltrack
+d=np.load('matrix_data.npz',allow_pickle=True); X=d['X']; names=list(d['names'])
+ct=np.load('celltrack_data.npz',allow_pickle=True); A=ct['celltrack']; celltypes=list(ct['celltypes']); samples=list(ct['samples']); C=ct['C']; F=ct['F']
+n,p=A.shape
+print('A',A.shape,'X',X.shape)
+# Compute AtA and AtY in chunks float64 to avoid huge
+AtA=np.zeros((p,p),dtype=np.float64)
+AtY=np.zeros((p,X.shape[1]),dtype=np.float64)
+chunk=200000
+for s in range(0,n,chunk):
+ e=min(n,s+chunk)
+ As=A[s:e].astype(np.float64)
+ AtA += As.T@As
+ AtY += As.T@X[s:e]
+print('computed normal')
+# add small ridge for stability
+ridge=1e-6*np.trace(AtA)/p
+AtA += np.eye(p)*ridge
+R=cholesky(AtA,lower=True)
+# solve R.T? use upper? cholesky lower returns L; AtA=L L.T
+# minimize ||R c - b|| with R upper? choose R=L.T, b=solve(L, Aty)
+Rmat=R.T
+b=solve_triangular(R,AtY,lower=True)
+coef=np.zeros((X.shape[1],p))
+for j in range(X.shape[1]):
+    coef[j], _ = nnls(Rmat,b[:,j])
+    print('sample',names[j],'nnls done',np.sum(coef[j]>1e-8),flush=True)
+# normalize coefficients
+coef_norm=coef/(coef.sum(axis=1,keepdims=True)+1e-12)
+np.savez_compressed('deconv_coef.npz',coef=coef,coef_norm=coef_norm,names=np.array(names,dtype=str),celltypes=np.array(celltypes,dtype=str),samples=np.array(samples,dtype=str),C=C,F=F)
+print('saved')
+PY
+python3 nnls_deconv.py"

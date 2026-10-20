@@ -1,0 +1,64 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from collections import Counter
+import re
+
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+def col_index(ref):
+    letters=''.join(ch for ch in ref if ch.isalpha())
+    n=0
+    for ch in letters:
+        n=n*26+ord(ch.upper())-64
+    return n-1
+
+def read_sheet(path):
+    with ZipFile(path) as z:
+        ss=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+            for si in root.findall(NS+'si'):
+                ss.append(''.join(t.text or '' for t in si.iter(NS+'t')))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        rows=[]
+        for row in root.findall('.//'+NS+'row'):
+            vals={}
+            for c in row.findall(NS+'c'):
+                v=c.find(NS+'v')
+                if v is None: value=None
+                else:
+                    raw=v.text
+                    value=ss[int(raw)] if c.get('t')=='s' else raw
+                vals[col_index(c.get('r'))]=value
+            if vals:
+                rows.append([vals.get(i) for i in range(max(vals)+1)])
+        return rows
+
+status_rows=read_sheet('inputs/230215_Trio_Status.xlsx')
+headers=status_rows[0]
+status=[dict(zip(headers,row+[None]*(len(headers)-len(row)))) for row in status_rows[1:]]
+carrier_ids={str(r['Sample ID']).strip() for r in status if r.get('BLM Mutation Status')=='Carrier'}
+
+coding={'synonymous_variant','missense_variant','stop_gained','stop_lost','start_lost','frameshift_variant','inframe_insertion','inframe_deletion','protein_altering_variant','coding_sequence_variant'}
+q=[]
+loaded=[]
+for path in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    m=re.search(r'_CHIP_(\\d+)',path.name)
+    if not m or m.group(1) not in carrier_ids: continue
+    sid=m.group(1); rows=read_sheet(str(path)); h=rows[1]; ix={x:i for i,x in enumerate(h)}; loaded.append(sid)
+    for row in rows[2:]:
+        row=row+[None]*(len(h)-len(row))
+        v=row[ix['Variant Allele Freq']]
+        try: v=float(v) if v not in (None,'') else None
+        except (TypeError,ValueError): v=None
+        so=row[ix['Sequence Ontology (Combined)']]
+        if v is not None and v < .3 and so in coding:
+            q.append((sid,so,row[ix['Zygosity']]))
+print('carrier IDs:',len(carrier_ids))
+print('loaded workbooks:',len(loaded),sorted(loaded,key=int))
+print('qualifying records:',len(q))
+print('coding SO:',dict(Counter(x[1] for x in q)))
+print('synonymous fraction:',format(sum(x[1]=='synonymous_variant' for x in q)/len(q),'.17g'))
+print('called coding records:',len([x for x in q if x[2]"'!='"'Reference']))
+PY"

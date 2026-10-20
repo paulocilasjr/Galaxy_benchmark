@@ -1,0 +1,52 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.analysis_packages python - <<'PY'
+import csv, time
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+
+fx='inputs/CRISPRGeneEffect.csv'
+fe='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+with open(fx,newline='') as f: gx=next(csv.reader(f))[1:]
+with open(fe,newline='') as f: ge=next(csv.reader(f))[1:]
+ges=set(ge)
+genes=[g for g in gx if g in ges]
+use=set(genes); use.add('')
+print('Reading matrices for',len(genes),'shared genes...',flush=True)
+t=time.time()
+x=pd.read_csv(fx,index_col=0,usecols=lambda c: c in use)
+e=pd.read_csv(fe,index_col=0,usecols=lambda c: c in use)
+ids=[i for i in x.index if i in e.index]
+x=x.loc[ids,genes]
+e=e.loc[ids,genes]
+print('aligned shape',x.shape,'read seconds',round(time.time()-t,2),flush=True)
+xa=x.to_numpy(dtype=np.float64,copy=False)
+ea=e.to_numpy(dtype=np.float64,copy=False)
+print('nonfinite effect',np.size(xa)-np.isfinite(xa).sum(),'expression',np.size(ea)-np.isfinite(ea).sum(),flush=True)
+ps=np.full(len(genes),np.nan)
+rs=np.full(len(genes),np.nan)
+ns=np.zeros(len(genes),dtype=int)
+t=time.time()
+for j in range(len(genes)):
+    ok=np.isfinite(xa[:,j]) & np.isfinite(ea[:,j])
+    ns[j]=ok.sum()
+    if ns[j] >= 3:
+        r,p=spearmanr(ea[ok,j],xa[ok,j])
+        rs[j]=r; ps[j]=p
+print('test seconds',round(time.time()-t,2),flush=True)
+valid=np.isfinite(ps)
+m=valid.sum()
+q=np.full(len(ps),np.nan)
+idx=np.flatnonzero(valid)
+order=np.argsort(ps[idx],kind='mergesort')
+sp=ps[idx][order]
+adj=np.minimum.accumulate((sp*m/np.arange(1,m+1))[::-1])[::-1]
+adj=np.minimum(adj,1.0)
+q[idx[order]]=adj
+sig=q < 0.05
+print('valid tests',m,'invalid',len(genes)-m,'min/max paired n',ns.min(),ns.max())
+print('significant',sig.sum(),'negative raw effect',np.sum(sig & (rs<0)),'positive raw effect',np.sum(sig & (rs>0)))
+print('percentage_valid',repr(100*sig.sum()/m))
+print('percentage_all_shared',repr(100*sig.sum()/len(genes)))
+print('largest q below .05',q[sig].max() if sig.any() else None,'smallest q >= .05',q[(~sig)&valid].min())
+print('p cutoff max sig',ps[sig].max() if sig.any() else None)
+PY"

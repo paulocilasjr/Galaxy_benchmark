@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np, time
+fn='sample.swap.atac.q2.tsv.gz'
+cols=None; cse=[]
+with gzip.open(fn,'rt') as f:
+    cols=f.readline().rstrip().split('\\t')[3:]
+    for line in f:
+        p=line.rstrip().split('\\t')
+        cse.append((p[0],int(p[1]),int(p[2])))
+# build bin index: dict chr -> sorted starts, arrays
+bins_by_chr={}
+for i,(c,s,e) in enumerate(cse):
+    bins_by_chr.setdefault(c,[]).append((s,e,i))
+# easier use np.searchsorted
+chr_starts={}; chr_ids={}
+for c,lst in bins_by_chr.items():
+    starts=np.array([x[0] for x in lst],dtype=np.int64)
+    ids=np.array([x[2] for x in lst],dtype=np.int64)
+    order=np.argsort(starts)
+    chr_starts[c]=starts[order]; chr_ids[c]=ids[order]
+# compute ref counts
+ref=np.zeros(len(cse),dtype=np.float64)
+with gzip.open('ref_AIIamacrine_frags.tsv.gz','rt') as f:
+    for line in f:
+        p=line.rstrip().split('\\t')
+        c=p[0]; start=int(p[1]); cnt=int(p[4])
+        if c not in chr_starts: continue
+        pos=np.searchsorted(chr_starts[c],start,side='right')-1
+        if pos<0: pos=0
+        # handle final bin ends
+        ref[chr_ids[c][pos]] += cnt
+print('nonzero',np.count_nonzero(ref),'sum',ref.sum())
+# load matrix
+X=np.zeros((len(cse),len(cols)),dtype=np.float64)
+with gzip.open(fn,'rt') as f:
+    f.readline()
+    for r,line in enumerate(f):
+        p=line.rstrip().split('\\t')
+        X[r,:]=[int(x) for x in p[3:]]
+# correlations
+from scipy.stats import spearmanr
+for j,col in enumerate(cols):
+    c=np.corrcoef(ref,X[:,j])[0,1]
+    c2=np.corrcoef(np.log1p(ref),np.log1p(X[:,j]))[0,1]
+    print(col,'pearson',c,'log',c2)
+# also per-chr maybe
+PY"

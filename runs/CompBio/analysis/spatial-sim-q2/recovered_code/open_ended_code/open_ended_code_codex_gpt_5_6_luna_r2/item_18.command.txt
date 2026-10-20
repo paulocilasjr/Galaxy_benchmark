@@ -1,0 +1,25 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import numpy as np,csv
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=np.loadtxt('data/spatial_q_sc_counts.csv',delimiter=',',skiprows=1,usecols=range(1,1001))
+with open('data/spatial_q_sc_metadata.csv') as f: rows=list(csv.reader(f))[1:]
+labels=np.array([r[1] for r in rows]); types=sorted(set(labels)); S=np.array([sc[labels==t].mean(0) for t in types])
+sp=mmread('data/matrix.mtx.gz').toarray(); coef=np.array([nnls(S.T,sp[:,j])[0] for j in range(sp.shape[1])]); props=coef/(coef.sum(1,keepdims=True)+1e-9); dom=np.argmax(props,1)
+# positions
+with open('data/tissue_positions.csv') as f: pos=list(csv.DictReader(f))
+# verify barcode index
+bcs=[]
+import gzip
+with gzip.open('data/barcodes.tsv.gz','rt') as f: bcs=f.read().splitlines()
+idx={b:i for i,b in enumerate(bcs)}
+rows_grid=np.array([int(p['array_row']) for p in pos]); cols_grid=np.array([int(p['array_col']) for p in pos]);
+print('type order',types)
+print('dom counts',[(types[i],sum(dom==i)) for i in range(6)])
+print('tumor spots dominant',[(j,rows_grid[j],cols_grid[j],round(float(props[j,dom[j]]),3),coef[j].round(2).tolist(),round(float(sp[:,j].sum()),0)) for j in range(900) if dom[j]==types.index('Tumor_Core')])
+chars={'B_Cell':'B','Endothelial':'E','Fibroblast_Stroma':'F','Macrophage':'M','T_Cell':'T','Tumor_Core':'X'}
+grid=[['?' for c in range(30)] for r in range(30)]
+for j in range(900): grid[rows_grid[j]][cols_grid[j]]=chars[types[dom[j]]]
+print('ascii rows array_row')
+for r in range(30): print(f'{r:02d} '+''.join(grid[r]))
+PY"

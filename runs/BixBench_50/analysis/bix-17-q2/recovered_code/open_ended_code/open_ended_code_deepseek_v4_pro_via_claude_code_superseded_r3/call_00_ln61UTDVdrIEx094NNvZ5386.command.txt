@@ -1,0 +1,69 @@
+python3 << 'PYEOF'
+from openpyxl import load_workbook
+import os
+import re
+
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+exclude_ontology = {
+    'intron_variant', 'intergenic_variant',
+    '3_prime_UTR_variant', '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+# Check sample 380 in detail
+files = sorted(os.listdir(chip_dir))
+filename = None
+for f in files:
+    match = re.search(r'CHIP_(.+)\.xlsx', f)
+    if match:
+        sid = re.sub(r'-[A-Z0-9]+$', '', match.group(1))
+        if sid == '380':
+            filename = f
+            break
+
+wb = load_workbook(os.path.join(chip_dir, filename))
+ws = wb.active
+
+passed = []
+for row in ws.iter_rows(min_row=3, values_only=True):
+    zygosity = row[4]
+    seq_onto = str(row[13]) if row[13] else ''
+    vaf = row[9]
+    
+    if zygosity == 'Reference':
+        continue
+    if seq_onto in exclude_ontology:
+        continue
+    
+    passed.append({
+        'chr_pos': row[0],
+        'gene': row[12],
+        'seq_onto': seq_onto,
+        'zygosity': zygosity,
+        'vaf': vaf,
+        'vaf_type': type(vaf).__name__,
+        'in_chip': row[29],
+    })
+
+print(f"Sample 380: {len(passed)} variants after excluding ref zyg and ontology")
+# Check VAF types and values
+vaf_types = set()
+vaf_values = set()
+for p in passed:
+    vaf_types.add((p['vaf_type'], type(p['vaf']).__name__ if p['vaf'] is not None else 'None'))
+    if p['vaf'] is not None:
+        vaf_values.add(p['vaf'])
+print(f"VAF types: {vaf_types}")
+print(f"Sample VAF non-None values: {list(vaf_values)[:20]}")
+
+# Show first few variants that passed
+print("\nFirst 10 passed variants:")
+for p in passed[:10]:
+    print(f"  {p['chr_pos']} gene={p['gene']} onto={p['seq_onto']} zyg={p['zygosity']} VAF={p['vaf']} ({p['vaf_type']})")
+
+# Show variants where VAF is a string percentage
+str_vafs = [p for p in passed if isinstance(p['vaf'], str)]
+print(f"\nVariants with string VAF: {len(str_vafs)}")
+for p in str_vafs[:5]:
+    print(f"  {p['vaf']}")
+PYEOF

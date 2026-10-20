@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py,numpy as np
+from scipy.optimize import linear_sum_assignment
+
+def meta(f):
+ with h5py.File(f,'r') as h:
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  targets=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/target_gene/categories'][:]]) if 'obs/target_gene/categories' in h else None
+  tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+ return guides,codes,targets,tcodes
+gr,cr,tr,tcr=meta('perturb.seq.align.q1.ref.h5ad'); gq,cq,_,_=meta('perturb.seq.align.q1.query.h5ad')
+r={g:(cr==i).sum() for i,g in enumerate(gr) if not g.startswith('NT-')}
+q={g:(cq==i).sum() for i,g in enumerate(gq) if not g.startswith('NT-')}
+guide2target={}
+for i,g in enumerate(gr):
+ if g.startswith('NT-'): continue
+ vals,counts=np.unique(tr[tcr[cr==i]],return_counts=True);guide2target[g]=vals[np.argmax(counts)]
+rg=list(r); qg=list(q)
+R=np.array([r[g] for g in rg]); Q=np.array([q[g] for g in qg])
+# scale factors from ratio of totals or medians; fit log ratio
+for method in ['ratio','log_median']:
+ if method=='ratio': scale=Q.sum()/R.sum()
+ else: scale=np.exp(np.median(np.log((Q[:,None]+1)/(R[None,:]+1))))
+ D=np.abs(Q[:,None]-scale*R[None,:])
+ ri,cj=linear_sum_assignment(D)
+ print('\\nmethod',method,'scale',scale)
+ for i,j in zip(ri,cj):
+  print(qg[i],'->',rg[j],guide2target[rg[j]],'q',Q[i],'scaled_ref',round(scale*R[j],1))
+ print('targets')
+ for target in ['PABPC1','NUDT21','LEO1']:
+  refidx=rg.index(next(g for g in rg if guide2target[g]==target))
+  j=cj.tolist().index(refidx)
+  print(target,'->',qg[ri[j]])
+PY"

@@ -1,0 +1,30 @@
+/bin/bash -c "/workspace/tools/envs/deseq/bin/Rscript - <<'RS'
+suppressPackageStartupMessages(library(readxl)); suppressPackageStartupMessages(library(DESeq2)); suppressPackageStartupMessages(library(apeglm))
+coldata <- as.data.frame(read_excel('inputs/Issy_ASXL1_blood_coldata_gender.xlsx'))
+counts <- read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, row.names=1, check.names=FALSE, sep='')
+counts <- counts[, coldata"'$sample, drop=FALSE]
+coldata$condition <- factor(coldata$condition, levels=c('"'Control','ASXL1')); coldata"'$sex <- factor(coldata$sex, levels=c('"'F','M'))
+dds <- DESeqDataSetFromMatrix(countData=counts, colData=coldata, design=~ sex + condition); dds <- DESeq(dds)
+for (alpha in c(0.05,0.1)) {
+ res <- results(dds, name='condition_ASXL1_vs_Control', alpha=alpha)
+ resL <- lfcShrink(dds, coef='condition_ASXL1_vs_Control', res=res, type='apeglm')
+ gtf <- read.csv('inputs/gencode.v31.primary_assembly.genes.csv', stringsAsFactors=FALSE); gtf <- gtf["'!duplicated(gtf$gene_id),]; rownames(gtf)<-gtf$gene_id
+ hgnc <- read.delim('"'inputs/HGNC_05-09-19.txt', header=TRUE, sep='\\t', stringsAsFactors=FALSE)
+ # normalize Ensembl ID stripping version? file Ensembl ID may be ENSG00000121410, no version
+ ens_versions <- rownames(resL)
+ ens_base <- sub('\\\\..*','',ens_versions)
+ has_hgnc <- ens_versions %in% hgnc"'$Ensembl.ID.supplied.by.Ensembl | ens_base %in% hgnc$Ensembl.ID.supplied.by.Ensembl
+ cat('"'alpha',alpha,'sig with HGNC ensembl',sum(resL"'$padj<.05 & has_hgnc,na.rm=TRUE),'"'total with hgnc',sum(has_hgnc),'\\n')
+ # gencode gene_name not empty
+ has_name <- "'!is.na(gtf[ens_versions,'"'gene_name']) & gtf[ens_versions,'gene_name']"'!='"''
+ cat('sig with gencode gene_name',sum(resL"'$padj<.05 & has_name,na.rm=TRUE),'"'total has name',sum(has_name),'\\n')
+ # hgnc approved symbols via gencode hgnc_id
+ gtf_hgnc <- gtf[ens_versions,'hgnc_id']
+ has_hgnc_gtf <- "'!is.na(gtf_hgnc) & gtf_hgnc!='"'' & gtf_hgnc %in% hgnc"'$HGNC.ID
+ cat('"'sig with gencode hgnc_id',sum(resL"'$padj<.05 & has_hgnc_gtf,na.rm=TRUE),'"'total',sum(has_hgnc_gtf),'\\n')
+ # protein coding only with hgnc
+ pc <- gtf[ens_versions,'gene_type']=='protein_coding'
+ cat('sig protein_coding + hgnc_id',sum(resL"'$padj<.05 & pc & has_hgnc_gtf,na.rm=TRUE),'"'\\n')
+ # all significant with approved symbol mapping unique? no
+}
+RS"

@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+# Validate pair calls against inferred haplotypes
+import pysam, collections
+bam=pysam.AlignmentFile('aln.bam','rb'); chrom='AL008638.1'
+events=[('63763',63763),('63823',63823),('64123',64123),('64283',64283),('64533',64533),('64732',64732),('64736',64736),('64983',64983)]
+h1=dict(zip([e[0] for e in events], 'A C T D C A D G'.split()))
+h2=dict(zip([e[0] for e in events], 'C T A G G D G A'.split()))
+allowed={k:{h1[k],h2[k]} for k,_ in events}
+def read_calls(aln):
+    d={}
+    target={p:k for k,p in events}
+    for qpos,rpos in aln.get_aligned_pairs(matches_only=False):
+        if rpos is None: continue
+        p=rpos+1
+        if p in target:
+            k=target[p]
+            a='D' if qpos is None else aln.query_sequence[qpos].upper()
+            if a in allowed[k]: d[k]=a
+    return d
+pairs=collections.defaultdict(dict)
+for aln in bam.fetch(chrom,63000,65200):
+    for k,a in read_calls(aln).items():
+        old=pairs[aln.query_name].get(k)
+        if old and old"'!=a: pairs[aln.query_name][k]='"'X'
+        else: pairs[aln.query_name][k]=a
+score=collections.Counter(); bad=[]
+for q,row in pairs.items():
+    if not row: continue
+    m1=sum(row.get(k)==v for k,v in h1.items())
+    m2=sum(row.get(k)==v for k,v in h2.items())
+    mis1=sum((k in row and row[k] not in (v,'X')) for k,v in h1.items())
+    mis2=sum((k in row and row[k] not in (v,'X')) for k,v in h2.items())
+    if m1>m2: score['h1']+=1; bad.append((q,'h1',m1,m2,mis1,mis2,row)) if mis1 else None
+    elif m2>m1: score['h2']+=1; bad.append((q,'h2',m1,m2,mis1,mis2,row)) if mis2 else None
+    else: score['tie']+=1
+print(score)
+# any pair with calls on >1 locus conflicting with both haplotypes?
+conf=[]
+for q,row in pairs.items():
+    if len(row)>=2:
+        ok1=all(row[k]==h1[k] for k in row if row[k]"'!='"'X')
+        ok2=all(row[k]==h2[k] for k in row if row[k]"'!='"'X')
+        if not (ok1 or ok2): conf.append((q,row))
+print('conflicting multilocus pairs',len(conf))
+print(conf[:10])
+print('answer','-'.join(h1[k] for k,_ in events)+'|'+'-'.join(h2[k] for k,_ in events))
+PY"

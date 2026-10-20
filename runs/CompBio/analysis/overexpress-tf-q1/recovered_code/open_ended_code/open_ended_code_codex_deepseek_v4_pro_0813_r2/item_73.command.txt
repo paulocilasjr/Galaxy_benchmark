@@ -1,0 +1,35 @@
+/bin/bash -c "python3 - <<'EOF'
+import pandas as pd, numpy as np, os
+from sklearn.neighbors import NearestNeighbors
+res=pd.read_csv('diff_peaks.tsv', sep='\\t')
+gc=pd.read_csv('union_gc.txt', sep='\\t', skiprows=1, header=None, names=['chr','start','end','pct_at','pct_gc','A','C','G','T','N','oth','len'])
+for c in ['start','end','pct_at','pct_gc','A','C','G','T','N','oth','len']:
+    gc[c]=pd.to_numeric(gc[c], errors='coerce')
+res['is_gained_all'] = ((res.log2FC>1.5)&(res.cpm_max>=3)&(res.perturb_count>=10)).astype(int)
+cand = res[(res.is_gained_all==0)&(res.cpm_max>=1)].copy()
+cand = cand.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end'])
+cand=cand.dropna(subset=['pct_gc','len'])
+print('candidates',len(cand),'gained_all',res.is_gained_all.sum())
+feats=['len','pct_gc']
+for k in [500,1000,2000,5000]:
+    gained_bed=f'gained_top{k}.bed'
+    if not os.path.exists(gained_bed): continue
+    g=pd.read_csv(gained_bed, sep='\\t', header=None, names=['chr','start','end'])
+    g=g.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end'])
+    g=g.dropna(subset=['pct_gc','len'])
+    X=cand[feats].values.astype(float); Y=g[feats].values.astype(float)
+    mean=X.mean(axis=0); std=X.std(axis=0)+1e-9
+    Xs=(X-mean)/std; Ys=(Y-mean)/std
+    nn=NearestNeighbors(n_neighbors=10, algorithm='kd_tree').fit(Xs)
+    dist,idx=nn.kneighbors(Ys)
+    chosen=[]
+    for row in idx:
+        chosen.extend(row[:5])
+    chosen=np.unique(chosen)
+    bg=cand.iloc[chosen][['chr','start','end']].drop_duplicates()
+    bg.to_csv(f'matched_bg{k}.bed', sep='\\t', header=False, index=False)
+    g[['chr','start','end']].to_csv(f'matched_g{k}.bed', sep='\\t', header=False, index=False)
+    bggc=bg.merge(gc,on=['chr','start','end'])
+    print(k,'g',len(g),'bg',len(bg),'bg len med',round(bggc.len.median(),1),'bg gc med',round(bggc.pct_gc.median(),3))
+EOF
+ls -lh matched_*.bed"

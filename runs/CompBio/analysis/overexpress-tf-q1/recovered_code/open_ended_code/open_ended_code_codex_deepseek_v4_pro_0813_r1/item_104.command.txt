@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from Bio import SeqIO
+import statsmodels.api as sm
+sets=['cond1','common','cond2']
+# original motif scans (corrected)
+orig={s:pd.read_csv(f'macs/bdgdiff/{s}.motif_scan.tsv',sep='\\t') for s in sets}
+shuf={s:pd.read_csv(f'macs/bdgdiff/{s}.shuffled_motif_scan.tsv',sep='\\t') for s in sets}
+# compute gc/length for each set from fasta
+for s in sets:
+ gcs=[]; lens=[]
+ for rec in SeqIO.parse(f'macs/bdgdiff/{s}.fa','fasta'):
+  seq=str(rec.seq).upper(); lens.append(len(seq)); gcs.append((seq.count('G')+seq.count('C'))/len(seq) if seq else 0)
+ orig[s]['gc']=gcs; orig[s]['length']=lens; orig[s]['set']=s
+# combine cond2 and common
+d=pd.concat([orig['cond2'],orig['common']],ignore_index=True)
+d['cond2']=(d['set']=='cond2').astype(int)
+# add shuffled binary columns with suffix _shufbin from shuffled file; align by set and order
+for s in sets:
+ sh=shuf[s]
+ for c in [c for c in sh.columns if c.endswith('_shuf')]:
+  orig_col=c[:-5]  # remove _shuf
+  # orig file has _p1e-4 columns
+  col=f'{orig_col}_p1e-4'
+  shuf[s][col+'_shufbin']=(sh[c]>0).astype(int)
+# merge shufbin into combined d
+for s in sets:
+ idx=d.index[d['set']==s]
+ sh=shuf[s]
+ for col in [c for c in sh.columns if c.endswith('_shufbin')]:
+  d.loc[idx,col]=sh[col].values
+cols=[c for c in d.columns if c.endswith('_p1e-4')]
+rows=[]
+for col in cols:
+ motif=col[:-6]; shufcol=col+'_shufbin'
+ d['has']=(d[col]>0).astype(int); d['has_shuf']=d[shufcol]
+ X=sm.add_constant(d[['cond2','gc','length','has_shuf']].astype(float))
+ try:
+  m=sm.Logit(d['has'],X).fit(disp=0); coef=m.params['cond2']; odds=np.exp(coef); p=m.pvalues['cond2']
+ except Exception as e:
+  coef=np.nan;odds=np.nan;p=np.nan
+ rows.append({'motif':motif,'adj_OR':odds,'logOR':coef,'p':p})
+res=pd.DataFrame(rows).sort_values('adj_OR',ascending=False)
+pd.set_option('display.width',200)
+print(res.to_string(index=False,float_format=lambda x:f'{x:,.4g}'))
+PY"

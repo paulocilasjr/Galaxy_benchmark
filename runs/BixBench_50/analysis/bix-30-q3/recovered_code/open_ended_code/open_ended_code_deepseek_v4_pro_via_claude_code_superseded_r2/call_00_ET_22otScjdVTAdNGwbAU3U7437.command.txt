@@ -1,0 +1,69 @@
+source /workspace/venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+df = pd.read_excel('inputs/pone.0150501.s002.xls')
+
+# Row 0 is the header with P_1..P_10, C_11..C_20
+# Rows 1+ are miRNAs
+# Columns: col 0 = miRNA name, cols 1-10 = patients (P), cols 11-20 = controls (C)
+
+miRNAs = []
+p_values = []
+
+for i in range(1, len(df)):
+    mir = df.iloc[i, 0]
+    if pd.isna(mir):
+        continue
+    
+    # Extract patient and control values
+    p_vals_raw = df.iloc[i, 1:11]   # P_1 to P_10
+    c_vals_raw = df.iloc[i, 11:21]  # C_11 to C_20
+    
+    # Convert to numeric, coerce errors to NaN, drop NaN
+    p_vals = pd.to_numeric(p_vals_raw, errors='coerce').dropna().values.astype(float)
+    c_vals = pd.to_numeric(c_vals_raw, errors='coerce').dropna().values.astype(float)
+    
+    if len(p_vals) < 2 or len(c_vals) < 2:
+        continue
+    
+    # Welch's t-test (doesn't assume equal variance)
+    t_stat, p_val = stats.ttest_ind(p_vals, c_vals, equal_var=False)
+    
+    miRNAs.append(mir)
+    p_values.append(p_val)
+
+p_values = np.array(p_values)
+n_tests = len(p_values)
+print(f'Total miRNAs tested: {n_tests}')
+
+# Bonferroni correction
+bonf_p = p_values * n_tests
+bonf_p = np.minimum(bonf_p, 1.0)  # cap at 1
+bonf_sig = np.sum(bonf_p <= 0.05)
+print(f'Bonferroni significant (p <= 0.05): {bonf_sig}')
+
+# Benjamini-Yekutieli correction
+sorted_indices = np.argsort(p_values)
+sorted_p = p_values[sorted_indices]
+
+n = n_tests
+harmonic = np.sum(1.0 / np.arange(1, n + 1))
+print(f'Harmonic number H_{n}: {harmonic:.4f}')
+
+by_p = np.ones(n)
+for i in range(n):
+    rank = i + 1  # 1-indexed
+    by_p[i] = min(sorted_p[i] * n * harmonic / rank, 1.0)
+
+# Ensure monotonicity
+for i in range(n - 2, -1, -1):
+    by_p[i] = min(by_p[i], by_p[i + 1])
+
+by_sig = np.sum(by_p <= 0.05)
+print(f'Benjamini-Yekutieli significant (p <= 0.05): {by_sig}')
+
+print(f'Ratio: {bonf_sig}:{by_sig}')
+"
+

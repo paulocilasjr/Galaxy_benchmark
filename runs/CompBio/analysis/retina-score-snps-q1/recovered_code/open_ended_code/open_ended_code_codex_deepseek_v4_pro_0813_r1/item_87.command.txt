@@ -1,0 +1,67 @@
+/bin/bash -lc "cat > fetch_hg38_seqs.py <<'PY'
+import pandas as pd, requests, time, os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+INP_LEN=2114; BUFFER=500
+m=pd.read_pickle('mapped_snps.pkl')
+comp=str.maketrans('ACGT','TGCA')
+def rc(s): return s.translate(comp)[::-1].upper()
+# adjust alleles for strand
+def adjust(row):
+    ref=str(row.ref).upper(); alt=str(row.alt).upper()
+    if row.strand=='-':
+        ref=rc(ref); alt=rc(alt)
+    return ref,alt
+m['adj_ref'],m['adj_alt']=zip(*m.apply(adjust,axis=1))
+# only mapped
+mm=m[m.hg38_chr.notna()].copy()
+mm['P']=mm.hg38_pos1.astype(int)
+url='https://api.genome.ucsc.edu/getData/sequence'
+session=requests.Session()
+def fetch(i,row):
+    P=row.P
+    s=P-INP_LEN//2
+    e=P+INP_LEN//2+BUFFER
+    params={'genome':'hg38','chrom':row.hg38_chr,'start':s,'end':e}
+    for attempt in range(6):
+        try:
+            r=session.get(url,params=params,timeout=90)
+            if r.status_code==200:
+                dna=r.json()['dna'].upper()
+                if len(dna)"'!=e-s:
+                    raise ValueError(f'"'len {len(dna)} expected {e-s}')
+                return i,dna
+            err=r.text[:200]
+            print('status',r.status_code,params,err,'attempt',attempt)
+        except Exception as ex:
+            print('err',ex,params,'attempt',attempt)
+        time.sleep(1+2*attempt)
+    raise RuntimeError(f'failed {row}')
+seqs=[None]*len(mm)
+with ThreadPoolExecutor(max_workers=8) as ex:
+    futs=[ex.submit(fetch,i,row) for i,row in mm.iterrows()]
+    for fut in as_completed(futs):
+        i,dna=fut.result()
+        seqs[i]=dna
+        if i%50==0: print('got',i)
+assert all(x is not None for x in seqs)
+mm['seq']=seqs
+# verify target base at index1056 equals adj_ref
+mism=0
+for i,row in mm.iterrows():
+    pos=INP_LEN//2-1
+    if row.seq[pos:pos+len(row.adj_ref)]"'!=row.adj_ref:
+        mism+=1
+        print('"'mismatch idx',row.idx,row.hg38_chr,row.P,row.adj_ref,row.seq[pos:pos+len(row.adj_ref)])
+print('mismatches',mism)
+# merge back to full m by idx
+full=m.copy()
+seqmap=dict(zip(mm.idx,mm.seq))
+full['seq']=full.idx.map(seqmap)
+full['adj_ref']=None; full['adj_alt']=None
+for c in ['adj_ref','adj_alt']:
+    full.loc[mm.index,c]=mm[c].values
+full.to_pickle('snp_seqs_hg38.pkl')
+print('saved',full.seq.notna().sum(),'rows')
+print(full[full.seq.isna()][['idx','chr','start','ref','alt','label']])
+PY
+python fetch_hg38_seqs.py"

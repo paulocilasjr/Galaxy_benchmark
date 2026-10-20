@@ -1,0 +1,24 @@
+/bin/bash -lc "cat > classify.py <<'PY'
+import numpy as np,pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+s=np.load('summaries.npz',allow_pickle=True); x=s['mexpr'];markers=list(s['markers']);donors=s['donors']; codes=s['codes'];n=len(codes)
+def expr(g):return x[:,markers.index(g)]
+def score(gs):return np.mean([expr(g) for g in gs.split() if g in markers],axis=0)
+sigs={'T':'CD3D CD3E TRAC','NK':'KLRD1 GNLY NKG7','B':'CD79A CD79B MS4A1','Mono':'LYZ CST3 LST1 FCN1','DC':'FCER1A CD1C CLEC10A','pDC':'LILRA4 TCF4','Plasma':'MZB1 JCHAIN SDC1','Platelet':'PPBP PF4','Erythrocyte':'HBB HBA1 HBA2'}
+scores=np.array([score(gs) for gs in sigs.values()]).T
+celltypes=np.array(list(sigs))[scores.argmax(1)]
+# Make confident monocyte and T/B selections independently.
+sel={'Mono':(score('LYZ LST1 CST3')>2)&(score('CD3D CD3E TRAC')<0.5)&(expr('CD79A')<1),'T':score('CD3D CD3E TRAC')>1.5,'B':(score('CD79A MS4A1')>1.5)&(expr('LYZ')<1)}
+np.save('celltypes.npy',celltypes)
+print(pd.crosstab(donors[codes],celltypes,normalize='index').round(3).to_string())
+ifng='IFI27 IFI44L IFIT1 IFIT3 ISG15 MX1 OAS1 RSAD2 SIGLEC1'.split()
+for ct,mask in sel.items():
+ df=pd.DataFrame([x[mask&(codes==d)].mean(0) for d in range(len(donors))],columns=markers,index=donors)
+ df.to_csv('means_'+ct+'.csv')
+ print('\\n',ct);print(df[ifng+['S100A8','S100A9','IL1B','HLA-DRA','CD163','MS4A7']].round(3).to_string())
+ pca=PCA(5); v=pca.fit_transform(StandardScaler().fit_transform(df))
+ print('PCA',pca.explained_variance_ratio_.round(2));print(pd.DataFrame(v[:,:3],index=donors).round(2).to_string())
+PY
+OPENBLAS_NUM_THREADS=2 python classify.py > classify.log"

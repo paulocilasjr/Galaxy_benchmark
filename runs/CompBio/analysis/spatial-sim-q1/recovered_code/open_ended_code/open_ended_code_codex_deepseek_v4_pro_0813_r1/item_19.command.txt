@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.io
+from scipy.optimize import minimize
+from scipy.special import gammaln
+meta=pd.read_csv('data/spatial_q_sc_metadata.csv',index_col=0).squeeze('columns')
+sc=pd.read_csv('data/spatial_q_sc_counts.csv',index_col=0)
+feat=pd.read_csv('data/features.tsv.gz',header=None,sep='\\t',compression='gzip')
+mat=scipy.io.mmread('data/matrix.mtx.gz').tocsc()
+y=np.asarray(mat[:,710].todense()).ravel()
+means=sc.groupby(meta).mean().T.values # genes x types
+types=sc.groupby(meta).mean().index
+# Poisson MLE with type means rates
+def negll(params):
+ lam=means@params
+ # avoid lam 0
+ eps=1e-8
+ return np.sum(lam - y*np.log(lam+eps) + gammaln(y+1))
+# optimize log params? positive
+res=minimize(lambda p: negll(np.exp(p)), np.zeros(len(types)), method='BFGS')
+n=np.exp(res.x)
+print('Poisson MLE n', dict(zip(types,n.round(4))))
+print('total pred',(means@n).sum(),'actual',y.sum())
+# Poisson with intercept/baseline? not necessary
+# Negative binomial MLE with type means and shared dispersion theta
+def negll_nb(params):
+ n=params[:6]; logtheta=params[6]; theta=np.exp(logtheta)
+ mu=means@n
+ # NB param r=theta, p = r/(mu+r), lgamma
+ r=theta
+ val = gammaln(y+r)-gammaln(r)-gammaln(y+1)+r*np.log(r/(mu+r))+y*np.log(mu/(mu+r))
+ return -val.sum()
+init=list(n)+[np.log(1)]
+# maybe theta large Poisson
+resnb=minimize(negll_nb, init, method='Nelder-Mead', options={'maxiter':10000,'xatol':1e-5,'fatol':1e-5})
+print('NB params',resnb.x, 'negll',resnb.fun)
+print('NB n',dict(zip(types,resnb.x[:6].round(4))),'theta',np.exp(resnb.x[6]))
+print('pred total',(means@resnb.x[:6]).sum())
+# Fit only candidate subset B,Endo,Macro and all types
+from scipy.optimize import nnls
+for subset in [['B_Cell','Endothelial','Macrophage'], ['Endothelial','Macrophage'], ['B_Cell','Endothelial'], ['B_Cell','Macrophage'], ['Endothelial','Macrophage','T_Cell'], ['B_Cell','Endothelial','Macrophage','T_Cell']]:
+ cols=[list(types).index(t) for t in subset]
+ A=means[:,cols]
+ coef,resid=nnls(A,y)
+ print(subset,'nnls coef',coef.round(3),'norm',(coef/coef.sum()).round(3),'predtotal',(A@coef).sum(),'corr',np.corrcoef(A@coef,y)[0,1],'L1',np.abs(A@coef-y).sum())
+PY"

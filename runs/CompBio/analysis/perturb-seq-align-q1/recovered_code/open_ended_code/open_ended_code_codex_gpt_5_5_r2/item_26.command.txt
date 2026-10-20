@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+# Final reciprocal/global mapping diagnostics for aligned common genes
+import h5py, numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+from scipy.optimize import linear_sum_assignment
+
+def dec(a): return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a])
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        X=csc_matrix((f['X/data'][()], f['X/indices'][()], f['X/indptr'][()]), shape=tuple(f['X'].attrs['shape'])).tocsr().astype(np.float32)
+        g=dec(f['obs/guide/categories'][()]); c=f['obs/guide/codes'][()].astype(np.int32); v=dec(f['var/_index'][()])
+    return X,g,c,v
+def lognorm(X):
+    X=X.copy(); lib=np.asarray(X.sum(1)).ravel().astype(np.float32); scale=np.divide(1e4,lib,out=np.zeros_like(lib),where=lib>0)
+    X.data *= np.repeat(scale,np.diff(X.indptr)); np.log1p(X.data,out=X.data); return X
+def means(X,c,ng):
+    G=csr_matrix((np.ones(c.size,dtype=np.float32),(np.arange(c.size),c)),shape=(c.size,ng))
+    n=np.bincount(c,minlength=ng).astype(np.float32); return (G.T@X).toarray()/n[:,None],n
+def rowcorr(A,B):
+    A=A.copy(); B=B.copy(); A-=A.mean(1,keepdims=True); B-=B.mean(1,keepdims=True)
+    A/=np.linalg.norm(A,axis=1,keepdims=True)+1e-9; B/=np.linalg.norm(B,axis=1,keepdims=True)+1e-9; return A@B.T
+refX,refg,refc,refv=load('perturb.seq.align.q1.ref.h5ad'); qX,qg,qc,qv=load('perturb.seq.align.q1.query.h5ad')
+qpos={x:i for i,x in enumerate(qv)}; pairs=[(i,qpos[x]) for i,x in enumerate(refv) if x in qpos]
+ri=np.array([p[0] for p in pairs]); qi=np.array([p[1] for p in pairs])
+refM,refN=means(lognorm(refX),refc,len(refg)); qM,qN=means(lognorm(qX),qc,len(qg))
+refnt=np.array([x.startswith('NT-') for x in refg]); qnt=np.array([x.startswith('NT-') for x in qg])
+refctrl=(refM[refnt]*refN[refnt,None]).sum(0)/refN[refnt].sum(); qctrl=(qM[qnt]*qN[qnt,None]).sum(0)/qN[qnt].sum()
+refE=(refM-refctrl)[:,ri]; qE=(qM-qctrl)[:,qi]
+rt=np.where(~refnt)[0]; qt=np.where(~qnt)[0]
+# use top 2000 high-variance common genes, which emphasized perturbation signatures
+var=refE[rt].var(0)+qE[qt].var(0); mask=np.zeros(refE.shape[1],bool); mask[np.argsort(var)[-2000:]]=1
+C=rowcorr(refE[rt][:,mask], qE[qt][:,mask])
+row_ind,col_ind=linear_sum_assignment(-C)  # maximize; 32 of 33 refs assigned
+assign={refg[rt[r]]:(qg[qt[c]],C[r,c]) for r,c in zip(row_ind,col_ind)}
+# print reciprocal best for requested and global assignment
+for target in ['PABPC1','NUDT21','LEO1']:
+    rid=[i for i in range(len(rt)) if refg[rt[i]].startswith(target+'-')][0]
+    best_q=int(np.argmax(C[rid])); best_ref_for_q=int(np.argmax(C[:,best_q]))
+    print(target, 'rowbest', refg[rt[rid]], qg[qt[best_q]], float(C[rid,best_q]), 'recip_ref', refg[rt[best_ref_for_q]], float(C[best_ref_for_q,best_q]), 'hungarian', assign.get(refg[rt[rid]]))
+print('\\nfull assignment sorted by ref:')
+for k in sorted(assign): print(k, assign[k][0], round(float(assign[k][1]),3))
+PY"

@@ -1,0 +1,93 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, fisher_exact, spearmanr, pearsonr
+from sklearn.metrics import pairwise_distances
+from statsmodels.stats.multitest import multipletests
+
+# load
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+features=pd.read_csv('features.tsv.gz', sep='\\t', header=None)
+barcodes=pd.read_csv('barcodes.tsv.gz', sep='\\t', header=None)[0].tolist()
+pos=pd.read_csv('tissue_positions.csv')
+Y=mmread('matrix.mtx.gz').tocsc().T.toarray().astype(float) # spots x genes
+# align genes
+spgenes=features[1].tolist()
+sc=sc[spgenes]
+ctypes=sorted(meta['cell_type'].unique())
+ref=np.vstack([sc.loc[meta['cell_type'].eq(ct)].mean(axis=0).values for ct in ctypes]).T # genes x types
+# normalize? keep raw counts; use all genes and marker subset variants later
+coefs=[]; res=[]
+for y in Y:
+    c,r=nnls(ref,y)
+    coefs.append(c); res.append(r)
+coef=pd.DataFrame(np.vstack(coefs), index=barcodes, columns=ctypes)
+prop=coef.div(coef.sum(axis=1).replace(0,np.nan), axis=0).fillna(0)
+pos=pos.set_index('barcode').loc[barcodes]
+coords=pos[['pxl_row_in_fullres','pxl_col_in_fullres']].astype(float).values
+print('types', ctypes)
+print('coef quantiles')
+print(coef.describe(percentiles=[.01,.05,.1,.25,.5,.75,.9,.95,.99]).T[['mean','std','min','1%','5%','10%','25%','50%','75%','90%','95%','99%','max']])
+print('\\nprop quantiles')
+print(prop.describe(percentiles=[.01,.05,.1,.25,.5,.75,.9,.95,.99]).T[['mean','std','min','1%','5%','10%','25%','50%','75%','90%','95%','99%','max']])
+print('\\ndominant counts')
+print(prop.idxmax(axis=1).value_counts())
+print('\\nmean props by dominant')
+print(prop.groupby(prop.idxmax(axis=1)).mean())
+print('\\ncoords by dominant')
+for ct in ctypes:
+    mask=prop.idxmax(axis=1).eq(ct).values
+    if mask.any():
+        print(ct, mask.sum(), coords[mask].mean(axis=0), coords[mask].min(axis=0), coords[mask].max(axis=0))
+# proximity tests for different presence thresholds
+D=pairwise_distances(coords)
+np.fill_diagonal(D, np.nan)
+# grid neighbor distance ~50; nearest distance to TC set excluding self for TC, including any TC target for others
+for thr in [0.01,0.025,0.05,0.075,0.1,0.15,0.2,0.3,0.5]:
+    tc=(prop['Tumor_Core']>=thr).values
+    print('\\nTHR',thr,'TC spots',tc.sum())
+    if tc.sum()==0: continue
+    tc_coords=coords[tc]
+    all_min=cdist(coords, tc_coords).min(axis=1)
+    rows=[]
+    for ct in ctypes:
+        if ct=='Tumor_Core': continue
+        m=(prop[ct]>=thr).values
+        if m.sum()<5 or (~m).sum()<5: continue
+        stat,p=mannwhitneyu(all_min[m], all_min[~m], alternative='less')
+        rows.append((ct,m.sum(),all_min[m].mean(),np.median(all_min[m]),all_min[~m].mean(),p))
+    if rows:
+        ps=[r[-1] for r in rows]
+        adj=multipletests(ps, method='fdr_bh')[1]
+        for r,a in zip(rows,adj): print(r,'FDR',a)
+# neighbor adjacency enrichment: spots adjacent within <=75? Using array grid immediate neighbors likely 50 row/col and diagonal 70.7.
+for pthr in [0.05,0.1,0.2,0.3,0.5]:
+    present={ct:(prop[ct]>=pthr).values for ct in ctypes}
+    tc=present['Tumor_Core']
+    neigh=(D<=75) # includes diag neighbors not self since nan false
+    near_tc=(neigh[:,tc].any(axis=1))
+    print('\\nNeighbor pthr',pthr,'tc',tc.sum(),'near_tc',near_tc.sum())
+    for ct in ctypes:
+        if ct=='Tumor_Core': continue
+        m=present[ct]
+        if m.sum()==0: continue
+        table=np.array([[np.sum(m & near_tc), np.sum(m & ~near_tc)], [np.sum(~m & near_tc), np.sum(~m & ~near_tc)]])
+        OR,p=fisher_exact(table, alternative='greater')
+        print(ct,'n',m.sum(),'nearfrac',np.mean(near_tc[m]),'OR',OR,'p',p,'table',table.tolist())
+# continuous correlation of prop with inverse distance to TC-rich high threshold maybe
+for tc_thr in [0.05,0.1,0.2,0.3,0.5]:
+    tc=(prop['Tumor_Core']>=tc_thr).values
+    dist=cdist(coords, coords[tc]).min(axis=1)
+    affinity=-dist
+    print('\\nCont tc_thr',tc_thr,tc.sum())
+    rows=[]
+    for ct in ctypes:
+        if ct=='Tumor_Core': continue
+        rho,p=spearmanr(prop[ct].values, affinity)
+        rows.append((ct,rho,p))
+    adj=multipletests([r[2] for r in rows], method='fdr_bh')[1]
+    for r,a in zip(rows,adj): print(r,'FDR',a)
+PY"

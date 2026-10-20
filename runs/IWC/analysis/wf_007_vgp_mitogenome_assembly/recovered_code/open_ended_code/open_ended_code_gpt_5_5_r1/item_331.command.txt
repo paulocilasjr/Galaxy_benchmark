@@ -1,0 +1,111 @@
+/usr/bin/bash -lc "/workspace/tools/mitoenv/bin/python - <<'PY'
+import json, pathlib, gzip
+trace=pathlib.Path('run_trace/analysis_steps.jsonl')
+def exists(p): return pathlib.Path(p).exists()
+def size(p):
+    q=pathlib.Path(p)
+    return q.stat().st_size if q.exists() else 0
+entries=[
+{
+ 'stage':'coverage_window_unitig_sweep',
+ 'status':'success',
+ 'tool_or_command':'kmc_dump coverage windows followed by work/scripts/unitigs_from_kmc_dump.py',
+ 'effective_parameters':{'k':31,'windows':['200-1000','250-800','300-600','300-1000','350-700','350-900','150-1500'],'unitig_min_len':500},
+ 'inputs':['work/kmc/err13917223.k31m6.kmc_pre','work/kmc/err13917223.k31m6.kmc_suf','work/scripts/unitigs_from_kmc_dump.py'],
+ 'outputs':['work/kmc/unitigs_ci300_cx600.fasta','work/logs/unitigs_ci300_cx600.log'],
+ 'validation':{'ci300_cx600_unitigs_ge_500bp':60,'ci300_cx600_sum_len':70590,'longest_unitig_bp':5201,'result':'fragmented high-copy mitochondrial-looking unitigs; no single circular unitig'}
+},
+{
+ 'stage':'anchor_unitig1_raw_read_mapping_first_try',
+ 'status':'failed',
+ 'tool_or_command':'seqkit grep -n -p unitig_1 followed by minimap2 -x map-hifi',
+ 'effective_parameters':{'anchor':'unitig_1','reason_for_failure':'seqkit -n matched full FASTA name rather than ID'},
+ 'inputs':['work/kmc/unitigs_ci300_cx600.fasta','data/inputs/collection_of_pacbio_data/err13917223/err13917223.fastqsanger.gz'],
+ 'outputs':['work/kmc/anchor_unitig1_ci300_cx600.fasta','work/reads/raw_vs_anchor_unitig1.paf'],
+ 'validation':{'anchor_fasta_bytes':0,'paf_rows':0}
+},
+{
+ 'stage':'anchor_unitig1_raw_read_mapping',
+ 'status':'success',
+ 'tool_or_command':'minimap2 -x map-hifi anchor_unitig1_ci300_cx600.fasta raw.fastq.gz; seqkit grep IDs',
+ 'effective_parameters':{'anchor':'unitig_1','min_alignment_length':1000,'min_identity':0.97,'read_extraction':'ID field'},
+ 'inputs':['work/kmc/anchor_unitig1_ci300_cx600.fasta','data/inputs/collection_of_pacbio_data/err13917223/err13917223.fastqsanger.gz'],
+ 'outputs':['work/reads/raw_vs_anchor_unitig1.paf','work/reads/anchor_unitig1_read_ids.txt','work/reads/anchor_unitig1_reads.fasta'],
+ 'validation':{'paf_rows':886,'selected_read_ids':556,'retained_bases':7060990,'retained_read_n50':15956}
+},
+{
+ 'stage':'flye_anchor_unitig1',
+ 'status':'failed',
+ 'tool_or_command':'flye --pacbio-hifi anchor_unitig1_reads.fasta --genome-size 16k',
+ 'effective_parameters':{'threads':4,'genome_size':'16k'},
+ 'inputs':['work/reads/anchor_unitig1_reads.fasta'],
+ 'outputs':['work/assemblies/flye_anchor_unitig1/00-assembly/draft_assembly.fasta','work/logs/flye_anchor_unitig1.log'],
+ 'validation':{'error':'Flye consensus failed because multiprocessing Manager socket bind was not permitted','draft_disjointigs':31,'draft_sum_len':1153353}
+},
+{
+ 'stage':'raven_anchor_unitig1_polished_disabled',
+ 'status':'success',
+ 'tool_or_command':'raven -t4 -p 0 anchor_unitig1_reads.fasta',
+ 'effective_parameters':{'threads':4,'polishing_rounds':0},
+ 'inputs':['work/reads/anchor_unitig1_reads.fasta'],
+ 'outputs':['work/assemblies/raven_anchor_unitig1_p0/assembly.fasta','work/assemblies/raven_anchor_unitig1_p0/graph.gfa'],
+ 'validation':{'contigs':2,'contig_lengths':[35963,37016],'result':'Utg210 contained two copies of the 5201 bp anchor separated by 16283 bp'}
+},
+{
+ 'stage':'extract_circular_candidate_from_raven_utg210',
+ 'status':'success',
+ 'tool_or_command':'Python extraction of Utg210[10806:27089]',
+ 'effective_parameters':{'source_contig':'Utg210','start_0based':10806,'end_0based':27089,'basis':'repeated unitig_1 anchor starts'},
+ 'inputs':['work/assemblies/raven_anchor_unitig1_p0/assembly.fasta','work/kmc/anchor_unitig1_ci300_cx600.fasta'],
+ 'outputs':['work/assemblies/raven_anchor_unitig1_p0/candidate_16283.fasta'],
+ 'validation':{'candidate_length':16283,'candidate_gc_percent':36.77,'candidate_copy_alignment':'full internal copy in Utg210 plus flanking partial copies'}
+},
+{
+ 'stage':'polish_candidate_with_anchor_reads',
+ 'status':'success',
+ 'tool_or_command':'minimap2 -ax map-hifi; samtools sort/index/coverage/depth; samtools consensus -X hifi',
+ 'effective_parameters':{'mapper':'map-hifi','consensus_config':'hifi','min_mapq_for_consensus':20,'rounds':2},
+ 'inputs':['work/assemblies/raven_anchor_unitig1_p0/candidate_16283.fasta','work/reads/anchor_unitig1_reads.fasta'],
+ 'outputs':['work/validation/anchor_reads_to_candidate.bam','work/validation/anchor_reads_to_polished1.bam','work/assemblies/raven_anchor_unitig1_p0/candidate_16279.polished2.fasta'],
+ 'validation':{'polished_length':16279,'coverage_percent':100.0,'mean_depth':149.863,'minimum_depth':4,'second_round_sequence_changed':False}
+},
+{
+ 'stage':'raw_reads_to_candidate_diagnostic',
+ 'status':'failed',
+ 'tool_or_command':'minimap2 -ax map-hifi raw.fastq.gz | samtools sort',
+ 'effective_parameters':{'candidate':'candidate_16283.fasta','reason_for_failure':'SAM stream included unmapped raw reads, producing oversized BAM sort; branch interrupted'},
+ 'inputs':['work/assemblies/raven_anchor_unitig1_p0/candidate_16283.fasta','data/inputs/collection_of_pacbio_data/err13917223/err13917223.fastqsanger.gz'],
+ 'outputs':['work/logs/map_raw_to_candidate.sam.log','work/validation/raw_reads_to_candidate.bam'],
+ 'validation':{'exit_code':130,'minimap2_completed':True,'bam_sort_interrupted':True}
+},
+{
+ 'stage':'all_unitig_bait_component_exploration',
+ 'status':'failed',
+ 'tool_or_command':'minimap2 raw reads to all ci300-cx600 unitigs; Raven/miniasm/wtdbg/Canu attempts on component reads',
+ 'effective_parameters':{'unitig_window':'300-600','component_unitigs':['unitig_5','unitig_7','unitig_8','unitig_11','unitig_13','unitig_15','unitig_19','unitig_26','unitig_27','unitig_38','unitig_40','unitig_56']},
+ 'inputs':['work/kmc/unitigs_ci300_cx600.fasta','data/inputs/collection_of_pacbio_data/err13917223/err13917223.fastqsanger.gz'],
+ 'outputs':['work/reads/mito_component_reads.fasta','work/assemblies/raven_mito_component_p0/assembly.fasta','work/assemblies/miniasm_mito_component.fasta','work/assemblies/canu_mito_component/agrius_mito.contigs.fasta'],
+ 'validation':{'component_reads':2498,'component_bases':34242649,'raven_result':'17 long repeat paths, no single nonredundant circle','miniasm_result':'17 long repeat paths, no single nonredundant circle','wtdbg_result':'no usable contigs','canu_result':'0 contigs; reads left unassembled'}
+},
+{
+ 'stage':'write_final_deliverable',
+ 'status':'success',
+ 'tool_or_command':'seqkit replace/seq -w 80 candidate_16279.polished2.fasta | gzip -c > final_answer/mitogenome.fasta.gz',
+ 'effective_parameters':{'record_name':'Agrius_convolvuli_mitogenome','line_width':80,'compression':'gzip'},
+ 'inputs':['work/assemblies/raven_anchor_unitig1_p0/candidate_16279.polished2.fasta'],
+ 'outputs':['final_answer/mitogenome.fasta.gz','work/validation/final_mitogenome.stats.tsv','work/validation/final_mitogenome.format_check.txt'],
+ 'validation':{'gzip_test':'passed','records':1,'bases':16279,'bad_sequence_lines':0,'gc_percent':36.77}
+}
+]
+with trace.open('a') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, sort_keys=True)+\"\\n\")
+# Validate JSONL
+for i,line in enumerate(trace.open(),1):
+    json.loads(line)
+print('trace_lines',sum(1 for _ in trace.open()))
+print('final_exists',exists('final_answer/mitogenome.fasta.gz'),'final_bytes',size('final_answer/mitogenome.fasta.gz'))
+PY
+find final_answer -maxdepth 1 -type f -printf '%P\\n' | sort
+/workspace/tools/mitoenv/bin/seqkit stats -a final_answer/mitogenome.fasta.gz
+wc -l run_trace/analysis_steps.jsonl"

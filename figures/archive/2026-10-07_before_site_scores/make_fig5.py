@@ -10,7 +10,7 @@ b, where the extra input comes from: Galaxy / custom-code ratios of actions and 
 c, reducing Galaxy token use: Galaxy / custom-code tokens per complete 50-task BixBench-Verified-50 run before and after
    each round of interface changes (July, GPT-5.5: archived July 6 batch, then the archived runs; October, GPT-5.6 Sol:
    archived runs, the one-replicate intermediate round from the batch summary, then the token-optimization batch), from
-   token_improvment/ (run_inventory.csv, earlier_rounds/, site_snapshot/summary.json);
+   runs/token_optimization/ (run_inventory.csv, earlier_rounds/, site_snapshot/summary.json);
 d, what the retained record holds for each analysis step in each condition, separating structured records from free
    text in the retained trace, records of the environment only, and evidence that was not retained or not recorded
    (unknown, not absent);
@@ -42,7 +42,7 @@ import openpyxl
 import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -54,10 +54,10 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
-ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+DESIGN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
+ACTIONS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
 OUT = os.path.join(ROOT, 'figures')
 B, SEED, B_PERM, B_MEDIAN = 20000, 20261002, 200000, 2000
 W, MM = 180.0, 1 / 25.4
@@ -295,7 +295,7 @@ def evidence(calls):
 def example_record(r):
     """The matched step of panel d, read from the retained evidence of bix-45-q1."""
     task, gal_id, code_id = EXAMPLE
-    d = json.load(open(os.path.join(ROOT, 'BixBench_50', 'analysis', task, 'history_analysis_evidence.json')))
+    d = json.load(open(os.path.join(ROOT, 'runs/BixBench_50', 'analysis', task, 'history_analysis_evidence.json')))
     runs = {x['run_id']: x for x in d['runs']}
     g = [e for e in runs[gal_id]['events'] if 'phykit' in str(e.get('tool') or '').lower()][0]
     c = [e for e in runs[code_id]['events'] if e['event_type'] == 'analysis']
@@ -337,7 +337,7 @@ def trade(r):
 
 
 # ---------------------------------------------------------------- token reduction rounds (panel c)
-TOKEN_DIR = os.path.join(ROOT, 'token_improvment')
+TOKEN_DIR = os.path.join(ROOT, 'runs/token_optimization')
 ROUNDS = [  # (comparison, stage, label, source)
     ('July', 'before', 'Round 1 in place: shorter skills, prompt guidance', 'july6'),
     ('July', 'after', 'Round 2: submit, wait and check in one MCP call', 'archive GPT-5.5'),

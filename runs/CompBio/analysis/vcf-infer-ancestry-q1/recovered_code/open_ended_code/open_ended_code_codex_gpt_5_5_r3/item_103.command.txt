@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+# collect matched biallelic-like gnomAD positions from existing AF records
+sel={}
+for line in open('selected_lifted.tsv'):
+    chrom,pos,ref,alt,hg38pos,*gs=line.strip().split('\\t')
+    sel[int(hg38pos)]=(ref,alt,[int(x) for x in gs],pos)
+records={}
+for fname in ['refs/gnomad_selected_af.tsv','refs/gnomad_selected_af_batched.tsv','refs/gnomad_single_site_af.tsv','refs/gnomad_single_site_af_more.tsv']:
+    try: fh=open(fname)
+    except: continue
+    for line in fh:
+        p=line.strip().split('\\t')
+        if len(p)<14: continue
+        records[tuple(p[:4])]=p
+matched=[]
+for key,p in records.items():
+    chrom,pos,ref,alts=key; pos=int(pos); altlist=alts.split(',')
+    if pos in sel:
+        oref,oalt,ugs,hg19pos=sel[pos]
+        if ref==oref and oalt in altlist and len(ref)==1 and len(oalt)==1:
+            matched.append((pos,ref,oalt,ugs))
+matched=matched[:120]
+with open('refs/gnomad_matched_positions.tsv','w') as out:
+    for pos,ref,alt,ugs in matched:
+        out.write('\\t'.join(map(str,[pos,ref,alt]+ugs))+'\\n')
+print(len(matched))
+PY
+python3 - <<'PY'
+import subprocess, os
+url='https://storage.googleapis.com/gcp-public-data--gnomad/release/3.1.2/vcf/genomes/gnomad.genomes.v3.1.2.hgdp_tgp.chr1.vcf.bgz'
+fmt='%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT]\\n'
+with open('refs/gnomad_matched_gt_single.tsv','w') as out:
+    got=0
+    for line in open('refs/gnomad_matched_positions.tsv'):
+        pos=line.split('\\t')[0]
+        r=f'chr1:{pos}-{pos}'
+        try:
+            res=subprocess.run(['bcftools','query','-r',r,'-f',fmt,url], text=True, capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            continue
+        if res.returncode==0 and res.stdout:
+            out.write(res.stdout); out.flush(); got += res.stdout.count('\\n')
+        if got>=100: break
+print('gt_rows',got)
+PY
+wc -l refs/gnomad_matched_gt_single.tsv"

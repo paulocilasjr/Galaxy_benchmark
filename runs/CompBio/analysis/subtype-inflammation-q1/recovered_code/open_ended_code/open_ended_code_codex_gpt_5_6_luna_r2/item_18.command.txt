@@ -1,0 +1,39 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,numpy as np,gc,warnings
+from scipy.io import mmread
+from scipy.sparse import coo_matrix,vstack
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+warnings.filterwarnings('ignore')
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as h:
+ next(h); genes=[x.rstrip().split('\\t')[1] for x in h]
+idx={x:i for i,x in enumerate(genes)}; files=['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz']; ns=[]; mus=[];m2s=[]
+for f in files:
+ a=mmread(f).tocoo();n=a.shape[1];ns.append(n);d=a.data.astype(np.float32);lib=np.bincount(a.col,weights=d,minlength=n).astype(np.float32);v=np.log1p(d*1e4/lib[a.col]);mus.append(np.bincount(a.row,weights=v,minlength=len(genes))/n);m2s.append(np.bincount(a.row,weights=v.astype(np.float64)**2,minlength=len(genes))/n);del a,d,lib,v;gc.collect()
+N=sum(ns);mean=sum(mus[j]*ns[j] for j in range(2))/N;m2=sum(m2s[j]*ns[j] for j in range(2))/N;var=np.maximum(m2-mean*mean,0);valid=(mean>.02)&np.array([not(g.startswith('MT-')or g.startswith('RPS')or g.startswith('RPL')or g=='MALAT1') for g in genes]);hvg=np.where(valid)[0][np.argsort(var[valid])[-3500:]]
+panels={'astrocyte':['GFAP','AQP4','S100B','SLC1A3','ALDOC','KCNJ10','AGT','WIF1','TF','CP','GJA1','CLDN11','ALDH1L1','C3','APOE','LGALS3','VIM'], 'muller':['RLBP1','GLUL','SLC1A3','VIM','AQP4','KCNJ10','RAX','SOX9','CLU','SLC1A2','ALDOC','SLC4A4','WIF1','TF','CP','FOXP2','DIO2','FABP7','CPE'], 'micro':['P2RY12','TMEM119','CX3CR1','AIF1','C1QA','C1QB','C1QC','CSF1R','TYROBP','LST1','FCER1G','HLA-DRA','CTSS','CST3','ADGRE1','F13A1','SPI1','ITGAM','LILRB4'], 'macro':['CD68','LILRB1','FCGR3A','APOC1','MSR1','MRC1','MARCO','CTSB','CTSD','TYROBP','LST1','FCER1G','CST3','STAB1','FPR1','OLR1','CCL2','CCL7','CYBB'], 'T':['CD3D','CD3E','CD3G','TRBC1','TRBC2','IL7R','LTB','CCL5','NKG7','CD8A','CD8B','KLRD1','LCK','TRAC','IL32','RASGRP1','CD247']}
+force=sorted(set(g for ms in panels.values() for g in ms)|{'RLBP1','GLUL','WIF1','GABRG3','FOXP2','MARCH1'});hvg=np.array(sorted(set(hvg.tolist()+[idx[g] for g in force if g in idx])),dtype=np.int32)
+Xs=[]
+for f,n in zip(files,ns):
+ a=mmread(f).tocoo();d=a.data.astype(np.float32);lib=np.bincount(a.col,weights=d,minlength=n).astype(np.float32);v=np.log1p(d*1e4/lib[a.col]);keep=np.isin(a.row,hvg);rr=np.searchsorted(hvg,a.row[keep]);Y=coo_matrix((v[keep],(a.col[keep],rr)),shape=(n,len(hvg)),dtype=np.float32).tocsr();Y.sum_duplicates();Xs.append(Y);del a,d,lib,v,keep,rr,Y;gc.collect()
+X=vstack(Xs,format='csr');del Xs;gc.collect();Z=TruncatedSVD(n_components=35,n_iter=3,random_state=1).fit_transform(X);Z=(Z-Z.mean(0))/(Z.std(0)+1e-8);lab=KMeans(n_clusters=35,n_init=5,random_state=1,max_iter=100).fit_predict(Z)
+muX=np.asarray(X.mean(0)).ravel();sdX=np.sqrt(np.maximum(np.asarray(X.multiply(X).mean(0)).ravel()-muX*muX,1e-4));pos={g:np.where(hvg==i)[0][0] for g,i in idx.items() if i in set(hvg)}
+for t,ms in panels.items():
+ pp=[pos[g] for g in ms if g in pos]
+ scores=[]
+ for c in range(35):
+  sel=lab==c;av=np.asarray(X[sel].mean(0)).ravel();scores.append(float(np.mean((av[pp]-muX[pp])/sdX[pp])))
+ print('\\n',t, 'best clusters',[(c,round(scores[c],2),int((lab==c).sum()),int((lab==c)[:ns[0]].sum()),int((np.asarray(X[lab==c,pos.get('CCL5',-1)].todense()).ravel()>0).sum()) if 'CCL5' in pos else 0) for c in np.argsort(scores)[::-1][:8]])
+# details ccl5 clusters
+cp=pos['CCL5']; ccl=np.asarray(X[:,cp].todense()).ravel();
+print('\\nCCL5 cluster details')
+for c in range(35):
+ sel=lab==c
+ if (ccl[sel]>0).sum()<10:
+  continue
+ av=np.asarray(X[sel].mean(0)).ravel();print('cluster',c,'n',sel.sum(),'e1',sel[:ns[0]].sum(),'e2',sel[ns[0]:].sum(),'ccl5+',int((ccl[sel]>0).sum()))
+ for t,ms in panels.items():
+  pp=[pos[g] for g in ms if g in pos];print(t,round(float(np.mean((av[pp]-muX[pp])/sdX[pp])),2),end='; ')
+ print()
+ print(' '.join(f'{g}={av[pos[g]]:.2f}' for g in ['GFAP','AQP4','S100B','SLC1A3','ALDOC','WIF1','TF','CP','RLBP1','GLUL','VIM','CLU','SLC1A2','SLC4A4','FOXP2','GABRG3','P2RY12','ADGRE1','MARCO','STAB1','OLR1','CCL2','CCL7','CYBB','CCL5'] if g in pos))
+PY"

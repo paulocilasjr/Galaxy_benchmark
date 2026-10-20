@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+# column names use underscores; metadata SampleID uses hyphens
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample')
+counts = counts.loc[:, layout.index]
+# Drop genes with zero counts across all experiment samples; these are untestable count rows.
+counts = counts.loc[counts.sum(axis=1) > 0]
+counts_t = counts.T.astype(int)
+metadata = layout[['Group']].copy()
+metadata['Group'] = metadata['Group'].astype('category')
+print('counts_t', counts_t.shape, 'metadata', metadata.shape)
+print(metadata['Group'].value_counts().to_string())
+
+dds = DeseqDataSet(counts=counts_t, metadata=metadata, design='~Group', ref_level=['Group','DMSO'], quiet=False, n_cpus=4)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['Group','CBD_IC50','DMSO'], alpha=0.05, quiet=False, n_cpus=4)
+stat.summary()
+res = stat.results_df.copy()
+print(res.head().to_string())
+print('rows', len(res), 'padj nonna', res['padj'].notna().sum())
+sig = res[(res['padj'] < 0.05) & (res['log2FoldChange'].abs() > 0.5)]
+up = sig[sig['log2FoldChange'] > 0]
+down = sig[sig['log2FoldChange'] < 0]
+print('sig', len(sig), 'up', len(up), 'down', len(down))
+print('top up')
+print(up.sort_values('padj').head(10)[['log2FoldChange','padj']].to_string())
+print('top down')
+print(down.sort_values('padj').head(10)[['log2FoldChange','padj']].to_string())
+PY"

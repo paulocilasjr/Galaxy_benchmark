@@ -1,0 +1,30 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np, anndata as ad
+res=pd.read_csv('centroid_pred_celltype_tumor.csv')
+S=pd.read_pickle('cell_scores.pkl')
+res.index=res.cell.values
+S.index=S.index.astype(str)
+# align
+S2=S.loc[res.index]
+lusc_samples=pd.read_csv('sample_subtype.csv').query('subtype==\"LUSC\"')['sample'].values
+res['sampleID']=S2.sampleID.values
+res['lusc_marker']=((S2.LUSC_basal>0.3)&(S2.epithelial>0.1)&(S2.sampleID.isin(lusc_samples))).values
+res['lusc_marker_any']=((S2.LUSC_basal>0.2)&(S2.epithelial>0.05)&(S2.sampleID.isin(lusc_samples))).values
+res['immune_marker']=((S2.immune_CD45>0.1)|(S2.Tcell>0.2)|(S2.NK>0.2)|(S2.Bcell>0.1)|(S2.myeloid>0.2)|(S2.Mast>0.2)|(S2.cDC1>0.1)|(S2.cDC2>0.1)|(S2.pDC>0.1)|(S2.DC_mature>0.15)|(S2.neutrophil>0.2)).values
+cent_lusc_all=res.pred.isin(['Tumor cells LUSC','Tumor cells LUSC mitotic'])
+cent_lusc_nonmit=res.pred=='Tumor cells LUSC'
+print('centroid all',cent_lusc_all.sum(),'marker strict',res.lusc_marker.sum(),'overlap',(cent_lusc_all&res.lusc_marker).sum())
+print('marker strict not centroid all',(res.lusc_marker & ~cent_lusc_all).sum(), 'their preds:')
+print(res.loc[res.lusc_marker & ~cent_lusc_all,'pred'].value_counts().head(20).to_string())
+print('centroid all not marker strict',(cent_lusc_all & ~res.lusc_marker).sum(), 'marker means by pred')
+for pred in ['Tumor cells LUSC','Tumor cells LUSC mitotic']:
+ sub=res[res.pred==pred]
+ print(pred, 'n',len(sub), 'lusc_basal mean',S2.loc[sub.index,'LUSC_basal'].mean(), 'epi',S2.loc[sub.index,'epithelial'].mean(), 'prolif',S2.loc[sub.index,'prolif'].mean())
+# denominator comparisons
+immune_prefixes=('T cell','NK cell','B cell','Plasma cell','Macrophage','Monocyte','Mast cell','Neutrophils','cDC','pDC','DC mature','myeloid dividing')
+cent_non=~res.pred.str.startswith(immune_prefixes)
+marker_non=~res.immune_marker
+print('cent non',cent_non.sum(),'marker non',marker_non.sum(),'intersection',(cent_non&marker_non).sum())
+for name,num in [('cent all',cent_lusc_all.sum()),('cent nonmit',cent_lusc_nonmit.sum()),('marker strict',res.lusc_marker.sum()),('marker any',res.lusc_marker_any.sum())]:
+ print(name,'num',num,'pct cent den',100*num/cent_non.sum(),'pct marker den',100*num/marker_non.sum())
+PY"

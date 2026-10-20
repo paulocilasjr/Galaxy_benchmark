@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import subprocess, sys, math
+from scipy.stats import mannwhitneyu
+from Bio import Phylo
+
+groups = {
+    'animals': sorted(Path('analysis/animal_trees').glob('*.treefile')),
+    'fungi': sorted(Path('analysis/fungi_trees').glob('*.treefile')),
+}
+
+def evo(path):
+    p = subprocess.run([sys.executable, '-m', 'phykit', 'evo_rate', str(path)],
+                       text=True, capture_output=True, check=True)
+    return path, float(p.stdout.strip()), p.stdout.strip()
+
+rates={}
+for group, paths in groups.items():
+    vals=[]
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        futures=[ex.submit(evo,p) for p in paths]
+        for f in as_completed(futures): vals.append(f.result())
+    vals.sort(key=lambda x:str(x[0]))
+    assert len(vals)==len(paths) and all(math.isfinite(x[1]) for x in vals)
+    rates[group]=[x[1] for x in vals]
+    print(group, 'processed', len(vals), 'min', min(rates[group]), 'median', __import__('numpy').median(rates[group]), 'max', max(rates[group]))
+
+a=rates['animals']; f=rates['fungi']
+res=mannwhitneyu(a,f,alternative='two-sided',method='asymptotic')
+print('scipy_version',__import__('scipy').__version__)
+print('U_animals_first',repr(res.statistic))
+print('U_fungi_first',repr(mannwhitneyu(f,a,alternative='two-sided',method='asymptotic').statistic))
+print('U_complement_check',len(a)*len(f)-res.statistic)
+print('two_sided_p',res.pvalue)
+
+# Independent rank-sum calculation on PhyKIT's four-decimal stdout values.
+from scipy.stats import rankdata
+u_rank = rankdata(a+f, method='average')[:len(a)].sum() - len(a)*(len(a)+1)/2
+print('U_rank_cross_check',repr(u_rank))
+
+# Check sensitivity to PhyKIT display rounding, using documented formula directly.
+def full_rate(p):
+    t=Phylo.read(p,'newick')
+    return t.total_branch_length()/len(t.get_terminals())
+a_full=[full_rate(p) for p in groups['animals']]
+f_full=[full_rate(p) for p in groups['fungi']]
+print('U_full_precision_formula',mannwhitneyu(a_full,f_full).statistic)
+PY"

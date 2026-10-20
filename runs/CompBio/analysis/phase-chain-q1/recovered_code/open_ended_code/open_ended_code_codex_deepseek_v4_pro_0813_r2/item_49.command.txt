@@ -1,0 +1,81 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections, statistics
+
+loci = [
+    (27079306, 'SNP', {'C','A'}),
+    (27079366, 'SNP', {'T','C'}),
+    (27079666, 'SNP', {'T','A'}),
+    (27079826, 'COMPLEX', {'G','D'}),
+    (27080076, 'SNP', {'C','G'}),
+    (27080275, 'DEL', {'A','D'}),
+    (27080279, 'COMPLEX', {'G','D'}),
+    (27080526, 'SNP', {'G','A'}),
+]
+bam=pysam.AlignmentFile('aln.sorted.bam','rb')
+
+def allele_at_read(r, pos1):
+    p0=pos1-1
+    pairs=r.get_aligned_pairs(matches_only=False)
+    # find pair with rp==p0; if multiple? one
+    found=None
+    for qp,rp in pairs:
+        if rp==p0:
+            if qp is None:
+                return 'D'
+            else:
+                b=r.query_sequence[qp]
+                q=(r.query_qualities[qp] if r.query_qualities else 20)
+                return b, q
+    return None
+
+# store per read id => list allele calls at loci
+reads={}
+for r in bam.fetch('chr22',27079000,27080700):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    calls=[]
+    for pos1,typ,alleles in loci:
+        x=allele_at_read(r,pos1)
+        if x is not None:
+            if isinstance(x,tuple):
+                b,q=x
+                if q<10: calls.append(None)
+                else: calls.append(b)
+            else:
+                calls.append(x)
+        else:
+            calls.append(None)
+    reads[r.query_name, 'R1' if r.is_read1 else 'R2']=calls
+bam.close()
+print('read1 count', sum(1 for k in reads if k[1]=='R1'))
+# Count pair alleles combining R1+R2, majority and disagreements
+pair_calls={}
+for name in [k[0] for k in reads if k[1]=='R1']:
+    arr=[None]*len(loci)
+    for mate in ['R1','R2']:
+        key=(name,mate)
+        if key not in reads: continue
+        calls=reads[key]
+        for i,c in enumerate(calls):
+            if c is None: continue
+            if arr[i] is None: arr[i]=c
+            elif arr[i]"'!=c:
+                # conflict, record both?
+                arr[i]=('"'CONF',arr[i],c)
+    pair_calls[name]=arr
+
+for li,(pos1,typ,alleles) in enumerate(loci):
+    c=collections.Counter()
+    conf=0
+    for name,arr in pair_calls.items():
+        a=arr[li]
+        if a is None: continue
+        if isinstance(a,tuple): conf+=1; continue
+        c[a]+=1
+    print('locus',li,pos1,typ,c,'conf',conf)
+# print example conflicts around loci
+print('conf examples')
+for name,arr in pair_calls.items():
+    if any(isinstance(a,tuple) for a in arr):
+        print(name,arr)
+        break
+PY"

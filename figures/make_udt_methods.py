@@ -18,7 +18,7 @@ import replaced_runs  # figures/replaced_runs.py
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'figures')
-SUMMARIES = os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
+SUMMARIES = os.path.join(ROOT, 'manuscript/manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
 PRIMARY = {'codex_gpt_5_5': 'GPT-5.5', 'codex_gpt_5_6_sol': 'GPT-5.6 Sol', 'codex_gpt_5_6_luna': 'GPT-5.6 Luna',
            'deepseek_v4_pro_via_codex': 'DeepSeek V4 Pro', 'codex_deepseek_v4_pro_0813': 'DeepSeek V4 Pro',
            'codex_deepseek_v4_pro': 'DeepSeek V4 Pro'}

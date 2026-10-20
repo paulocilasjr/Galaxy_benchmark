@@ -1,0 +1,109 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, math, statistics, re
+
+class Node:
+    __slots__=('children','name','length')
+    def __init__(self,name=None,length=0.0):
+        self.children=[]; self.name=name; self.length=length
+
+def parse_newick(s):
+    s=s.strip()
+    i=0
+    def skip():
+        nonlocal i
+        while i<len(s) and s[i].isspace(): i+=1
+    def label():
+        nonlocal i
+        skip(); start=i
+        while i<len(s) and s[i] not in '(),:;[]' and not s[i].isspace(): i+=1
+        return s[start:i] or None
+    def number():
+        nonlocal i
+        skip(); start=i
+        while i<len(s) and s[i] not in ',();[]' and not s[i].isspace(): i+=1
+        return float(s[start:i]) if i>start else 0.0
+    def subtree():
+        nonlocal i
+        skip()
+        if i<len(s) and s[i]=='(':
+            i+=1; n=Node()
+            while True:
+                n.children.append(subtree()); skip()
+                if i<len(s) and s[i]==',': i+=1; continue
+                if i<len(s) and s[i]==')': i+=1; break
+                raise ValueError((i,s[i:i+30]))
+            n.name=label(); skip()
+        else:
+            n=Node(name=label())
+        skip()
+        if i<len(s) and s[i]==':':
+            i+=1; n.length=number()
+        skip()
+        # Skip bracket comments if present.
+        while i<len(s) and s[i]=='[':
+            j=s.find(']',i+1)
+            if j<0: raise ValueError('unclosed comment')
+            i=j+1; skip()
+        return n
+    root=subtree(); return root
+
+def leaves(n, parent_dist=0.0, out=None):
+    if out is None: out=[]
+    if not n.children: out.append((n.name,parent_dist)); return out
+    for c in n.children: leaves(c,parent_dist+c.length,out)
+    return out
+
+def mean_pairwise(root):
+    # Recursively derive distance between every pair across child subtrees.
+    vals=[]
+    def rec(n):
+        if not n.children: return [(n.name,0.0)]
+        groups=[]
+        for c in n.children:
+            groups.append([(name,d+c.length) for name,d in rec(c)])
+        all_leaves=[]
+        for g in groups:
+            for x in g:
+                for y in all_leaves:
+                    vals.append(x[1]+y[1])
+                all_leaves.append(x)
+        out=[]
+        for g in groups: out.extend(g)
+        return out
+    rec(root)
+    return statistics.fmean(vals), vals
+
+def get(group):
+    zname=f'inputs/scogs_{group}.zip'
+    rows=[]
+    with zipfile.ZipFile(zname) as z:
+        for name in z.namelist():
+            if not name.endswith('.treefile'): continue
+            root=parse_newick(z.read(name).decode())
+            m,p=mean_pairwise(root)
+            tips=[x[0] for x in leaves(root)]
+            rows.append((name.split('.')[0],m,len(tips),tuple(sorted(tips)),p,z.read(name).decode().strip()))
+    return rows
+for group in ['animals','fungi']:
+    rows=get(group)
+    print('\\n',group,'n',len(rows))
+    print('tip counts', {k:sum(r[2]==k for r in rows) for k in sorted({r[2] for r in rows})})
+    print('tip sets', {k:sum(r[3]==k for r in rows) for k in sorted({r[3] for r in rows})})
+    ms=[r[1] for r in rows]
+    print('mean range', min(ms),max(ms),'median',statistics.median(ms),'mean',statistics.fmean(ms))
+    print('first sorted means', sorted(ms)[:5], sorted(ms)[-5:])
+    print('taxon counts', {t:sum(t in r[3] for r in rows) for t in sorted(set(x for r in rows for x in r[3]))})
+
+A=get('animals'); F=get('fungi')
+print('\\nRATIO all F/A',statistics.median([r[1] for r in F])/statistics.median([r[1] for r in A]))
+# complete 4 only
+for label, pred in [('complete4',lambda r:r[2]==4),('3only',lambda r:r[2]==3)]:
+    aa=[r[1] for r in A if pred(r)]; ff=[r[1] for r in F if pred(r)]
+    print(label,'n',len(aa),len(ff),'medians',statistics.median(aa) if aa else None,statistics.median(ff) if ff else None,'ratio',statistics.median(ff)/statistics.median(aa) if aa else None)
+# all common gene IDs with both trees
+ad={r[0]:r for r in A}; fd={r[0]:r for r in F}; common=sorted(set(ad)&set(fd))
+print('common IDs',len(common),'A/F medians common',statistics.median([ad[k][1] for k in common]),statistics.median([fd[k][1] for k in common]),'ratio',statistics.median([fd[k][1] for k in common])/statistics.median([ad[k][1] for k in common]))
+# complete in both/common 4
+common4=[k for k in common if ad[k][2]==4 and fd[k][2]==4]
+print('common complete IDs',len(common4),'medians',statistics.median([ad[k][1] for k in common4]) if common4 else None,statistics.median([fd[k][1] for k in common4]) if common4 else None,'ratio',statistics.median([fd[k][1] for k in common4])/statistics.median([ad[k][1] for k in common4]) if common4 else None)
+PY"

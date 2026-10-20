@@ -1,0 +1,42 @@
+/bin/bash -lc "PYTHONPATH=/workspace/tmp/pydeps OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4 python - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv')
+assert raw['geneID'].is_unique
+assert not raw.isna().any().any()
+count_cols = list(raw.columns[1:])
+assert all(np.issubdtype(raw[c].dtype, np.integer) for c in count_cols)
+assert (raw[count_cols] >= 0).all().all()
+counts_all = raw.set_index('geneID').T
+
+def fit(samples, label):
+    counts = counts_all.loc[samples]
+    meta = pd.DataFrame({'condition': pd.Categorical(
+        ['KL' if s.startswith('KL') else 'WL' for s in samples],
+        categories=['WL','KL'])}, index=samples)
+    dds = DeseqDataSet(counts=counts, metadata=meta, design='~condition', refit_cooks=True, n_cpus=4, quiet=True)
+    dds.deseq2()
+    print(label, 'coefficients', list(dds.varm['LFC'].columns), flush=True)
+    ds = DeseqStats(dds, contrast=['condition','KL','WL'], alpha=0.05, n_cpus=4, quiet=True)
+    ds.summary()
+    pre = ds.results_df.copy()
+    coeff = [c for c in dds.varm['LFC'].columns if c "'!= '"'Intercept'][0]
+    ds.lfc_shrink(coeff=coeff)
+    res = ds.results_df.copy()
+    sig_raw = res[(res.pvalue < .05) & (res.log2FoldChange.abs() > 1) & (res.baseMean > 10)]
+    sig_adj = res[(res.padj < .05) & (res.log2FoldChange.abs() > 1) & (res.baseMean > 10)]
+    sig_unshrunk = pre[(pre.pvalue < .05) & (pre.log2FoldChange.abs() > 1) & (pre.baseMean > 10)]
+    print(label, 'genes modeled',len(res),'p_NA',res.pvalue.isna().sum(),'padj_NA',res.padj.isna().sum())
+    print(label, 'raw_p_shrunk_total',len(sig_raw),'up',int((sig_raw.log2FoldChange>1).sum()),'down',int((sig_raw.log2FoldChange < -1).sum()))
+    print(label, 'padj_shrunk_total',len(sig_adj),'up',int((sig_adj.log2FoldChange>1).sum()),'down',int((sig_adj.log2FoldChange < -1).sum()))
+    print(label, 'raw_p_unshrunk_total',len(sig_unshrunk))
+    return res, sig_raw, sig_adj
+
+r6,s6,a6=fit(['KL1','KL2','KL3','WL1','WL2','WL3'],'six')
+r4,s4,a4=fit(['KL1','KL2','WL1','WL2'],'four')
+print('raw change',len(s4)-len(s6),'direction', 'increase' if len(s4)>len(s6) else 'decrease' if len(s4)<len(s6) else 'no change')
+print('adj change',len(a4)-len(a6),'direction', 'increase' if len(a4)>len(a6) else 'decrease' if len(a4)<len(a6) else 'no change')
+print('overlap raw',len(set(s6.index)&set(s4.index)),'lost',len(set(s6.index)-set(s4.index)),'gained',len(set(s4.index)-set(s6.index)))
+PY"

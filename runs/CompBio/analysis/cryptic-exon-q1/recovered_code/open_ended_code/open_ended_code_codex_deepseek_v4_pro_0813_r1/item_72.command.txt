@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess,re,collections,pickle,os
+known_pickle='known_all.pkl'
+if os.path.exists(known_pickle):
+    known=set(pickle.load(open(known_pickle,'rb')))
+else:
+    known=set()
+    for line in open('gencode.v47.annotation.gtf'):
+        if line.startswith('#'):continue
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<9 or f[2]"'!='"'exon':continue
+        attrs=dict(re.findall(r'(\\S+?) \"(["'^"]*)"'"',f[8])); tx=attrs.get('transcript_id','')
+        # need group by tx; cannot one-pass easily. We'll store in dict
+    # do group
+    exons=collections.defaultdict(list)
+    for line in open('gencode.v47.annotation.gtf'):
+        if line.startswith('#'):continue
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<9 or f[2]"'!='"'exon':continue
+        attrs=dict(re.findall(r'(\\S+?) \"(["'^"]*)"'"',f[8])); tx=attrs.get('transcript_id','')
+        exons[tx].append((f[0],int(f[3]),int(f[4])))
+    for tx,es in exons.items():
+        es=sorted(es)
+        for (chrom,s1,e1),(chrom2,s2,e2) in zip(es,es[1:]):
+            if chrom==chrom2 and s2>e1+1:
+                known.add((chrom,e1+1,s2-1))
+    pickle.dump(known,open(known_pickle,'wb'))
+    print('known introns',len(known))
+# parse candidate alignments, identify globally novel junctions and adjacent pairs
+hits=[]
+novel_counts=collections.Counter()
+for line in subprocess.Popen(['samtools','view','-F','4','cand_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6:continue
+    flag=int(f[1]); mapq=int(f[4]); cigar=f[5]
+    if flag&0x900:continue
+    if mapq<10:continue
+    m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"',f[2])
+    if not m:continue
+    label=m.group(1); chrom=m.group(2); ref_start=int(m.group(3)); pos=int(f[3])
+    ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar); left=0; ints=[]
+    for n,op in ops:
+        n=int(n)
+        if op=='N':
+            gs=ref_start+1+(pos-1)+left; ge=gs+n-1
+            # chrom candidate header is chr? yes
+            novel=(chrom,gs,ge) not in known
+            ints.append((gs,ge,n,novel))
+            if novel: novel_counts[(chrom,gs,ge)]+=1
+            left+=n
+        elif op in 'MDN=X': left+=n
+    # adjacent pairs of two novel introns
+    for i in range(len(ints)-1):
+        a=ints[i]; b=ints[i+1]
+        if a[3] and b[3]:
+            exon_len=b[0]-a[1]-1
+            hits.append((label,chrom,pos,mapq,cigar,ints,a[:3],b[:3],exon_len,f[0]))
+print('adjacent novel-novel pairs',len(hits))
+for h in hits:
+    label,chrom,pos,mapq,cigar,ints,a,b,elen,rid=h
+    print(f'{label}\\t{chrom}:{a[0]}-{a[1]};{b[0]}-{b[1]}\\texon_len={elen}\\tread={rid}\\tpos={pos}\\tmapq={mapq}\\tcigar={cigar}')
+print('top novel intron counts')
+for j,c in novel_counts.most_common(50): print(j,c)
+PY"

@@ -1,0 +1,30 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(path) {
+  x <- readRDS(path)
+  data.frame(gene=attr(x,\"rownames\"), log2FoldChange=x@listData"'$log2FoldChange, padj=x@listData$padj, stringsAsFactors=FALSE)
+}
+link_lines <- readLines("https://rest.kegg.jp/link/pathway/pau", warn=FALSE)
+links <- do.call(rbind, strsplit(link_lines, "'"\\t\", fixed=TRUE))
+map <- unique(data.frame(gene=sub(\""'^pau:", "", links[,1]), pathway=sub("''^path:", "", links[,2]), stringsAsFactors=FALSE))
+ora_sig <- function(res) {
+  foreground <- res$gene[!is.na(res$padj) & abs(res$log2FoldChange) > 1.5 & res$padj < 0.05]
+  universe <- intersect(res$gene, unique(map$gene))
+  foreground <- intersect(foreground, universe)
+  gs <- lapply(split(map$gene[map$gene %in% universe], map$pathway[map$gene %in% universe]), unique)
+  hits <- vapply(gs, function(g) sum(g %in% foreground), integer(1))
+  gs <- gs[hits > 0]
+  hits <- hits[hits > 0]
+  M <- length(universe); N <- length(foreground); K <- lengths(gs)
+  p <- phyper(hits - 1, K, M - K, N, lower.tail=FALSE)
+  padj <- p.adjust(p, method="BH")
+  names(padj)[padj < 0.05]
+}
+glu_sig <- ora_sig(read_res("inputs/res_GluFevsGluFePlus.rds"))
+succ_sig <- ora_sig(read_res("inputs/res_SuccvsGluFePlus.rds"))
+answer <- length(setdiff(glu_sig, succ_sig))
+dir.create("codex_output", showWarnings=FALSE)
+writeLines(as.character(answer), "codex_output/answer.txt")
+cat(answer, "'"\\n\")
+cat(paste(sort(setdiff(glu_sig, succ_sig)), collapse=\",\"), \"\\n\")
+RS
+cat codex_output/answer.txt"

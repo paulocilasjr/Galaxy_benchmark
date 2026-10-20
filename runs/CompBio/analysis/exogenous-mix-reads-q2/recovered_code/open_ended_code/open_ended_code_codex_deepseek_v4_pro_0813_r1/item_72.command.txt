@@ -1,0 +1,53 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+cds=(597,2037)
+def reg(i):
+ if i+50<=cds[0]:return '5UTR'
+ if i>=cds[1]:return '3UTR'
+ if i<cds[0] and i+50>cds[0]:return 'span5'
+ if i<cds[1] and i+50>cds[1]:return 'span3'
+ return 'CDS'
+for f in ['exogenous.mix.reads.q1.exo.fq','exogenous.mix.reads.q1.endo.fq','exogenous.mix.reads.q1.mix.fq','exogenous.mix.reads.q2.exo.fq','exogenous.mix.reads.q2.mix.fq']:
+ c=Counter(); strands=Counter(); mism=0; total=0; coords=[]
+ with open(f) as fh:
+  while True:
+   h=fh.readline()
+   if not h:break
+   s=fh.readline().strip(); fh.readline(); fh.readline(); total+=1
+   # determine mismatch exact?
+   exact=any(s==t[i:i+50] for lab,t in [('+',seq),('-',rc)] for i in range(len(t)-49))
+   if not exact:mism+=1
+   lab,i=bestpos(s); strands[lab]+=1; c[reg(i)]+=1; coords.append(i)
+ print('\\n',f,'n',total,'mismatch',mism)
+ print(dict(c),dict(strands),'coord mean',np.mean(coords))
+# q2 prefix/tail region
+for grp,sl in [('q2exo(0:592)',slice(0,592)),('q2tail(592:691)',slice(592,691))]:
+ arr=[]
+ with open('exogenous.mix.reads.q2.mix.fq') as fh:
+  while True:
+   h=fh.readline()
+   if not h:break
+   s=fh.readline().strip(); fh.readline(); fh.readline(); arr.append(s)
+ sub=arr[sl]; c=Counter()
+ for s in sub:
+  lab,i=bestpos(s); c[reg(i)]+=1
+ print(grp,dict(c))
+PY"

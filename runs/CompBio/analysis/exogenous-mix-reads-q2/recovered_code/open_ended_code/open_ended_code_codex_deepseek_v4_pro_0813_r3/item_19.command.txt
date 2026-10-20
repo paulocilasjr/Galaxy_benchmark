@@ -1,0 +1,38 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+import re
+from collections import defaultdict
+
+def get_mismatches(f,start=0,end=None):
+    mism=defaultdict(list)
+    lines=Path(f).read_text().splitlines(); j=0
+    for line in lines:
+        if line.startswith('@'): continue
+        if j < start or (end is not None and j>=end): j+=1; continue
+        j+=1
+        p=line.split('\\t'); flag=int(p[1]);
+        if flag & 0x900: continue
+        seq=p[9]; pos=int(p[3]); cigar=p[5]
+        nm=int(re.search(r'NM:i:(\\d+)',line).group(1))
+        md=re.search(r'MD:Z:(\\S+)',line).group(1) if nm else ''
+        if cigar=='50M' and nm:
+            refpos=pos; seqpos=0; k=0
+            while k<len(md):
+                c=md[k]
+                if c.isdigit():
+                    n=''
+                    while k<len(md) and md[k].isdigit(): n+=md[k]; k+=1
+                    refpos+=int(n); seqpos+=int(n)
+                elif c=='"'^'"':
+                    k+=1
+                    while k<len(md) and md[k].isalpha(): k+=1
+                else:
+                    mism[refpos].append((c,seq[seqpos]))
+                    refpos+=1; seqpos+=1; k+=1
+    return mism
+endo=get_mismatches('exogenous.mix.reads.q2.endo.sam')
+exo_extra=get_mismatches('exogenous.mix.reads.q2.exo.sam',395)
+mix_extra=get_mismatches('exogenous.mix.reads.q2.mix.sam',592)
+for name,mm in [('endo',endo),('exo_extra',exo_extra),('mix_extra',mix_extra)]:
+    print(name, sorted(mm.items()))
+PY"

@@ -1,0 +1,149 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from statistics import median, mean
+import re
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    pos=0
+    def parse_node():
+        nonlocal pos
+        # children if '('
+        if pos < len(s) and s[pos]=='(':
+            pos+=1
+            children=[]
+            while True:
+                children.append(parse_node())
+                if pos < len(s) and s[pos]==',':
+                    pos+=1
+                    continue
+                else:
+                    break
+            if pos < len(s) and s[pos]==')': pos+=1
+            else: raise ValueError('missing )')
+            label=''
+            if pos < len(s) and s[pos] not in ',);:':
+                # label
+                start=pos
+                while pos<len(s) and s[pos] not in ',);:':
+                    pos+=1
+                label=s[start:pos]
+            length=None
+            if pos < len(s) and s[pos]==':':
+                pos+=1
+                start=pos
+                while pos<len(s) and s[pos] not in ',);':
+                    pos+=1
+                length=float(s[start:pos])
+            return Node(children=children,label=label,length=length)
+        else:
+            start=pos
+            while pos<len(s) and s[pos] not in ',();:':
+                pos+=1
+            label=s[start:pos]
+            length=None
+            if pos<len(s) and s[pos]==':':
+                pos+=1
+                start=pos
+                while pos<len(s) and s[pos] not in ',();':
+                    pos+=1
+                length=float(s[start:pos])
+            return Node(label=label,length=length,children=[])
+    tree=parse_node()
+    if pos "'!= len(s):
+        # may have root label/length? already handled
+        pass
+    return tree
+
+class Node:
+    __slots__=('"'children','label','length')
+    def __init__(self,children=None,label='',length=None):
+        self.children=children or []
+        self.label=label
+        self.length=length
+    def is_leaf(self): return not self.children
+
+def collect_leaf_dists(tree):
+    # Enumerate leaves with distance from root, and compute pairwise using LCA? Simpler: for each leaf path to root, then pair intersection.
+    paths=[]
+    leaves=[]
+    def dfs(node, path):
+        # path list of (node, cumulative distance up to this node)
+        if node.is_leaf():
+            leaves.append(node.label)
+            paths.append(path)
+        else:
+            for ch in node.children:
+                dfs(ch, path+[(ch, (path[-1][1] if path else 0.0)+(ch.length or 0.0))])
+    dfs(tree, [])
+    ds=[]
+    for i in range(len(leaves)):
+        pi=paths[i]
+        # distances from leaf to each ancestor. Build maps cum distances
+        dist_i={}
+        cum=0
+        # pi is leaf first; node references
+        for idx,(node,d) in enumerate(pi):
+            dist_i[id(node)]=d
+        for j in range(i+1,len(leaves)):
+            pj=paths[j]
+            # find deepest common ancestor node
+            common_depth=0
+            maxk=min(len(pi),len(pj))
+            # path order is leaf -> root; leaf node shared? no. compare node identity from start; leaves unique, then next ancestor.
+            k=0
+            while k<maxk and pi[k][0] is pj[k][0]:
+                k+=1
+            # deepest common is k-1 (the last shared node)
+            common_idx=k-1
+            # distance = distance from each leaf to common node, but paths include cumulative distance to common node (since cumulative includes branch from common to leaf? Need carefully)
+            # Path pi[0] leaf, pi[k] ancestor cumulative distance from root? Our dfs path appends child with cumulative from root to that node. So pi[common_idx] is common node and its cumulative distance from root to common node.
+            # Distance leaf i to common = pi[-1? no leaf path cumulative]?
+            # Actually pi entries for leaf (cum from root to leaf) and ancestors. Need distance between leaf and common = pi[leaf].d - pi[common].d? But pi[leaf] is pi[0].
+            # Wait pi[0]=leaf, d = dist root->leaf. pi[common_idx] = common node with d=dist root->common. Difference = branch sum common->leaf. yes.
+            dist_to_common_i = pi[0][1] - pi[common_idx][1]
+            dist_to_common_j = pj[0][1] - pj[common_idx][1]
+            ds.append(dist_to_common_i+dist_to_common_j)
+    return ds, leaves
+
+def parse_mldist(f):
+    lines=f.read_text().strip().splitlines()
+    n=int(lines[0].strip())
+    names=[]
+    vals=[]
+    for line in lines[1:]:
+        parts=line.strip().split()
+        names.append(parts[0])
+        vals.append([float(x) for x in parts[1:]])
+    ds=[]
+    for i in range(n):
+        for j in range(i+1,n):
+            ds.append(vals[i][j])
+    return ds,names
+
+for group in ['scogs_animals','scogs_fungi']:
+    p=Path('/workspace/tmp')/group
+    tree_means=[]; ml_means=[]
+    errors=[]
+    for f in sorted(p.glob('*.treefile')):
+        try:
+            tree=parse_newick(f.read_text())
+            ds,leaves=collect_leaf_dists(tree)
+            tree_means.append(mean(ds))
+        except Exception as e:
+            errors.append((f.name,str(e)))
+        ml=f.with_suffix('') # not easy
+        # derive base: name .faa.mafft.clipkit.treefile
+        base=f.name[:-len('.mafft.clipkit.treefile')]
+        mlfile=p/(base+'.mafft.clipkit.mldist')
+        if mlfile.exists():
+            ds,_=parse_mldist(mlfile)
+            ml_means.append(mean(ds))
+    print(group)
+    print(' treefiles',len(tree_means),'median',median(tree_means),'mean',mean(tree_means),'minmax',min(tree_means),max(tree_means))
+    print(' mldist',len(ml_means),'median',median(ml_means),'mean',mean(ml_means),'minmax',min(ml_means),max(ml_means))
+    if errors: print('errors',errors[:5])
+    print('first 10 tree means', tree_means[:10])
+    print('first 10 ml means', ml_means[:10])
+PY"

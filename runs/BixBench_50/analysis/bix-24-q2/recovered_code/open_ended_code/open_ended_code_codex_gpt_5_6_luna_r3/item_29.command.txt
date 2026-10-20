@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+meta = pd.read_csv('inputs/sample_layout.csv')
+meta['col'] = meta['SampleID'].str.replace('-', '_', regex=False)
+
+def run(groups, label):
+    m = meta[meta.Group.isin(groups)].copy()
+    # order DMSO/control first then CBD target; within group retain sample order
+    m['condition'] = pd.Categorical(m.Group, categories=groups, ordered=True)
+    c = counts[m['col']].T.copy()
+    c.index = m['col'].values
+    c.columns = counts.index.astype(str)
+    print(label, 'counts', c.shape, 'groups', m.Group.value_counts().to_dict(), flush=True)
+    t=time.time()
+    dds = DeseqDataSet(counts=c, metadata=m.set_index('col')[['condition']], design='~condition', ref_level=['condition', groups[0]], quiet=True, n_cpus=1)
+    dds.deseq2()
+    print('fit sec', time.time()-t, flush=True)
+    stat = DeseqStats(dds, contrast=['condition',groups[1],groups[0]], alpha=0.05, quiet=True, n_cpus=1)
+    stat.summary()
+    res = stat.results_df.copy()
+    # columns baseMean log2FoldChange lfcSE stat pvalue padj
+    res['gene']=res.index
+    valid=res.dropna(subset=['padj','log2FoldChange'])
+    sig=valid[(valid.padj<0.05)&(valid.log2FoldChange.abs()>0.5)]
+    up=sig[sig.log2FoldChange>0.5]
+    down=sig[sig.log2FoldChange< -0.5]
+    print(label, 'all valid', len(valid), 'sig',len(sig),'up',len(up),'down',len(down), flush=True)
+    print('top up:\\n', up.sort_values(['padj','log2FoldChange'], ascending=[True,False])[['baseMean','log2FoldChange','pvalue','padj']].head(10).to_string(), flush=True)
+    print('top down:\\n', down.sort_values(['padj','log2FoldChange'], ascending=[True,True])[['baseMean','log2FoldChange','pvalue','padj']].head(10).to_string(), flush=True)
+    return res
+run(['DMSO','CBD_IC50'],'regular')
+run(['DMSO_Serum_starvation','CBD_IC50_Serum_starvation_16h'],'starved')
+PY"

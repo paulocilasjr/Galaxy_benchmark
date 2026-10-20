@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+# Independent XML-level extraction cross-check of the carrier workbooks.
+from pathlib import Path
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from openpyxl import load_workbook
+from collections import Counter
+import re
+NS='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+base=Path('inputs')
+meta=load_workbook(base/'230215_Trio_Status.xlsx',read_only=True,data_only=True).active
+ids={str(r[0]).strip() for r in meta.iter_rows(min_row=2,values_only=True) if r[3]=='Carrier'}
+
+def colnum(ref):
+    s=re.match(r'[A-Z]+',ref).group(); n=0
+    for c in s: n=n*26+ord(c)-64
+    return n-1
+
+def xml_rows(p):
+    with ZipFile(p) as z:
+        ss=ET.fromstring(z.read('xl/sharedStrings.xml'))
+        strings=[]
+        for si in ss.findall(NS+'si'):
+            strings.append(''.join(t.text or '' for t in si.iter(NS+'t')))
+        root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        for rr in root.find(NS+'sheetData').findall(NS+'row'):
+            vals={}
+            for c in rr.findall(NS+'c'):
+                v=c.find(NS+'v')
+                if v is None: val=None
+                elif c.get('t')=='s': val=strings[int(v.text)]
+                else: val=v.text
+                vals[colnum(c.get('r'))]=val
+            yield vals
+
+obs=[]
+for p in sorted((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+    m=re.search(r'CHIP_(["'^-.]+)'"',p.name)
+    if not m or m.group(1) not in ids: continue
+    it=xml_rows(p); next(it); head=next(it); ix={v:k for k,v in head.items()}
+    for row in it:
+        v=row.get(ix['Variant Allele Freq'])
+        if v is None or float(v)>=0.3: continue
+        so=row.get(ix['Sequence Ontology (Combined)'])
+        if so in {'synonymous_variant','missense_variant','frameshift_variant','inframe_insertion','inframe_deletion','stop_gained','stop_lost','start_lost','protein_altering_variant'}:
+            obs.append((m.group(1),row.get(ix['Chr:Pos']),row.get(ix['Ref/Alt']),so,row.get(ix['Zygosity']),row.get(ix['Filter'])))
+print('sample-variant consequence counts',Counter(x[3] for x in obs))
+print('numerator denominator ratio',sum(x[3]=='synonymous_variant' for x in obs),len(obs),sum(x[3]=='synonymous_variant' for x in obs)/len(obs))
+uniq={(x[1],x[2],x[3]) for x in obs}
+print('deduplicated-site consequence counts (sensitivity only)',Counter(x[2] for x in uniq), 'n',len(uniq))
+print('all genotype/filter',Counter((x[4],x[5]) for x in obs))
+PY"

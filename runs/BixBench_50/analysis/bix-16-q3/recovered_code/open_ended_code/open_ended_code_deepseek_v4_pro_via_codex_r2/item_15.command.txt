@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, time, gc
+import scipy.stats
+
+def sym(x): return str(x).split(' (')[0]
+
+t0=time.time()
+ch=pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()[1:]
+eh=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()[1:]
+cg={sym(x):x for x in ch}; eg={sym(x):x for x in eh}
+common=sorted(set(cg)&set(eg))
+print('common genes',len(common),'time',time.time()-t0)
+
+cids=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:,0].astype(str).tolist()
+eids=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:,0].astype(str).tolist()
+common_ids=sorted(set(cids)&set(eids), key=lambda x:cids.index(x))
+print('common ids',len(common_ids))
+
+uc=['Unnamed: 0']+[cg[g] for g in common]
+ue=['Unnamed: 0']+[eg[g] for g in common]
+dtype={c:np.float32 for c in uc[1:]}
+c=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=uc, index_col=0, dtype=dtype, low_memory=False).loc[common_ids]
+print('c shape',c.shape,'load time',time.time()-t0)
+dtype={c:np.float32 for c in ue[1:]}
+e=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=ue, index_col=0, dtype=dtype, low_memory=False).loc[common_ids]
+print('e shape',e.shape,'load time',time.time()-t0)
+
+# validate sample with scipy
+for g in ['A1BG','TP53','MYC','GAPDH','RPL11','KRAS']:
+    if g in common:
+        r=scipy.stats.spearmanr(c[cg[g]], e[eg[g]], nan_policy='omit').statistic
+        print('sample',g,'nvalid',c[cg[g]].notna().sum(),'rho',r)
+
+# propagate NaN effect mask to expression; rank both over valid per column
+mask=c.notna()
+e_masked=e.where(mask)
+print('mask done',time.time()-t0)
+rc=c.rank(axis=0)
+print('rank c done',time.time()-t0)
+re=e_masked.rank(axis=0)
+print('rank e done',time.time()-t0)
+rho=rc.corrwith(re)
+print('corr done',time.time()-t0)
+print('rho count',rho.notna().sum(),'nan',rho.isna().sum())
+print('range',rho.min(),rho.max(),'mean',rho.mean())
+for th in [0.6,0.7,0.8,0.9]:
+    print('raw rho >=',th,(rho>=th).sum())
+for th in [-0.6,-0.7,-0.8,-0.9]:
+    print('raw rho <=',th,(rho<=th).sum())
+print('neg (essentiality= -effect) rho>=0.6',(rho<=-0.6).sum())
+# valid pair distribution among genes hitting neg threshold
+nvalid=c.notna().sum(axis=0)
+for label, sel in [('raw>=0.6',rho>=0.6),('raw<=-0.6',rho<=-0.6)]:
+    s=nvalid[sel]
+    print(label,'count',int(sel.sum()),'valid stats min median max',s.min(),s.median(),s.max())
+    if len(s):
+      print('valid distribution <=20:',(s<=20).sum(),'<=50',(s<=50).sum(),'<=100',(s<=100).sum(),'<=200',(s<=200).sum(),'<=500',(s<=500).sum())
+print('total elapsed',time.time()-t0)
+PY"

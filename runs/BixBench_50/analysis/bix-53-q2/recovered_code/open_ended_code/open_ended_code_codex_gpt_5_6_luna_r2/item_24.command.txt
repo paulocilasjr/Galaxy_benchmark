@@ -1,0 +1,36 @@
+/bin/bash -lc "PYTHONPATH=/workspace/pylib python3 -u - <<'PY'
+import pandas as pd, numpy as np, traceback, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('inputs/count.csv')
+all_counts = raw.set_index('geneID').T.astype(int)
+
+def run(samples, label):
+    counts = all_counts.loc[samples]
+    cond = ['KL' if s.startswith('KL') else 'WL' for s in samples]
+    meta = pd.DataFrame({'condition': cond}, index=samples)
+    print(label, 'start', counts.shape, flush=True)
+    dds = DeseqDataSet(counts=counts, metadata=meta, design='~condition', quiet=True, n_cpus=1)
+    dds.deseq2()
+    print(label, 'fit', flush=True)
+    ds = DeseqStats(dds, contrast=['condition','WL','KL'], alpha=0.05, quiet=True, n_cpus=1)
+    ds.summary()
+    ds.lfc_shrink(coeff='condition[T.WL]')
+    r = ds.results_df.copy()
+    # PyDESeq2's baseMean, pvalue and shrunken log2FoldChange are used.
+    keep_p = r['baseMean'].gt(10) & r['pvalue'].lt(0.05) & r['log2FoldChange'].abs().gt(1)
+    keep_padj = r['baseMean'].gt(10) & r['padj'].lt(0.05) & r['log2FoldChange'].abs().gt(1)
+    print(label, 'n_p', int(keep_p.fillna(False).sum()), 'n_padj', int(keep_padj.fillna(False).sum()), flush=True)
+    print(label, 'up_WL', int((keep_p & r['log2FoldChange'].gt(1)).fillna(False).sum()), 'down_WL', int((keep_p & r['log2FoldChange'].lt(-1)).fillna(False).sum()), flush=True)
+    print(label, 'examples', r.loc[keep_p.fillna(False), ['baseMean','log2FoldChange','pvalue','padj']].sort_values('pvalue').head(10).to_string(), flush=True)
+    return int(keep_p.fillna(False).sum()), int(keep_padj.fillna(False).sum())
+
+try:
+    full = run(['KL1','KL2','KL3','WL1','WL2','WL3'], 'full')
+    reduced = run(['KL1','KL2','WL1','WL2'], 'reduced')
+    print('RESULT', full, reduced, 'direction', 'increase' if reduced[0] > full[0] else 'decrease' if reduced[0] < full[0] else 'no change', flush=True)
+except Exception:
+    traceback.print_exc()
+    raise
+PY"

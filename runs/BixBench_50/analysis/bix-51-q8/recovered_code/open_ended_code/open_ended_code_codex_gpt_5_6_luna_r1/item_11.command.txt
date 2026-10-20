@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+import math
+ws=load_workbook('/workspace/inputs/data.xlsx',read_only=True,data_only=True).active
+rows=list(ws.iter_rows(values_only=True))
+# columns C efficacy, D age, B group
+obs=[(r[3],r[2],r[1]) for r in rows[1:] if r[0] is not None]
+
+def fit(y):
+    x=[float(a) for a,e,g in obs]
+    # Newton maximize loglik; beta=(intercept, slope)
+    b0=b1=0.0
+    for it in range(100):
+        g0=g1=0.0
+        h00=h01=h11=0.0
+        ll=0.0
+        for xi,yi in zip(x,y):
+            z=b0+b1*xi
+            if z>=0:
+                ez=math.exp(-z); p=1/(1+ez)
+                ll += yi*(-math.log1p(ez))+(1-yi)*( -z-math.log1p(ez))
+            else:
+                ez=math.exp(z); p=ez/(1+ez)
+                ll += yi*(z-math.log1p(ez))+(1-yi)*(-math.log1p(ez))
+            w=p*(1-p)
+            g0 += yi-p; g1 += (yi-p)*xi
+            h00 -= w; h01 -= w*xi; h11 -= w*xi*xi
+        # solve H step = -g
+        det=h00*h11-h01*h01
+        d0=(-g0*h11+h01*g1)/det
+        d1=(h01*g0-h00*g1)/det
+        b0+=d0;b1+=d1
+        if max(abs(d0),abs(d1))<1e-14: break
+    return b0,b1,ll,it+1
+cases={
+ 'PR=1 vs SD/PD=0':[int(e=='PR') for a,e,g in obs],
+ 'nonPR=1 vs PR=0':[int(e"'!='"'PR') for a,e,g in obs],
+ 'group1=1 vs group2=0':[int(g==1) for a,e,g in obs],
+ 'group2=1 vs group1=0':[int(g==2) for a,e,g in obs],
+ 'PD=1 vs nonPD=0':[int(e=='PD') for a,e,g in obs],
+ 'SD=1 vs nonSD=0':[int(e=='SD') for a,e,g in obs],
+}
+for name,y in cases.items():
+    print(name,Counter(y) if False else '',fit(y))
+PY"

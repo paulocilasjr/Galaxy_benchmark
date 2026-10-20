@@ -1,0 +1,57 @@
+/bin/bash -c "python3 - <<'EOF'
+import json
+from Bio import SeqIO
+from MOODS import scan, tools
+from scipy.stats import fisher_exact
+import os
+motifs=json.load(open('candidate_motifs.json'))
+mat_dict={}
+for tf,m in motifs.items():
+    pfm=m['pfm']; cols=len(pfm['A'])
+    mat=[[pfm[b][i] for i in range(cols)] for b in 'ACGT']
+    mat_dict[tf]=mat
+bg=[0.295,0.205,0.205,0.295]
+
+def scan_file(path, pvals=(1e-3,1e-4,1e-5)):
+    records=list(SeqIO.parse(path,'fasta'))
+    n=len(records); total_bp=sum(len(str(r.seq)) for r in records)
+    out={}
+    for tf,mat in mat_dict.items():
+        # convert to log-odds? use counts directly as probability? MOODS uses PFM counts and bg, threshold from p requires matrix as counts? Test.
+        for p in pvals:
+            try:
+                th=tools.threshold_from_p(p, mat, bg)
+            except Exception as e:
+                print('threshold error',tf,p,e); continue
+            hits=0; seqs_hit=0
+            for r in records:
+                s=str(r.seq).upper()
+                if len(s)<len(mat[0]): continue
+                res=scan.scan_dna(s,[mat],bg,[th])
+                c=len(res[0])
+                if c>0: seqs_hit+=1
+                hits+=c
+            out[(tf,p)]={'seqs_hit':seqs_hit,'frac':seqs_hit/n if n else 0,'hits':hits,'n':n,'total_bp':total_bp,'threshold':th}
+    return out
+files=['gained_top500.fa','gained_top1000.fa','gained_top2000.fa','gained_top5000.fa','stable_bg10k.fa']
+results={}
+for f in files:
+    if os.path.exists(f) and os.path.getsize(f)>0:
+        results[f]=scan_file(f)
+        print('scanned',f,results[f][('FOXA1',1e-4)])
+print('\\nFrac seqs with motif at p=1e-4')
+print('file '+' '.join(motifs.keys()))
+for f in files:
+    if f not in results: continue
+    vals=[f\"{results[f][(tf,1e-4)]['frac']:.3f}\" for tf in motifs]
+    print(f, ' '.join(vals))
+for gainf in [x for x in files if 'gained' in x]:
+    if gainf not in results or 'stable_bg10k.fa' not in results: continue
+    print('\\nEnrichment', gainf, 'vs bg p=1e-4')
+    G=results[gainf]; B=results['stable_bg10k.fa']
+    for tf in motifs:
+        a=G[(tf,1e-4)]['seqs_hit']; b=G[(tf,1e-4)]['n']-a
+        c=B[(tf,1e-4)]['seqs_hit']; d=B[(tf,1e-4)]['n']-c
+        orr,pval=fisher_exact([[a,b],[c,d]],alternative='greater')
+        print(f'{tf:8s} a={a:4d}/{G[(tf,1e-4)][\"n\"]:5d} bg={c:4d}/{B[(tf,1e-4)][\"n\"]:5d} frac={G[(tf,1e-4)][\"frac\"]:.3f} vs {B[(tf,1e-4)][\"frac\"]:.3f} OR={orr:.2f} p={pval:.3g}')
+EOF"

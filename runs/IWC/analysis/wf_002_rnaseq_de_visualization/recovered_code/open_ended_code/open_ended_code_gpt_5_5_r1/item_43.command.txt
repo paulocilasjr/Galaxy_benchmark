@@ -1,0 +1,40 @@
+/usr/bin/bash -lc "micromamba run -n de_env python - <<'PY'
+from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+root=Path('/workspace')
+files=[
+('SRR5085167',root/'data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat'),
+('SRR5085168',root/'data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat'),
+('SRR5085169',root/'data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat'),
+('SRR5085170',root/'data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat'),
+]
+series=[]
+for sample,path in files:
+    df=pd.read_csv(path, sep='\\t')
+    series.append(pd.Series(df[sample].astype(int).to_numpy(), index=df['Geneid'].astype(str), name=sample))
+counts=pd.concat(series, axis=1)
+retained=counts.index[(counts>=10).sum(axis=1)>=2]
+out=pd.read_csv(root/'final_answer/differential_expression.tsv', sep='\\t')
+assert list(out.columns)==['gene_id','log2_fold_change','p_value','fdr']
+assert out.shape[0]==len(retained)
+assert out['gene_id'].tolist()==retained.tolist()
+assert np.isfinite(out['log2_fold_change']).all()
+assert np.isfinite(out['p_value']).all() and ((out['p_value']>=0)&(out['p_value']<=1)).all()
+assert np.isfinite(out['fdr']).all() and ((out['fdr']>=0)&(out['fdr']<=1)).all()
+p=out['p_value'].to_numpy(float)
+order=np.argsort(p, kind='mergesort')
+ranked=p[order]*len(p)/np.arange(1,len(p)+1)
+bh=np.empty_like(p)
+bh[order]=np.minimum(np.minimum.accumulate(ranked[::-1])[::-1], 1.0)
+assert np.allclose(out['fdr'].to_numpy(float), bh, rtol=1e-10, atol=1e-12)
+method=json.loads((root/'final_answer/method.json').read_text())
+assert list(method.keys())==['method'] and method['method']=='DESeq2'
+print('validation_ok')
+print('retained_genes', len(retained))
+print('output_rows', out.shape[0])
+print('lfc_range', out['log2_fold_change'].min(), out['log2_fold_change'].max())
+print('p_range', out['p_value'].min(), out['p_value'].max())
+print('fdr_range', out['fdr'].min(), out['fdr'].max())
+PY"

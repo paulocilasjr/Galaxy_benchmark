@@ -1,0 +1,74 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, collections
+
+def load(fn):
+ out=[]
+ with zipfile.ZipFile(fn) as z:
+  for name in z.namelist():
+   if not name.endswith('.mafft'): continue
+   text=z.read(name).decode(); seqs=[]; cur=None
+   for line in text.splitlines():
+    if line.startswith('>'):
+     if cur is not None: seqs.append(''.join(cur))
+     cur=[]
+    elif cur is not None: cur.append(line.strip())
+   if cur is not None: seqs.append(''.join(cur))
+   assert len({len(s) for s in seqs})==1
+   out.append((name,seqs))
+ return out
+A=load('inputs/scogs_animals.zip'); F=load('inputs/scogs_fungi.zip')
+
+def pct(item, state='missing', denom='all'):
+ _, seqs=item; cols=list(zip(*seqs))
+ clean=[]; complete=[]
+ for col in cols:
+  if state=='missing': vals=[x for x in col if x not in '-?']
+  elif state=='gap': vals=list(col)
+  else: # complete columns only
+   if any(x in '-?' for x in col): continue
+   vals=list(col)
+  if vals: clean.append(vals)
+  if not any(x in '-?' for x in col): complete.append(vals if state"'!='"'gap' else list(col))
+ def is_pi(vals):
+  counts=collections.Counter(vals)
+  return sum(v>=2 for v in counts.values())>=2
+ pi=sum(is_pi(vals) for vals in clean)
+ if denom=='all': d=len(cols)
+ elif denom=='available': d=len(clean)
+ elif denom=='complete': d=len(complete)
+ elif denom=='variable': d=sum(len(set(vals))>1 for vals in clean)
+ else: raise ValueError(denom)
+ return 100*pi/d if d else 0
+
+def U(x,y):
+ allv=sorted([(v,0) for v in x]+[(v,1) for v in y],key=lambda t:t[0])
+ ranks=[0.0]*(len(allv)); i=0
+ while i<len(allv):
+  j=i+1
+  while j<len(allv) and allv[j][0]==allv[i][0]: j+=1
+  r=(i+1+j)/2.0
+  for k in range(i,j): ranks[k]=r
+  i=j
+ rx=sum(r for r,(_,g) in zip(ranks,allv) if g==0)
+ return rx-len(x)*(len(x)+1)/2
+
+variants=[
+ ('all-gapmissing-all','missing','all'),
+ ('all-gap-as-state-all','gap','all'),
+ ('all-complete-only','complete','complete'),
+ ('all-gapmissing-available','missing','available'),
+ ('all-gapmissing-variable','missing','variable')]
+for label,state,denom in variants:
+ av=[pct(x,state,denom) for x in A]; fv=[pct(x,state,denom) for x in F]
+ print(label,'U_A',U(av,fv),'n',len(av),len(fv),'zeros',sum(v==0 for v in av),sum(v==0 for v in fv),'ranges',min(av),max(av),min(fv),max(fv))
+ for minseq in [4]:
+  aa=[pct(x,state,denom) for x in A if len(x[1])>=minseq]; ff=[pct(x,state,denom) for x in F if len(x[1])>=minseq]
+  print('  nseq>=4','U_A',U(aa,ff),'n',len(aa),len(ff),'zeros',sum(v==0 for v in aa),sum(v==0 for v in ff))
+# common ID scope, base variant
+ad={x[0]:pct(x,'missing','all') for x in A}; fd={x[0]:pct(x,'missing','all') for x in F}; ids=set(ad)&set(fd)
+print('common all U',U([ad[i] for i in ids],[fd[i] for i in ids]),'n',len(ids))
+# If U reported as smaller of U1 and U2
+for state,denom in [('missing','all'),('gap','all'),('complete','complete')]:
+ av=[pct(x,state,denom) for x in A]; fv=[pct(x,state,denom) for x in F]
+ u=U(av,fv); print('minU',state,denom,min(u,len(av)*len(fv)-u),'other',len(av)*len(fv)-u)
+PY"

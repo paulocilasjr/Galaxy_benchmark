@@ -1,0 +1,47 @@
+/bin/bash -lc "cat > scripts/make_snp_filter_strict.py <<'PY'
+import gzip, sys, bisect
+peakfile='data/ENCFF717TCQ.bed.gz'
+peaks=[]
+with gzip.open(peakfile,'rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        peaks.append((float(p[8]), p[0], int(p[1]), int(p[2])))
+peaks.sort(key=lambda x:x[0], reverse=True)
+chr1_intervals=sorted((x[2],x[3]) for x in peaks[:1000] if x[1]=='chr1')
+starts=[a for a,b in chr1_intervals]
+ends=[b for a,b in chr1_intervals]
+acgt=set('ACGT')
+out=open('data/snp151Common_chr1_biallelic_strict.tsv','w')
+count=0
+for line in sys.stdin:
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<10: continue
+    chrom=p[1]; start=int(p[2]); observed=p[9]
+    if chrom"'!='"'chr1': continue
+    i=bisect.bisect_right(starts, start)-1
+    if i>=0 and start < ends[i]:
+        # Split observed into alleles, exactly two, each exactly one base A/C/G/T
+        alleles=observed.split('/')
+        if len(alleles)==2 and all(a in acgt for a in alleles) and alleles[0]"'!=alleles[1]:
+            pos=start+1
+            out.write(f"chr1'"\\t{pos}\\t.\\t{observed}\\n\")
+            count+=1
+out.close()
+print(count, file=sys.stderr)
+PY
+curl -sL --retry 3 'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/snp151Common.txt.gz' | gzip -dc | python3 scripts/make_snp_filter_strict.py
+wc -l data/snp151Common_chr1_biallelic_strict.tsv
+# compare to original
+python3 - <<'PY'
+orig=set()
+for l in open('data/snp151Common_chr1_biallelic.tsv'):
+ p=l.rstrip().split('\\t'); orig.add((int(p[1]), tuple(sorted(set(p[3])))))
+strict=set()
+for l in open('data/snp151Common_chr1_biallelic_strict.tsv'):
+ p=l.rstrip().split('\\t'); strict.add((int(p[1]), tuple(sorted(p[3].split('/')))))
+print('orig',len(orig),'strict',len(strict),'orig-strict',len(orig-strict))
+print('in orig not strict')
+for x in sorted(orig-strict): print(x)
+print('in strict not orig')
+for x in sorted(strict-orig): print(x)
+PY"

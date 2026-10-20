@@ -1,7 +1,7 @@
 """Runs the results site replaced after the archive's derived tables were built, and how the figures take them.
 
 IWC wf_007 (VGP mitogenome assembly): on 2026-10-12 the site replaced all 24 runs with new runs on read set ERR12833637
-(IWC/replacement_wf007_20261012/: runs.csv, written by build_record.py from the lab repository's commit ff9c4f5). The
+(runs/IWC/replacement_wf007_20261012/: runs.csv, written by build_record.py from the lab repository's commit ff9c4f5). The
 archive holds the traces of the superseded runs only. The figures therefore take:
 - scores and token counts: the new runs' (scored_runs.csv carries the new scores; replace_tokens() the new usage);
 - everything derived from a trace (tool calls, Galaxy jobs, execution errors, actions, answers, UDT definitions, run
@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-RECORD = os.path.join(ROOT, 'IWC', 'replacement_wf007_20261012', 'runs.csv')
+RECORD = os.path.join(ROOT, 'runs/IWC', 'replacement_wf007_20261012', 'runs.csv')
 REPLACED_TASKS = {'wf_007_vgp_mitogenome_assembly'}                 # IWC; every run of the task was replaced
 IWC_LABELS = {'IWC', 'iwc'}
 # trace-derived columns of the archive's per-run token table (token_run_observations.csv)
@@ -70,12 +70,12 @@ def replaced_evidence(path):
 
 def superseded_inspection():
     """Distinct tools inspected, and of those never run, summed over the superseded Galaxy runs, counted as
-    manuscript_material/scripts/build_data.py counts them for the archive's 'Inspected tools never run in the same run'
+    manuscript/manuscript_material/scripts/build_data.py counts them for the archive's 'Inspected tools never run in the same run'
     measure (token_interface_friction.csv): the replaced task's share, to be taken out of the IWC count."""
     import gzip
     import json
     inspected = never = 0
-    path = os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
+    path = os.path.join(ROOT, 'manuscript/manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
     for raw in gzip.open(path, 'rt'):
         s = json.loads(raw)
         if s['benchmark'] != 'IWC' or s['task'] not in REPLACED_TASKS or s['condition'] != 'galaxy' \
@@ -104,10 +104,10 @@ def superseded_inspection():
 
 def superseded_failures():
     """Failed Galaxy-interface requests of the superseded runs, by benchmark, failure class and A1 subclass, as
-    manuscript_narrative/narrative_common.galaxy_failures() classifies them (four primary configurations): the replaced
+    manuscript/manuscript_narrative/narrative_common.galaxy_failures() classifies them (four primary configurations): the replaced
     task's share of the archive's failure-class table (token_failure_classes.csv), to be taken out of it."""
     import sys
-    sys.path.insert(0, os.path.join(ROOT, 'manuscript_narrative'))
+    sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_narrative'))
     import narrative_common as nc
     f = nc.galaxy_failures()
     f = f[f.cfg.isin(['GPT-5.5', 'GPT-5.6 Sol', 'GPT-5.6 Luna', 'DeepSeek V4 Pro'])]

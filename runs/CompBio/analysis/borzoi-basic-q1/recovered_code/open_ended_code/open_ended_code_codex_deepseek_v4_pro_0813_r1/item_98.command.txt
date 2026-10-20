@@ -1,0 +1,46 @@
+/bin/bash -c "python3 - <<'PY'
+import h5py, numpy as np
+
+def layer_param_count(path, exclude_moving=True):
+    res={}
+    with h5py.File(path,'r') as f:
+      for name, obj in f['model_weights'].items():
+        cnt=0; moving=0
+        shapes=[]
+        def rec(g):
+          nonlocal cnt,moving
+          for k,o in g.items():
+            if isinstance(o,h5py.Dataset):
+              n=int(np.prod(o.shape,dtype=np.int64))
+              cnt += n
+              if k.startswith('moving_'): moving += n
+              else: shapes.append((k,tuple(o.shape)))
+            else: rec(o)
+        rec(obj)
+        train = cnt-moving
+        res[name]=(cnt,train,moving,shapes)
+      return res
+
+human=layer_param_count('models/model0_best.h5')
+mouse=layer_param_count('models/model1_best.h5')
+
+# identify output/head layers by dense kernel shape output dimension
+def find_head(d):
+    for name,(total,train,moving,shapes) in d.items():
+      for k,s in shapes:
+        if k.endswith('kernel:0') and len(s)==2 and s[1] in (7611,2608):
+          return name, train
+print('human head', find_head(human))
+print('mouse head', find_head(mouse))
+hh=find_head(human)[1]; mh=find_head(mouse)[1]
+human_total=sum(v[0] for v in human.values()); human_train=sum(v[1] for v in human.values()); human_moving=sum(v[2] for v in human.values())
+mouse_total=sum(v[0] for v in mouse.values()); mouse_train=sum(v[1] for v in mouse.values()); mouse_moving=sum(v[2] for v in mouse.values())
+human_trunk=human_train-hh; mouse_trunk=mouse_train-mh
+print('human total/train/moving/trunk', human_total,human_train,human_moving,human_trunk)
+print('mouse total/train/moving/trunk', mouse_total,mouse_train,mouse_moving,mouse_trunk)
+print('trunk match', human_trunk==mouse_trunk)
+combined=human_trunk+hh+mh
+print('combined trainable',combined)
+print('sum naive human+mouse train',human_train+mouse_train)
+print('sum naive total',human_total+mouse_total)
+PY"

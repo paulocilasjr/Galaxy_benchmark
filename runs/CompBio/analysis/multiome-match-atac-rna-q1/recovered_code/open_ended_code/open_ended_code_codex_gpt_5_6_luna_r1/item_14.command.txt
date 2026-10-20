@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import gzip,itertools,numpy as np
+from scipy.stats import rankdata
+
+def load(fn):
+ with gzip.open(fn,'rt') as f:
+  f.readline(); return np.loadtxt(f,delimiter='\\t',usecols=range(1,9))
+R=load('multiome.match.atac.rna.q1.rna.tsv.gz'); A=load('multiome.match.atac.rna.q1.atac.tsv.gz')
+perms=np.array(list(itertools.permutations(range(8))),dtype=int); tri=np.triu_indices(8,1)
+def sim_row(x,transform='raw',metric='dot'):
+ if transform=='log': x=np.log1p(x)
+ elif transform=='sqrt': x=np.sqrt(x)
+ elif transform=='rank': x=np.apply_along_axis(rankdata,0,x)
+ # row centered/scaled
+ x=x-x.mean(1,keepdims=True)
+ if transform=='rowz': pass
+ # z all rows; constant rows ignored
+ sd=x.std(1,keepdims=True); x=x/(sd+1e-12)
+ if metric=='dot': return x.T@x/x.shape[0]
+ if metric=='corr': return np.corrcoef(x.T)
+ if metric=='cos': return (x.T@x)/np.sqrt((x*x).sum(0)[:,None]*(x*x).sum(0)[None,:])
+
+def sim_row2(x,transform='raw'):
+ if transform=='log': x=np.log1p(x)
+ elif transform=='sqrt': x=np.sqrt(x)
+ elif transform=='rank': x=np.apply_along_axis(rankdata,0,x)
+ # zscore feature rows, preserving each feature equal weight
+ x=(x-x.mean(1,keepdims=True))/(x.std(1,keepdims=True)+1e-12)
+ return x.T@x/x.shape[0]
+def show(label,SR,SA):
+ vr=SR[tri]; va=SA[perms[:, :, None],perms[:, None, :]][:,tri[0],tri[1]]
+ cr=vr-vr.mean(); ca=va-va.mean(1,keepdims=True)
+ scores=(ca@cr)/(np.sqrt((ca*ca).sum(1))*np.sqrt((cr*cr).sum()))
+ mse=((va-vr)**2).mean(1)
+ print('\\n',label)
+ for i in np.argsort(-scores)[:8]: print(f'{scores[i]:.8f} mse={mse[i]:.8f} p={\";\".join(map(str,perms[i]))}')
+for tr in ['raw','log','sqrt','rank']:
+ show('rowz '+tr,sim_row2(R,tr),sim_row2(A,tr))
+PY"

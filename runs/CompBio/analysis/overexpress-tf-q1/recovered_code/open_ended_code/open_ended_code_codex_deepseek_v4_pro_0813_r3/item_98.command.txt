@@ -1,0 +1,50 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, math
+from scipy.stats import norm, chi2
+f='work/features.tsv'
+df=pd.read_csv(f,sep='\\t')
+sub=df[df.label.isin(['fg','common'])].copy()
+sub['y']=(sub.label=='fg').astype(int)
+sub['gcbin']=pd.cut(sub.gc,bins=np.arange(0,1.0001,0.02),labels=False)
+tf=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']
+mot=[c for c in df.columns if '_' in c and c.split('_')[0] in tf]
+rows=[]
+for feat in tf+mot:
+    tables=[]
+    for b,grp in sub.groupby('gcbin', observed=False):
+        if len(grp)==0: continue
+        a=((grp.y==1)&(grp[feat]==1)).sum()
+        c_=((grp.y==1)&(grp[feat]==0)).sum()
+        b_=((grp.y==0)&(grp[feat]==1)).sum()
+        d=((grp.y==0)&(grp[feat]==0)).sum()
+        if a+b_+c_+d==0: continue
+        tables.append((a,b_,c_,d))
+    if not tables: continue
+    # Mantel-Haenszel common OR, adding 0.5 if zero cells
+    num=0; den=0
+    for a,b_,c_,d in tables:
+        if b_*c_==0 and a*d==0:
+            a+=0.5;b_+=0.5;c_+=0.5;d+=0.5
+        n=a+b_+c_+d
+        if n==0 or c_*b_==0: continue
+        num += a*d/n
+        den += b_*c_/n
+    or_mh=num/den if den"'!=0 else np.inf
+    # variance logOR
+    var=0
+    for a,b_,c_,d in tables:
+        n=a+b_+c_+d
+        if n==0: continue
+        R=a+d; S=b_+c_
+        if R*S*n==0: continue
+        var += (a*d*(a+d) + b_*c_*(b_+c_)) / (2*n*R*S)
+    if var<=0: z=np.inf; p=0
+    else:
+        z=math.log(or_mh)/math.sqrt(var)
+        p=2*(1-norm.cdf(abs(z)))
+    rows.append((feat,or_mh,z,p))
+rows=sorted(rows,key=lambda x:-x[1])
+print('"'Mantel-Haenszel OR adjusted by GC bins (fg vs common), ranked:')
+for feat,or_,z,p in rows:
+    print(f'{feat:22s} OR {or_:.3f} z {z:+.2f} p {p:.3e}')
+PY"

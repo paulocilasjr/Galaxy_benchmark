@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, pysam, collections, re
+# load gene symbols
+sym={}
+with gzip.open('Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as fh:
+    for line in fh:
+        if line.startswith('>'):
+            tid=line[1:].split()[0]
+            m=re.search(r'gene_symbol:(\\S+)',line)
+            if m: sym[tid]=m.group(1)
+print('symbols',len(sym))
+sam=pysam.AlignmentFile('raw_transcriptome.sam','r')
+# collect primary alignments, one per query read (flag not secondary/supp)
+pairs=collections.defaultdict(dict) # read name -> {1:gene,...}
+counts=collections.Counter()
+for a in sam.fetch(until_eof=True):
+    if a.is_secondary or a.is_supplementary or a.is_unmapped: continue
+    qname=a.query_name
+    first = not a.is_read2
+    tid=a.reference_name
+    g=sym.get(tid, tid)
+    if first not in pairs[qname]:
+        pairs[qname][first]=g
+        counts[g]+=1
+disc=collections.Counter()
+for q, d in pairs.items():
+    g1=d.get(1); g2=d.get(2)
+    if g1 and g2:
+        if g1 "'!= g2:
+            pair=tuple(sorted([g1,g2]))
+            disc[pair]+=1
+print('"'primary pairs', len(pairs), 'discordant', sum(disc.values()))
+for (g1,g2),c in disc.most_common(50):
+    print(c, g1, g2)
+print('top genes primary')
+for g,c in counts.most_common(30):
+    print(c,g)
+PY"

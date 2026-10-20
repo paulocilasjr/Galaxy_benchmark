@@ -1,0 +1,36 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd,json,mygene,warnings,time
+warnings.filterwarnings('ignore')
+import gseapy
+res=pd.read_csv('/workspace/de_cbd_vs_dmso_fullmodel.csv',index_col=0)
+mp=json.load(open('/workspace/ensembl_mapping.json'))
+bg_ids=res[res['padj'].notna()].index.tolist()
+missing=[i for i in bg_ids if i not in mp]
+print('bg',len(bg_ids),'missing',len(missing))
+if missing:
+ mg=mygene.MyGeneInfo(); out={}
+ for ci in range(0,len(missing),1000):
+  ch=missing[ci:ci+1000]
+  for r in mg.querymany(ch, scopes='ensembl.gene', fields='symbol,entrezgene,go.BP', species='human', verbose=False):
+   go=r.get('go'); bp=go.get('BP') if isinstance(go,dict) else []
+   out[r.get('query')]={'symbol':r.get('symbol'),'entrez':r.get('entrezgene'),'bp':bp}
+ mp.update(out); json.dump(mp,open('/workspace/ensembl_mapping_full.json','w'))
+ print('now mapped',sum(1 for i in bg_ids if i in mp))
+else:
+ json.dump(mp,open('/workspace/ensembl_mapping_full.json','w'))
+bg=sorted(set(v['symbol'] for i in bg_ids if (v:=mp.get(i)) and v.get('symbol')))
+sig=res[(res['padj']<0.05)&(res['log2FoldChange'].abs()>0.5)]
+def syms(ids): return sorted(set(v['symbol'] for i in ids if (v:=mp.get(i)) and v.get('symbol')))
+up=syms(sig[sig['log2FoldChange']>0].index); down=syms(sig[sig['log2FoldChange']<0].index)
+print('mapped bg/up/down',len(bg),len(up),len(down))
+for version in ['GO_Biological_Process_2021','GO_Biological_Process_2023','GO_Biological_Process_2026']:
+ gs=json.load(open(f'/workspace/{version}.json'))
+ print('\\n',version)
+ for lab,gl in [('UP',up),('DOWN',down)]:
+  r=gseapy.enrich(gene_list=gl,gene_sets=gs,background=bg,outdir=None,cutoff=0.05,no_plot=True,verbose=False).results
+  sigr=r[r['Adjusted P-value']<0.05]
+  print(lab,'sig',len(sigr),'min',r['Adjusted P-value'].min())
+  core=sigr[sigr['Term'].str.contains(r'glycol|gluconeo|glucose|carbohydrate|pyruvate|ATP metabolic|respiration|lipid|fatty acid',regex=True,case=False,na=False)]
+  print('core',len(core))
+  if len(core): print(core[['Term','Overlap','Adjusted P-value']].head(8).to_string(index=False,max_colwidth=60))
+PY"

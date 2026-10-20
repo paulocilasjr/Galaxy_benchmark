@@ -1,0 +1,32 @@
+/bin/bash -lc "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python - <<'PY'
+# Final full-scope attempt: all nonzero genes (all-zero genes cannot be estimated by DESeq2/PyDESeq2).
+import os, gc, pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+meta = pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample')[['batch','sex']]
+meta['batch'] = meta['batch'].astype(str)
+meta['sex'] = pd.Categorical(meta['sex'], categories=['F','M'])
+counts_all = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0).T.loc[meta.index]
+full_dds = DeseqDataSet(counts=counts_all, metadata=meta, design='~ batch + sex', quiet=True, low_memory=True, n_cpus=1)
+full_dds.fit_size_factors()
+sf = full_dds.obs['size_factors'].copy()
+genes = counts_all.columns[counts_all.sum(axis=0) > 0].tolist()
+print('genes', len(genes), 'FAM in', 'FAM138A' in genes, flush=True)
+counts = counts_all.loc[:, genes].copy(); del full_dds, counts_all; gc.collect()
+dds = DeseqDataSet(counts=counts, metadata=meta, design='~ batch + sex', quiet=False, low_memory=True, n_cpus=1)
+dds.obs['size_factors']=sf.loc[dds.obs_names].astype(float)
+dds.layers['normed_counts']=dds.X/dds.obs['size_factors'].values[:,None]
+dds.var['_normed_means']=np.asarray(dds.layers['normed_counts'].mean(axis=0)).ravel()
+dds.fit_genewise_dispersions(); dds.fit_dispersion_trend(); dds.fit_dispersion_prior(); dds.fit_MAP_dispersions(); dds.fit_LFC(); dds.calculate_cooks()
+if dds.refit_cooks: dds.refit()
+dds.cooks_outlier()
+stat = DeseqStats(dds, contrast=['sex','M','F'], quiet=False, n_cpus=1)
+stat.summary(); stat.lfc_shrink(coeff='sex[T.M]')
+row = stat.results_df.loc['FAM138A']
+print(row.to_string(), flush=True)
+answer = format(float(row['log2FoldChange']), '.12g')
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w') as fh:
+    fh.write(answer + '\\n')
+print('ANSWER', answer, flush=True)
+PY"

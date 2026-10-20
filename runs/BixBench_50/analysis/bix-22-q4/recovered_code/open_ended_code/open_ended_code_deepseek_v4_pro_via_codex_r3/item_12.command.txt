@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+
+samp = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+cd14_samples = samp.loc[samp['celltype']=='CD14','sample'].tolist()
+print('n_cd14', len(cd14_samples), cd14_samples[:5], cd14_samples[-5:])
+
+meta = pd.read_csv('inputs/GeneMetaInfo_Zenodo.csv', index_col=0)
+print('meta genes', len(meta), meta.index.is_unique, meta['gene_biotype'].eq('protein_coding').sum())
+
+counts = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0, dtype='float32')
+print('counts shape', counts.shape)
+print('cols subset present', sum(c in counts.columns for c in cd14_samples), 'all', set(cd14_samples) <= set(counts.columns))
+cd14 = counts[cd14_samples]
+print('cd14 shape', cd14.shape, 'min', cd14.values.min(), 'max', cd14.values.max())
+# Check NAs
+print('na in cd14', cd14.isna().sum().sum())
+total = cd14.sum(axis=1)
+mean = cd14.mean(axis=1)
+# align meta order
+print('counts idx is_unique', counts.index.is_unique, 'meta order match', counts.index.equals(meta.index))
+print('missing meta', len(set(counts.index)-set(meta.index)), 'missing counts', len(set(meta.index)-set(counts.index)))
+# produce dataframe in counts order with length
+length = meta['Length'].reindex(counts.index)
+biotype = meta['gene_biotype'].reindex(counts.index)
+mask = biotype.eq('protein_coding') & (total >= 10)
+print('eligible', mask.sum())
+print('protein coding total>=10 counts min', total[mask].min(), 'max', total[mask].max())
+print('length missing eligible', length[mask].isna().sum())
+r, p = pearsonr(length[mask].to_numpy(dtype='float64'), mean[mask].to_numpy(dtype='float64'))
+print('Pearson r', r)
+print('p', p)
+print('length stats eligible', length[mask].describe())
+print('mean stats eligible', mean[mask].describe())
+# save exact with high precision
+print('repr', repr(float(r)))
+# Alternative log? maybe log2 mean vs length pearson
+mean_pos=mean[mask]
+print('log mean min max', np.log2(mean_pos).min(), np.log2(mean_pos).max())
+print('pearson length vs log2mean', pearsonr(length[mask], np.log2(mean[mask].astype('float64')))[0])
+# spearman
+print('spearman', __import__('scipy.stats').stats.spearmanr(length[mask], mean[mask]).statistic)
+PY"

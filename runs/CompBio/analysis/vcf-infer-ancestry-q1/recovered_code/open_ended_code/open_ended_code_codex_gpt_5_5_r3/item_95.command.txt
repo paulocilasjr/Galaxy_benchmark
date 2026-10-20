@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, os, time
+fmt='%CHROM\\t%POS\\t%REF\\t%ALT\\t%INFO/gnomad_AF_afr\\t%INFO/gnomad_AF_asj\\t%INFO/gnomad_AF_nfe\\t%INFO/gnomad_AF_eas\\t%INFO/gnomad_AF_mid\\t%INFO/gnomad_AF_sas\\t%INFO/AC_papuan\\t%INFO/AN_papuan\\t%INFO/AC_melanesian\\t%INFO/AN_melanesian\\n'
+url='https://storage.googleapis.com/gcp-public-data--gnomad/release/3.1.2/vcf/genomes/gnomad.genomes.v3.1.2.hgdp_tgp.chr1.vcf.bgz'
+# Existing queried positions
+seen=set()
+for fname in ['refs/gnomad_single_site_af.tsv','refs/gnomad_single_site_af_more.tsv']:
+    if os.path.exists(fname):
+        for line in open(fname):
+            p=line.split('\\t')
+            if len(p)>=2: seen.add(int(p[1]))
+rows=[]
+for line in open('selected_lifted.tsv'):
+    chrom,pos,ref,alt,hg38pos,*gs=line.strip().split('\\t')
+    hp=int(hg38pos)
+    if hp not in seen:
+        rows.append(hp)
+with open('refs/gnomad_single_site_af_more.tsv','a') as out:
+    got=0; tried=0
+    for hg38pos in rows:
+        tried+=1
+        r=f'chr1:{hg38pos}-{hg38pos}'
+        cmd=['bcftools','query','-r',r,'-f',fmt,url]
+        try:
+            res=subprocess.run(cmd, text=True, capture_output=True, timeout=12)
+        except subprocess.TimeoutExpired:
+            continue
+        if res.returncode==0 and res.stdout:
+            out.write(res.stdout)
+            got += res.stdout.count('\\n')
+            out.flush()
+        if got>=180 or tried>=260:
+            break
+print('new_rows', got, 'tried', tried)
+PY
+wc -l refs/gnomad_single_site_af_more.tsv"

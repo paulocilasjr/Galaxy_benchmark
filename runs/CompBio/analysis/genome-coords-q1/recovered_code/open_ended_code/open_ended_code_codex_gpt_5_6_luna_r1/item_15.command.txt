@@ -1,0 +1,41 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd,numpy as np
+D=pd.read_csv('single_cell_dynamics_question.csv'); q=D[['enh_x','enh_y','enh_z']].to_numpy()-D[['prom_x','prom_y','prom_z']].to_numpy(); C=(np.sqrt((q*q).sum(1))<=260).astype(int).reshape(600,250); T=D.transcription.to_numpy().astype(int).reshape(600,250)
+# per-cell conditional rates/effects at lag +1, requiring cells with both source groups if possible
+for name,Y,X in [('C leads T',T,C),('T leads C',C,T)]:
+ # target next index, source current
+ y0=Y[:,:-1]; y1=Y[:,1:]; x0=X[:,:-1]
+ e=[]; n=[]
+ for i in range(600):
+  a=y1[i][x0[i]==1]; b=y1[i][x0[i]==0]
+  e.append(a.mean()-b.mean() if len(a)>0 else np.nan); n.append((len(a),len(b)))
+ e=np.array(e)
+ print(name,'mean per-cell diff',np.nanmean(e),'median',np.nanmedian(e),'positive frac',np.nanmean(e>0),'n valid',np.sum(~np.isnan(e)))
+ print('pooled diff',y1[x0==1].mean()-y1[x0==0].mean())
+ # quantiles
+ print('q',np.nanpercentile(e,[1,5,25,50,75,95,99]))
+# condition on cell baseline rates via difference in deviations? pooled logistic fixed effects maybe compute paired event probabilities by cell-source group, conditional source/current target
+# Bootstrap cell-level average effects
+rng=np.random.default_rng(1)
+for name,Y,X in [('C leads T',T,C),('T leads C',C,T)]:
+ y1=Y[:,1:]; x0=X[:,:-1];
+ e=[]
+ for i in range(600):
+  a=y1[i][x0[i]==1]; b=y1[i][x0[i]==0]
+  e.append(a.mean()-b.mean())
+ e=np.array(e)
+ means=[]
+ for _ in range(2000): means.append(e[rng.integers(0,600,600)].mean())
+ print(name,'bootstrap 95%',np.percentile(means,[2.5,50,97.5]))
+# event overlap sequences counts (C_t,T_t), preceding/following combinations
+# for each t interior print counts by prev/current/next state for two vars maybe pattern
+for tname,X,Y in [('C',C,T),('T',T,C)]:
+ print('\\npatterns around',tname,'event onset, target prev/current/next')
+ on=(X[:,1:-1]==1)&(X[:,:-2]==0) # onset t=1..248
+ # t indexing one offset
+ for yp in [0,1]:
+  for yc in [0,1]:
+   for yn in [0,1]:
+    n=np.sum(on & (Y[:,0:-2]==yp) & (Y[:,1:-1]==yc) & (Y[:,2:]==yn))
+    if n: print('Y',yp,yc,yn,n)
+PY"

@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+# compute M for promoter/body mapping quickly and print pair scores normalized
+import gzip,numpy as np,collections
+
+def load(fn):
+ with gzip.open(fn,'rt') as f:
+  next(f); n=[]; v=[]
+  for l in f:
+   z=l.rstrip().split('\\t'); n.append(z[0]); v.append([float(x) for x in z[1:]])
+ return n,np.array(v,np.float32)
+rn,R=load('multiome.match.atac.rna.q1.rna.tsv.gz'); an,A=load('multiome.match.atac.rna.q1.atac.tsv.gz')
+amap={(n.rsplit('_',2)[0],int(n.rsplit('_',2)[1])):i for i,n in enumerate(an)}
+chroms={f'chr{i}' for i in range(1,23)}|{'chrX'}; t=collections.defaultdict(list)
+with gzip.open('hg38.ncbiRefSeq.txt.gz','rt') as f:
+ for l in f:
+  z=l.rstrip().split('\\t')
+  if len(z)>=13 and z[2] in chroms:
+   c,s=z[2],z[3]; x,y=int(z[4]),int(z[5]); t[z[12]].append((c,x if s=='+' else y-1,x,y))
+for mode in ['tss','prom','body']:
+ rr=[]; aa=[]
+ for gi,sym in enumerate(rn):
+  inds=[]
+  for c,pos,x,y in t.get(sym,[]):
+   if mode=='tss': bs=[pos//10000*10000]
+   elif mode=='prom': bs=list(range(max(0,(pos-20000)//10000*10000),(pos+20000)//10000*10000+10000,10000))
+   else: bs=list(range(x//10000*10000,((y-1)//10000+1)*10000,10000))
+   inds += [amap[(c,b)] for b in bs if (c,b) in amap]
+  if inds:
+   rr.append(R[gi]); aa.append(A[np.unique(inds)].mean(0))
+ rr=np.array(rr); aa=np.array(aa)
+ for trans,func in [('log',np.log1p),('sqrt',np.sqrt),('raw',lambda x:x)]:
+  x=func(rr); y=func(aa); x=x-x.mean(1,keepdims=True); y=y-y.mean(1,keepdims=True)
+  x/=np.sqrt((x*x).sum(1,keepdims=True)); y/=np.sqrt((y*y).sum(1,keepdims=True));
+  good=np.isfinite(x).all(1)&np.isfinite(y).all(1); M=x[good].T@y[good]/good.sum()
+  print('\\n',mode,trans,'n',good.sum()); print(np.round(M,4));
+  print('row best',M.argmax(1),'cols best',M.argmax(0))
+PY"

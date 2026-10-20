@@ -39,8 +39,8 @@ import pandas as pd
 import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_narrative'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_narrative'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -52,11 +52,11 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-ERRORS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig5.xlsx')
-ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
-COMPBIO_AUDIT = os.path.join(ROOT, 'CompBio', 'compBio_overview_audit.json')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+ERRORS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig5.xlsx')
+ACTIONS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
+COMPBIO_AUDIT = os.path.join(ROOT, 'runs/CompBio', 'compBio_overview_audit.json')
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM = 20000, 20261002, 200000

@@ -1,6 +1,6 @@
 """Supplementary Table: design and run selection for each benchmark and condition (accompanies Fig. 1).
 
-From the read-only design extraction (manuscript_narrative/derived/design/per_run_design_metadata.csv) and the scored
+From the read-only design extraction (manuscript/manuscript_narrative/derived/design/per_run_design_metadata.csv) and the scored
 runs (figures/scored_runs.csv, every run as the public results site shows it; make_scored_runs.py). Writes
 figures/supp_table_design.csv and figures/supp_table_design.md.
 """
@@ -9,7 +9,7 @@ import os
 import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
+DESIGN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
 SCORED = os.path.join(ROOT, 'figures', 'scored_runs.csv')
 OUT = os.path.join(ROOT, 'figures')
 PRIMARY = {'codex_gpt_5_5', 'codex_gpt_5_6_sol', 'codex_gpt_5_6_luna', 'deepseek_v4_pro_via_codex',
@@ -75,7 +75,7 @@ def main():
                 'in the paper; scored runs have a benchmark score. Prompts differ between conditions for every task, '
                 'model and replicate (0 identical prompt files of 2,070 pairs), and Galaxy prompts add execution '
                 'policy. Values come from the read-only design extraction '
-                '(`manuscript_narrative/derived/design/`).\n\n')
+                '(`manuscript/manuscript_narrative/derived/design/`).\n\n')
         f.write('| ' + ' | '.join(t.columns) + ' |\n|' + '---|' * len(t.columns) + '\n')   # no tabulate dependency
         for row in t.itertuples(index=False):
             f.write('| ' + ' | '.join(str(v) for v in row) + ' |\n')

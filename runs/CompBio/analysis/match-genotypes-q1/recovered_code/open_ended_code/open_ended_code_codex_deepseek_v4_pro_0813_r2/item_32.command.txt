@@ -1,0 +1,40 @@
+/bin/bash -c "python3 - <<'PY'
+import pgenlib,pandas as pd,numpy as np
+
+def pvar(pre): return pd.read_csv(pre+'.pvar',sep='\\t',comment='#',names=['CHROM','POS','ID','REF','ALT'],dtype={'CHROM':str,'POS':int})
+def genos(pre,sub):
+ r=pgenlib.PgenReader(pre.encode()+b'.pgen'); ids=[l.strip() for l in open(pre+'.psam') if not l.startswith('#') and l.strip()]
+ idx=np.array(sub,dtype=np.uint32); buf=np.empty([idx.size,r.get_raw_sample_ct()],dtype=np.int32); r.read_list(idx,buf); return ids,buf
+p1=pvar('match.genotypes.1.1'); p3=pvar('match.genotypes.1.3')
+lo,hi=133250000,133262000
+idx3=p3.index[(p3.POS>=lo)&(p3.POS<=hi)].to_numpy(); ids3,g3=genos('match.genotypes.1.3',idx3); s3=p3.iloc[idx3].reset_index(drop=True)
+idx1=p1.index[(p1.POS>=lo)&(p1.POS<=hi)].to_numpy(); ids1,g1=genos('match.genotypes.1.1',idx1); s1=p1.iloc[idx1].reset_index(drop=True)
+keyO=np.where(s3.POS.to_numpy()==133257521)[0][0]
+# shared matching
+pairs=[]
+for j,row in s1.iterrows():
+ m=np.where((s3.POS==row.POS)&(s3.REF==row.REF)&(s3.ALT==row.ALT))[0]
+ if len(m)==1: pairs.append((j,int(m[0]),row.POS))
+R=g3[np.array([b for a,b,c in pairs])]; T=g1[np.array([a for a,b,c in pairs])]
+# selected O-correlated markers (from top)
+positions=[133261703,133261662,133256625,133260743,133258141,133253159,133261737,133261730,133261560]
+for pos in positions:
+    try: jj=s1.index[s1.POS==pos][0]
+    except: continue
+    # target col
+    ti=next(a for a,b,c in pairs if b==jj) # pairs uses ref index? Wait b is ref index from s3, jj target index. Need map target index.
+# redo mapping properly
+targ_by_pos={row.POS:j for j,row in s1.iterrows()}
+ref_by_pos={row.POS:i for i,row in s3.iterrows()}
+for pos in positions:
+    if pos not in targ_by_pos or pos not in ref_by_pos: continue
+    ti=targ_by_pos[pos]; ri=ref_by_pos[pos]
+    gt={ids1[k]:T[ti,k] for k in range(4)}
+    print('\\nPOS',pos,'target',gt)
+    for val in range(3):
+        mask=T[ti]==val
+        o=g3[keyO][mask]
+        if len(o):
+            counts=np.bincount(o.astype(int),minlength=3)
+            print(' target genotype',val,'ref count O key',counts,'mean',o.mean())
+PY"

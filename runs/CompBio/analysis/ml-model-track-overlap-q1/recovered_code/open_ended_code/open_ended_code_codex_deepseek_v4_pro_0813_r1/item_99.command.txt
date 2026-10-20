@@ -1,0 +1,37 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-281652bfe651d812e2dd4d4b/workspace && cat > fetch_borzoi_file_reps.py <<'PY'
+import json, urllib.request, urllib.parse, time, os, sys, gzip, re
+workspace='.'
+# normalized encff ids from targets
+ids=set()
+for path in ['[REDACTED LOCAL PATH]','[REDACTED LOCAL PATH]']:
+ f=gzip.open(path,'rt'); f.readline()
+ for line in f:
+  ident=re.sub(r'[+-]"'$'"','',line.rstrip('\\n').split('\\t')[1])
+  if ident.startswith('ENCFF'): ids.add(ident)
+ids=sorted(ids)
+print('ids',len(ids))
+out_path='data/borzoi_encff_metadata_full.jsonl'
+if os.path.exists(out_path): os.remove(out_path)
+batch_size=100; rows=[]
+for start in range(0,len(ids),batch_size):
+ batch=ids[start:start+batch_size]
+ params=[('type','File'),('format','json'),('field','accession'),('field','dataset'),('field','biological_replicates'),('field','technical_replicates'),('field','output_type'),('field','assay_term_name'),('limit','all')]+[('accession',a) for a in batch]
+ url='https://www.encodeproject.org/search/?'+urllib.parse.urlencode(params)
+ data=None
+ for attempt in range(5):
+  try:
+   data=json.load(urllib.request.urlopen(url,timeout=120)); break
+  except Exception as e:
+   print('retry',start,attempt,e,flush=True); time.sleep(2*(attempt+1))
+ if data is None: print('FAIL',start); sys.exit(1)
+ graph=data.get('@graph',[])
+ with open(out_path,'a') as f:
+  for g in graph:
+   f.write(json.dumps(g)+'\\n'); rows.append(g)
+ got={g['accession'] for g in graph}; missing=set(batch)-got
+ if missing: print('WARN missing',start,missing)
+ print('batch',start//batch_size+1,'got',len(graph),'total',len(rows),flush=True)
+ time.sleep(0.03)
+print('done',len(rows))
+PY
+python3 fetch_borzoi_file_reps.py"

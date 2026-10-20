@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.io
+from scipy.optimize import nnls
+from scipy.sparse import issparse
+meta=pd.read_csv('data/spatial_q_sc_metadata.csv',index_col=0).squeeze('columns')
+sc=pd.read_csv('data/spatial_q_sc_counts.csv',index_col=0)
+feat=pd.read_csv('data/features.tsv.gz',header=None,sep='\\t',compression='gzip')
+mat=scipy.io.mmread('data/matrix.mtx.gz').tocsc()
+y=np.asarray(mat[:,710].todense()).ravel()
+# normalize to CPM maybe total 1e4; signature per cell type total 1e4
+sc_cpm=sc.div(sc.sum(axis=1),axis=0)*10000
+y_cpm=y/y.sum()*10000
+means=sc_cpm.groupby(meta).mean()
+# NNLS using means (columns types)
+A=means.T.values
+coef,res=nnls(A,y_cpm)
+print('NNLS raw proportions (scaled):', dict(zip(means.index, np.round(coef,6))))
+# renormalize coefficients to sum
+if coef.sum(): print('normalized', dict(zip(means.index, np.round(coef/coef.sum(),4))))
+print('res norm',res,'corr pred',np.corrcoef(A@coef,y_cpm)[0,1])
+# Maybe spot total scales cells not CPM, use counts and means counts; coefficients cell counts-ish
+means_counts=sc.groupby(meta).mean()
+coef2,res2=nnls(means_counts.T.values,y)
+print('NNLS counts coef',dict(zip(means.index,np.round(coef2,4))),'norm',coef2/coef2.sum() if coef2.sum() else None)
+print('pred total', (means_counts.T.values@coef2).sum())
+# deconvolution with individual cells as reference using nnls on CPM, sum coeff per type
+A_ind=sc_cpm.T.values
+coef_ind,res_ind=nnls(A_ind,y_cpm)
+props=pd.Series(coef_ind,index=sc.index).groupby(meta).sum()
+print('NNLS individual props raw (sum)',props.to_dict(), 'sum',coef_ind.sum())
+print('normalized by sum',(props/props.sum()).to_dict())
+# correlation pred
+print('corr ind',np.corrcoef(A_ind@coef_ind,y_cpm)[0,1])
+# Use top variable genes maybe all
+PY"

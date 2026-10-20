@@ -1,0 +1,86 @@
+/bin/bash -lc "cat > classify_multiple.py <<'PY'
+import numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.semi_supervised import LabelPropagation, LabelSpreading
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.metrics import roc_auc_score
+import warnings; warnings.filterwarnings('ignore')
+
+# load features
+sig=pd.read_csv('working_signature_scores2.csv',index_col=0)
+orig=pd.read_csv('orig_signature_scores.csv',index_col=0)
+# label in orig file: label 1=HC? Check in classify_sigs labels=(Class=='HC').astype(int) so 1 HC yes
+wcats=sig.index.tolist()
+ocols=orig.index.tolist()
+y=orig['label'].values
+features=['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro','myel_lymph_ratio','isg_lymph_ratio']
+Xo=orig[features].values; Xw=sig[features].values
+# Use various feature subsets
+sets={
+'all':features,
+'no_ratios':['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro'],
+'covid_genes':['up','down','diff'],
+'immune':['ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro'],
+'immune_ratio':['ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro','myel_lymph_ratio','isg_lymph_ratio'],
+'no_composition':['ISG','up','down','diff'],
+}
+def train_pred(Xtr,ytr,Xte,model_name):
+    # standardize using training
+    sc=StandardScaler().fit(Xtr); Xtrz=sc.transform(Xtr); Xtez=sc.transform(Xte)
+    if model_name=='lr':
+        m=LogisticRegressionCV(Cs=10,cv=5,scoring='roc_auc',max_iter=10000,class_weight='balanced',random_state=0).fit(Xtrz,ytr)
+        p=m.predict_proba(Xtez)[:,1]
+    elif model_name=='svc':
+        m=SVC(kernel='linear',probability=True,class_weight='balanced',random_state=0).fit(Xtrz,ytr)
+        p=m.predict_proba(Xtez)[:,1]
+    elif model_name=='rf':
+        m=RandomForestClassifier(n_estimators=1000,class_weight='balanced',random_state=0).fit(Xtrz,ytr)
+        p=m.predict_proba(Xtez)[:,1]
+    elif model_name=='knn':
+        m=KNeighborsClassifier(n_neighbors=5,weights='distance').fit(Xtrz,ytr)
+        p=m.predict_proba(Xtez)[:,1]
+    return p
+# print CV AUC for lr on each feature set
+for fs_name, fs in sets.items():
+    X=orig[fs].values
+    sc=StandardScaler().fit(X); Xz=sc.transform(X)
+    for model in ['lr','svc','rf']:
+        try:
+            if model=='lr': m=LogisticRegressionCV(Cs=10,cv=5,scoring='roc_auc',max_iter=10000,class_weight='balanced',random_state=0)
+            elif model=='svc': m=SVC(kernel='linear',probability=True,class_weight='balanced',random_state=0)
+            else: m=RandomForestClassifier(n_estimators=500,class_weight='balanced',random_state=0)
+            yp=cross_val_predict(m,Xz,y,cv=StratifiedKFold(5,shuffle=True,random_state=0),method='predict_proba')[:,1]
+            print(fs_name,model,'AUC',round(roc_auc_score(y,yp),3))
+        except Exception as e: print(e)
+
+# for each feature set and model produce top 14 working p HC
+print('\\nTOP 14 HC by model')
+for fs_name, fs in sets.items():
+    for model in ['lr','svc','rf','knn']:
+        try:
+            p=train_pred(orig[fs].values,y,sig[fs].values,model)
+            res=pd.DataFrame({'donor':wcats,'p_hc':p}).sort_values('p_hc',ascending=False)
+            top=sorted([int(d[5:]) for d in res.head(14).donor])
+            print(f'{fs_name:12s} {model:3s}:',','.join(map(str,top)), '14th',top[-1] if top else '')
+        except Exception as e: print('err',fs_name,model,e)
+
+# Label propagation combined feature all and subsets
+for fs_name,fs in sets.items():
+    # standardize combined all samples
+    allm=np.concatenate([orig[fs].values,sig[fs].values],axis=0)
+    sc=StandardScaler().fit(allm); Z=sc.transform(allm)
+    Xo=Z[:len(y)]; Xw=Z[len(y):]
+    # labels: -1 unknown for working
+    labels=np.concatenate([y, -np.ones(len(wcats))])
+    for kern in ['knn','rbf']:
+        lp=LabelSpreading(kernel=kern,n_neighbors=7,alpha=0.7,max_iter=200,tol=1e-3).fit(Z,labels)
+        pw=lp.label_distributions_[len(y):,1]
+        res=pd.DataFrame({'donor':wcats,'p_hc':pw}).sort_values('p_hc',ascending=False)
+        top=sorted([int(d[5:]) for d in res.head(14).donor])
+        print('LP',fs_name,kern, ','.join(map(str,top)))
+PY
+python3 classify_multiple.py"

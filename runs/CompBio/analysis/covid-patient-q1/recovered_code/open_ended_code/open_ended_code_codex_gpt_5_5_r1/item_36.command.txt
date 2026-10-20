@@ -1,0 +1,48 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.preprocessing import StandardScaler
+p='covid.patients.q1.h5ad'
+with h5py.File(p,'r') as f:
+    cats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['obs/donor_id/categories'][:]]
+    codes=f['obs/donor_id/codes'][:].astype(np.int16)
+    gcats=[x.decode() if isinstance(x,bytes) else str(x) for x in f['var/feature_name/categories'][:]]
+    gcodes=f['var/feature_name/codes'][:]
+    idxraw=f['var/_index'][:]
+    genes=np.array([gcats[c] if c>=0 else (idx.decode() if isinstance(idx,bytes) else str(idx)) for c,idx in zip(gcodes, idxraw)])
+    n, ng = f['X'].attrs['shape']; nd=len(cats)
+    cells=np.bincount(codes, minlength=nd).astype(np.float64)
+    sums=np.zeros((nd,ng), dtype=np.float64)
+    indptr=f['X/indptr'][:]; data=f['X/data']; indices=f['X/indices']
+    for start in range(0,n,8000):
+        end=min(n,start+8000); st=int(indptr[start]); en=int(indptr[end])
+        ip=indptr[start:end+1].astype(np.int64)-st
+        X=csr_matrix((data[st:en], indices[st:en], ip), shape=(end-start,ng))
+        cc=codes[start:end]
+        D=csr_matrix((np.ones(end-start,dtype=np.float32),(np.arange(end-start), cc)), shape=(end-start,nd))
+        sums += (D.T @ X).toarray()
+    totals=sums.sum(axis=1)
+    logcpm=np.log1p(sums/totals[:,None]*1e6)
+    # filter variable genes
+    var=logcpm.var(axis=0)
+    top=np.argsort(var)[-3000:]
+    X=StandardScaler().fit_transform(logcpm[:,top])
+    pca=PCA(n_components=10, random_state=1)
+    pcs=pca.fit_transform(X)
+    print('explained',np.round(pca.explained_variance_ratio_[:5],3))
+    print('donor PC1 PC2 PC3')
+    for i,c in enumerate(cats): print(c, f'{pcs[i,0]:.3f}', f'{pcs[i,1]:.3f}', f'{pcs[i,2]:.3f}')
+    for k in [2,3,4]:
+        km=KMeans(n_clusters=k, random_state=1, n_init=50).fit(pcs[:,:5])
+        print('kmeans',k)
+        for lab in range(k):
+            members=[cats[i] for i in range(nd) if km.labels_[i]==lab]
+            print(lab, sorted([int(x.replace('donor','')) for x in members]))
+    # PC1 loadings top genes positive/negative
+    comp=np.zeros(ng); comp[top]=pca.components_[0]
+    for direction,name in [(1,'PC1pos'),(-1,'PC1neg')]:
+        idx=np.argsort(direction*comp)[-40:][::-1]
+        print(name, ','.join(genes[idx]))
+PY"

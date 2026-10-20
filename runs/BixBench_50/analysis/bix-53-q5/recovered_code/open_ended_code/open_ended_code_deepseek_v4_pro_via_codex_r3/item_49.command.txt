@@ -1,0 +1,30 @@
+/bin/bash -c "Rscript - <<'RS'
+suppressPackageStartupMessages(library(org.Mm.eg.db))
+suppressPackageStartupMessages(library(AnnotationDbi))
+sig <- read.delim('/workspace/tmp/sig_genes.tsv', stringsAsFactors=FALSE)
+ids <- unique(sig"'$geneID)
+ann <- select(org.Mm.eg.db, keys=ids, keytype='"'ENSEMBL', columns='SYMBOL')
+# keep first symbol per ensembl
+ann <- ann["'!is.na(ann$SYMBOL) & ann$SYMBOL != '"'',]
+ann <- ann["'!duplicated(ann$ENSEMBL),]
+m <- merge(sig, ann, by.x='"'geneID', by.y='ENSEMBL', all.x=TRUE)
+m <- m["'!is.na(m$SYMBOL),]
+m <- m[order(m$padj),]
+m <- m[!duplicated(m$SYMBOL),]
+write.table(m[,c('"'geneID','SYMBOL','padj','log2FoldChange')], '/workspace/tmp/sig_symbols_org.tsv', sep='\\t', quote=FALSE, row.names=FALSE, col.names=TRUE)
+cat('mapped', nrow(m), '\\n')
+cat('head symbols:', head(m"'$SYMBOL, 20), '"'\\n')
+RS
+/opt/agent-venv/bin/python - <<'PY'
+import pandas as pd, gseapy as gp
+m=pd.read_csv('/workspace/tmp/sig_symbols_org.tsv', sep='\\t')
+genes=m['SYMBOL'].tolist()
+print('n genes', len(genes), genes[:10])
+enr=gp.enrichr(gene_list=genes, gene_sets='WikiPathways_2019_Mouse', organism='mouse', outdir=None, cutoff=1)
+res=enr.results
+res.to_csv('/workspace/tmp/enrichr_org.tsv', sep='\\t', index=False)
+top20=res.head(20)
+mask=top20['Term'].str.lower().str.contains('oxidative', na=False)
+print('top20 oxidative', mask.sum(), 'fraction', mask.sum()/20)
+print(top20[['Term','P-value']].to_string(index=False))
+PY"

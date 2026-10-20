@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+# mapping tid->gene,sym,type
+info={}
+with open('gencode.v47.transcripts.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            p=line[1:].rstrip().split('|')
+            info[p[0]]=(p[1],p[5] if len(p)>5 else '',p[7] if len(p)>7 else '')
+A=pd.read_csv('salmon_A/quant.sf',sep='\\t')
+B=pd.read_csv('salmon_B/quant.sf',sep='\\t')
+for df in (A,B):
+    df['tid']=df.Name.str.split('|').str[0]
+    df['gid']=df.tid.map(lambda x: info[x][0] if x in info else x)
+    df['sym']=df.tid.map(lambda x: info[x][1] if x in info else '')
+    df['type']=df.tid.map(lambda x: info[x][2] if x in info else '')
+# DEFB
+for s,df in [('A',A),('B',B)]:
+ print(s, df[df.gid=='ENSG00000203970.4'][['Name','TPM','NumReads','EffectiveLength']].to_string(index=False))
+# merged
+merged=A[['Name','tid','gid','sym','type','TPM','NumReads']].merge(B[['Name','TPM','NumReads']],on='Name',suffixes=('_A','_B'))
+# gene totals
+gA=A.groupby('gid').agg(TPM=('TPM','sum'),reads=('NumReads','sum'),type=('type','first'),sym=('sym','first'))
+gB=B.groupby('gid').agg(TPM=('TPM','sum'),reads=('NumReads','sum'))
+# compute frac within gene
+merged['fA']=0.0; merged['fB']=0.0
+for gid,grp in merged.groupby('gid'):
+    totA=grp.TPM_A.sum(); totB=grp.TPM_B.sum()
+    if totA>0 and totB>0:
+        merged.loc[grp.index,'fA']=grp.TPM_A/totA
+        merged.loc[grp.index,'fB']=grp.TPM_B/totB
+rows=[]
+for gid,grp in merged.groupby('gid'):
+    if len(grp)<2: continue
+    a=gA.loc[gid,'reads']; b=gB.loc[gid,'reads']
+    if a<20 or b<20: continue
+    tv=(grp.fA-grp.fB).abs().sum()/2
+    maxdiff=(grp.fA-grp.fB).abs().max()
+    rows.append((tv,maxdiff,a,b,gid,gA.loc[gid,'sym'],gA.loc[gid,'type']))
+rows.sort(reverse=True)
+print('\\nTop Salmon DTU')
+for r in rows[:30]:
+ print(f'{r[5]:12} {r[4]:20} A={r[2]:6.1f} B={r[3]:6.1f} TV={r[0]:.3f} maxdiff={r[1]:.3f} {r[6]}')
+print('TV=1 count',sum(r[0]>=0.999 for r in rows))
+PY"

@@ -1,0 +1,73 @@
+/bin/bash -lc "python3 - <<'PY'
+import random, pickle, math, time
+from Bio import SeqIO
+from collections import defaultdict
+# Load reference
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+names=list(seqs); comp=str.maketrans('ACGT','TGCA'); L=36
+rev={n:s.translate(comp)[::-1] for n,s in seqs.items()}
+# generate reads
+random.seed(0)
+pi=[0.5,0.2,0.2,0.1]; p=0.009; N=40000
+reads=[]; truth=[]
+for _ in range(N):
+    c=random.choices(range(4),weights=pi)[0]
+    strand=random.choice(['f','r'])
+    s=seqs[names[c]] if strand=='f' else rev[names[c]]
+    start=random.randrange(len(s)-L+1)
+    seq=list(s[start:start+L])
+    for i in range(L):
+        if random.random()<p:
+            b='ACGT'.index(seq[i]); seq[i]=random.choice([x for j,x in enumerate('ACGT') if j"'!=b])
+    reads.append('"''.join(seq)); truth.append(c)
+# build index k=5 maxd=6 and count
+k=5; maxd=6
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in names}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1): index[name]['f'][s[i:i+k]].append(i)
+    rs=rev[name]
+    for i in range(len(rs)-L+1): index[name]['r'][rs[i:i+k]].append(i)
+def count_dists(read,name):
+    cnt=[0]*(maxd+1); min_any=L+1
+    for strand in ['f','r']:
+        idx=index[name][strand]; sstr=seqs[name] if strand=='f' else rev[name]
+        aligns=set()
+        for start in range(0,L-k+1,k):
+            seed=read[start:start+k]
+            for pos in idx.get(seed,()):
+                a=pos-start
+                if 0<=a<=len(sstr)-L: aligns.add(a)
+        for a in aligns:
+            d=sum(sstr[a+j]"'!=read[j] for j in range(L))
+            if d<min_any: min_any=d
+            if d<=maxd: cnt[d]+=1
+    return cnt,min_any
+start=time.time(); allcnt=[]; allmin=[]
+for r in reads:
+    row=[]; ms=[]
+    for name in names:
+        c,m=count_dists(r,name); row.append(c); ms.append(m)
+    allcnt.append(row); allmin.append(ms)
+print('"'count time',time.time()-start)
+# EM fixed p
+q=1-p
+def run():
+    pihat=[.25]*4; prev=-1e100
+    for it in range(1000):
+        new=[0.0]*4; ll=0.0
+        for i in range(N):
+            vals=[]; den=0
+            for j in range(4):
+                c=allcnt[i][j]; m=allmin[i][j]
+                lik=sum(c[d]*(p**d)*(q**(L-d)) for d in range(maxd+1))
+                if m>maxd: lik+=(p**m)*(q**(L-m))
+                if lik==0: lik=1e-300
+                v=pihat[j]*lik; vals.append(v); den+=v
+            ll+=math.log(den)
+            for j in range(4): new[j]+=vals[j]/den
+        pihat=[x/N for x in new]
+        if abs(ll-prev)<1e-12: break
+        prev=ll
+    return pihat,ll,it
+print('truth',pi,'estimate',run())
+PY"

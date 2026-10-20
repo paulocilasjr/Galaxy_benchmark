@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import csv, os, time
+import pandas as pd
+
+crispr_path='inputs/CRISPRGeneEffect.csv'
+expr_path='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+start=time.time()
+with open(crispr_path, newline='') as f:
+    crispr_header=next(csv.reader(f))
+with open(expr_path, newline='') as f:
+    expr_header=next(csv.reader(f))
+
+expr_set=set(expr_header[1:])
+shared=[g for g in crispr_header[1:] if g in expr_set]
+shared_set=set(shared)
+crispr_usecols=[0]+[i for i,g in enumerate(crispr_header[1:], start=1) if g in shared_set]
+expr_usecols=[0]+[i for i,g in enumerate(expr_header[1:], start=1) if g in shared_set]
+print('shared genes', len(shared), 'header prep', round(time.time()-start,2), flush=True)
+
+ge=pd.read_csv(crispr_path, usecols=crispr_usecols, index_col=0)
+print('loaded ge', ge.shape, round(time.time()-start,2), flush=True)
+expr=pd.read_csv(expr_path, usecols=expr_usecols, index_col=0)
+print('loaded expr', expr.shape, round(time.time()-start,2), flush=True)
+
+# Align both axes deliberately: same model IDs and same gene labels.
+models=ge.index.intersection(expr.index)
+ge=ge.loc[models, shared]
+expr=expr.loc[models, shared]
+print('aligned', ge.shape, expr.shape, 'models', len(models), round(time.time()-start,2), flush=True)
+print('na counts', int(ge.isna().sum().sum()), int(expr.isna().sum().sum()), flush=True)
+
+# Essentiality/dependency strength is positive-going; CRISPRGeneEffect is negative-going.
+ess=-ge
+
+# Pairwise-complete Spearman. This vectorized path is valid if no NAs after alignment.
+if ge.isna().values.any() or expr.isna().values.any():
+    corr=expr.corrwith(ess, axis=0, method='spearman')
+else:
+    rx=expr.rank(axis=0, method='average')
+    ry=ess.rank(axis=0, method='average')
+    cx=rx-rx.mean(axis=0)
+    cy=ry-ry.mean(axis=0)
+    corr=(cx*cy).sum(axis=0)/(((cx*cx).sum(axis=0)*(cy*cy).sum(axis=0))**0.5)
+
+count=int((corr >= 0.6).sum())
+print('count', count, 'max', float(corr.max()), 'min', float(corr.min()), 'elapsed', round(time.time()-start,2), flush=True)
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w') as f:
+    f.write(str(count)+'\\n')
+PY"

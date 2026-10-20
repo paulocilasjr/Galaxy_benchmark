@@ -1,0 +1,34 @@
+/usr/bin/bash -lc "micromamba run -n sc_pseudobulk python - <<'PY'
+from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+root=Path('/workspace')
+counts=pd.read_csv(root/'final_answer/pseudobulk_counts.tsv',sep='\\t')
+de=pd.read_csv(root/'final_answer/differential_expression.tsv',sep='\\t')
+checks={}
+checks['columns0']=list(counts.columns[0:1])==['gene']
+checks['gene_unique']=not counts['gene'].duplicated().any()
+checks['len']=len(de)==len(counts)
+checks['gene_set']=set(de['gene'])==set(counts['gene'])
+checks['de_gene_unique']=not de['gene'].duplicated().any()
+checks['de_cols']=list(de.columns)==['gene','log2_fold_change','p_value','fdr']
+values=counts.drop(columns='gene').to_numpy()
+checks['int']=np.issubdtype(values.dtype,np.integer)
+checks['finite_counts']=np.isfinite(values).all()
+checks['nonnegative']=(values>=0).all()
+lfc=de['log2_fold_change'].to_numpy(float); p=de['p_value'].to_numpy(float); q=de['fdr'].to_numpy(float)
+checks['finite_lfc']=np.isfinite(lfc).all()
+checks['valid_p']=np.isfinite(p).all() and ((p>=0)&(p<=1)).all()
+checks['valid_q']=np.isfinite(q).all() and ((q>=0)&(q<=1)).all()
+order=np.argsort(p,kind='mergesort'); qs=p[order]*len(p)/np.arange(1,len(p)+1,dtype=float); qs=np.minimum.accumulate(qs[::-1])[::-1]; expected=np.empty_like(qs); expected[order]=np.clip(qs,0,1)
+checks['bh_abs_1e-15']=np.allclose(q,expected,rtol=0,atol=1e-15)
+checks['bh_max_abs']=float(np.max(np.abs(q-expected)))
+method=json.loads((root/'final_answer/method.json').read_text())
+checks['method_keys']=list(method)==['method']
+checks['method_value']=method.get('method')=='DESeq2'
+print(checks)
+print('dtypes',values.dtype,counts.dtypes.tail().to_dict())
+print('method',method)
+print('first mismatch',np.argmax(np.abs(q-expected)),q[np.argmax(np.abs(q-expected))],expected[np.argmax(np.abs(q-expected))])
+PY"

@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, spearmanr
+from sklearn.preprocessing import StandardScaler
+
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv').set_index('Unnamed: 0').loc[sc.index]
+cts=sorted(meta.cell_type.unique())
+# log norm sc
+sc_lib=sc.sum(1).replace(0,np.nan)
+sc_log=np.log1p(sc.div(sc_lib, axis=0).fillna(0)*1e4)
+# spatial log norm
+X=mmread('matrix.mtx.gz').tocsc().T.toarray().astype(float) # spots x genes
+barcodes=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+features=[l.strip().split('\\t')[1] for l in gzip.open('features.tsv.gz','rt')]
+sp_lib=X.sum(1)
+sp_log=np.log1p((X / sp_lib[:,None]) * 1e4)
+# z spatial genes
+sp_z=(sp_log-sp_log.mean(0))/(sp_log.std(0)+1e-9)
+markers={}
+for ct in cts:
+    inct=meta.cell_type==ct
+    mean_in=sc_log.loc[inct].mean(0)
+    mean_out=sc_log.loc[~inct].mean(0)
+    pct_in=(sc.loc[inct]>0).mean(0)
+    pct_out=(sc.loc[~inct]>0).mean(0)
+    score=(mean_in-mean_out)*(pct_in+0.1)/(pct_out+0.1)
+    top=score.sort_values(ascending=False).head(30).index.tolist()
+    markers[ct]=top
+    print(ct, top[:10])
+# scores
+scores=np.zeros((X.shape[0], len(cts)))
+for k,ct in enumerate(cts):
+    idx=[features.index(g) for g in markers[ct]]
+    scores[:,k]=sp_z[:,idx].mean(1)
+score_df=pd.DataFrame(scores,index=barcodes,columns=cts)
+print('\\nscore corr with nnls fracs')
+fr=pd.read_csv('nnls_spot_fractions.csv', index_col=0).loc[barcodes]
+for ct in cts:
+    print(ct, spearmanr(score_df[ct], fr[ct]).statistic)
+# Dominant by marker scores
+print('\\nmarker dominant counts')
+print(score_df.idxmax(1).value_counts())
+# proximity using tumor score high quantiles and ct score high quantiles
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode').loc[barcodes]
+coords=pos[['array_row','array_col']].astype(float).values
+for tq in [0.90,0.925,0.95,0.975]:
+    tumor=score_df['Tumor_Core']>=score_df['Tumor_Core'].quantile(tq)
+    dist=cdist(coords, coords[tumor]).min(1)
+    print('\\ntumor q',tq,'n',tumor.sum(),'dist med',np.median(dist))
+    for ct in cts:
+        if ct=='Tumor_Core': continue
+        for cq in [0.6]:
+            mask=score_df[ct]>=score_df[ct].quantile(cq)
+            p=mannwhitneyu(dist[mask], dist[~mask], alternative='less').pvalue
+            print(ct,'top',1-cq,'n',mask.sum(),'med_in',np.median(dist[mask]),'med_out',np.median(dist[~mask]),'p',p)
+PY"

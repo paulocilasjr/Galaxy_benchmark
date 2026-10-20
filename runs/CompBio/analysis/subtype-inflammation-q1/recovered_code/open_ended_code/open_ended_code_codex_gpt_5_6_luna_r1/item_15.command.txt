@@ -1,0 +1,51 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np,pandas as pd,time
+from scipy.io import mmread
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:g=pd.read_csv(f,sep='\\t').gene_symbols.astype(str).to_numpy()
+with gzip.open('subtype.inflammation.q1.1.mtx.gz','rb') as f:X1=mmread(f).tocsr()
+with gzip.open('subtype.inflammation.q1.2.mtx.gz','rb') as f:X2=mmread(f).tocsr()
+X=sparse.hstack([X1,X2],format='csr'); n1=X1.shape[1]; batch=np.r_[np.zeros(n1,int),np.ones(X2.shape[1],int)]
+lib=np.asarray(X.sum(0)).ravel(); Xn=X.multiply(1e4/np.maximum(lib,1)).tocsr(); Xn.data=np.log1p(Xn.data); Xc=Xn.T.tocsr()
+mean=np.asarray(Xc.mean(0)).ravel(); mean2=np.asarray(Xc.multiply(Xc).mean(0)).ravel(); var=mean2-mean*mean
+present=np.asarray((X>0).sum(1)).ravel(); mask=(present>=20)&np.array([not str(x).upper().startswith('MT-') for x in g])
+idx=np.where(mask)[0][np.argsort(var[mask])[::-1][:3000]]
+print('hvg',len(idx),'matrix',Xc[:,idx].shape)
+t=time.time(); svd=TruncatedSVD(n_components=50,n_iter=5,random_state=1); Z=svd.fit_transform(Xc[:,idx]); print('svd',round(time.time()-t,1),svd.explained_variance_ratio_.sum())
+t=time.time(); km=KMeans(n_clusters=50,n_init=5,random_state=1,algorithm='lloyd').fit(Z); print('kmeans',round(time.time()-t,1))
+clusters=km.labels_; mp={x.upper():i for i,x in enumerate(g)}
+markers={
+'astro':['GFAP','AQP4','ALDH1L1','SLC1A3','GJA1','SOX9','CLDN11','ATP1B2','AGT'],
+'micro':['P2RY12','TMEM119','CX3CR1','C1QA','C1QB','C1QC','AIF1','TYROBP','CSF1R','LST1','CTSS','SPI1'],
+'RPE':['RPE65','BEST1','RLBP1','PMEL','TYR','MITF','LRAT','MERTK','RDH5'],
+'cone':['ARR3','GNB3','PDE6H','OPN1SW','OPN1MW','OPN1LW','GNAT2','RXRG','GUCA1C','GRK7'],
+'rod':['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','ROM1','GNGT1','CNGB1'],
+'horizontal':['LHX1','LHX2','ONECUT1','PROX1','CALB1','CACNA1A','GAD1','GAD2','VSX1'],
+'bipolar':['VSX2','VSX1','PRKCA','GRM6','TRPM1','CABP5','PCP4','OTX2','GPR149','LHX3'],
+'RGC':['RBPMS','SNCG','ISL1','POU4F1','POU4F2','THY1','NEFL','SLC17A6','GAP43','CPLX3'],
+'T':['CD3D','CD3E','TRBC1','TRBC2','CD2','CD247','IL7R','LTB','CCL5'],
+'macro':['LYZ','FCER1G','TYROBP','CTSD','CD68','LILRB1','AIF1','CTSS','CD14','MS4A7','LGALS3','MARCO','ADGRE1','OLR1'],
+'Schwann':['S100B','SOX10','PLP1','MPZ','NCAM1','ERBB3','MAG','PMP22','GFAP'],
+'pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ACTA2','COL4A1','DES','NOTCH3','ABCC9','KCNJ8'],
+'B':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD22','CD19','CD83'],
+'fibro':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','PDGFRA','C7','FBLN1','COL6A2'],
+'Muller':['SLC1A3','RLBP1','GLUL','VIM','SOX9','RAX','KCNJ10','AQP4','FABP7','SLC1A2','DIO2'],
+'endothelial':['EMCN','KDR','ESAM','PECAM1','VWF','ENG','CLDN5','RAMP2','PLVAP','RGCC']}
+ct=list(markers)
+def inds(gs):return [mp[x] for x in gs if x in mp]
+sc=np.array([np.asarray(Xc[:,inds(gs)].mean(1)).ravel() for gs in markers.values()]).T
+cdvec=np.asarray(X[mp['CD69'],:].toarray()).ravel()>0; cclvec=np.asarray(X[mp['CCL5'],:].toarray()).ravel()>0
+for c in range(50):
+ ii=clusters==c
+ if ii.sum()<10:continue
+ m=sc[ii].mean(0); top=np.argsort(m)[::-1][:3]
+ print(c,'n',ii.sum(),'e1/e2',int((ii& (batch==0)).sum()),int((ii&(batch==1)).sum()),'cd69',int((ii&cdvec).sum()),'ccl5',int((ii&cclvec).sum()),'markers',[(ct[j],round(float(m[j]),2)) for j in top])
+print('CD69 clusters')
+for c in sorted(range(50),key=lambda c:int(((clusters==c)&cdvec).sum()),reverse=True)[:10]:
+ ii=(clusters==c); 
+ print(c,'n',ii.sum(),'e1/e2',[(int(ii&(batch==b)).sum()) for b in [0,1]],'cd69',int((ii&cdvec).sum()))
+ cm=np.asarray(Xc[ii].mean(0)).ravel(); bg=np.asarray(Xc.mean(0)).ravel(); score=cm-bg
+ print('; '.join(g[i]+'='+str(round(float(score[i]),2)) for i in np.argsort(score)[-30:][::-1]))
+PY"

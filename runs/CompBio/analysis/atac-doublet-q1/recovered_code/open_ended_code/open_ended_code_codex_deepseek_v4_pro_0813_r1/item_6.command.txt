@@ -1,0 +1,40 @@
+/bin/bash -lc "cat > compute_basic.py <<'PY'
+import gzip, collections, sys, statistics, json
+fn='atac.doublet.q1.bed.gz'
+bcs=[] # order first seen
+counts=collections.Counter()
+uniq_frag=collections.Counter()
+uniq_bin1=collections.Counter() # 5kb bin key chr,start//5000
+uniq_bin2=collections.Counter() # 10kb
+first=set()
+with gzip.open(fn,'rt') as f:
+    for line in f:
+        parts=line.split()
+        chr=parts[0]; start=int(parts[1]); end=int(parts[2]); bc=parts[3]
+        if bc not in first:
+            first.add(bc); bcs.append(bc)
+        counts[bc]+=1
+        uniq_frag[(bc,start,end)]=1
+        uniq_bin1[(bc,chr,start//5000)]=1
+        uniq_bin2[(bc,chr,start//10000)]=1
+rows=[]
+for bc in bcs:
+    c=counts[bc]
+    # unique exact fragments count
+    uf=sum(1 for (b,s,e),v in uniq_frag.items() if b==bc)
+    ub1=sum(1 for (b,ch,st),v in uniq_bin1.items() if b==bc)
+    ub2=sum(1 for (b,ch,st),v in uniq_bin2.items() if b==bc)
+    rows.append((bc,c,uf,ub1,ub2,c-uf,c/ub2 if ub2 else 0, c/ub1 if ub1 else 0))
+print('n',len(rows))
+for name,idx in [('total',1),('unique_frag',2),('bin5k',3),('bin10k',4),('dup',5),('frag_per10k',6)]:
+    vals=sorted(r[idx] for r in rows)
+    print('\\n',name,'min max mean median p95 p99')
+    print(vals[0],vals[-1],statistics.mean(vals),statistics.median(vals),vals[int(.95*len(vals))],vals[int(.99*len(vals))])
+    top=sorted(rows,key=lambda r:r[idx], reverse=True)[:20]
+    print([(r[0],r[idx]) for r in top])
+# scatter of duplicate and bin unique top
+import math
+print('\\nTop total')
+for r in sorted(rows,key=lambda r:r[1], reverse=True)[:30]: print(r)
+PY
+python3 compute_basic.py"

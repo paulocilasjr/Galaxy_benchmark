@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from collections import Counter
+
+sample_file='inputs/Sample_annotated_Zenodo.csv'
+meta_file='inputs/GeneMetaInfo_Zenodo.csv'
+count_file='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+
+with open(sample_file,newline='') as f:
+    samples=list(csv.DictReader(f))
+cd14_names=[r['sample'] for r in samples if r['celltype']=='CD14']
+assert len(cd14_names)==132 and len(cd14_names)==len(set(cd14_names))
+
+meta={}
+with open(meta_file,newline='') as f:
+    for r in csv.DictReader(f):
+        gene=r['']
+        assert gene not in meta
+        meta[gene]=(float(r['Length']),r['gene_biotype'])
+
+records=[]
+bad_width=0
+nonfinite=0
+negative=0
+noninteger=0
+with open(count_file,newline='') as f:
+    rd=csv.reader(f)
+    h=next(rd)
+    pos={v:i for i,v in enumerate(h)}
+    assert h[0]==''
+    assert set(h[1:])=={r['sample'] for r in samples}
+    cdidx=[pos[x] for x in cd14_names]
+    for lineno,row in enumerate(rd,2):
+        if len(row)"'!=len(h): bad_width+=1; continue
+        gene=row[0]
+        vals=[float(row[i]) for i in cdidx]
+        if any(not math.isfinite(v) for v in vals): nonfinite+=1
+        negative += sum(v<0 for v in vals)
+        noninteger += sum(v!=round(v) for v in vals)
+        ctot=math.fsum(vals)
+        atot=math.fsum(float(v) for v in row[1:])
+        length,bt=meta[gene]
+        records.append((gene,length,bt,ctot,atot))
+assert len(records)==len(meta)==59453
+
+def corr(xs,ys):
+    n=len(xs)
+    mx=math.fsum(xs)/n; my=math.fsum(ys)/n
+    dx=[v-mx for v in xs]; dy=[v-my for v in ys]
+    return math.fsum(a*b for a,b in zip(dx,dy))/math.sqrt(math.fsum(a*a for a in dx)*math.fsum(b*b for b in dy))
+
+def result(label,pred):
+    z=[r for r in records if pred(r)]
+    x=[r[1] for r in z]
+    # mean expression = CD14 total / n CD14; correlation unchanged by constant scale
+    y=[r[3]/len(cd14_names) for r in z]
+    print(label,'"'n',len(z),'r',format(corr(x,y),'.17g'))
+
+result('MAIN exact protein; CD14 total>=10',lambda r:r[2]=='protein_coding' and r[3]>=10)
+result('exact protein; all-sample total>=10',lambda r:r[2]=='protein_coding' and r[4]>=10)
+result('exact protein; CD14 mean>=10',lambda r:r[2]=='protein_coding' and r[3]/len(cd14_names)>=10)
+result('exact protein; CD14 total>10',lambda r:r[2]=='protein_coding' and r[3]>10)
+result('contains protein_coding; CD14 total>=10',lambda r:'protein_coding' in r[2] and r[3]>=10)
+print('CD14 samples',len(cd14_names),'bad widths',bad_width,'nonfinite',nonfinite,'negative',negative,'noninteger',noninteger)
+print('protein exact',sum(r[2]=='protein_coding' for r in records),
+      'kept',sum(r[2]=='protein_coding' and r[3]>=10 for r in records),
+      'below10',sum(r[2]=='protein_coding' and r[3]<10 for r in records),
+      'exactly10',sum(r[2]=='protein_coding' and r[3]==10 for r in records))
+PY"

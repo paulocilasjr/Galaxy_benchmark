@@ -1,0 +1,59 @@
+/bin/bash -lc "cd geo && python3 - <<'PY'
+import gzip, csv, math
+fn='GSE4479_family.soft.gz'
+lines=[]; 
+with gzip.open(fn,'rt',encoding='latin1') as f: lines=f.readlines()
+# platform
+start=next(i for i,l in enumerate(lines) if l.startswith('"'!platform_table_begin'"'))
+end=next(i for i,l in enumerate(lines) if l.startswith('"'!platform_table_end'"'))
+rows=list(csv.reader(lines[start+1:end], delimiter='\\t')); header=rows[0]
+symidx=header.index('Gene Symbol')
+probe_sym={r[0]: r[symidx].split('///')[0].strip() for r in rows[1:]}
+starts=[i for i,l in enumerate(lines) if l.startswith('"'!sample_table_begin'"')]
+ends=[i for i,l in enumerate(lines) if l.startswith('"'!sample_table_end'"')]
+expr=[]
+for s,e in zip(starts,ends):
+    srows=list(csv.reader(lines[s+1:e], delimiter='\\t'))
+    val={row[0]:float(row[1]) for row in srows[1:] if len(row)>=2}
+    expr.append(val)
+probes=list(expr[0].keys())
+import numpy as np
+X=np.array([[e[p] for p in probes] for e in expr], dtype=float) # samples x probes
+X=np.log2(X+1)
+groups=np.array([0]*5+[1]*5) # septic 0, sham 1
+# logFC septic - sham, t-test
+m0=X[groups==0].mean(axis=0); m1=X[groups==1].mean(axis=0)
+v0=X[groups==0].var(axis=0,ddof=1); v1=X[groups==1].var(axis=0,ddof=1)
+n0=5;n1=5
+sp=np.sqrt(((n0-1)*v0+(n1-1)*v1)/(n0+n1-2))
+logfc=m0-m1
+t=logfc/(sp*np.sqrt(1/n0+1/n1)+1e-12)
+# collapse probes to max abs t per gene
+from collections import defaultdict
+gene_stats=defaultdict(list)
+for p,probe in enumerate(probes):
+    gene=probe_sym.get(probe,'')
+    if not gene: continue
+    gene_stats[gene].append((abs(t[p]), logfc[p], t[p], probe))
+# select best abs t
+genes=[]
+for g,lst in gene_stats.items():
+    best=max(lst,key=lambda x:x[0])
+    genes.append((best[1], best[2], best[0], best[3], g))
+# sort by abs logFC descending
+genes_by_lfc=sorted(genes,key=lambda x:-abs(x[0]))
+print('top 120 by abs logfc:')
+for i,x in enumerate(genes_by_lfc[:120],1):
+    print(i,x[4],round(x[0],3),round(x[2],2))
+print('\\noverlap top120 with query:')
+q=set(open('../characterize.response.q1.txt').read().split())
+top=set(x[4] for x in genes_by_lfc[:120])
+print('overlap',len(q&top))
+print(q&top)
+print('query not top120',len(q-top))
+print(sorted(q-top)[:50])
+# rank of query genes
+rank={g:i+1 for i,x in enumerate(genes_by_lfc) for g in [x[4]]}
+r=[rank.get(g) for g in q if g in rank]
+print('query ranks in lfc sort first/middle:', sorted(r)[:20], sorted(r)[-10:])
+PY"

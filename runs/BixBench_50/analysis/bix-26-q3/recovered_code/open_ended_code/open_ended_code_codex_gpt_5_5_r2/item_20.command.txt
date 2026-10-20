@@ -1,0 +1,36 @@
+/bin/bash -lc "Rscript - <<'RS'
+x<-readRDS('inputs/res_GluFevsGluFePlus.rds')
+ld<-attr(x,'listData', exact=TRUE)
+df<-data.frame(gene=attr(x,'rownames', exact=TRUE), log2FoldChange=ld"'$log2FoldChange, padj=ld$padj, stringsAsFactors=FALSE)
+fg<-df$gene[!is.na(df$padj) & df$padj < 0.05 & !is.na(df$log2FoldChange) & df$log2FoldChange > 1.5]
+fetch <- function(url){ tf<-tempfile(); download.file(url, tf, quiet=TRUE); read.delim(tf, header=FALSE, stringsAsFactors=FALSE) }
+links <- fetch('"'https://rest.kegg.jp/link/pathway/pau')
+names <- fetch('https://rest.kegg.jp/list/pathway/pau')
+colnames(links) <- c('gene','pathway')
+links"'$gene <- sub('"'"'^pau:'"', '', links"'$gene)
+links$pathway <- sub('"'"'^path:'"', '', links"'$pathway)
+colnames(names) <- c('"'pathway','description')
+names"'$pathway <- sub('"'"'^path:'"', '', names"'$pathway)
+# Universe: DE table genes that map to at least one KEGG PA14 pathway.
+universe <- intersect(df$gene, unique(links$gene))
+fgm <- intersect(fg, universe)
+M <- length(universe); N <- length(fgm)
+res <- do.call(rbind, lapply(split(links$gene, links$pathway), function(gs){
+  gs <- intersect(unique(gs), universe)
+  k <- sum(fgm %in% gs); n <- length(gs)
+  data.frame(pathway=unique(links$pathway[links$gene %in% gs])[1], n=n, k=k, pvalue=phyper(k-1, n, M-n, N, lower.tail=FALSE))
+}))
+# The split path assignment above can be brittle after intersect; recompute simpler
+res <- do.call(rbind, lapply(names(split(links$gene, links$pathway)), function(pid){
+  gs <- intersect(unique(links$gene[links$pathway==pid]), universe)
+  k <- sum(fgm %in% gs); n <- length(gs)
+  data.frame(pathway=pid, n=n, k=k, pvalue=phyper(k-1, n, M-n, N, lower.tail=FALSE))
+}))
+res$padj <- p.adjust(res$pvalue, method='"'BH')
+res <- merge(res, names, by='pathway', all.x=TRUE)
+res <- res[order(res"'$pvalue),]
+cat('"'DE genes', nrow(df), 'mapped universe', M, 'foreground', length(fg), 'mapped foreground', N, '\\n')
+print(head(res, 20), row.names=FALSE)
+cat('ABC row:\\n')
+print(res[grep('ABC transporters', res"'$description, fixed=TRUE),], row.names=FALSE)
+RS'

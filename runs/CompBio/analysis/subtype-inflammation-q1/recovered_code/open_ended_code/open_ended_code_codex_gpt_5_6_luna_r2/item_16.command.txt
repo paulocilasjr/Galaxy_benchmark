@@ -1,0 +1,64 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip, numpy as np, time, gc, warnings
+from scipy.io import mmread
+from scipy.sparse import coo_matrix, vstack
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+warnings.filterwarnings('ignore')
+t0=time.time()
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as h:
+ next(h); genes=[x.rstrip().split('\\t')[1] for x in h]
+idx={x:i for i,x in enumerate(genes)}
+files=['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz']
+ns=[]; mus=[]; m2s=[]
+for f in files:
+ print('stats',f,flush=True)
+ a=mmread(f).tocoo()
+ n=a.shape[1]; ns.append(n)
+ dat=a.data.astype(np.float32,copy=False); col=a.col
+ lib=np.bincount(col,weights=dat,minlength=n).astype(np.float32)
+ vals=np.log1p(dat*(1e4/lib[col]))
+ mu=np.bincount(a.row,weights=vals,minlength=a.shape[0]).astype(np.float64)/n
+ m2=np.bincount(a.row,weights=vals.astype(np.float64)**2,minlength=a.shape[0])/n
+ mus.append(mu); m2s.append(m2)
+ print('done nnz',a.nnz,'time',time.time()-t0,flush=True)
+ del a,dat,col,lib,vals,mu,m2; gc.collect()
+N=sum(ns); mean=sum(mus[j]*ns[j] for j in range(2))/N
+m2=sum(m2s[j]*ns[j] for j in range(2))/N
+var=np.maximum(m2-mean*mean,0)
+valid=(mean>0.02)&np.array([not (g.startswith('MT-') or g.startswith('RPS') or g.startswith('RPL') or g=='MALAT1') for g in genes])
+nhvg=4000
+hvg=np.where(valid)[0][np.argsort(var[valid])[-nhvg:]]
+# force key markers into features
+force=['CCL5','SLC1A3','RLBP1','GLUL','WIF1','GABRG3','FOXP2','P2RY12','ADGRE1','MARCO','STAB1','OLR1','CCL2','CCL7','CYBB','CD3D','TRAC','IL7R','MARCH1']
+hvg=np.array(sorted(set(hvg.tolist()+[idx[g] for g in force if g in idx])),dtype=np.int32)
+print('hvg',len(hvg),'time',time.time()-t0,'topvar',[(genes[i],round(var[i],2)) for i in hvg[np.argsort(var[hvg])[-15:]]],flush=True)
+Xs=[]
+for f,n in zip(files,ns):
+ print('build',f,flush=True)
+ a=mmread(f).tocoo(); dat=a.data.astype(np.float32,copy=False); col=a.col
+ lib=np.bincount(col,weights=dat,minlength=n).astype(np.float32)
+ vals=np.log1p(dat*(1e4/lib[col]))
+ keep=np.isin(a.row,hvg)
+ rr=np.searchsorted(hvg,a.row[keep])
+ Y=coo_matrix((vals[keep],(col[keep],rr)),shape=(n,len(hvg)),dtype=np.float32).tocsr()
+ Y.sum_duplicates(); Xs.append(Y)
+ print('built',Y.shape,Y.nnz,'time',time.time()-t0,flush=True)
+ del a,dat,col,lib,vals,keep,rr,Y; gc.collect()
+X=vstack(Xs,format='csr'); del Xs; gc.collect()
+print('stack',X.shape,X.nnz,'time',time.time()-t0,flush=True)
+svd=TruncatedSVD(n_components=40,n_iter=3,random_state=1)
+Z=svd.fit_transform(X)
+Z=(Z-Z.mean(0))/(Z.std(0)+1e-8)
+print('svd done',time.time()-t0,'expl',svd.explained_variance_ratio_[:10].sum(),flush=True)
+for k in [25,40]:
+ km=KMeans(n_clusters=k,n_init=5,random_state=1,max_iter=100)
+ lab=km.fit_predict(Z)
+ print('\\nK',k,'inertia',km.inertia_,flush=True)
+ ccl5=np.asarray(X[:,np.where(hvg==idx['CCL5'])[0][0]].todense()).ravel() if idx['CCL5'] in hvg else np.zeros(X.shape[0])
+ meanX=np.asarray(X.mean(0)).ravel()
+ for c in range(k):
+  sel=lab==c; n=sel.sum(); n1=sel[:ns[0]].sum(); cp=(ccl5[sel]>0).sum()
+  av=np.asarray(X[sel].mean(0)).ravel(); eff=av-meanX; ix2=np.argsort(eff)[-10:][::-1]
+  print(f'{c:2d}: n={n:4d} e1={n1:4d} e2={n-n1:4d} ccl5={cp:4d}({cp/max(n,1)*100:4.1f}%) '+','.join(genes[hvg[i]] for i in ix2),flush=True)
+PY"

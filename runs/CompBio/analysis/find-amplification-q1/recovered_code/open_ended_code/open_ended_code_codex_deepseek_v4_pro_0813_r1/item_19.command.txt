@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, csv, statistics, math, os
+bam='aligned.bam'
+# stream depth all chr22
+p=subprocess.Popen(['samtools','depth','-a','-Q','20',bam],stdout=subprocess.PIPE,text=True,bufsize=1000000)
+# 10kb bins
+bin=10000
+counts=[0]*((50818468//bin)+2)
+sums=[0]*len(counts)
+for line in p.stdout:
+    chrom,pos,dep=line.split()
+    pos=int(pos); dep=int(dep)
+    i=(pos-1)//bin
+    counts[i]+=1; sums[i]+=dep
+p.wait()
+means=[]
+for i,(c,s) in enumerate(zip(counts,sums)):
+    means.append(s/c if c else 0)
+with open('depth_10kb.csv','w') as f:
+    w=csv.writer(f); w.writerow(['start','end','mean'])
+    for i,m in enumerate(means):
+        w.writerow([i*bin+1,(i+1)*bin,m])
+# print nonzero summary and peaks
+print('bins',len(means),'global mean',statistics.mean([m for m in means if m>0]),'median',statistics.median([m for m in means if m>0]))
+# print stretches with mean > baseline*1.5 maybe
+nz=[m for m in means if m>0]
+baseline=statistics.median(nz)
+print('median baseline',baseline,'max',max(means),'min nz',min(nz))
+# contiguous bins above 1.5*median
+thr=baseline*1.5
+seg=[]
+start=None
+for i,m in enumerate(means):
+    if m>thr:
+        if start is None: start=i
+        end=i
+    else:
+        if start is not None:
+            seg.append((start,end))
+            start=None
+if start is not None: seg.append((start,end))
+print('segments >1.5 median')
+for a,b in seg:
+    segmeans=means[a:b+1]
+    print(a*bin+1,(b+1)*bin,'bins',a,b,'len',(b-a+1)*bin,'mean',statistics.mean(segmeans),'max',max(segmeans))
+PY"

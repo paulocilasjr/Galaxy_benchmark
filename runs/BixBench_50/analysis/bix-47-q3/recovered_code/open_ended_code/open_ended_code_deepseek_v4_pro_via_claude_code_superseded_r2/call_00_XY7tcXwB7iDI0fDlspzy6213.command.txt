@@ -1,0 +1,67 @@
+source /tmp/venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+from collections import Counter
+
+# 1. Find oldest male carrier
+trio = pd.read_excel("inputs/230215_Trio_Status.xlsx")
+male_carriers = trio[(trio['Sex'] == 'M') & (trio['BLM Mutation Status'] == 'Carrier')]
+oldest = male_carriers.loc[male_carriers['Age'].idxmax()]
+sample_id = str(int(oldest['Sample ID']))
+print(f"Oldest male carrier: Sample ID {sample_id}, Age {oldest['Age']}")
+
+# 2. Read CHIP genes
+genes_df = pd.read_excel("inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx")
+chip_genes = set(genes_df['ABL1'].str.upper().tolist())
+print(f"Number of CHIP genes: {len(chip_genes)}")
+
+# 3. Read variant file for this sample
+# Find the matching file
+import os
+chip_dir = "inputs/CHIP_DP10_GQ20_PASS"
+files = os.listdir(chip_dir)
+matching = [f for f in files if f"CHIP_{sample_id}-" in f]
+print(f"Matching files: {matching}")
+
+var_file = f"{chip_dir}/{matching[0]}"
+var = pd.read_excel(var_file)
+data = var.iloc[1:].copy()  # skip sub-header row
+
+# 4. Filter to non-reference variants
+nonref = data[data.iloc[:, 4] != 'Reference']  # Zygosity column (index 4, sample-specific)
+print(f"\nNon-reference variants (all genes): {len(nonref)}")
+
+# 5. Count by gene (splitting comma-separated genes)
+gene_counter = Counter()
+for gene_str in nonref.iloc[:, 12]:  # RefSeq Genes column
+    if pd.notna(gene_str):
+        genes = [g.strip() for g in str(gene_str).split(',')]
+        for g in genes:
+            gene_counter[g] += 1
+
+print("\n=== All genes, non-ref variants (split by comma) ===")
+for gene, count in gene_counter.most_common(20):
+    print(f"  {gene}: {count}")
+
+# 6. Filter to CHIP genes only
+chip_gene_counter = Counter()
+for gene_str in nonref.iloc[:, 12]:
+    if pd.notna(gene_str):
+        genes = [g.strip().upper() for g in str(gene_str).split(',')]
+        for g in genes:
+            if g in chip_genes:
+                chip_gene_counter[g] += 1
+
+print("\n=== CHIP genes only, non-ref variants (split by comma) ===")
+for gene, count in chip_gene_counter.most_common(20):
+    print(f"  {gene}: {count}")
+
+# 7. Also check: without splitting by comma
+gene_counter_nosplit = Counter()
+for gene_str in nonref.iloc[:, 12]:
+    if pd.notna(gene_str):
+        gene_counter_nosplit[str(gene_str).strip()] += 1
+
+print("\n=== All genes, non-ref (no split) ===")
+for gene, count in gene_counter_nosplit.most_common(10):
+    print(f"  {gene}: {count}")
+PYEOF

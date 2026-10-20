@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+expr='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+meta='inputs/GeneMetaInfo_Zenodo.csv'
+ann='inputs/Sample_annotated_Zenodo.csv'
+cts=('CD4','CD8','CD14','CD19')
+with open(ann,newline='') as f:
+    ar=list(csv.DictReader(f))
+with open(expr,newline='') as f:
+    er=csv.reader(f); hdr=next(er)
+    col_ct={x['sample']:x['celltype'] for x in ar}
+    idx={ct:[i for i,s in enumerate(hdr) if i and col_ct[s]==ct] for ct in cts}
+    with open(meta,newline='') as mf:
+        mr=csv.DictReader(mf)
+        lengths=[]; means={ct:[] for ct in cts}
+        missing=0; bad=0; rows=0; coding=0
+        for e,m in zip(er,mr):
+            rows += 1
+            if e[0] "'!= m['"'Geneid']:
+                raise RuntimeError(f'misalignment row {rows}: {e[0]} "'!= {m["Geneid"]}'"')
+            if m['gene_biotype'] "'!= '"'protein_coding':
+                continue
+            coding += 1
+            lengths.append(float(m['Length']))
+            for ct in cts:
+                vals=[]
+                for i in idx[ct]:
+                    if e[i]=='': missing += 1
+                    else:
+                        try: vals.append(float(e[i]))
+                        except ValueError: bad += 1
+                if len(vals) "'!= len(idx[ct]): raise RuntimeError('"'missing or nonnumeric expression')
+                means[ct].append(math.fsum(vals)/len(vals))
+        try: next(er); raise RuntimeError('expression has extra rows')
+        except StopIteration: pass
+        try: next(mr); raise RuntimeError('metadata has extra rows')
+        except StopIteration: pass
+
+def pearson(x,y):
+    mx=math.fsum(x)/len(x); my=math.fsum(y)/len(y)
+    dx=[v-mx for v in x]; dy=[v-my for v in y]
+    return math.fsum(a*b for a,b in zip(dx,dy))/math.sqrt(math.fsum(a*a for a in dx)*math.fsum(b*b for b in dy))
+print('rows',rows,'coding',coding,'missing',missing,'bad',bad)
+print('sample counts',{ct:len(idx[ct]) for ct in cts})
+for ct in cts:
+    r=pearson(lengths,means[ct])
+    print(ct,format(r,'.17g'),'abs',format(abs(r),'.17g'),'mean range',min(means[ct]),max(means[ct]))
+print('weakest',min(cts,key=lambda ct:abs(pearson(lengths,means[ct]))))
+PY"

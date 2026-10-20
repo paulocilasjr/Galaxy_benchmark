@@ -1,0 +1,46 @@
+/bin/bash -lc "mkdir -p analysis && cat > analysis/analyze.py <<'PY'
+import numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import spearmanr
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0).loc[sc.index]
+types=sorted(meta.cell_type.unique())
+genes=pd.read_csv('features.tsv.gz',sep='\\t',header=None)[1]
+bc=pd.read_csv('barcodes.tsv.gz',header=None)[0]
+x=mmread('matrix.mtx.gz').toarray().T
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode').loc[bc]
+means=sc.groupby(meta.cell_type).mean().loc[types,genes].T.to_numpy()
+w=np.stack([nnls(means,y)[0] for y in x])
+p=w/w.sum(axis=1,keepdims=True)
+pd.DataFrame(w,index=bc,columns=types).to_csv('analysis/abundance.csv')
+pd.DataFrame(p,index=bc,columns=types).to_csv('analysis/proportions.csv')
+print('SHAPES',sc.shape,x.shape)
+print('CELL TYPES',meta.cell_type.value_counts().to_string())
+print('SC library',sc.sum(axis=1).describe().to_string())
+print('ST library',pd.Series(x.sum(axis=1)).describe().to_string())
+print('Abundance summary',pd.DataFrame(w,columns=types).describe().to_string())
+print('Proportion summary',pd.DataFrame(p,columns=types).describe().to_string())
+print('Dominant counts',pd.Series(np.array(types)[p.argmax(1)]).value_counts().to_string())
+print('Relative residual',np.linalg.norm(x-w@means.T)/np.linalg.norm(x))
+xy=pos[['pxl_col_in_fullres','pxl_row_in_fullres']].to_numpy()
+d=cdist(xy,xy)
+tum=types.index('Tumor_Core')
+for thr in [.1,.2,.3,.4,.5]:
+ t=p[:,tum]>thr
+ if not t.any(): continue
+ dist=d[:,t].min(axis=1)
+ print('\\nTHRESHOLD',thr,'n_tum',t.sum())
+ for i,ct in enumerate(types):
+  print(ct,'spearman',spearmanr(p[:,i],dist),'mean weighted dist',np.average(dist,weights=p[:,i]))
+fig,axs=plt.subplots(2,(len(types)+1)//2,figsize=(18,10))
+for i,(ct,ax) in enumerate(zip(types,axs.flat)):
+ im=ax.scatter(xy[:,0],xy[:,1],c=p[:,i],s=12,cmap='viridis',vmin=0,vmax=1)
+ ax.set_title(ct); ax.set_aspect('equal'); ax.invert_yaxis(); fig.colorbar(im,ax=ax)
+fig.tight_layout();fig.savefig('analysis/maps.png',dpi=140)
+PY
+OPENBLAS_NUM_THREADS=1 python analysis/analyze.py"

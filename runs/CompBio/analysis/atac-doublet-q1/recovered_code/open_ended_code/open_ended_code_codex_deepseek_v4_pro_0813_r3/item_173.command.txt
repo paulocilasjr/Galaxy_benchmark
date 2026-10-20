@@ -1,0 +1,38 @@
+/bin/bash -c "python3 - <<'PY'
+import snapatac2 as snap, numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.metrics.pairwise import cosine_similarity
+# peak matrix binary, SnapATAC2 clusters
+ap=snap.read('atac_peaks_scrub.h5ad'); X=ap.X[:].tocsr().astype(np.float32); X.data[:]=1; names=np.array(ap.obs_names)
+at=snap.read('atac.snap.h5ad'); names2=np.array(at.obs_names); idx=[np.where(names2==n)[0][0] for n in names]; leiden=np.array(at.obs['leiden'])[idx]
+uniq,clusters=np.unique(leiden,return_inverse=True)
+means=[]
+for c in range(len(uniq)):
+    means.append(np.asarray(X[clusters==c].mean(axis=0)).ravel())
+means=np.vstack(means)
+# normalize rows
+from sklearn.preprocessing import normalize
+means_norm=normalize(means,norm='l2',axis=1)
+# candidate
+b='GCGACACGCCGGGCAC-1'; j=np.where(names==b)[0][0]; v=np.asarray(X[j].toarray()).ravel().astype(np.float32); v=normalize(v.reshape(1,-1),norm='l2')[0]
+# top clusters from entropy were 4 and 3? leiden_raw labels, cluster indices? need map.
+leiden_raw=np.unique(leiden)
+# find cluster label for candidate
+print('cand leiden',leiden[j], 'cluster idx',clusters[j])
+# Determine neighbor clusters from prior: cluster labels 4 and 3? We saw counts for uniq [0..13], candidate cluster idx? It was leiden raw '4', and neighbors labels 3 and 4? earlier counts [0 0 0 14 ... 16 ...], for candidate cl 4, counts cluster index 3=14, index 4=16. So parents raw labels '3' and '4' (indices 3,4).
+ci=3; cj=4
+mid=(means_norm[ci]+means_norm[cj])/2
+mid=normalize(mid.reshape(1,-1),norm='l2')[0]
+sim_to_3=cosine_similarity(v.reshape(1,-1),means_norm[ci].reshape(1,-1))[0,0]
+sim_to_4=cosine_similarity(v.reshape(1,-1),means_norm[cj].reshape(1,-1))[0,0]
+sim_to_mid=cosine_similarity(v.reshape(1,-1),mid.reshape(1,-1))[0,0]
+print('sim to cluster3,4,mid',sim_to_3,sim_to_4,sim_to_mid)
+# distribution of sim_to_mid for cluster3 and cluster4 cells
+for clidx,label in [(3,'3'),(4,'4')]:
+ vals=[]
+ for i in np.where(clusters==clidx)[0]:
+  vi=np.asarray(X[i].toarray()).ravel().astype(np.float32); vi=normalize(vi.reshape(1,-1),norm='l2')[0]
+  vals.append(cosine_similarity(vi.reshape(1,-1),mid.reshape(1,-1))[0,0])
+ print(label,'sim_mid mean',np.mean(vals),'max',np.max(vals),'quant',np.quantile(vals,[.5,.75,.9,.95,1]))
+ print('candidate percentile',(np.array(vals)<sim_to_mid).mean())
+PY"

@@ -1,0 +1,53 @@
+/bin/bash -lc "command -v R || true
+command -v julia || true
+python - <<'PY'
+import math, openpyxl
+ws=openpyxl.load_workbook('inputs/data.xlsx',read_only=True,data_only=True)['Sheet1']
+rows=ws.iter_rows(values_only=True)
+headers=next(rows)
+pos={h:i for i,h in enumerate(headers) if h is not None}
+data=[]
+for r in rows:
+    eff=r[pos['Efficacy']]; bmi=r[pos['BMI']]
+    if eff is not None and bmi is not None:
+        data.append((float(bmi), 1.0 if eff == 'PR' else 0.0))
+print('n',len(data),'events',sum(y for x,y in data),'nonevents',sum(1-y for x,y in data))
+# Newton-Raphson maximizing Bernoulli log likelihood with intercept and raw BMI.
+b0=b1=0.0
+for it in range(100):
+    g0=g1=0.0
+    h00=h01=h11=0.0
+    ll=0.0
+    for x,y in data:
+        eta=b0+b1*x
+        if eta>=0:
+            log1pexp=eta+math.log1p(math.exp(-eta))
+            p=1/(1+math.exp(-eta))
+        else:
+            log1pexp=math.log1p(math.exp(eta))
+            p=math.exp(eta)/(1+math.exp(eta))
+        ll += y*eta-log1pexp
+        e=y-p
+        w=p*(1-p)
+        g0 += e; g1 += e*x
+        h00 -= w; h01 -= w*x; h11 -= w*x*x
+    det=h00*h11-h01*h01
+    # H delta = g; beta_new = beta - H"'^-1 g
+    d0=(h11*g0-h01*g1)/det
+    d1=(-h01*g0+h00*g1)/det
+    b0 -= d0; b1 -= d1
+    print(it,b0,b1,ll,g0,g1)
+    if max(abs(d0),abs(d1))<1e-13:
+        break
+ll=0
+for x,y in data:
+    eta=b0+b1*x
+    ll += y*eta - (eta+math.log1p(math.exp(-eta)) if eta>=0 else math.log1p(math.exp(eta)))
+print('"'coef',b0,b1)
+print('logLik',repr(ll))
+print('AIC',repr(-2*ll+2*2))
+# null likelihood/AIC check
+p=sum(y for x,y in data)/len(data)
+ll0=sum(y*math.log(p)+(1-y)*math.log1p(-p) for x,y in data)
+print('null',ll0,-2*ll0+2)
+PY"

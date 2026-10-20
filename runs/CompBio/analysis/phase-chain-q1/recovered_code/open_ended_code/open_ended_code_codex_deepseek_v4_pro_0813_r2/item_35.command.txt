@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam
+bam=pysam.AlignmentFile('aln.sorted.bam','rb')
+for region_start,region_end in [(27079790,27079860),(27080240,27080310)]:
+    print('\\nREGION',region_start,region_end)
+    seen=set()
+    for r in bam.fetch('chr22',region_start,region_end):
+        # only primary, mapped, read spans enough
+        if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+        # print sequence as aligned to reference using cigar
+        refpos=r.reference_start
+        qpos=0
+        ref_aligned=[]; read_aligned=[]
+        for op,length in r.cigartuples:
+            if op==0: # M
+                for _ in range(length):
+                    ref_aligned.append(refpos); read_aligned.append(qpos)
+                    refpos+=1; qpos+=1
+            elif op==1: # I
+                for _ in range(length):
+                    ref_aligned.append(None); read_aligned.append(qpos); qpos+=1
+            elif op==2: # D
+                for _ in range(length):
+                    ref_aligned.append(refpos); read_aligned.append(None); refpos+=1
+            elif op==3: refpos+=length
+            elif op==4: qpos+=length
+            # ignore others
+        # filter ref positions in window
+        align=[]
+        for rp,qp in zip(ref_aligned,read_aligned):
+            if rp is not None and region_start<=rp<region_end:
+                base = '-' if qp is None else r.query_sequence[qp]
+                align.append((rp,base))
+        s=''.join(b for _,b in align)
+        key=(r.query_name,s)
+        if key in seen: continue
+        seen.add(key)
+        print(r.query_name, 'R1' if r.is_read1 else 'R2', r.reference_start, r.cigarstring, len(s), s)
+    print('unique reads',len(seen))
+bam.close()
+PY"

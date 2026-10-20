@@ -1,0 +1,24 @@
+/bin/bash -lc "cd work && python3 - <<'PY'
+import numpy as np
+from collections import Counter
+# load
+bc=[]
+with open('read_barcodes.tsv') as f:
+    for l in f: bc.append(l.rstrip().split('\\t')[1])
+barcodes=sorted(set(bc)); idx={b:i for i,b in enumerate(barcodes)}; ridx=np.array([idx[b] for b in bc],dtype=np.int32)
+h=np.load('human_scores.npy');m=np.load('mouse_scores.npy');p=np.load('pig_scores.npy')
+S=np.vstack([h,m,p]).T
+print('score positive',np.sum(S>0,axis=0),'max per row',np.max(S,axis=1).sum())
+order=np.argsort(-S,axis=1); best=S[np.arange(len(S)),order[:,0]]; second=S[np.arange(len(S)),order[:,1]]
+for min_score in [0,10,20,30,40,50]:
+ for margin in [0,1,2,5,10]:
+  assign=np.full(len(S),-1,dtype=np.int8); ok=(best>=min_score)&(best-second>=margin); assign[ok]=order[ok,0]
+  print('min',min_score,'margin',margin,'assigned reads',ok.sum(),'species assigned',Counter(assign[ok]))
+  counts=np.zeros((len(barcodes),3),dtype=np.int32); valid=assign>=0; np.add.at(counts,(ridx[valid],assign[valid]),1)
+  total=counts.sum(axis=1); top=counts.argmax(axis=1); topc=counts.max(axis=1)
+  for mr in [50,100,200,500]:
+   for purity in [0.7,0.8,0.9,0.95]:
+    conf=(total>=mr)&(topc/np.maximum(total,1)>=purity)
+    if conf.sum()>0:
+     print('  mr',mr,'p',purity,'conf',conf.sum(),Counter(top[conf]))
+PY"

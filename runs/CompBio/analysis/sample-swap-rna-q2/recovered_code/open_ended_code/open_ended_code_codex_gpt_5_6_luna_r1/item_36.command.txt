@@ -1,0 +1,27 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+x=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+m=pd.read_csv('tae_markers.csv')
+m['gene ID']=m['gene ID'].astype(str)
+print('markers',m.shape,'clusters',sorted(m.cluster.unique()),'counts',m.cluster.value_counts().sort_index().to_dict())
+# marker expression scores each cluster set; use log1p expression and compare average rank / specificity
+lx=np.log1p(x)
+# global rank percentile per gene among columns? scores average log x for marker set
+for cl,g in m.groupby('cluster'):
+    genes=[z for z in g['gene ID'] if z in lx.index]
+    # weighted by avg log2FC? all marker genes and top 50
+    for subsetname, gg in [('all',g),('top20',g.sort_values(['p_val_adj','avg_log2FC']).head(20)),('top50',g.sort_values(['p_val_adj','avg_log2FC']).head(50))]:
+        genes=[z for z in gg['gene ID'] if z in lx.index]
+        sc=lx.loc[genes].mean().sort_values(ascending=False)
+        if subsetname=='all': print('cluster',cl,'n',len(genes),'score',sc.round(3).to_dict())
+    print()
+# For each current col, what source cluster marker expression strongest after subtracting mean across all cols
+print('marker-specific contrasts')
+for cl,g in m.groupby('cluster'):
+    genes=[z for z in g['gene ID'] if z in lx.index]
+    # mean log, contrast to other cols? score just mean standardized row
+    vals=lx.loc[genes]
+    z=(vals-vals.mean(axis=1).values[:,None])/(vals.std(axis=1).values[:,None]+1e-6)
+    sc=z.mean().sort_values(ascending=False)
+    print(cl,sc.round(3).to_dict())
+PY"

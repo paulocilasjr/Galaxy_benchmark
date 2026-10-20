@@ -1,0 +1,85 @@
+/bin/bash -c "cat > custom_doublet.py <<'PY'
+import numpy as np, time
+from scipy.sparse import csr_matrix, vstack, hstack
+from scipy.sparse.linalg import svds
+from sklearn.decomposition import TruncatedSVD
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import normalize
+from sklearn.cluster import KMeans
+
+t=time.time()
+d=np.load('atac_5kb.npz')
+mat=csr_matrix((d['data'],d['indices'],d['indptr']), shape=tuple(d['shape']))
+cell_ids=np.array([l.strip() for l in open('cell_ids.txt')])
+# binarize
+mat.data[:] = 1
+print('loaded', mat.shape, mat.nnz, flush=True)
+# feature frequency filter
+freq=np.asarray(mat.sum(axis=0)).ravel()
+lo=0.005*mat.shape[0]; hi=0.3*mat.shape[0]
+keep=np.where((freq>=lo)&(freq<=hi))[0]
+print('keep',len(keep), 'quant',np.quantile(freq,[.001,.005,.01,.05,.1,.3,.5,.9,1]), flush=True)
+sub=mat[:,keep].astype(np.float32).tocsr()
+# Normalize TF-IDF-ish: log1p then L2 normalize rows
+sub.data=np.log1p(sub.data)
+sub=normalize(sub, norm='l2', axis=1, copy=False)
+print('normalized', time.time()-t, flush=True)
+# SVD 30 components (center? TruncatedSVD doesn't center by default)
+ncomp=50
+svd=TruncatedSVD(n_components=ncomp, algorithm='randomized', random_state=0)
+X=svd.fit_transform(sub)
+print('svd done', X.shape, svd.explained_variance_ratio_[:10], time.time()-t, flush=True)
+# simulate doublets: choose random pairs (2x cells) and sum raw binarized counts? use sub normalized or raw sub? Scrublet simulates raw counts then normalizes. We'll use raw sub (log? no) counts.
+# For simplicity sum normalized profiles then L2 normalize again.
+rng=np.random.default_rng(0)
+n_cells=mat.shape[0]
+n_sim=2*n_cells
+idx1=rng.integers(0,n_cells,size=n_sim)
+idx2=rng.integers(0,n_cells,size=n_sim)
+# raw counts from sub
+sub_raw=sub.copy(); # currently normalized"'! Need raw before normalization. Oops.
+# Rebuild raw
+raw=mat[:,keep].astype(np.float32).tocsr()
+sim_raw=raw[idx1,:]+raw[idx2,:]
+sim_raw.data=np.log1p(sim_raw.data)
+sim_norm=normalize(sim_raw, norm='"'l2', axis=1, copy=False)
+# Observed normalized already sub
+# Project simulated via svd transform
+X_sim=svd.transform(sim_norm)
+# combined
+X_all=np.vstack([X, X_sim])
+labels=np.array([0]*n_cells + [1]*n_sim)
+# compute kNN
+nn=NearestNeighbors(n_neighbors=30, metric='cosine', n_jobs=-1).fit(X_all)
+# query observed only
+dists, inds=nn.kneighbors(X, n_neighbors=30)
+scores=(labels[inds].sum(axis=1))/30
+# scores for sim
+dists_sim, inds_sim=nn.kneighbors(X_sim, n_neighbors=30)
+scores_sim=(labels[inds_sim].sum(axis=1))/30
+print('obs score quantiles', np.quantile(scores,[0,.25,.5,.75,.9,.95,.99,1]), 'max',scores.max())
+print('sim score quantiles', np.quantile(scores_sim,[0,.25,.5,.75,.9,.95,.99,1]), 'max',scores_sim.max())
+idx=np.argsort(-scores)
+for i in idx[:50]:
+    print(cell_ids[i], scores[i])
+np.savetxt('custom_scores.txt', np.c_[cell_ids,scores], fmt='%s')
+# cluster observed with KMeans? k=14
+km=KMeans(n_clusters=14, random_state=0, n_init=10).fit(X)
+cl=km.labels_
+# For each cell, nearest neighbor clusters among observed
+nobs=NearestNeighbors(n_neighbors=30, metric='cosine', n_jobs=-1).fit(X)
+dobs,iobs=nobs.kneighbors(X,n_neighbors=30)
+ent=[]
+for i in range(n_cells):
+    labels_neigh=cl[iobs[i]]
+    counts=np.bincount(labels_neigh,minlength=14)
+    p=counts/counts.sum()
+    ent.append(-(p[p>0]*np.log(p[p>0])).sum())
+ent=np.array(ent)
+idx=np.argsort(-ent)
+print('top entropy (mixed cluster neighbors)')
+for i in idx[:50]: print(cell_ids[i], ent[i], cl[i], scores[i], counts)
+np.savetxt('custom_clusters.txt', np.c_[cell_ids,cl,ent,scores], fmt='%s')
+print('done', time.time()-t)
+PY
+python3 custom_doublet.py"

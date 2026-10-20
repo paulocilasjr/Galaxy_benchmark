@@ -1,0 +1,105 @@
+cat << 'PYEOF' > /workspace/calc_correlation.py
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+
+# 1. Load gene metadata, filter for protein_coding
+print("Loading gene metadata...")
+gene_meta = pd.read_csv(
+    'inputs/GeneMetaInfo_Zenodo.csv',
+    index_col=0  # first unnamed col is the gene name; also Geneid column
+)
+# The CSV has an unnamed first column that is the gene name, and also a Geneid column.
+# Let's inspect:
+print("GeneMetaInfo columns:", list(gene_meta.columns))
+print("GeneMetaInfo first rows:")
+print(gene_meta.head(3))
+
+# Filter for protein_coding
+protein_genes = gene_meta[gene_meta['gene_biotype'] == 'protein_coding']
+print(f"\nProtein-coding genes: {len(protein_genes)}")
+print(f"  Length range: {protein_genes['Length'].min()} - {protein_genes['Length'].max()}")
+print(f"  Length mean: {protein_genes['Length'].mean():.0f}")
+
+# 2. Load sample annotations
+print("\nLoading sample annotations...")
+sample_annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+print("Sample annot columns:", list(sample_annot.columns))
+print("Cell types:", sample_annot['celltype'].unique())
+
+# Map each cell type to its samples
+celltype_samples = {}
+for ct in ['CD4', 'CD8', 'CD14', 'CD19']:
+    samples_ct = sample_annot[sample_annot['celltype'] == ct]['sample'].tolist()
+    celltype_samples[ct] = samples_ct
+    print(f"  {ct}: {len(samples_ct)} samples")
+
+# 3. Load expression data (it's large, so we'll process carefully)
+print("\nLoading expression data (this may take a moment)...")
+expr = pd.read_csv(
+    'inputs/BatchCorrectedReadCounts_Zenodo.csv',
+    index_col=0
+)
+print(f"Expression matrix: {expr.shape[0]} genes x {expr.shape[1]} samples")
+print(f"Gene index type: {type(expr.index[0])}, sample: {expr.index[0]}")
+
+# Check overlap between protein-coding genes and expression matrix
+protein_gene_names = set(protein_genes.index)
+expr_gene_names = set(expr.index)
+common_genes = protein_gene_names & expr_gene_names
+print(f"\nProtein-coding genes in meta: {len(protein_gene_names)}")
+print(f"Genes in expression matrix: {len(expr_gene_names)}")
+print(f"Common genes: {len(common_genes)}")
+
+# Check sample column overlap
+for ct, samples in celltype_samples.items():
+    available = [s for s in samples if s in expr.columns]
+    print(f"  {ct}: {len(available)}/{len(samples)} samples available in expr matrix")
+    celltype_samples[ct] = available
+
+# 4. For each cell type, compute average expression per gene, then Pearson r
+print("\n=== Computing correlations ===")
+results = []
+
+for ct in ['CD4', 'CD8', 'CD14', 'CD19']:
+    samples = celltype_samples[ct]
+    if not samples:
+        print(f"  {ct}: No samples, skipping")
+        continue
+    
+    # Subset expression to protein-coding genes and this cell type's samples
+    ct_expr = expr.loc[list(common_genes), samples]
+    print(f"\n  {ct}: {ct_expr.shape[0]} genes x {ct_expr.shape[1]} samples")
+    
+    # Average expression across samples for each gene
+    avg_expr = ct_expr.mean(axis=1)
+    
+    # Get gene lengths for these genes (in same order)
+    # avg_expr index is the gene names
+    lengths = protein_genes.loc[avg_expr.index, 'Length']
+    
+    # Remove any NaN/inf
+    mask = ~(avg_expr.isna() | lengths.isna() | np.isinf(avg_expr))
+    avg_expr_clean = avg_expr[mask]
+    lengths_clean = lengths[mask]
+    
+    # Compute Pearson correlation
+    r, p = pearsonr(lengths_clean, avg_expr_clean)
+    results.append((ct, r, p, len(avg_expr_clean)))
+    print(f"    Pearson r = {r:.6f}, p = {p:.2e}, n = {len(avg_expr_clean)}")
+
+# 5. Determine weakest (lowest absolute r)
+print("\n=== Summary ===")
+for ct, r, p, n in results:
+    print(f"  {ct}: r = {r:.6f}, |r| = {abs(r):.6f}, p = {p:.2e}, n = {n}")
+
+weakest = min(results, key=lambda x: abs(x[1]))
+print(f"\nWeakest correlation: {weakest[0]} (|r| = {abs(weakest[1]):.6f})")
+
+# Write answer
+with open('codex_output/answer.txt', 'w') as f:
+    f.write(weakest[0] + '\n')
+
+print(f"\nAnswer written to codex_output/answer.txt: {weakest[0]}")
+PYEOF
+python3 /workspace/calc_correlation.py

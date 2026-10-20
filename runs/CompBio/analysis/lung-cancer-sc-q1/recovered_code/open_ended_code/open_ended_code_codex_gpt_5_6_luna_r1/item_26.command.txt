@@ -1,0 +1,58 @@
+/bin/bash -lc "python -u - <<'PY'
+import anndata as ad, numpy as np, pandas as pd, h5py, time
+A=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+sy=np.asarray(A.var['symbol'].astype(str))
+sets={
+'immune':['PTPRC','CD3D','CD3E','TRBC1','TRBC2','CD79A','MS4A1','CD37','CD68','LST1','TYROBP','FCER1A','CD1C','CLEC10A','CLEC9A','CST3','FCGR3A','S100A8','S100A9','LILRB1','HLA-DRA','CD74','GZMB','NKG7','GNLY','IL7R','CCR7','FOXP3','MKI67'],
+'dc':['FCER1A','CD1C','CLEC10A','CLEC9A','CST3','HLA-DRA','HLA-DPA1','HLA-DPB1','HLA-DQB1','CD74','COTL1','FCER1G','IRF8','BATF3'],
+'myeloid':['LYZ','LST1','TYROBP','FCER1G','CTSS','AIF1','LGALS3','CSTA','FCGR3A','S100A8','S100A9','S100A10','CTSD','MS4A7'],
+'basal':['KRT5','KRT14','KRT17','TP63','SOX2','KRT6A','KRT13','KRT15','KRT16','S100A2','S100A7','SFN','CLCA2','TRIM29','DSC3','DSG3','SERPINB13','GPC1','FSCN1','GPNMB','HOXA1','FGFBP1','PERP','SLC6A8','KRT4','KRT23','KRT24'],
+'luad':['NAPSA','NKX2-1','SFTPB','SFTPA1','SFTPA2','SFTPC','SFTPD','SCGB1A1','SCGB3A2','AQP5','MUC1','MUC5B','MUC6','WFDC2','FOLR1','SLC34A2','EPCAM','KRT8','KRT18','KRT19','C8orf4','CXCL17'],
+'epithelial':['EPCAM','KRT8','KRT18','KRT19','KRT5','KRT14','KRT17','KRT6A','KRT13','KRT15','KRT16','KRT4','KRT23','KRT24','MUC1','SFN'],
+'endothelial':['PECAM1','VWF','EMCN','KDR','RAMP2','CA4','EDNRB','PLVAP','ENG','ESAM','RGCC'],
+'fibro':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','COL6A2','COL6A3','PDGFRA','PDGFRB','ACTA2','TAGLN','RGS5','DES'],
+'lymphoid':['CD3D','CD3E','TRBC1','TRBC2','CD247','IL7R','CCR7','LTB','CD79A','MS4A1','CD37','NKG7','GNLY'],
+}
+allgs=list(dict.fromkeys(g for gs in sets.values() for g in gs))
+idx=[]; present=[]
+for g in allgs:
+ ii=np.flatnonzero(sy==g)
+ if len(ii): idx.append(int(ii[0])); present.append(g)
+ else: print('MISSING',g)
+print('selected',len(present),flush=True)
+t=time.time(); X=A.X[:,idx].toarray().astype(np.float32); print('loaded marker matrix',time.time()-t,X.shape,'nnz',np.count_nonzero(X),flush=True)
+# row sums directly from CSR datasets
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ indptr=np.asarray(f['X/indptr'])
+ rows=np.diff(indptr)
+ data=f['X/data']
+ totals=np.zeros(len(rows),dtype=np.int64)
+ nz=np.flatnonzero(rows)
+ # avoid loading all values at once; sum each contiguous nonempty row block
+ # each block of 5000 rows
+ for st in range(0,len(rows),5000):
+  en=min(len(rows),st+5000); a=int(indptr[st]); b=int(indptr[en]);
+  totals[st:en]=np.add.reduceat(np.asarray(data[a:b],dtype=np.int64), (indptr[st:en]-a), dtype=np.int64) if b>a else 0
+print('totals',totals.min(),np.median(totals),totals.max(),flush=True)
+Z=np.log1p(X / totals[:,None].astype(np.float32) * 1e4)
+mi={g:i for i,g in enumerate(present)}
+scores={k:Z[:,[mi[g] for g in gs if g in mi]].mean(axis=1) for k,gs in sets.items()}
+samples=np.asarray(A.obs['sampleID'].astype(str))
+out=[]
+for s in sorted(np.unique(samples), key=lambda z:int(z.split('_')[1])):
+ m=samples==s; n=int(m.sum()); row={'sample':s,'n':n}
+ for k,v in scores.items(): row[k]=float(v[m].mean())
+ for g in ['PTPRC','FCER1A','CD1C','CLEC10A','CLEC9A','KRT5','KRT14','KRT17','TP63','SOX2','KRT6A','NAPSA','NKX2-1','SFTPB','EPCAM']:
+  if g in mi: row[g+'_pct']=float((X[m,mi[g]]>0).mean()*100)
+ out.append(row)
+df=pd.DataFrame(out).set_index('sample')
+pd.set_option('display.max_rows',100); pd.set_option('display.max_columns',100); pd.set_option('display.width',240)
+print('\\nTARGET SAMPLE SUMMARY',flush=True)
+print(df.loc[['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']].round(3).to_string(),flush=True)
+print('\\nTOP BY BASAL',flush=True)
+print(df.sort_values('basal',ascending=False)[['n','basal','luad','immune','dc','epithelial']].head(30).round(3).to_string(),flush=True)
+print('\\nTOP BY LUAD',flush=True)
+print(df.sort_values('luad',ascending=False)[['n','basal','luad','immune','dc','epithelial']].head(30).round(3).to_string(),flush=True)
+print('\\nTOP BY DC',flush=True)
+print(df.sort_values('dc',ascending=False)[['n','dc','immune','myeloid','basal','luad']].head(30).round(3).to_string(),flush=True)
+PY"

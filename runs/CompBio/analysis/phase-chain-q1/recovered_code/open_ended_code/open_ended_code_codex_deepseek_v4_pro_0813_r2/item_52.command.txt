@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+# loci genomic 1-based
+loci = [
+    (27079306, 'SNP', ['C','A']),
+    (27079366, 'SNP', ['T','C']),
+    (27079666, 'SNP', ['T','A']),
+    (27079826, 'COMPLEX', ['G','D']),
+    (27080076, 'SNP', ['C','G']),
+    (27080275, 'DEL', ['A','D']),
+    (27080279, 'COMPLEX', ['G','D']),
+    (27080526, 'SNP', ['G','A']),
+]
+local_start=27078000
+bam=pysam.AlignmentFile('aln_bwa.sorted.bam','rb')
+def allele_at_read(r,pos1):
+    local_p0=pos1-local_start  # 0-based in local ref
+    for qp,rp in r.get_aligned_pairs(matches_only=False):
+        if rp==local_p0:
+            return 'D' if qp is None else r.query_sequence[qp]
+    return None
+reads={}
+for r in bam.fetch():
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    reads[r.query_name,'R1' if r.is_read1 else 'R2']=[allele_at_read(r,p) for p,_,_ in loci]
+bam.close()
+pair_calls={}
+for name in set(k[0] for k in reads if k[1]=='R1'):
+    arr=[None]*len(loci)
+    for mate in ['R1','R2']:
+        for i,c in enumerate(reads.get((name,mate),[])):
+            if c is None: continue
+            if arr[i] is None: arr[i]=c
+            elif arr[i]"'!=c: arr[i]=None
+    pair_calls[name]=arr
+for li,(pos,typ,_) in enumerate(loci):
+    c=collections.Counter(a[li] for a in pair_calls.values() if a[li] is not None)
+    print('"'locus',li,pos,c.most_common())
+# pairwise selected
+major=[['C','A'],['T','C'],['T','A'],['G','D'],['C','G'],['A','D'],['G','D'],['G','A']]
+for i in range(len(loci)):
+    for j in range(i+1,len(loci)):
+        ai=major[i]; aj=major[j]
+        tab=collections.Counter()
+        for arr in pair_calls.values():
+            a=arr[i]; b=arr[j]
+            if a in ai and b in aj: tab[(a,b)]+=1
+        n=sum(tab.values())
+        if n<5: continue
+        print(f'{i}-{j} n={n}')
+        for a in ai: print(' ',a,[tab.get((a,b),0) for b in aj])
+PY"

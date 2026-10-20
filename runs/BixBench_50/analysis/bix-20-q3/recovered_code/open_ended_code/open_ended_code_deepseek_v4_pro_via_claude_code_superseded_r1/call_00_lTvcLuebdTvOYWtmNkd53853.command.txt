@@ -1,0 +1,54 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import numpy as np
+
+# Load CHIP genes list
+genes_df = pd.read_excel("inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx")
+chip_genes = set(genes_df.iloc[:, 0].dropna().str.strip().tolist())
+print(f"CHIP genes ({len(chip_genes)}): {sorted(chip_genes)}")
+
+# Check if MMAB, NOTCH1, TET2 etc are in the list
+for gene in ['MMAB', 'NOTCH1', 'TET2', 'GNB1', 'CSF3R', 'DNMT3A', 'ETV6', 'MMACHC']:
+    print(f"  {gene}: {'YES' if gene in chip_genes else 'NO'}")
+
+# Now let me also check all gene names that appear in the passing variants
+variant_dir = "inputs/CHIP_DP10_GQ20_PASS"
+trio = pd.read_excel("inputs/230215_Trio_Status.xlsx")
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+
+exclude_seq = ['intron_variant', 'intergenic_variant', 'intergenic_region', 
+               '3_prime_UTR_variant', '5_prime_UTR_variant',
+               '5_prime_UTR_premature_start_codon_gain_variant']
+
+all_genes_seen = set()
+for _, row in carriers.iterrows():
+    sid = row['Sample ID']
+    matching = [f for f in os.listdir(variant_dir) if f'CHIP_{sid}-' in f]
+    if not matching:
+        continue
+    fpath = os.path.join(variant_dir, matching[0])
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:]
+    
+    zygosity = data[4]
+    seq_ontology = data[13]
+    vaf = pd.to_numeric(data[9], errors='coerce')
+    classification = data[25]
+    
+    combined = data[(zygosity != 'Reference') & 
+                    (~seq_ontology.isin(exclude_seq)) & 
+                    (vaf < 0.3) & 
+                    (classification.notna())]
+    
+    for _, v in combined.iterrows():
+        genes = str(v[12]).split(',')
+        for g in genes:
+            all_genes_seen.add(g.strip())
+            if g.strip() not in chip_genes:
+                print(f"WARNING: {g.strip()} NOT in CHIP gene list! Sample {sid}, variant {v[0]}")
+
+print(f"\nAll genes in passing variants: {sorted(all_genes_seen)}")
+print(f"Genes NOT in CHIP list: {all_genes_seen - chip_genes}")
+
+PYEOF

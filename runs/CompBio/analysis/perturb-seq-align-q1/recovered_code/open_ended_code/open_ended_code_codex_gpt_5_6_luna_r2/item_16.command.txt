@@ -1,0 +1,29 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix
+
+def load(fn):
+ with h5py.File(fn,'r') as f:
+  nobs,nvar=len(f['obs/_index']),len(f['var/_index'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=(nobs,nvar)).tocsr()
+  genes=f['var/_index'][...].astype(str); cats=f['obs/guide/categories'][...].astype(str); codes=f['obs/guide/codes'][...]
+ return X,genes,cats,codes
+
+def stats(fn):
+ X,g,cats,codes=load(fn)
+ lib=np.asarray(X.sum(1)).ravel(); Y=X.multiply(1e4/np.maximum(lib,1)[:,None]).tocsr(); Y.data=np.log1p(Y.data)
+ ctrl=np.isin(codes,[i for i,x in enumerate(cats) if x.startswith('NT-')])
+ base=Y[ctrl].mean(0).A1
+ return Y,g,cats,codes,base
+R,gr,rg,rc,br=stats('perturb.seq.align.q1.ref.h5ad'); Q,gq,qg,qc,bq=stats('perturb.seq.align.q1.query.h5ad')
+for refg,queryg in [('LEO1-I2','guide14'),('CTR9-I7','guide14'),('PAF1-I6','guide14'),('PABPC1-I1','guide18'),('NUDT21-I3','guide13')]:
+ print('\\nPAIR',refg,queryg)
+ for Y,g,cats,codes,base,label in [(R,gr,rg,rc,br,'ref'),(Q,gq,qg,qc,bq,'query')]:
+  if (refg if label=='ref' else queryg) not in cats:continue
+  k= list(cats).index(refg if label=='ref' else queryg)
+  d=Y[codes==k].mean(0).A1-base
+  # top abs and pos/neg
+  inds=np.argsort(d)[-20:][::-1]; neg=np.argsort(d)[:20]
+  print(label,'n',sum(codes==k),'pos',[(g[i],round(d[i],2)) for i in inds[:10]])
+  print(label,'neg',[(g[i],round(d[i],2)) for i in neg[:10]])
+PY"

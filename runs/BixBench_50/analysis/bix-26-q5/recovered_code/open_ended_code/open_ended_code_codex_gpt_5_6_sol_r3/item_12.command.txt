@@ -1,0 +1,44 @@
+/bin/bash -lc "Rscript - <<'RS'
+# Read DESeqResults without requiring Bioconductor classes.
+read_de <- function(p) {
+ x <- readRDS(p)
+ data.frame(gene=attr(x,'rownames'), attr(x,'listData'), check.names=FALSE)
+}
+a <- read_de('inputs/res_GluFevsGluFePlus.rds')
+b <- read_de('inputs/res_SuccvsGluFePlus.rds')
+sig <- function(d) unique(d"'$gene[!is.na(d$padj) & !is.na(d$log2FoldChange) & abs(d$log2FoldChange)>1.5 & d$padj<0.05])
+A <- sig(a); B <- sig(b)
+# KEGG PA14 current organism pathway membership
+lk <- read.delim('"'https://rest.kegg.jp/link/pathway/pau', header=FALSE, col.names=c('gene','term'), stringsAsFactors=FALSE)
+lk"'$gene <- sub('"'"'^pau:'"', '', lk"'$gene); lk$term <- sub('"'"'^path:'"', '', lk"'$term)
+lk <- unique(lk)
+nm <- read.delim('"'https://rest.kegg.jp/list/pathway/pau', header=FALSE, col.names=c('term','name'), stringsAsFactors=FALSE)
+ora <- function(fg, bg=NULL, all_terms=FALSE) {
+ if (is.null(bg)) bg <- unique(lk"'$gene) else bg <- intersect(unique(bg), unique(lk$gene))
+ fg <- intersect(unique(fg), bg)
+ spl <- split(lk$gene, lk$term)
+ spl <- lapply(spl, function(x) intersect(unique(x), bg))
+ ok <- lengths(spl)>=10 & lengths(spl)<=500
+ spl <- spl[ok]
+ k <- vapply(spl, function(gs) sum(fg %in% gs), integer(1))
+ tested <- if(all_terms) rep(TRUE,length(k)) else k>0
+ spl <- spl[tested]; k <- k[tested]
+ M <- lengths(spl); N <- length(bg); n <- length(fg)
+ p <- phyper(k-1, M, N-M, n, lower.tail=FALSE)
+ data.frame(term=names(spl), k=k, M=M, n=n, N=N, p=p, padj=p.adjust(p,'"'BH'), stringsAsFactors=FALSE)
+}
+for (bgmode in c('kegg','deseq')) for (allterms in c(FALSE,TRUE)) {
+ bg <- if(bgmode=='kegg') NULL else union(a"'$gene,b$gene)
+ ea <- ora(A,bg,allterms); eb <- ora(B,bg,allterms)
+ sa <- ea$term[ea$padj<.05]; sb <- eb$term[eb$padj<.05]; ans <- setdiff(sa,sb)
+ cat('"'\\nMODE bg=',bgmode,'family=',if(allterms)'all-size-eligible' else 'hit-only', '\\n', sep='')
+ cat('mapped fg',ea"'$n,eb$n,'"'background',ea"'$N,'"'sig',length(sa),length(sb),'difference',length(ans),'\\n')
+ out <- merge(ea[ea"'$term %in% ans,c('"'term','k','M','p','padj')],nm,by='term',all.x=TRUE)
+ out <- out[order(out"'$padj),]
+ print(out,row.names=FALSE)
+ # Show status in B
+ st <- merge(out[,c('"'term','name')], eb[,c('term','k','M','p','padj')], by='term', all.x=TRUE)
+ cat('B status:\\n'); print(st,row.names=FALSE)
+}
+cat('\\nKEGG links',nrow(lk),'genes',length(unique(lk"'$gene)),'"'terms',length(unique(lk"'$term)),'"'\\n')
+RS"

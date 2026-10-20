@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+cols=['3_1','3_2','3_3','9_1','9_2','9_3']
+x=counts[cols].T
+meta=pd.DataFrame({'condition':['DMSO']*3+['CBD_cisplatin']*3},index=cols)
+print('input',x.shape,'nonzero genes',(x.sum(axis=0)>0).sum(),flush=True)
+t=time.time()
+dds=DeseqDataSet(counts=x,metadata=meta,design='~condition',refit_cooks=True,n_cpus=2,quiet=False)
+dds.deseq2()
+print('fit secs',time.time()-t,flush=True)
+st=DeseqStats(dds,contrast=['condition','CBD_cisplatin','DMSO'],alpha=0.05,n_cpus=2,quiet=False)
+st.summary()
+r=st.results_df
+print('results',r.shape,'padj nonnull',r.padj.notna().sum())
+deg=r[(r.padj<0.05)&(r.log2FoldChange.abs()>=0.5)]
+print('DEG',len(deg),'up',(deg.log2FoldChange>0).sum(),'down',(deg.log2FoldChange<0).sum())
+print(deg.sort_values('padj').head(20).to_string())
+# just calculate target mapping hits after downloading lib
+import gseapy as gp
+ann=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t').set_index('ENSG')['gene_name']
+genes=ann.reindex(deg.index).dropna().tolist()
+print('mapped rows',len(genes),'unique symbols',len(set(genes)))
+lib=gp.get_library(name='Reactome_2022',organism='Human')
+term='TP53 Regulates Transcription Of Cell Cycle Genes'
+print('library terms',len(lib),'target exact',term in lib)
+if term in lib:
+ pgenes=lib[term]
+ hits=sorted(set(genes)&set(pgenes))
+ print('target pathway size',len(pgenes),'hits',len(hits),hits)
+# exact enrichr online
+res=gp.enrichr(gene_list=genes,gene_sets='Reactome_2022',organism='human',outdir=None,verbose=True)
+row=res.results[res.results.Term.eq(term)]
+print(row.to_string(index=False))
+PY"

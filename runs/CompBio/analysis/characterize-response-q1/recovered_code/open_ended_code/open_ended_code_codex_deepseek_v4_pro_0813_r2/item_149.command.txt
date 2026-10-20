@@ -1,0 +1,29 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(mouse4302.db)
+library(data.table)
+expr <- fread('GSE17721_expr.csv')
+probes <- expr[[1]]
+# remove quotes? inspect
+cat('probe head', head(probes), '\\n')
+# strip quotes if present
+probes <- gsub('\"','',probes)
+map <- select(mouse4302.db, keys=probes, columns=c('SYMBOL'), keytype='PROBEID')
+# aggregate: prefer unique non-NA, but many probes per gene. average by symbol later in python
+write.csv(map, 'GSE17721_probe_map.csv', row.names=FALSE)
+cat('mapped', sum("'!is.na(map$SYMBOL)), '"'of', length(probes),'\\n')
+RS
+python3 - <<'PY'
+import pandas as pd, numpy as np
+expr=pd.read_csv('GSE17721_expr.csv')
+expr['probe']=expr.iloc[:,0].str.replace('\"','')
+map=pd.read_csv('GSE17721_probe_map.csv')
+# map columns; drop ID_REF
+expr=expr.merge(map.rename(columns={'PROBEID':'probe'}),on='probe',how='left')
+# group by SYMBOL uppercase mean of numeric cols
+cols=[c for c in expr.columns if c not in ['ID_REF','probe','SYMBOL']]
+expr['SYMBOL']=expr['SYMBOL'].str.upper()
+out=expr.groupby('SYMBOL')[cols].mean().reset_index()
+out.to_csv('GSE17721_symbol_expr.csv',index=False)
+print(out.shape)
+PY
+head -2 GSE17721_symbol_expr.csv | cut -c1-200"

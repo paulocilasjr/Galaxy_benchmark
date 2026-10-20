@@ -1,0 +1,102 @@
+/bin/bash -lc "python3 - <<'PY'
+import math, csv, re
+from collections import defaultdict
+
+path2gene=defaultdict(set); gene2path=defaultdict(set)
+for line in open('/workspace/tmp/pau_link.tsv'):
+    line=line.strip()
+    if not line: continue
+    g,p=line.split('\\t'); g=re.sub(r'["'^:]+:'"','',g); p=re.sub(r'["'^:]+:'"','',p)
+    path2gene[p].add(g); gene2path[g].add(p)
+names={}
+for line in open('/workspace/tmp/pau_pathways.tsv'):
+    line=line.strip()
+    if not line: continue
+    p,n=line.split('\\t',1); names[p]=n
+path2gene={p:g for p,g in path2gene.items() if p in names}
+gene2path={g:{p for p in ps if p in names} for g,ps in gene2path.items()}
+universe=sorted({g for gs in path2gene.values() for g in gs}); N=len(universe)
+
+def bh(ps):
+    n=len(ps); idx=sorted(range(n), key=lambda i:ps[i]); q=[0.0]*n; prev=1.0
+    for rank,i in enumerate(idx):
+        v=ps[i]*n/(rank+1); q[i]=min(v,prev); prev=q[i]
+    return [min(v,1) for v in q]
+
+def qvalues(ps):
+    # pi0est bootstrap from qvalue package, lambda=seq(.05,.95,.05), bootstrap method
+    p=ps
+    m=len(p)
+    lam=[i/20 for i in range(1,20)]
+    # pi0 for each lambda
+    ind=len(lam)
+    counts=[sum(pp >= l for pp in p) for l in lam]
+    # R: cumsum(tabulate(findInterval(p, vec=lambda))[ind])/(length(p)*(1-lambda[ind]))
+    # tabulate bins counts of p in intervals. counts >= lambda equivalent sum(p>=lambda)
+    pi0s=[counts[i]/(m*(1-lam[i])) for i in range(ind)]
+    minpi0=sorted(pi0s)[int((len(pi0s)-1)*0.1)] if len(pi0s)>1 else min(pi0s)
+    W=counts
+    mses=[]
+    for i,l in enumerate(lam):
+        mse=(W[i]/(m*m*(1-l)**2))*(1-W[i]/m)+(pi0s[i]-minpi0)**2
+        mses.append(mse)
+    # R pi0 <- min(pi0[mse == min(mse)],1), first match? min may choose smallest pi0 among ties
+    minmse=min(mses)
+    candidates=[pi0s[i] for i,v in enumerate(mses) if v==minmse]
+    pi0=min(min(candidates),1)
+    # qvals: pi0 * pmin(1, cummin(p[o]*m/i)) for decreasing p, map back
+    o=sorted(range(m), key=lambda i:-p[i])
+    ro=[0]*m
+    for rank,i in enumerate(o): ro[i]=rank
+    c=[0.0]*m; prev=float('inf')
+    # cummin over ordered decreasing
+    vals=[]
+    cur=1.0
+    for rank,i in enumerate(o):
+        v=p[i]*m/(rank+1)
+        if v<cur: cur=v
+        vals.append(cur)
+    # map vals in order back
+    q=[pi0*vals[ro[i]] for i in range(m)]
+    return q
+
+def ora(gene_set):
+    gene_set=set(gene_set)&set(gene2path); mapped={g:set(gene2path[g]) for g in gene_set}
+    qterms=set().union(*mapped.values()) if mapped else set()
+    if not qterms:return []
+    qterms={t for t in qterms if 10<=len(path2gene[t])<=500}
+    n=len(mapped); rows=[]
+    for t in sorted(qterms):
+        k=len(path2gene[t]&set(mapped)); M=len(path2gene[t]); den=math.comb(N,n); p=0.0
+        for i in range(k,min(n,M)+1): p+=math.comb(M,i)*math.comb(N-M,n-i)/den
+        rows.append((t,k,M,n,p))
+    ps=[r[4] for r in rows]; padj=bh(ps); qv=qvalues(ps)
+    res=[]
+    for r,pa,q in zip(rows,padj,qv):
+        t,k,M,n,p=r
+        res.append((t,p,pa,q,k,M,n))
+    return res
+
+strains={}
+for st in ['97','98','99']:
+    genes=[]
+    for row in csv.DictReader(open(f'/workspace/tmp/res_{st}.csv')):
+        genes.append((row['gene'],float(row['lfc'])))
+    strains[st]=genes
+    for direction in ['up','down']:
+        pred=(lambda x:x>1.5) if direction=='up' else (lambda x:x<-1.5)
+        gs=[g for g,l in genes if pred(l)]
+        res=ora(gs)
+        full=[r for r in res if r[1]<=0.05 and r[2]<=0.05 and r[3]<=0.2]
+        padj=[r for r in res if r[1]<=0.05 and r[2]<=0.05]
+        print(st,direction,'tested',len(res),'padj',len(padj),'full',len(full))
+        print(' full IDs',[r[0] for r in full])
+        print(' padj IDs',[r[0] for r in padj])
+        globals()[f'{direction}_{st}']=set(r[0] for r in full)
+        globals()[f'{direction}_{st}_padj']=set(r[0] for r in padj)
+
+for key,label in [('full','q/padj'),('padj','padj only')]:
+    up=globals()[f'up_97{\"\" if key==\"full\" else \"_padj\"}'] & globals()[f'up_98{\"\" if key==\"full\" else \"_padj\"}'] & globals()[f'up_99{\"\" if key==\"full\" else \"_padj\"}']
+    down=globals()[f'down_97{\"\" if key==\"full\" else \"_padj\"}'] & globals()[f'down_98{\"\" if key==\"full\" else \"_padj\"}'] & globals()[f'down_99{\"\" if key==\"full\" else \"_padj\"}']
+    print('\\n',label,'up common',up,'down common',down,'union',len(up|down))
+PY"

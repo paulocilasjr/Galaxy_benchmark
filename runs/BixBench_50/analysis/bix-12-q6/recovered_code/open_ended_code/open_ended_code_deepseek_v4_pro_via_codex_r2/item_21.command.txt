@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+
+def parse_fasta(path):
+    seqs=[]; name=None; buf=[]
+    for line in path.read_text().splitlines():
+        if line.startswith('>'):
+            if name is not None: seqs.append(''.join(buf))
+            name=line[1:].strip(); buf=[]
+        else:
+            buf.append(line.strip())
+    if name is not None: seqs.append(''.join(buf))
+    return seqs
+
+def count_info(seqs):
+    L=max((len(s) for s in seqs), default=0)
+    arr=[s.ljust(L,'-') for s in seqs]
+    ok=set('ABCDEFGHIKLMNPQRSTVWYZ')
+    info=0
+    for col in zip(*arr):
+        c=Counter()
+        for x in col:
+            u=x.upper()
+            if u in ok: c[u]+=1
+        states=[v for v in c.values() if v>=2]
+        if len(states)>=2:
+            info+=1
+    return info
+for group in ['animals','fungi']:
+    base=Path('/workspace/tmp')/f'inspect_{group}'/group
+    files=sorted(base.glob('*.mafft'))
+    counts=[]
+    seqcounts=[]
+    for f in files:
+        seqs=parse_fasta(f)
+        seqcounts.append(len(seqs))
+        counts.append(count_info(seqs))
+    print(group, 'n', len(counts), 'sum', sum(counts), 'nonzero', sum(c>0 for c in counts))
+    print('seqcount distribution', Counter(seqcounts))
+    print('counts', counts)
+    Path(f'/workspace/tmp/{group}_counts.txt').write_text('\\n'.join(map(str,counts)))
+
+def mwu(x,y):
+    # U for x (first), with average ranks
+    vals=sorted(set(x+y))
+    ranks={v:i+1 for i,v in enumerate(vals)}
+    rankx=sum(ranks[v] for v in x)
+    n=len(x)
+    U=rankx - n*(n+1)//2
+    # alternative U for y
+    ranky=sum(ranks[v] for v in y)
+    m=len(y)
+    U2=ranky - m*(m+1)//2
+    return U,U2, min(U,U2)
+animals=list(map(int,Path('/workspace/tmp/animals_counts.txt').read_text().split()))
+fungi=list(map(int,Path('/workspace/tmp/fungi_counts.txt').read_text().split()))
+print('U animals-first, fungi-second, min', mwu(animals,fungi))
+# scipy-like tied? U unchanged
+PY"

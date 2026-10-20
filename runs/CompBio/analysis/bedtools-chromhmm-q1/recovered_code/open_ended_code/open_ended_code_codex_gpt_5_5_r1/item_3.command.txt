@@ -1,0 +1,98 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import defaultdict
+
+peak='ENCFF333TAT.bed.gz'
+ann='E055_15_coreMarks_dense.bed.gz'
+state='14_ReprPCWk'
+
+anns=defaultdict(list)
+with gzip.open(ann,'rt') as f:
+    for line in f:
+        if not line.strip() or line.startswith(('#','track','browser')):
+            continue
+        parts=line.rstrip('\\n').split('\\t')
+        chrom=parts[0]; start=int(parts[1]); end=int(parts[2]); st=parts[3]
+        anns[chrom].append((start,end,st))
+for chrom in anns:
+    anns[chrom].sort()
+
+def overlap_sum(intervals):
+    total_ann=0
+    total_state=0
+    idx_by_chrom=defaultdict(int)
+    # This assumes peaks grouped/sorted enough? Better use binary search per interval.
+
+# binary-search method
+import bisect
+ann_starts={c:[x[0] for x in v] for c,v in anns.items()}
+
+def interval_overlap(chrom, s, e):
+    v=anns.get(chrom)
+    if not v:
+        return 0,0
+    starts=ann_starts[chrom]
+    i=bisect.bisect_right(starts, s)-1
+    if i<0: i=0
+    total=reprbp=0
+    n=len(v)
+    while i<n and v[i][0] < e:
+        a,b,st=v[i]
+        if b > s:
+            ov=min(e,b)-max(s,a)
+            if ov>0:
+                total += ov
+                if st==state:
+                    reprbp += ov
+        i+=1
+    return total, reprbp
+
+per_total=per_repr=0
+peak_lines=0
+peak_bp=0
+chrom_missing=defaultdict(int)
+peaks_by_chrom=defaultdict(list)
+with gzip.open(peak,'rt') as f:
+    for line in f:
+        if not line.strip() or line.startswith(('#','track','browser')):
+            continue
+        p=line.rstrip('\\n').split('\\t')
+        c=p[0]; s=int(p[1]); e=int(p[2])
+        peak_lines += 1
+        peak_bp += e-s
+        t,r=interval_overlap(c,s,e)
+        per_total += t
+        per_repr += r
+        if t==0:
+            chrom_missing[c]+=e-s
+        peaks_by_chrom[c].append((s,e))
+
+# merged/union intervals per chromosome
+union_total=union_repr=0
+union_bp=0
+for c, ints in peaks_by_chrom.items():
+    ints.sort()
+    merged=[]
+    for s,e in ints:
+        if not merged or s>merged[-1][1]:
+            merged.append([s,e])
+        else:
+            if e>merged[-1][1]: merged[-1][1]=e
+    for s,e in merged:
+        union_bp += e-s
+        t,r=interval_overlap(c,s,e)
+        union_total += t
+        union_repr += r
+
+print('peak_lines', peak_lines)
+print('peak_bp_per_record', peak_bp)
+print('annotated_bp_per_record', per_total)
+print('repr_bp_per_record', per_repr)
+print('percent_per_record', per_repr/per_total*100, 'round', round(per_repr/per_total*100))
+print('union_peak_bp', union_bp)
+print('annotated_bp_union', union_total)
+print('repr_bp_union', union_repr)
+print('percent_union', union_repr/union_total*100, 'round', round(union_repr/union_total*100))
+print('missing_annotation_bp_per_record', peak_bp-per_total)
+print('missing chroms sample', dict(list(chrom_missing.items())[:10]))
+PY"

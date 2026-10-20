@@ -1,0 +1,29 @@
+/bin/bash -lc "cat > reference.py <<'PY'
+import fsspec,h5py,json,numpy as np,pandas as pd,sys
+refs={'wijst':'01ad3cd7-3929-4654-84c0-6db05bd5fd59','ren':'9dbab10c-118d-496b-966a-67f1763a6b7d','combat':'ebc2e1ff-c8f9-466a-acf4-9d291afaf8b3','stephenson':'c7775e88-49bf-4ba2-a03b-93f00447c958','yoshida':'2a498ace-872a-4935-984b-1afa70fd9886'}
+for key in sys.argv[1:]:
+ d=next(d for d in json.load(open('cellxgene_datasets.json')) if d['dataset_id']==refs[key]);url=d['assets'][0]['url']
+ print(key,url,flush=True)
+ with fsspec.open(url,'rb',block_size=1024*1024,cache_type='blockcache') as stream:
+  with h5py.File(stream,'r') as f:
+   print(list(f.keys()),list(f['obs']),flush=True)
+   cols={}
+   for k in f['obs']:
+    if k=='_index' or any(x in k.lower() for x in ['donor','disease','patient','sample','status','severity','condition']):
+     g=f['obs'][k]
+     if isinstance(g,h5py.Group):
+      cat=g['categories'][:];codes=g['codes'][:];v=cat[codes]
+     else:v=g[:]
+     if v.dtype.kind in 'OS':v=np.array([x.decode() if isinstance(x,bytes) else x for x in v])
+     cols[k]=v
+     print(k,pd.Series(v).value_counts().to_dict() if len(np.unique(v))<150 else str(v[:5]),flush=True)
+   pd.DataFrame(cols).to_csv('ref_'+key+'_obs.csv',index=False)
+   print('var',list(f['var']),flush=True)
+   for k in ['_index','feature_name']:
+    if k in f['var']:
+     g=f['var'][k]
+     if isinstance(g,h5py.Group):v=g['categories'][:][g['codes'][:]]
+     else:v=g[:]
+     print(k,v[:20],flush=True)
+PY
+python -u reference.py wijst ren combat stephenson yoshida > reference.log 2>&1"

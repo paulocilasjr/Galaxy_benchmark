@@ -1,0 +1,51 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import spearmanr
+
+base='extracted/'
+sc=pd.read_csv(base+'spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv(base+'spatial_q_sc_metadata.csv',index_col=0)
+sp=mmread(base+'matrix.mtx.gz').tocsr().toarray().T.astype(float)
+pos=pd.read_csv(base+'tissue_positions.csv')
+types=sorted(meta['cell_type'].unique())
+# Reference profiles: average normalized single-cell expression.
+ref=meta.join(sc.div(sc.sum(axis=1),axis=0)).groupby('cell_type')[sc.columns].mean().loc[types].T.to_numpy()
+ref=ref/ref.sum(axis=0,keepdims=True)
+# Spot compositions by NNLS on all genes.
+y=sp/(sp.sum(axis=1,keepdims=True)+1e-12)
+co=np.array([nnls(ref,row)[0] for row in y]);co=co/(co.sum(axis=1,keepdims=True)+1e-12)
+# Mixture sizes are recoverable from spot library-size bands.
+n=np.rint(sp.sum(axis=1)/sc.sum(axis=1).mean()).astype(int)
+cell_counts=np.rint(co*n[:,None]).astype(int)
+assert np.all(cell_counts.sum(axis=1)==n)
+assert np.allclose(cell_counts/(n[:,None]),co,atol=.1)
+# Tumor-containing spots: at least one inferred Tumor_Core cell.
+tj=types.index('Tumor_Core'); target=cell_counts[:,tj]>0
+xy=pos[['array_row','array_col']].to_numpy(float)
+d=cdist(xy,xy)[:,target].min(axis=1)
+# Distance-to-target null: random spot labels with same number of spots.
+rng=np.random.default_rng(123)
+res=[]
+for t,j in zip(types,range(len(types))):
+ mask=cell_counts[:,j]>0
+ observed=d[mask].mean()
+ null=np.array([d[rng.choice(len(d),mask.sum(),replace=False)].mean() for _ in range(2000)])
+ p=(np.count_nonzero(null<=observed)+1)/(len(null)+1)
+ res.append((t,mask.sum(),observed,null.mean(),p))
+print('types',types)
+print('tumor target spots',int(target.sum()))
+for z in res: print(z)
+# Repeat using several tumor thresholds on continuous NNLS; candidate types consistently below all other non-targets.
+for th in [0.05,.1,.2,.4,.6]:
+ mask=co[:,tj]>th
+ dt=cdist(xy,xy)[:,mask].min(axis=1)
+ vals={t:np.average(dt,weights=cell_counts[:,j]) for j,t in enumerate(types)}
+ print('threshold',th,'n',int(mask.sum()),'weighted distances',vals)
+# exact output candidate set, excluding target by definition and sorting alphabetically
+cand=[t for t,_,obs,null,p in res if t"'!='"'Tumor_Core' and obs < null and p<.01]
+print('ANSWER',','.join(sorted(cand)))
+PY
+python [REDACTED LOCAL PATH]"

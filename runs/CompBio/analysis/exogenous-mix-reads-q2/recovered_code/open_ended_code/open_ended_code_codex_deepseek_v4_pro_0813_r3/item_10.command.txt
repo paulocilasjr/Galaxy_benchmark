@@ -1,0 +1,41 @@
+/bin/bash -c "python3 - <<'PY'
+import re
+from pathlib import Path
+from collections import Counter,defaultdict
+# map reads names? parse bwa mem primary alignments
+for f in ['exogenous.mix.reads.q2.exo.sam','exogenous.mix.reads.q2.endo.sam','exogenous.mix.reads.q2.mix.sam']:
+    mismatch_pos=Counter(); mismatches=[]
+    for line in Path(f).read_text().splitlines():
+        if line.startswith('@'): continue
+        p=line.split('\\t'); flag=int(p[1])
+        if flag & 0x900: continue
+        seq=p[9]; pos=int(p[3]); cigar=p[5]; md=p[12] if len(p)>12 else ''
+        # use NM tag
+        nm=int(re.search(r'NM:i:(\\d+)',line).group(1))
+        if nm:
+            # parse MD to locate mismatches if simple 50M
+            if cigar=='50M':
+                md=p[12] if len(p)>12 else ''
+                refpos=pos
+                seqpos=0
+                # parse md string
+                j=0
+                while j<len(md):
+                    if md[j].isdigit():
+                        n=''
+                        while j<len(md) and md[j].isdigit(): n+=md[j]; j+=1
+                        n=int(n); refpos+=n; seqpos+=n
+                    else:
+                        # mismatch; if "'^ deletion not in 50M
+                        if md[j]=='"'"'^'"':
+                            j+=1
+                            while j<len(md) and md[j].isalpha(): j+=1
+                            continue
+                        mismatch_pos[refpos]+=1; mismatches.append((refpos,md[j],seq[seqpos] if seqpos<len(seq) else '?'))
+                        refpos+=1; seqpos+=1; j+=1
+            else:
+                print('non 50M',line)
+    print(f,'nm>0 reads',sum(1 for line in Path(f).read_text().splitlines() if not line.startswith('@') and re.search(r'NM:i:([1-9])',line)))
+    print('mismatch positions',mismatch_pos.most_common(20))
+    print('first mismatches',mismatches[:10])
+PY"

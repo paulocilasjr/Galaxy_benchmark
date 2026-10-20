@@ -1,0 +1,53 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b533916b494d2eb32b",
+  "history_id": "bbd44e69cb8906b5b0a282c34aea45e8",
+  "tool_id": "codex_pca_log10_pc1_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T03:44:21.354624",
+  "update_time": "2026-07-15T03:44:52.599569",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > pca_pc1.py <<'PY'\nfrom __future__ import print_function\nimport csv\nimport math\nimport sys\nfrom collections import Counter, defaultdict\n\nimport numpy as np\nfrom sklearn.decomposition import PCA\n\nexpr_path = sys.argv[1]\nmeta_path = sys.argv[2]\nout_path = sys.argv[3]\n\nwith open(meta_path, 'r') as handle:\n    meta_reader = csv.DictReader(handle)\n    meta_rows = list(meta_reader)\n    meta_fields = meta_reader.fieldnames or []\nif 'projid' not in meta_fields:\n    raise RuntimeError('metadata is missing projid column')\nmeta_counts = Counter(row['projid'] for row in meta_rows)\nmeta_groups = defaultdict(list)\nfor row in meta_rows:\n    meta_groups[row['projid']].append(row)\n\n# Complete the repeated-ID gate by checking whether repeated metadata rows\n# disagree on plausible stable/invariant sample attributes.\nstable_fields = [field for field in ['msex', 'educ', 'apoe_genotype'] if field in meta_fields]\nstable_conflict_ids = []\nfor sample_id, rows in meta_groups.items():\n    if len(rows) > 1:\n        for field in stable_fields:\n            if len(set(row.get(field, '') for row in rows)) > 1:\n                stable_conflict_ids.append(sample_id)\n                break\n\nwith open(expr_path, 'r') as handle:\n    reader = csv.reader(handle)\n    header = next(reader)\n    if not header or header[0] != 'gene':\n        raise RuntimeError('expression table must have gene as first column')\n    sample_labels = header[1:]\n    expr_counts = Counter(sample_labels)\n    collided_ids = set([sid for sid, n in expr_counts.items() if n > 1])\n    collided_ids.update([sid for sid, n in meta_counts.items() if n > 1])\n    collided_ids.update(stable_conflict_ids)\n\n    keep_indices = []\n    keep_samples = []\n    for idx, sample_id in enumerate(sample_labels):\n        if expr_counts[sample_id] == 1 and meta_counts.get(sample_id, 0) == 1 and sample_id not in collided_ids:\n            keep_indices.append(idx)\n            keep_samples.append(sample_id)\n    if len(keep_samples) < 101:\n        raise RuntimeError('fewer than 101 resolved samples remain for 100-component PCA')\n\n    gene_labels = []\n    rows = []\n    for row in reader:\n        if len(row) != len(header):\n            raise RuntimeError('ragged expression row for gene %s' % (row[0] if row else '<empty>'))\n        gene_labels.append(row[0])\n        vals = []\n        for idx in keep_indices:\n            x = float(row[idx + 1])\n            if x < -1.0:\n                raise RuntimeError('value less than -1 encountered before log10 pseudocount transform')\n            vals.append(math.log10(x + 1.0))\n        rows.append(vals)\n\nif not rows:\n    raise RuntimeError('no expression rows read')\nif len(set(gene_labels)) != len(gene_labels):\n    raise RuntimeError('duplicate gene labels present; feature identity is unresolved')\n\nmatrix = np.asarray(rows, dtype=float).T  # samples x genes\nif not np.all(np.isfinite(matrix)):\n    raise RuntimeError('non-finite values after log10 pseudocount transform')\n\nvariances = np.var(matrix, axis=0, ddof=1)\nnonzero = variances > 0.0\nmatrix = matrix[:, nonzero]\nif matrix.shape[1] < 1:\n    raise RuntimeError('no nonzero-variance genes remain')\n\npca = PCA(n_components=100, svd_solver='full')\npca.fit(matrix)\npc1_percent = float(pca.explained_variance_ratio_[0] * 100.0)\n\nwith open(out_path, 'w') as out:\n    out.write('metric\\tvalue\\n')\n    out.write('pc1_percent\\t%.12g\\n' % pc1_percent)\n    out.write('input_genes\\t%d\\n' % len(gene_labels))\n    out.write('fitted_genes_nonzero_variance\\t%d\\n' % matrix.shape[1])\n    out.write('input_expression_columns\\t%d\\n' % len(sample_labels))\n    out.write('unique_expression_ids\\t%d\\n' % len(expr_counts))\n    out.write('metadata_rows\\t%d\\n' % len(meta_rows))\n    out.write('unique_metadata_ids\\t%d\\n' % len(meta_counts))\n    out.write('excluded_collided_primary_ids\\t%d\\n' % len(collided_ids))\n    out.write('fitted_samples\\t%d\\n' % matrix.shape[0])\n    out.write('n_components\\t100\\n')\n    out.write('centered\\ttrue\\n')\n    out.write('scaled\\tfalse\\n')\nPY\npython pca_pc1.py \"/jetstream2/scratch/main/jobs/78533234/inputs/dataset_82587448-4b78-4eca-b95d-32ab21930d64.dat\" \"/jetstream2/scratch/main/jobs/78533234/inputs/dataset_3a2c4501-6f77-46f5-950c-58423ad1a640.dat\" pc1_variance.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "expression": {
+      "id": "f9cad7b01a472135a93051cc249c220e",
+      "src": "hda",
+      "uuid": "82587448-4b78-4eca-b95d-32ab21930d64"
+    },
+    "metadata": {
+      "id": "f9cad7b01a472135de57f7b7fd7a8558",
+      "src": "hda",
+      "uuid": "3a2c4501-6f77-46f5-950c-58423ad1a640"
+    }
+  },
+  "outputs": {
+    "result": {
+      "id": "f9cad7b01a4721358d7f91fe46996f47",
+      "src": "hda",
+      "uuid": "8cf3e4a7-8784-4a55-9a67-135d0022731c"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

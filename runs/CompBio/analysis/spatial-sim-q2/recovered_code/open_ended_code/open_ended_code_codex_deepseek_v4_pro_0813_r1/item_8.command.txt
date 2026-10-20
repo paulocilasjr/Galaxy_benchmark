@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+import gzip
+sp = mmread('matrix.mtx.gz').tocsc().T # genes x spots
+sp = sp.toarray()
+print('sp', sp.shape, sp.min(), sp.max(), sp.mean())
+features=pd.read_csv('features.tsv.gz', sep='\\t', header=None, names=['ens','gene','type'])
+barcodes=pd.read_csv('barcodes.tsv.gz', sep='\\t', header=None, names=['barcode'])
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+means=sc.groupby(meta['cell_type']).mean()
+cts=means.index.tolist()
+# Ensure gene order aligns with features gene
+X=means.loc[:, features['gene']].values.T # genes x types
+print(X.shape)
+# NNLS each spot
+P=np.zeros((sp.shape[1], len(cts)))
+for j in range(sp.shape[1]):
+    y=sp[:,j]
+    coef,res=nnls(X,y)
+    P[j]=coef
+P_df=pd.DataFrame(P,index=barcodes['barcode'],columns=cts)
+# scale to sum per spot
+Psum=P_df.div(P_df.sum(axis=1),axis=0)
+print(P_df.describe())
+print('correlations among proportions')
+print(Psum.corr())
+# dominant per spot
+print(Psum.idxmax(axis=1).value_counts())
+# Save
+Psum.to_csv('deconv_proportions.csv')
+# summary by array positions
+pos=pd.read_csv('tissue_positions.csv',index_col='barcode')
+pos.index=pos.index.str.replace? no
+# barcodes match
+print('pos barcodes match', pos.index.equals(Psum.index))
+PY"

@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,pysam,collections
+# transcript to gene symbol
+t2g={}
+with gzip.open('Homo_sapiens.GRCh38.cdna.all.fa.gz','rt') as h:
+    for line in h:
+        if line.startswith('>'):
+            tid=line[1:].split(None,1)[0]
+            m=re.search(r'gene_symbol:(["'^ ]+)'"',line)
+            t2g[tid]=m.group(1) if m else '?'
+# group alignments by read; ignore secondary for gene-level evidence
+b=pysam.AlignmentFile('cdna.aln.bam')
+by=collections.defaultdict(list)
+for a in b.fetch(until_eof=True):
+    if not a.is_secondary:
+        by[a.query_name].append(a)
+
+def gene(a): return t2g.get(a.reference_name,'?') if not a.is_unmapped else '*'
+def desc(a):
+    return ('S' if a.is_supplementary else 'P')+('1' if a.is_read1 else '2')+':'+gene(a)+':'+str(a.mapping_quality)+':'+(a.cigarstring or '*')+'@'+str(a.reference_start+1 if not a.is_unmapped else 0)
+# split support pairs primary vs supp, same mate
+cross=collections.Counter(); crossq=collections.defaultdict(list)
+for q,aa in by.items():
+    prim=[a for a in aa if not a.is_supplementary and not a.is_unmapped]
+    sups=[a for a in aa if a.is_supplementary and not a.is_unmapped]
+    for s in sups:
+        for p in prim:
+            if s.is_read1==p.is_read1:
+                gp,gs=gene(p),gene(s)
+                if gp"'!='"'?' and gs"'!='"'?' and gp"'!=gs:
+                    key=tuple(sorted((gp,gs)))
+                    cross[key]+=1; crossq[key].append((q,desc(p),desc(s)))
+# pair-level different mate primary genes
+matepairs=collections.Counter(); mpq=collections.defaultdict(list)
+for q,aa in by.items():
+    p1=[a for a in aa if a.is_read1 and not a.is_supplementary and not a.is_unmapped]
+    p2=[a for a in aa if a.is_read2 and not a.is_supplementary and not a.is_unmapped]
+    gs1={gene(a) for a in p1}; gs2={gene(a) for a in p2}
+    for g1 in gs1:
+      for g2 in gs2:
+        if g1 not in ('"'?','*') and g2 not in ('?','*') and g1"'!=g2:
+          key=tuple(sorted((g1,g2))); matepairs[key]+=1; mpq[key].append((q,desc(p1[0]),desc(p2[0])))
+print('"'\\nTOP SPLIT CROSS-GENE PAIRS')
+for k,n in cross.most_common(80):
+    print(n, k, 'examples', '; '.join(str(x) for x in crossq[k][:3]))
+print('\\nTOP MATE PRIMARY CROSS-GENE PAIRS')
+for k,n in matepairs.most_common(80):
+    print(n,k,'examples','; '.join(str(x) for x in mpq[k][:3]))
+PY"

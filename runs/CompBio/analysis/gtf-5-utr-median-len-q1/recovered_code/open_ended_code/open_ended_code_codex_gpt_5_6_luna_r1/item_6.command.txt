@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections,math
+import numpy as np
+p='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+def attrs(s):
+    return dict(re.findall(r'(\\S+)\\s+\"(["'^"]*)"'"',s))
+D=collections.defaultdict(lambda: {'seq':None,'strand':None,'tx':None,'exon':[],'cds':[],'start':[],'stop':[]})
+with gzip.open(p,'rt') as h:
+  for line in h:
+    if line.startswith('#'): continue
+    a=line.rstrip('\\n').split('\\t'); at=attrs(a[8])
+    if at.get('tag')"'!='"'MANE Select' or a[0] not in std: continue
+    tid=at.get('transcript_id')
+    # tags as dict okay here
+    d=D[tid]; d['seq']=a[0];d['strand']=a[6]
+    x=(int(a[3]),int(a[4])); typ=a[2]
+    if typ=='transcript':d['tx']=x
+    elif typ=='exon':d['exon'].append(x)
+    elif typ=='CDS':d['cds'].append(x)
+    elif typ=='start_codon':d['start'].append(x)
+    elif typ=='stop_codon':d['stop'].append(x)
+print('transcripts',len(D))
+print('feature-bearing counts',collections.Counter((bool(d['exon']),bool(d['cds']),bool(d['stop'])) for d in D.values()))
+print('no CDS',sum(not d['cds'] for d in D.values()), 'no stop',sum(not d['stop'] for d in D.values()), 'no start',sum(not d['start'] for d in D.values()))
+
+def leniv(xs): return sum(b-a+1 for a,b in xs)
+
+def union_len(xs):
+  xs=sorted(xs); total=0; cur=None
+  for a,b in xs:
+    if cur is None: cur=[a,b]
+    elif a<=cur[1]+1: cur[1]=max(cur[1],b)
+    else: total += cur[1]-cur[0]+1;cur=[a,b]
+  if cur is not None:total+=cur[1]-cur[0]+1
+  return total
+
+def metrics(d, cds_stop=True):
+  ex=d['exon']; cod=d['cds']+(d['stop'] if cds_stop else [])
+  coding_start=min(a for a,b in cod); coding_end=max(b for a,b in cod)
+  if d['strand']=='+':
+    u5=sum(max(0,min(b,coding_start-1)-a+1) for a,b in ex)
+    u3=sum(max(0,b-max(a,coding_end+1)+1) for a,b in ex)
+  else:
+    u5=sum(max(0,b-max(a,coding_end+1)+1) for a,b in ex)
+    u3=sum(max(0,min(b,coding_start-1)-a+1) for a,b in ex)
+  return u5,union_len(cod),u3
+for incl in [True,False]:
+  vals=[metrics(d,incl) for d in D.values() if d['cds']]
+  print('incl stop',incl,'n',len(vals),'med',np.median(np.array(vals),axis=0),'floor',[math.floor(x) for x in np.median(np.array(vals),axis=0)])
+  print('mean',np.mean(vals,axis=0),'mins',np.min(vals,axis=0),'maxs',np.max(vals,axis=0))
+# validate total exon equals u5+coding+u3 with union cds, check weird overlaps
+bad=[]
+for tid,d in D.items():
+ if d['cds']:
+  m=metrics(d,True); ex=union_len(d['exon'])
+  if sum(m)"'!=ex:bad.append((tid,d['"'strand'],m,ex,leniv(d['exon']),d['tx'],d['cds'],d['stop'],d['exon']))
+print('bad sums',len(bad))
+for z in bad[:10]:print(z)
+# distributions missing codon details; coding lengths examples
+print('transcripts with CDS but no stop')
+for tid,d in D.items():
+ if d['cds'] and not d['stop']: print(tid,d['seq'],d['strand'],d['tx'],d['cds'][:2],len(d['exon']))
+PY"

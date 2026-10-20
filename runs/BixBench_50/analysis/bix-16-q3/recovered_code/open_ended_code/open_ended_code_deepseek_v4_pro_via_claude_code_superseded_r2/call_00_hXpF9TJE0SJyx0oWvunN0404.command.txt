@@ -1,0 +1,72 @@
+source venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy.stats import spearmanr
+
+# Load data the correct way (same as v4)
+crispr_ids_all = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:, 0].tolist()
+omics_ids_all = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:, 0].tolist()
+crispr_ids_set = set(crispr_ids_all)
+omics_ids_set = set(omics_ids_all)
+
+crispr_header = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()
+omics_header = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()
+
+def parse_gene_name(col_name):
+    col_name = col_name.strip()
+    if '(' in col_name:
+        return col_name.split('(')[0].strip()
+    return col_name
+
+crispr_gene_to_idx = {}
+crispr_gene_to_full = {}
+for i, col in enumerate(crispr_header):
+    if i > 0:
+        gene = parse_gene_name(col)
+        if gene not in crispr_gene_to_idx:
+            crispr_gene_to_idx[gene] = i
+            crispr_gene_to_full[gene] = col
+
+omics_gene_to_idx = {}
+omics_gene_to_full = {}
+for i, col in enumerate(omics_header):
+    if i > 0:
+        gene = parse_gene_name(col)
+        if gene not in omics_gene_to_idx:
+            omics_gene_to_idx[gene] = i
+            omics_gene_to_full[gene] = col
+
+common_genes = sorted(set(crispr_gene_to_idx.keys()) & set(omics_gene_to_idx.keys()))
+
+# Manual check: find genes with rho <= -0.6
+count = 0
+for gene in common_genes:
+    cc = crispr_gene_to_idx[gene]
+    oc = omics_gene_to_idx[gene]
+    
+    crispr_data = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0, cc])
+    omics_data = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0, oc])
+    
+    crispr_data = crispr_data.rename(columns={crispr_data.columns[0]: 'cell_line'})
+    omics_data = omics_data.rename(columns={omics_data.columns[0]: 'cell_line'})
+    
+    crispr_data = crispr_data[crispr_data['cell_line'].isin(omics_ids_set)]
+    omics_data = omics_data[omics_data['cell_line'].isin(crispr_ids_set)]
+    
+    crispr_data = crispr_data.set_index('cell_line')
+    omics_data = omics_data.set_index('cell_line')
+    
+    common_idx = crispr_data.index.intersection(omics_data.index)
+    x = crispr_data.loc[common_idx].iloc[:, 0].astype(float).values
+    y = omics_data.loc[common_idx].iloc[:, 0].astype(float).values
+    
+    mask = ~(np.isnan(x) | np.isnan(y))
+    if mask.sum() >= 10:
+        xc, yc = x[mask], y[mask]
+        if not (np.all(xc == xc[0]) or np.all(yc == yc[0])):
+            rho, _ = spearmanr(xc, yc)
+            if rho <= -0.6:
+                count += 1
+                rho_ess = -rho  # essentiality interpretation
+                print(f'{gene}: rho(expr, crispr)={rho:.6f}, rho(expr, essentiality)={rho_ess:.6f}, n={mask.sum()}')
+" 2>&1

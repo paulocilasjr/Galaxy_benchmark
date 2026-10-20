@@ -1,0 +1,20 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+import json,sys,torch,numpy as np,glob
+sys.path.insert(0,'openspliceai_repo')
+from openspliceai.predict.predict import create_datapoints,load_pytorch_models
+from openspliceai.train_base.openspliceai import SpliceAI
+j=json.load(open('inputs/chr12_120196699_120201111_ucsc.json')); seq=j['dna'].translate(str.maketrans('ACGTN','TGCAN'))[::-1]
+X=torch.tensor(create_datapoints(seq,5000,10000),dtype=torch.float32).permute(0,2,1)
+p=np.load('results/ensemble_predictions.npz')['ensemble'].T
+models,params=load_pytorch_models('openspliceai_repo/models/openspliceai-mane/10000nt',torch.device('cpu'),5000,10000)
+with torch.no_grad():
+ y=torch.mean(torch.stack([m(X) for m in models]),axis=0).permute(0,2,1).contiguous().view(-1,3)[:len(seq)].numpy()
+for pos in [0,29,30,381,382,1626,1801,4412]: print(pos,'direct',p[pos], 'pkg',y[pos], 'diff',y[pos]-p[pos])
+print('params',params)
+print('files',glob.glob('openspliceai_repo/models/openspliceai-mane/10000nt/*.pt'))
+# direct one model each vs package models (package glob order)
+for f,m in zip(glob.glob('openspliceai_repo/models/openspliceai-mane/10000nt/*.pt'),models):
+ state=torch.load(f,map_location='cpu'); md=SpliceAI(32,np.asarray([11]*8+[21]*4+[41]*4),np.asarray([1]*4+[4]*4+[10]*4+[25]*4)); md.load_state_dict(state); md.eval()
+ with torch.no_grad(): a=md(X).permute(0,2,1).view(-1,3)[:len(seq)].numpy(); b=m(X).permute(0,2,1).view(-1,3)[:len(seq)].numpy()
+ print(f, np.max(abs(a-b)),a[381],b[381])
+PY"

@@ -1,0 +1,46 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import warnings
+warnings.filterwarnings("ignore")
+
+count_df = pd.read_csv("inputs/count.csv", index_col=0)
+counts_t = count_df.T
+
+def count_sig(counts_t, use_padj=True):
+    samples = list(counts_t.index)
+    condition = ["KL" if "KL" in s else "WL" for s in samples]
+    metadata = pd.DataFrame({"condition": condition}, index=samples)
+    dds = DeseqDataSet(counts=counts_t, metadata=metadata, design="~condition")
+    dds.deseq2()
+    stat_res = DeseqStats(dds, contrast=["condition", "KL", "WL"])
+    stat_res.summary()
+    stat_res.lfc_shrink(coeff="condition[T.WL]")
+    res = stat_res.results_df.copy()
+    res["log2FoldChange"] = -res["log2FoldChange"]
+    
+    p_col = "padj" if use_padj else "pvalue"
+    sig = res[
+        (res[p_col] < 0.05) &
+        (res["log2FoldChange"].abs() > 1) &
+        (res["baseMean"] > 10)
+    ]
+    return len(sig)
+
+print("Using adjusted p-value (padj):")
+n_all_padj = count_sig(counts_t, use_padj=True)
+n_sub_padj = count_sig(counts_t.drop(index=["KL3","WL3"]), use_padj=True)
+print(f"  All replicates: {n_all_padj}")
+print(f"  Without third reps: {n_sub_padj}")
+print(f"  Direction: {'increase' if n_sub_padj > n_all_padj else 'decrease' if n_sub_padj < n_all_padj else 'no change'}")
+
+print("\nUsing raw p-value (pvalue):")
+n_all_pval = count_sig(counts_t, use_padj=False)
+n_sub_pval = count_sig(counts_t.drop(index=["KL3","WL3"]), use_padj=False)
+print(f"  All replicates: {n_all_pval}")
+print(f"  Without third reps: {n_sub_pval}")
+print(f"  Direction: {'increase' if n_sub_pval > n_all_pval else 'decrease' if n_sub_pval < n_all_pval else 'no change'}")
+PYEOF
+

@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, numpy as np
+from collections import Counter, defaultdict
+refs=[]; s=''
+for line in open('read.proportions.q1.fa'):
+ line=line.strip()
+ if line.startswith('>'):
+  if s: refs.append(s)
+  s=''
+ else:s+=line
+refs.append(s)
+counts=[[0,0,0,0,0] for _ in range(3000)]
+bi={'A':0,'C':1,'G':2,'T':3}
+for line in open('q1.sam'):
+ if line.startswith('@'):continue
+ f=line.split('\\t'); flag=int(f[1])
+ if flag&4:continue
+ pos=int(f[3])-1; seq=f[9]; qi=0; ri=pos
+ for n,op in re.findall(r'(\\d+)([MIDNSHP=X])',f[5]):
+  n=int(n)
+  if op in 'M=X':
+   for j in range(n):
+    if ri+j<3000: counts[ri+j][bi.get(seq[qi+j],4)]+=1
+   qi+=n;ri+=n
+  elif op in 'IS': qi+=n
+  elif op in 'DN': ri+=n
+var=[j for j in range(3000) if len({r[j] for r in refs})>1]
+X=[];y=[]
+for j in var:
+ n=sum(counts[j][:4])
+ for b in 'ACGT':
+  X.append([1 if r[j]==b else 0 for r in refs])
+  y.append(counts[j][bi[b]]/n)
+coef,resid,rank,sv=np.linalg.lstsq(np.array(X),np.array(y),rcond=None)
+print('lstsq',coef,coef/coef.sum(), 'rank',rank, 'resid',resid)
+# pattern summaries, observed allele class fractions vs prediction
+pat=defaultdict(lambda:[Counter(),0])
+for j in var:
+ key=''.join(r[j] for r in refs); n=sum(counts[j][:4]);
+ pat[key][1]+=n
+ for b in 'ACGT':pat[key][0][b]+=counts[j][bi[b]]
+for k,(c,n) in sorted(pat.items(),key=lambda x:-x[1][1]):
+ print(k,sum(1 for j in var if ''.join(r[j] for r in refs)==k),n,{b:round(v/n,4) for b,v in c.items() if v})
+print('coverage min mean max',min(sum(counts[j][:4]) for j in var),sum(sum(counts[j][:4]) for j in var)/len(var),max(sum(counts[j][:4]) for j in var))
+PY"

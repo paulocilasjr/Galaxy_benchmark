@@ -1,0 +1,92 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, statistics
+from collections import Counter
+
+sample_path='inputs/Sample_annotated_Zenodo.csv'
+meta_path='inputs/GeneMetaInfo_Zenodo.csv'
+counts_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+
+# CD14 samples from sample annotation
+cd14=[]
+with open(sample_path, newline='') as f:
+    for row in csv.DictReader(f):
+        if row['celltype'] == 'CD14':
+            cd14.append(row['sample'])
+cd14_set=set(cd14)
+print('CD14 samples', len(cd14))
+
+# gene metadata keyed by Geneid; keep length and biotype
+meta={}
+biotypes=Counter()
+with open(meta_path, newline='') as f:
+    for row in csv.DictReader(f):
+        gid=row['Geneid']
+        biotypes[row['gene_biotype']]+=1
+        try:
+            length=float(row['Length'])
+        except ValueError:
+            continue
+        meta[gid]=(length,row['gene_biotype'])
+print('meta genes', len(meta), 'protein_coding', biotypes['protein_coding'])
+
+xs=[]; ys=[]
+all_total_filter=[]
+seen=0; pc=0; expressed=0; missing_meta=0
+with open(counts_path, newline='') as f:
+    r=csv.reader(f)
+    header=next(r)
+    cd14_idx=[i for i,h in enumerate(header) if h in cd14_set]
+    print('CD14 cols matched', len(cd14_idx))
+    if len(cd14_idx)"'!=len(cd14):
+        print('"'missing from counts', sorted(cd14_set-set(header))[:10])
+    for row in r:
+        seen+=1
+        gid=row[0]
+        m=meta.get(gid)
+        if m is None:
+            missing_meta+=1
+            continue
+        length, biotype=m
+        if biotype"'!='"'protein_coding':
+            continue
+        pc+=1
+        vals=[float(row[i]) for i in cd14_idx]
+        total=sum(vals)
+        if total >= 10:
+            expressed+=1
+            xs.append(length)
+            ys.append(total/len(cd14_idx))
+
+def pearson(x,y):
+    n=len(x)
+    mx=sum(x)/n; my=sum(y)/n
+    sxx=sum((v-mx)**2 for v in x)
+    syy=sum((v-my)**2 for v in y)
+    sxy=sum((a-mx)*(b-my) for a,b in zip(x,y))
+    return sxy/math.sqrt(sxx*syy)
+
+print('count rows', seen, 'missing_meta', missing_meta, 'pc rows', pc, 'expressed pc CD14 total>=10', expressed)
+print('pearson', repr(pearson(xs,ys)))
+print('length mean expression first stats', min(xs), max(xs), min(ys), max(ys))
+
+# also compute some nearby interpretations for sanity, not for final unless needed.
+# total>=10 across all samples, mean over CD14
+x2=[]; y2=[]
+with open(counts_path, newline='') as f:
+    r=csv.reader(f); header=next(r)
+    sample_idx=list(range(1,len(header)))
+    cd14_idx=[i for i,h in enumerate(header) if h in cd14_set]
+    for row in r:
+        m=meta.get(row[0])
+        if not m or m[1]"'!='"'protein_coding': continue
+        all_total=sum(float(row[i]) for i in sample_idx)
+        if all_total>=10:
+            x2.append(m[0]); y2.append(sum(float(row[i]) for i in cd14_idx)/len(cd14_idx))
+print('alt all-sample total>=10 n pearson', len(x2), repr(pearson(x2,y2)))
+
+# log10 mean expression plus pseudocount? common but not asked.
+x3=[]; y3=[]
+for a,b in zip(xs,ys):
+    x3.append(a); y3.append(math.log10(b+1))
+print('alt log10(mean+1) pearson', repr(pearson(x3,y3)))
+PY"

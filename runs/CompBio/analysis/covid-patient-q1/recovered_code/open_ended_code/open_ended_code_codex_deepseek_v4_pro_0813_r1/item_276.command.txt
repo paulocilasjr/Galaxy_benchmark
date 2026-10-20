@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from scipy.cluster.hierarchy import linkage, fcluster
+sig=pd.read_csv('working_signature_scores2.csv',index_col=0)
+freq=pd.read_csv('celltype_freq.csv',index_col=0)
+# feature options
+options={
+'covid_sig':['up','down','diff'],
+'sig_all':['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro','myel_lymph_ratio','isg_lymph_ratio'],
+'no_ratio':['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro'],
+}
+for name,feats in options.items():
+ X=StandardScaler().fit_transform(sig[feats].values)
+ print('\\n',name)
+ for k in [2,3]:
+  km=KMeans(n_clusters=k,n_init=100,random_state=0).fit(X)
+  # determine which cluster healthy-like by mean up/diff? assume lower diff = HC
+  means=[]
+  for lab in range(k):
+   means.append(sig.loc[sig.index[km.labels_==lab],'diff'].mean())
+  healthy_lab=min(range(k), key=lambda l:means[l])
+  sizes=[]
+  for lab in range(k):
+   mem=sorted([int(d[5:]) for d in sig.index[km.labels_==lab]])
+   sizes.append((lab,len(mem),mem))
+  print('kmeans',k,'healthy cluster',healthy_lab,'size', [s[1] for s in sizes], [s for s in sizes])
+  g=GaussianMixture(n_components=k,random_state=0,n_init=20,covariance_type='full').fit(X); labs=g.predict(X)
+  means=[]
+  for lab in range(k): means.append(sig.loc[sig.index[labs==lab],'diff'].mean())
+  healthy_lab=min(range(k), key=lambda l:means[l])
+  sizes=[]
+  for lab in range(k):
+   mem=sorted([int(d[5:]) for d in sig.index[labs==lab]])
+   sizes.append((lab,len(mem),mem))
+  print('gmm',k,'healthy cluster',healthy_lab,'sizes',[s[1] for s in sizes], [s for s in sizes])
+PY"

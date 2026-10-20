@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, time
+start=time.time()
+# Load CD14 sample indices from counts header and annotations set
+cd14=set()
+with open('inputs/Sample_annotated_Zenodo.csv', newline='') as f:
+    for row in csv.DictReader(f):
+        if row['celltype']=='CD14':
+            cd14.add(row['sample'])
+# Load metadata arrays in order, same order as counts confirmed
+geneid=[]; length=[]; pc=[]
+with open('inputs/GeneMetaInfo_Zenodo.csv', newline='') as f:
+    r=csv.reader(f); next(r)
+    for row in r:
+        geneid.append(row[0]); length.append(int(row[3])); pc.append(row[4]=='protein_coding')
+print('meta loaded', len(geneid), time.time()-start)
+# Read counts header and get CD14 col indexes
+cols=None
+with open('inputs/BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    r=csv.reader(f); header=next(r); cols=[i for i,c in enumerate(header) if c in cd14]
+print('n CD14 cols', len(cols), 'expected', len(cd14), 'missing header', len(cd14)-len(cols), cd14-set(header))
+n=len(cols)
+# accumulate
+cnt=0; excluded_less10=0; total_pc=0
+sx=sy=sxx=syy=sxy=0.0
+missing_values=0
+# also accum log10 length and log10 mean maybe for diagnostics
+slx=sly=slxx=slyy=slxy=0.0
+with open('inputs/BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    r=csv.reader(f); next(r)
+    for i,row in enumerate(r):
+        if i>=len(geneid):
+            print('extra row', i); break
+        if not pc[i]:
+            continue
+        total_pc+=1
+        try:
+            s=sum(float(row[j]) for j in cols)
+        except Exception as e:
+            print('bad row', i, geneid[i], e, row[:5]); missing_values+=1; continue
+        if s < 10:
+            excluded_less10+=1
+            continue
+        mean=s/n
+        l=float(length[i])
+        cnt+=1
+        sx+=l; sy+=mean; sxx+=l*l; syy+=mean*mean; sxy+=l*mean
+        lx=math.log10(l) if l>0 else 0; ly=math.log10(mean) if mean>0 else 0
+        slx+=lx; sly+=ly; slxx+=lx*lx; slyy+=ly*ly; slxy+=lx*ly
+print('total pc', total_pc, 'excluded<10', excluded_less10, 'included', cnt, 'missing', missing_values, 'time',time.time()-start)
+def pear(n,sx,sy,sxx,syy,sxy):
+    denom=math.sqrt((n*sxx-sx*sx)*(n*syy-sy*sy))
+    return (n*sxy-sx*sy)/denom if denom else None
+print('raw pearson', pear(cnt,sx,sy,sxx,syy,sxy))
+print('log10 pearson', pear(cnt,slx,sly,slxx,slyy,slxy))
+print('means len/mean', sx/cnt, sy/cnt)
+# print some quantiles maybe min max
+PY"

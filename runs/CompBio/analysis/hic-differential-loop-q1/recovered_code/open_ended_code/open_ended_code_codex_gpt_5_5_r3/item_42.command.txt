@@ -1,0 +1,56 @@
+/bin/bash -lc "PYTHONPATH=./pydeps python3 - <<'PY'
+import hicstraw, numpy as np, pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.ndimage import maximum_filter, gaussian_filter
+h1='https://4dn-open-data-public.s3.amazonaws.com/fourfront-webprod/wfoutput/0abd0cb2-6e62-492f-97a8-6cd19f814e99/4DNFI2TK7L2F.hic'
+hff='https://4dn-open-data-public.s3.amazonaws.com/fourfront-webprod/wfoutput/464f672a-ff4b-41ba-818c-535fd1e725ac/4DNFIPC7P27B.hic'
+start,end,res=7000000,9000000,10000
+n=(end-start)//res
+
+def mat(url, mtype='oe', norm='KR'):
+    a=np.full((n,n), np.nan, dtype=float)
+    recs=hicstraw.straw(mtype,norm,url,f'12:{start}:{end}',f'12:{start}:{end}','BP',res)
+    for r in recs:
+        i=(r.binX-start)//res; j=(r.binY-start)//res
+        if 0<=i<n and 0<=j<n:
+            a[i,j]=r.counts; a[j,i]=r.counts
+    return a
+print('fetch h1')
+H1=mat(h1); print('fetch hff')
+HFF=mat(hff)
+np.savez('nanog_oe_10kb.npz', H1=H1, HFF=HFF, start=start, end=end, res=res)
+# diff log2 ratio with pseudocount in OE
+D=np.log2((H1+0.05)/(HFF+0.05))
+# plot clipped
+fig,axs=plt.subplots(1,3,figsize=(15,5),constrained_layout=True)
+for ax,a,title,cmap,vmin,vmax in [
+    (axs[0],np.log2(H1),'H1 log2 OE','Reds',-1,2.5),
+    (axs[1],np.log2(HFF),'HFF log2 OE','Reds',-1,2.5),
+    (axs[2],D,'H1-HFF log2 OE ratio','coolwarm',-2,2)]:
+    im=ax.imshow(a.T,origin='lower',extent=[start/1e6,end/1e6,start/1e6,end/1e6],cmap=cmap,vmin=vmin,vmax=vmax)
+    ax.axvspan(7629950/1e6,7809597/1e6,color='cyan',alpha=.15)
+    ax.axhspan(7629950/1e6,7809597/1e6,color='cyan',alpha=.15)
+    ax.set_title(title)
+    ax.set_xlabel('chr12 Mb'); ax.set_ylabel('chr12 Mb')
+    fig.colorbar(im,ax=ax,fraction=.046)
+fig.savefig('nanog_oe_diff_10kb.png',dpi=180)
+# candidate local maxima: off diagonal >50kb, H1 or HFF oe > threshold, high abs diff
+coords=[]
+valid=np.isfinite(D)&np.isfinite(H1)&np.isfinite(HFF)
+# local max in absolute diff after slight smoothing? Use positive H1-specific and HFF-specific
+for mode,name,a,b,sign in [(1,'H1',H1,HFF,1),(-1,'HFF',HFF,H1,-1)]:
+    score=np.log2((a+0.05)/(b+0.05))
+    filt=maximum_filter(score, size=5, mode='constant', cval=-999)
+    for i in range(n):
+        for j in range(i+5,n):
+            pos1=start+i*res; pos2=start+j*res
+            if score[i,j]==filt[i,j] and score[i,j]>0.8 and a[i,j]>1.5:
+                # ensure one anchor/gene subcompartment? print all near gene range window
+                if (7400000<=pos1<=8200000 or 7400000<=pos2<=8200000):
+                    coords.append((score[i,j],name,a[i,j],b[i,j],pos1,pos2,j-i))
+coords=sorted(coords, reverse=True)[:100]
+for c in coords[:50]:
+    print('\\t'.join(map(lambda x: f'{x:.3f}' if isinstance(x,float) else str(x), c)))
+PY"

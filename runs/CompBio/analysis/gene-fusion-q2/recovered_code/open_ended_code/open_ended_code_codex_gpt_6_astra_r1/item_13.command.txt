@@ -1,0 +1,47 @@
+/bin/bash -lc "cat > work/assemble.py <<'PY'
+import gzip,collections
+candidates={'MYC','SP1','ZIC2','CATSPER4','LINC01766'}
+ids=set()
+for l in open('work/reads.paf'):
+ p=l.split()
+ if p[5].split('|')[5] in candidates:ids.add(p[0])
+reads=[]
+with gzip.open('gene.fusion.q2.fq.gz','rt') as f:
+ for h,s,p,q in zip(f,f,f,f):reads.append((h.strip()[1:],s.strip()))
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s):return s.translate(comp)[::-1]
+k=31
+seed=set()
+for r,s in reads:
+ if r in ids:
+  for s in (s,rc(s)):
+   seed.update(s[i:i+k] for i in range(len(s)-k+1))
+selected=[(r,s) for r,s in reads if r in ids or any(s[i:i+k] in seed for i in range(len(s)-k+1))]
+print('Selected',len(selected),'seed',len(ids))
+with open('work/candidate_reads.fa','w') as o:
+ for r,s in selected:o.write('>'+r+'\\n'+s+'\\n')
+for k in (31,41,51):
+ counts=collections.Counter()
+ for r,s in selected:
+  for s in (s,rc(s)): counts.update(s[i:i+k] for i in range(len(s)-k+1))
+ edges={s:n for s,n in counts.items() if n>=3};out=collections.defaultdict(list);inc=collections.defaultdict(list)
+ for s in edges:out[s[:-1]].append(s);inc[s[1:]].append(s)
+ seen=set();contigs=[]
+ def walk(e):
+  seq=e;ns=[edges[e]];seen.add(e)
+  while len(out[seq[-k+1:]])==1 and len(inc[seq[-k+1:]])==1:
+   nxt=out[seq[-k+1:]][0]
+   if nxt in seen:break
+   seq+=nxt[-1];seen.add(nxt);ns.append(edges[nxt])
+  if len(seq)>=80:contigs.append((seq,sum(ns)/len(ns)))
+ for e in edges:
+  if e not in seen and (len(inc[e[:-1]])"'!=1 or len(out[e[:-1]])!=1):walk(e)
+ for e in edges:
+  if e not in seen:walk(e)
+ unique={min(s,rc(s)):(s,c) for s,c in contigs}
+ with open(f'"'work/contigs{k}.fa','w') as o:
+  for i,(s,c) in enumerate(sorted(unique.values(),key=lambda t:-len(t[0]))):o.write(f'>c{k}_{i}_cov{c:.1f}\\n{s}\\n')
+ print(k,'unitigs',len(unique),'longest',sorted([len(s) for s in unique],reverse=True)[:20])
+PY
+python3 work/assemble.py
+minimap2 -t 8 -x asm5 -c --secondary=no reference/gencode.v47.transcripts.fa.gz work/contigs41.fa > work/contigs.paf 2> work/contigs_minimap.log"

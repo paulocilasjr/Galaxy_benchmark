@@ -1,0 +1,42 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c1f0451d847e54dabf9a57f3/workspace && python3 - <<'PY'
+import urllib.request, struct
+url='https://zenodo.org/api/records/8313962/files/scATAC_clusters.zip/content'
+size=4351228465
+# fetch last 1MB
+req=urllib.request.Request(url, headers={'Range':f'bytes={size-(1<<20)}-{size-1}'})
+data=urllib.request.urlopen(req).read(); print(len(data))
+for sig in [b'PK\\x06\\x06',b'PK\\x06\\x07',b'PK\\x05\\x06']:
+    positions=[]; start=0
+    while True:
+        p=data.find(sig,start)
+        if p<0:break
+        positions.append(p); start=p+1
+    print(sig, positions)
+# ZIP64 EOCD locator is 20 bytes, signature PK0607. record after it? parse around last locator
+p=data.rfind(b'PK\\x06\\x07'); print('locator p',p, data[p:p+20].hex())
+loc=struct.unpack('<4sLQQL', data[p:p+20]); print(loc)
+# loc fields: sig, disk with zip64 eocd, offset, total disks
+zip64_offset=loc[2]
+# find record in data or fetch from offset
+req=urllib.request.Request(url, headers={'Range':f'bytes={zip64_offset}-{zip64_offset+1000}'})
+rec=urllib.request.urlopen(req).read()
+print('rec starts',rec[:4])
+# zip64 eocd record fixed 56 bytes: sig 4, size 8, ver made 2, ver needed 2, disk 4, cddisk 4, entries disk 8, entries total 8, cd size 8, cd offset 8
+vals=struct.unpack('<4sQHHIIQQQQ', rec[:56]); print(vals)
+cdoff=vals[9]; cdsize=vals[8]
+print('cdoff',cdoff,'cdsize',cdsize)
+req=urllib.request.Request(url, headers={'Range':f'bytes={cdoff}-{cdoff+cdsize-1}'})
+cd=urllib.request.urlopen(req).read(); print('cd len',len(cd))
+p=0; entries=[]
+while p+46<=len(cd):
+    if cd[p:p+4]"'!=b'"'PK\\x01\\x02': break
+    v=struct.unpack('<4s6H3L5H2L',cd[p:p+46])
+    # zip64 values if all ones in usize/csize/offset? not likely
+    fnl,efl,cl=v[10],v[11],v[12]
+    name=cd[p+46:p+46+fnl].decode('utf8','replace')
+    p += 46+fnl+efl+cl
+    entries.append((name,v[9],v[16],v[8]))
+print('entries',len(entries))
+for name,us,off,cs in entries:
+    print(name,'us',us,'cs',cs,'off',off)
+PY"

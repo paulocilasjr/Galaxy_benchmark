@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+for build in ['hg38','hg19']:
+    vars=[]
+    for line in Path(f'{build}.mosaic_candidates.tsv').read_text().splitlines():
+        vid=line.split('\\t')[0]
+        chrom,pos,ref,alt=vid.split(':')
+        chrom=chrom.replace('chr','')
+        vars.append(f'{chrom} {pos} {pos} {ref}/{alt} +')
+    Path(f'{build}.vep_payload.json').write_text('{\"variants\":['+','.join('\"'+v+'\"' for v in vars)+']}\\n')
+PY
+curl -sS -H 'Content-Type: application/json' -H 'Accept: application/json' -X POST --data @hg38.vep_payload.json 'https://rest.ensembl.org/vep/human/region?LoF=1&canonical=1&symbol=1' -o hg38.vep.json
+curl -sS -H 'Content-Type: application/json' -H 'Accept: application/json' -X POST --data @hg19.vep_payload.json 'https://grch37.rest.ensembl.org/vep/human/region?LoF=1&canonical=1&symbol=1' -o hg19.vep.json
+python - <<'PY'
+import json
+from pathlib import Path
+for build in ['hg38','hg19']:
+    print('BUILD', build)
+    data=json.loads(Path(f'{build}.vep.json').read_text())
+    for item in data:
+        best=[]
+        for tc in item.get('transcript_consequences',[]):
+            terms=tc.get('consequence_terms',[])
+            if any(t in ('stop_gained','frameshift_variant','splice_donor_variant','splice_acceptor_variant') for t in terms):
+                best.append((tc.get('gene_symbol'),terms,tc.get('impact'),tc.get('lof'),tc.get('canonical'),tc.get('hgvsc'),tc.get('hgvsp')))
+        if best:
+            print(item.get('input'), best[:5])
+PY"

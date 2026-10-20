@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, numpy as np
+from collections import Counter
+cmdbase=\"curl -L --fail --silent 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.5&rettype=fasta&retmode=text' | minimap2 -a -x sr - {fq} 2>/dev/null\"
+files={n:f'exogenous.mix.reads.q1.{n}.fq' for n in ['exo','endo','mix']}
+coords={}
+for n,fq in files.items():
+    out=subprocess.check_output(cmdbase.format(fq=fq),shell=True,text=True)
+    ps=[]; nall=0
+    for line in out.splitlines():
+        if line.startswith('@'): continue
+        nall+=1
+        x=line.split('\\t')
+        flag=int(x[1])
+        if flag&4: continue
+        ps.append(int(x[3]))
+    coords[n]=np.array(ps)
+    print(n,'mapped',len(ps),'range',ps and (min(ps),max(ps)))
+for width in [25,50,100,200]:
+    lo=1; hi=2903
+    edges=np.arange(lo,hi+width,width)
+    # Include all mapped positions; bins common
+    hist={n:np.histogram(v,bins=edges)[0] for n,v in coords.items()}
+    print('\\nwidth',width)
+    for n in ['exo','endo','mix']:
+        print(n, hist[n].tolist())
+    pe=hist['exo']/hist['exo'].sum(); pn=hist['endo']/hist['endo'].sum(); pm=hist['mix']/hist['mix'].sum()
+    fs=np.linspace(0,1,10001)
+    ll=[]
+    for f in fs:
+      q=f*pe+(1-f)*pn
+      ll.append(np.sum(pm*np.log(np.maximum(q,1e-300))))
+    f=fs[int(np.argmax(ll))]
+    print('MLE exo fraction',f,'grid loglik',max(ll))
+# outside exo-support based estimate
+for a,b in [(501,2000),(501,2050),(451,2000),(501,1950)]:
+  def inside(x): return ((x>=a)&(x<=b)).sum()
+  print('support',a,b,'exo_inside',inside(coords['exo'])/len(coords['exo']),'endo_inside',inside(coords['endo'])/len(coords['endo']),'mix_inside',inside(coords['mix'])/len(coords['mix']),'f', (inside(coords['mix'])/len(coords['mix'])-inside(coords['endo'])/len(coords['endo']))/(inside(coords['exo'])/len(coords['exo'])-inside(coords['endo'])/len(coords['endo'])))
+PY"

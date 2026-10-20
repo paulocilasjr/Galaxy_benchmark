@@ -1,0 +1,22 @@
+/bin/bash -lc "PYTHONPATH=pydeps python3 - <<'PY'
+import json,numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+import MOODS.tools
+names=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']; ids=['MA0148.5','MA1100.3','MA0003.5','MA0002.3','MA0039.5','MA0680.3','MA0769.3','MA0138.3','MA0080.7','MA0037.5']; bg=MOODS.tools.flat_bg(4); mats=[]
+for mid in ids:
+ d=json.load(open('refs/'+mid+'.json')); mats.append(MOODS.tools.log_odds([[float(x) for x in d['pfm'][b]] for b in 'ACGT'],bg,.1))
+s=np.load('results/candidate_motif_scores.npy'); cut=np.array([MOODS.tools.threshold_from_p(m,bg,1e-4) for m in mats]); h=(s>=cut).astype(float)
+x=np.loadtxt('results/union_counts.tsv',usecols=(1,2,3,4)); length=x[:,1]-x[:,0]; r=x[:,2]; p=x[:,3]; n=len(r); lfc=np.log2((p+5)/(11257343+5*n))-np.log2((r+5)/(10141848+5*n)); tot=r+p
+seqs=[]; chunks=[]
+for line in open('results/union_peaks.fa'):
+ if line[0]=='>':
+  if chunks: seqs.append(''.join(chunks)); chunks=[]
+ else: chunks.append(line.strip().upper())
+if chunks: seqs.append(''.join(chunks))
+gc=np.array([(z.count('G')+z.count('C'))/len(z) for z in seqs]); use=((lfc>2)|(abs(lfc)<.2))&(tot>=30); y=(lfc[use]>2).astype(int); base=StandardScaler().fit_transform(np.c_[gc[use],np.log(length[use])])
+for j,nm in enumerate(names):
+ m=LogisticRegression(C=100,max_iter=1000,n_jobs=1).fit(np.c_[base,h[use,j]],y); print('single',nm,round(m.coef_[0,-1],3),round(np.exp(m.coef_[0,-1]),2))
+m=LogisticRegression(C=100,max_iter=2000,n_jobs=1).fit(np.c_[base,h[use]],y)
+for nm,c in zip(names,m.coef_[0,2:]): print('joint',nm,round(c,3),round(np.exp(c),2))
+PY"

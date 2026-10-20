@@ -1,0 +1,110 @@
+python3 << 'EOF'
+import os
+from collections import Counter
+
+ANIMAL_DIR = "/workspace/work"
+FUNGI_DIR = "/workspace/work_fungi"
+
+def read_fasta_alignment(filepath):
+    sequences = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if current_header is not None:
+                    sequences.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            sequences.append((current_header, ''.join(current_seq)))
+    return sequences
+
+def count_parsimony_informative_sites(sequences):
+    if len(sequences) < 4:
+        return 0
+    seqs = [s for _, s in sequences]
+    seq_len = len(seqs[0])
+    pis_count = 0
+    for col in range(seq_len):
+        chars = [seq[col] for seq in seqs]
+        chars_no_gap = [c for c in chars if c != '-']
+        if len(chars_no_gap) < 4:
+            continue
+        counts = Counter(chars_no_gap)
+        chars_ge_2 = sum(1 for v in counts.values() if v >= 2)
+        if chars_ge_2 >= 2:
+            pis_count += 1
+    return pis_count
+
+# Find shared orthologs
+animal_ogs = set(f.replace('.faa', '') for f in os.listdir(ANIMAL_DIR) if f.endswith('.faa'))
+fungi_ogs = set(f.replace('.faa', '') for f in os.listdir(FUNGI_DIR) if f.endswith('.faa'))
+shared = sorted(animal_ogs & fungi_ogs)
+
+animal_pis = []
+fungi_pis = []
+
+for og_id in shared:
+    animal_mafft = os.path.join(ANIMAL_DIR, f"{og_id}.faa.mafft")
+    fungi_mafft = os.path.join(FUNGI_DIR, f"{og_id}.faa.mafft")
+    
+    if not os.path.exists(animal_mafft) or not os.path.exists(fungi_mafft):
+        continue
+    
+    animal_seqs = read_fasta_alignment(animal_mafft)
+    fungi_seqs = read_fasta_alignment(fungi_mafft)
+    
+    animal_pi = count_parsimony_informative_sites(animal_seqs)
+    fungi_pi = count_parsimony_informative_sites(fungi_seqs)
+    
+    animal_pis.append(animal_pi)
+    fungi_pis.append(fungi_pi)
+
+# Distribution analysis
+print("Animal PIS distribution:")
+counts = Counter(animal_pis)
+for k in sorted(counts):
+    print(f"  {k}: {counts[k]}")
+print(f"  Total: {len(animal_pis)}")
+print(f"  Non-zero: {sum(1 for p in animal_pis if p > 0)}")
+print(f"  Mean: {sum(animal_pis)/len(animal_pis):.2f}")
+
+print("\nFungi PIS distribution:")
+counts = Counter(fungi_pis)
+for k in sorted(counts):
+    print(f"  {k}: {counts[k]}")
+print(f"  Total: {len(fungi_pis)}")
+print(f"  Non-zero: {sum(1 for p in fungi_pis if p > 0)}")
+print(f"  Mean: {sum(fungi_pis)/len(fungi_pis):.2f}")
+
+# Mann-Whitney U manual calculation (U statistic for group x being animals)
+def mannwhitneyu_manual(x, y):
+    n1, n2 = len(x), len(y)
+    combined = [(v, 0) for v in x] + [(v, 1) for v in y]
+    combined.sort(key=lambda t: t[0])
+    
+    ranks = []
+    i = 0
+    while i < len(combined):
+        j = i
+        while j < len(combined) and combined[j][0] == combined[i][0]:
+            j += 1
+        avg_rank = (i + j + 1) / 2.0
+        for k in range(i, j):
+            ranks.append((avg_rank, combined[k][1]))
+        i = j
+    
+    r1 = sum(r for r, group in ranks if group == 0)
+    u1 = r1 - n1 * (n1 + 1) / 2.0
+    u2 = n1 * n2 - u1
+    return u1, u2, min(u1, u2)
+
+u1, u2, u = mannwhitneyu_manual(animal_pis, fungi_pis)
+print(f"\nU1 (animals): {u1}")
+print(f"U2 (fungi): {u2}")
+print(f"U = min(U1, U2): {u}")
+EOF

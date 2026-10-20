@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import anndata as ad, pandas as pd, numpy as np
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array(A.var['feature_name'].astype(str))
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array(orig.index.astype(str))
+common=np.intersect1d(np.char.lower(wnames),np.char.lower(onames))
+# map original names preserving original case for common
+omap={s.lower():s for s in onames}
+genes=[omap[c] for c in common]
+print(len(genes))
+open('common_genes.txt','w').write('\\n'.join(genes))
+PY
+Rscript - <<'RS'
+library(Seurat)
+library(Matrix)
+cat('reading\\n'); t0<-Sys.time()
+obj<-readRDS('GSE161918_AllBatches_SeuratObj.rds')
+cat('read', format(difftime(Sys.time(),t0,units='mins')), '\\n')
+counts<-GetAssayData(obj,assay='RNA',slot='counts')
+cat('dims',dim(counts),class(counts),'\\n')
+genes<-readLines('common_genes.txt')
+rown<-rownames(counts)
+idx<-match(genes,rown)
+cat('matched',sum("'!is.na(idx)),'"'of',length(genes),'\\n')
+idx<-idx["'!is.na(idx)]
+sub<-counts[idx,,drop=FALSE]
+cat('"'sub dim',dim(sub),'nnz',length(sub@x),'\\n')
+# Save transposed as RDS for python? save dgCMatrix as RDS
+saveRDS(sub,'orig_common_counts.rds')
+cat('saved rds\\n')
+# write mtx transposed (cells x genes)
+subT<-Matrix::t(sub)
+writeMM(subT,'orig_common_counts.mtx')
+cat('wrote mtx\\n')
+RS"

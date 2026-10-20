@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter
+import math, random
+sams={n:f'refs/exogenous.mix.reads.q1.{n}.sam' for n in ['mix','endo','exo']}
+def pos_counts(sam, mode='posstrand'):
+    c=Counter(); total=0
+    with open(sam) as f:
+        for line in f:
+            if line.startswith('@'): continue
+            total+=1
+            p=line.split('\\t'); flag=int(p[1])
+            if flag&4:
+                key=('unmapped',)
+            else:
+                pos=int(p[3]); strand='-' if flag&16 else '+'
+                if mode=='pos': key=pos
+                elif mode=='bin50': key=(pos//50)
+                elif mode=='bin100': key=(pos//100)
+                elif mode=='region': key='inside' if 605<=pos<=1987 else 'outside'
+                else: key=(pos,strand)
+            c[key]+=1
+    return c,total
+for mode in ['region','bin100','bin50','pos','posstrand']:
+    C={n:pos_counts(sams[n],mode)[0] for n in sams}
+    T={n:sum(C[n].values()) for n in C}
+    keys=set().union(*[set(c) for c in C.values()])
+    P={n:{x:C[n][x]/T[n] for x in keys} for n in C}
+    num=sum((P['mix'][x]-P['endo'][x])*(P['exo'][x]-P['endo'][x]) for x in keys)
+    den=sum((P['exo'][x]-P['endo'][x])**2 for x in keys)
+    p=num/den
+    # grid multinomial likelihood with source smoothed probabilities
+    print('\\nmode',mode,'LS',p,'keys',len(keys))
+    for alpha in [0,0.01,0.1,1,10]:
+        best=(-1,None)
+        for i in range(1001):
+            pi=i/1000
+            ll=0
+            for x,c in C['mix'].items():
+                pe=(C['exo'][x]+alpha)/(T['exo']+alpha*len(keys)) if alpha>0 else C['exo'][x]/T['exo']
+                pn=(C['endo'][x]+alpha)/(T['endo']+alpha*len(keys)) if alpha>0 else C['endo'][x]/T['endo']
+                prob=pi*pe+(1-pi)*pn
+                if prob<=0:
+                    ll=-1e300; break
+                ll += c*math.log(prob)
+            if ll>best[0]: best=(ll,pi)
+        print(' alpha',alpha,'MLE',best[1])
+PY"

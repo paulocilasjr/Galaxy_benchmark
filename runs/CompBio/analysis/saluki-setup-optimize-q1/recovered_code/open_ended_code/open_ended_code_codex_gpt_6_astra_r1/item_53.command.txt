@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+p='validate_model.py';s=open(p).read();a=s.index(\"with tf.device('/GPU:0')\");b=s.index('np.testing.assert_allclose',a)
+s=s[:a]+'''gi=next(i for i,l in enumerate(b.model.layers) if isinstance(l,tf.keras.layers.GRU))
+trunk=tf.keras.Model(b.model.inputs,b.model.layers[gi].input)
+@tf.function
+def hybrid(x):
+ with tf.device('/GPU:0'):y=trunk(x,training=False)
+ with tf.device('/CPU:0'):
+  for layer in b.model.layers[gi:]:y=layer(y,training=False)
+ return y
+with tf.device('/CPU:0'):ya=a(x,training=False).numpy();yc=b.model(x,training=False).numpy()
+yb=hybrid(x).numpy()
+'''+s[b:]
+s=s.replace(\"'saved_model_GPU'\",\"'saved_model_CPU'\").replace(\"'rnann_GPU'\",\"'rnann_GPU_convolutions_CPU_GRU'\").replace(\"'saved_model_CPU':yc\",\"'rnann_CPU':yc\")
+open(p,'w').write(s)
+p='optimize.py';s=open(p).read();a=s.index('@tf.function');b=s.index('\\ncurrent=SEQ',a)
+s=s[:a]+'''# TensorFlow Metal 1.1.0 GRU disagrees with the saved model CPU reference.
+# Run convolutional trunk on GPU and the small recurrent/output tail on CPU.
+gru_index=next(i for i,l in enumerate(model.model.layers) if isinstance(l,tf.keras.layers.GRU))
+trunk=tf.keras.Model(model.model.inputs,model.model.layers[gru_index].input)
+@tf.function(input_signature=[tf.TensorSpec([None,12288,6],tf.float32)])
+def predict(x):
+ with tf.device('/GPU:0' if gpus else '/CPU:0'):
+  y=trunk(x,training=False)
+ with tf.device('/CPU:0'):
+  for layer in model.model.layers[gru_index:]:y=layer(y,training=False)
+ return y
+'''+s[b:]
+open(p,'w').write(s)
+PY
+PYTHONPATH=\""'$PWD/basenji" TMPDIR="$PWD/tmp" XDG_CACHE_HOME="$PWD/cache" native/python/bin/python3 -u validate_model.py > validate_model.log 2>&1'

@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+# Use saved activity pkl and R matrix? Recompute quickly from pickles? Need R and A; load act tss pkl.
+import pandas as pd, numpy as np, gzip
+from scipy.stats import spearmanr, pearsonr
+from scipy.optimize import linear_sum_assignment
+
+# load R
+genes=[]; rna=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    h=f.readline().rstrip().split('\\t')[1:]
+    for line in f:
+        p=line.rstrip().split('\\t'); genes.append(p[0]); rna.append([float(x) for x in p[1:9]])
+R=pd.DataFrame(rna,index=genes,columns=h)
+acts={}
+for name in ['tss','prom10']:
+    acts[name]=pd.read_pickle(f'act_{name}.pkl')
+# remove duplicate? no.
+for name,act in acts.items():
+    common=act.index.intersection(R.index)
+    X=R.loc[common].values; Y=act.loc[common].values
+    # keep sum thresholds
+    keep=(R.loc[common].values.sum(axis=1)>0.1)&(act.loc[common].values.sum(axis=1)>0)
+    Xl=np.log1p(X[keep]); Yl=np.log1p(Y[keep])
+    var_r=np.var(Xl,axis=1); var_a=np.var(Yl,axis=1)
+    for top in [None,2000,5000,10000,20000]:
+        if top is None:
+            idx=np.arange(Xl.shape[0])
+        else:
+            idx=np.argsort(-(var_r+var_a))[:top]
+        for method in ['pearson','spearman']:
+            C=np.empty((8,8))
+            for i in range(8):
+                for j in range(8):
+                    x=Xl[idx,i]; y=Yl[idx,j]
+                    if method=='pearson':
+                        C[i,j]=np.corrcoef(x,y)[0,1]
+                    else:
+                        C[i,j]=spearmanr(x,y)[0]
+            row_ind,col_ind=linear_sum_assignment(-C)
+            print(name,top,method,'hung',col_ind,'greedy',C.argmax(axis=1),'diagsum',sum(C[i,col_ind[i]] for i in range(8)))
+            # print rounded matrix maybe
+PY"

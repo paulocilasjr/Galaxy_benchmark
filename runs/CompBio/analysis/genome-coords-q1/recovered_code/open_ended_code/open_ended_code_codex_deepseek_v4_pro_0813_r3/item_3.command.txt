@@ -1,0 +1,52 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+p='single_cell_dynamics_question.csv'
+df=pd.read_csv(p)
+d2=((df[['enh_x','enh_y','enh_z']].values - df[['prom_x','prom_y','prom_z']].values)**2).sum(axis=1)
+df['dist']=np.sqrt(d2); df['contact']=(df.dist<=260).astype(int)
+# group sorted
+g=df.groupby('cell_id')[['contact','transcription','dist']]
+C=g['contact'].apply(lambda s:s.values).to_numpy()  # list? Actually series of arrays
+T=g['transcription'].apply(lambda s:s.values).to_numpy()
+# easier collect arrays
+C_list=[a for a in C]
+T_list=[a for a in T]
+C=np.array(C_list); T=np.array(T_list)
+print(C.shape)
+def lag_prob(x,y,lags):
+    # x at t, y at t+k? We'll define P(Y_t=1 | X_{t-k}=1) vs baseline
+    for k in lags:
+        if k==0:
+            xprev=x[:,:]; ycur=y[:,:]
+        elif k>0:
+            xprev=x[:,:-k]; ycur=y[:,k:]
+        else:
+            # k negative: y current? We'll handle outside
+            continue
+        mask1=xprev==1; mask0=xprev==0
+        p1=ycur[mask1].mean(); p0=ycur[mask0].mean(); n1=mask1.sum(); n0=mask0.sum()
+        rr=p1/p0 if p0>0 else np.nan
+        print(f'lag {k}: n1={n1} P(Y|Xprev=1)={p1:.4f} n0={n0} P(Y|Xprev=0)={p0:.4f} RR={rr:.3f}')
+print('X=contact, Y=transcription at later time (C->T)')
+lag_prob(C,T,range(0,11))
+print('X=transcription, Y=contact at later time (T->C)')
+lag_prob(T,C,range(0,11))
+# negative lags for C->T: contact after transcription
+print('C->T negative lags: P(C_t=1 | T_{t-k}=1) equivalent T->C above? actually C target, T predictor')
+def lag_prob2(pred,target,lags):
+    for k in lags:
+        if k>0:
+            xprev=pred[:,:-k]; ycur=target[:,k:]
+        elif k<0:
+            kk=-k
+            xprev=pred[:,kk:]; ycur=target[:,:-kk]
+        else:
+            xprev=pred[:,:]; ycur=target[:,:]
+        mask1=xprev==1; mask0=xprev==0
+        p1=ycur[mask1].mean(); p0=ycur[mask0].mean()
+        print(f'lag {k}: n1={mask1.sum()} P(target|pred=1)={p1:.4f} P(target|pred=0)={p0:.4f} RR={p1/p0:.3f}')
+print('\\npred=contact target=transcription, positive lag = transcription after contact')
+lag_prob2(C,T,range(-10,11))
+print('\\npred=transcription target=contact, positive lag = contact after transcription')
+lag_prob2(T,C,range(-10,11))
+PY"

@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, collections
+fn='pc_align.sam'
+
+def gene(r):
+    x=r.split('|')
+    return x[5] if len(x)>5 else r
+
+def qrange(cigar):
+    toks=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+    prefix=0
+    for n,o in toks:
+        n=int(n)
+        if o in 'HS': prefix+=n
+        else: break
+    aligned=sum(int(n) for n,o in toks if o in 'MI=X')
+    return prefix,prefix+aligned
+
+pairs=collections.Counter(); reads=collections.defaultdict(list); details=collections.Counter()
+with open(fn) as f:
+  for line in f:
+    if line[0]=='@': continue
+    a=line.rstrip('\\n').split('\\t')
+    qn=a[0]; flag=int(a[1]); rn=a[2]; mapq=int(a[4]); cigar=a[5]
+    if rn=='*': continue
+    g=gene(rn); qs,qe=qrange(cigar); strand='-' if flag&16 else '+'
+    sa=None
+    for x in a[11:]:
+      if x.startswith('SA:Z:'): sa=x[5:]; break
+    if sa:
+      for ent in sa.strip(';').split(';'):
+        if not ent: continue
+        b=ent.split(',')
+        if len(b)<6: continue
+        srn=b[0]; ss=b[2]; sc=b[3]; smq=int(b[4]); snm=int(b[5])
+        sg=gene(srn); sqs,sqe=qrange(sc)
+        if sg==g: continue
+        # order on transcript: query-left is 5' if alignment strand +, reversed if -
+        if strand=='+': ordered=tuple(x[1] for x in sorted([(qs,qe,g),(sqs,sqe,sg)]))
+        else: ordered=tuple(x[1] for x in sorted([(qs,qe,g),(sqs,sqe,sg)], reverse=True))
+        pairs[ordered]+=1
+        details[(ordered,mapq,smq, min(qe-qs,sqe-sqs),max(qe-qs,sqe-sqs),strand)]+=1
+        reads[qn].append((ordered,(qs,qe),(sqs,sqe),mapq,smq,flag,sc,cigar))
+print('distinct split read records',len(reads),'pair observations',sum(pairs.values()),'pairs',len(pairs))
+for pair,n in pairs.most_common(80):
+    lens=collections.Counter(); maps=collections.Counter(); strs=collections.Counter()
+    for q,vals in reads.items():
+      for o,qr1,qr2,mq,smq,fl,sc,pc in vals:
+       if o==pair:
+        lens[min(qr1[1]-qr1[0],qr2[1]-qr2[0])]+=1; maps[(mq,smq)]+=1; strs['-' if fl&16 else '+']+=1
+    print(n, '-'.join(pair), 'minseg',dict(lens),'strand',dict(strs),'mapqtop',maps.most_common(3))
+PY"

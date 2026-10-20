@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.spatial.distance import cdist
+comp=pd.read_csv('deconv_composition.csv')
+ctypes=['B_Cell','Endothelial','Fibroblast_Stroma','Macrophage','T_Cell']
+coords=comp[['array_row','array_col']].values
+tm=comp['Tumor_Core']>0; D=cdist(coords,coords[tm]); nearest=D.min(1)
+weights={t:comp[t].values for t in ctypes}
+# weighted mean distance for each type
+obs={t:np.average(nearest, weights=weights[t]) for t in ctypes}
+print('observed weighted mean')
+for t in ctypes: print(t,obs[t])
+# permutation: shuffle cell type labels among all cells? Since spots have multiple counts, can permute cell counts across spots preserving spot totals? Simpler: randomly assign each spot's cell-type presence with same n? Better: randomize cell type identity of each cell in composition matrix while preserving total cells per type and spots? Use permutation of non-zero entries? We'll approximate by random spots weighted counts.
+rng=np.random.default_rng(42)
+perms={t:[] for t in ctypes}
+for _ in range(1000):
+    # sample n cells positions (weighted counts) according to total counts of type from all spots (with replacement) maybe
+    for t in ctypes:
+        n=weights[t].sum().round().astype(int)
+        # if random sample of n cells over spots proportional to total spot cell counts? Hmm.
+        # use random spots with total cells per spot fixed, not possible.
+        pass
+# Alternative: permute cell type labels among all inferred cells, preserving spot total counts and cell type totals.
+# Create expanded cell table: each cell belongs to spot, type. Permute type labels across cells (preserves total per type and cells per spot), recompute weighted nearest.
+cells=[]
+for i,row in comp.iterrows():
+    for t in ctypes:
+        for _ in range(int(row[t])):
+            cells.append((i,t))
+spot_ids=np.array([c[0] for c in cells])
+type_arr=np.array([c[1] for c in cells])
+null={t:[] for t in ctypes}
+for _ in range(1000):
+    perm=rng.permutation(type_arr)
+    for t in ctypes:
+        idx=spot_ids[perm==t]
+        if len(idx)==0: val=np.nan
+        else: val=nearest[idx].mean()
+        null[t].append(val)
+for t in ctypes:
+    nulls=np.array(null[t])
+    p=(nulls<=obs[t]).mean()
+    z=(obs[t]-nulls.mean())/nulls.std()
+    print(t,'p lower',p,'z',z,'null mean',nulls.mean(),'null sd',nulls.std())
+PY"

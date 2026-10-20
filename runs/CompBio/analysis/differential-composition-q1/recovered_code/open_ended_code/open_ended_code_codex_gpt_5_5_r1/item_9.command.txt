@@ -1,0 +1,110 @@
+/bin/bash -lc "cat > analyze_marker_scores.py <<'PY'
+import gzip
+import numpy as np
+import pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+
+# Load genes
+genes=[]
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+    header=next(f)
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        genes.append(parts[1].upper() if len(parts)>1 else parts[0].upper())
+idx={g:i for i,g in enumerate(genes)}
+
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SOX9','GJA1','S100B'],
+'microglial cell':['CX3CR1','P2RY12','TMEM119','AIF1','C1QA','C1QB','C1QC','TYROBP','CSF1R'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MITF','MERTK','TTR'],
+'cone cell':['OPN1SW','OPN1MW','OPN1LW','ARR3','GNAT2','PDE6C','GNGT2','CNGB3','GUCA1A'],
+'rod cell':['RHO','NRL','SAG','GNAT1','PDE6A','PDE6B','GNGT1','CNGA1','ROM1','RCVRN'],
+'horizontal cell':['ONECUT1','ONECUT2','LHX1','PROX1','CALB1','CALB2','TFAP2A'],
+'bipolar cell':['VSX2','TRPM1','GRM6','PRKCA','CABP5','PCP2','OTX2','ISL1'],
+'RGC':['RBPMS','SNCG','NEFL','NEFM','THY1','POU4F1','POU4F2','ISL1'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','IL7R','CD2','CD247','LCK','TRBC1'],
+'macrophage':['CD68','LYZ','FCGR3A','MSR1','MRC1','CD163','LST1','FCER1G'],
+'Schwann cell':['MPZ','PLP1','SOX10','PMP22','MBP','S100B','ERBB3','NGFR'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','ACTA2','NOTCH3','KCNJ8','ABCC9'],
+'B cell':['MS4A1','CD79A','CD79B','CD19','BANK1','CD74','HLA-DRA','MZB1'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','FBLN1','PDGFRA','THY1'],
+'endothelial cell':['PECAM1','VWF','KDR','CLDN5','FLT1','RAMP2','ESAM','CDH5'],
+'muller glia cell':['RLBP1','GLUL','APOE','CLU','VIM','CRYAB','AQP4','SLC1A3','SLC1A2'],
+}
+
+print('Loading matrices')
+with gzip.open('differential.composition.q1.1.mtx.gz','rb') as f: X1=mmread(f).tocsc().astype(np.float32)
+with gzip.open('differential.composition.q1.2.mtx.gz','rb') as f: X2=mmread(f).tocsc().astype(np.float32)
+Xs=[X1,X2]
+libs=[np.asarray(X.sum(axis=0)).ravel() for X in Xs]
+
+print('shape', X1.shape, X2.shape, 'libs med', np.median(libs[0]), np.median(libs[1]))
+# compute avg log1p CPM per marker set for all cells
+all_scores=[]
+for si,X in enumerate(Xs):
+    lib=libs[si]
+    scores={}
+    for ct,ms in markers.items():
+        present=[idx[m] for m in ms if m in idx]
+        absent=[m for m in ms if m not in idx]
+        if not present:
+            scores[ct]=np.zeros(X.shape[1])
+            continue
+        sub=X[present,:].toarray().astype(np.float32)
+        sub = np.log1p(sub / lib[None,:] * 1e4)
+        scores[ct]=sub.mean(axis=0)
+    all_scores.append(pd.DataFrame(scores))
+
+# assignments using raw score max after z scaling each CT across combined cells
+S=pd.concat(all_scores, ignore_index=True)
+# zscore columns
+Z=(S-S.mean(axis=0))/(S.std(axis=0)+1e-9)
+# Use margin and threshold maybe
+assign=Z.idxmax(axis=1)
+maxz=Z.max(axis=1)
+second=np.partition(Z.values, -2, axis=1)[:,-2]
+margin=maxz-second
+for threshold in [-99,0,0.5,1.0]:
+    print('\\nASSIGN threshold maxz>=',threshold)
+    rows=[]
+    start=0
+    for si,n in enumerate([X1.shape[1],X2.shape[1]], start=1):
+        a=assign.iloc[start:start+n].copy()
+        mz=maxz.iloc[start:start+n]
+        a[mz<threshold]='unassigned'
+        c=a.value_counts()
+        rows.append(c.rename(f's{si}'))
+        start+=n
+    tab=pd.concat(rows, axis=1).fillna(0).astype(int)
+    tab['s1_frac']=tab['s1']/X1.shape[1]
+    tab['s2_frac']=tab['s2']/X2.shape[1]
+    tab['ratio_s2_s1']=(tab['s2_frac']+1e-6)/(tab['s1_frac']+1e-6)
+    print(tab.sort_values('s1', ascending=False).to_string())
+
+# marker score summaries by sample
+print('\\nMARKER score means and percent cells > thresholds')
+for ct in markers:
+    v1=all_scores[0][ct].values; v2=all_scores[1][ct].values
+    for thr in [0.02,0.05,0.1,0.2,0.5,1.0]:
+        pass
+    print(f\"{ct:18s} mean1={v1.mean():.4f} mean2={v2.mean():.4f} nz1={(v1>0).mean():.3f} nz2={(v2>0).mean():.3f} p>0.1 {((v1>0.1).mean()):.3f}/{((v2>0.1).mean()):.3f} p>0.5 {((v1>0.5).mean()):.3f}/{((v2>0.5).mean()):.3f}\")
+
+# aggregate marker counts normalized by total UMI and per-cell marker positive counts
+print('\\nAggregate marker counts per 1e6 UMIs')
+for ct,ms in markers.items():
+    present=[idx[m] for m in ms if m in idx]
+    sums=[]
+    pos=[]
+    for X,lib in zip(Xs,libs):
+        marker_counts=np.asarray(X[present,:].sum(axis=0)).ravel() if present else np.zeros(X.shape[1])
+        sums.append(marker_counts.sum()/lib.sum()*1e6)
+        pos.append((marker_counts>0).mean())
+    print(f\"{ct:18s} cpm1={sums[0]:8.2f} cpm2={sums[1]:8.2f} ratio={((sums[1]+1e-9)/(sums[0]+1e-9)):.3f} pos={pos[0]:.3f}/{pos[1]:.3f}\")
+
+# Print marker availability
+print('\\nMarker availability')
+for ct,ms in markers.items():
+    print(ct, [m for m in ms if m in idx])
+PY
+python3 analyze_marker_scores.py"

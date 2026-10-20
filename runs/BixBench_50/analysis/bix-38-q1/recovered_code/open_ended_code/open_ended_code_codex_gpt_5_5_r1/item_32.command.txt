@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, tempfile, pathlib, subprocess, statistics, json, re
+from decimal import Decimal, getcontext
+getcontext().prec=40
+
+def phykit_lengths(zip_path):
+    rows=[]
+    with tempfile.TemporaryDirectory(dir='/workspace') as d, zipfile.ZipFile(zip_path) as z:
+        names=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+        for n in names:
+            p=pathlib.Path(d)/n
+            p.write_bytes(z.read(n))
+            out=subprocess.run(['python','-m','phykit','total_tree_length',str(p)], text=True, capture_output=True, check=True).stdout.strip()
+            rows.append((n, Decimal(out)))
+    return rows
+
+def exact_lengths(zip_path):
+    rows=[]
+    num=re.compile(rb':([0-9]+(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)')
+    with zipfile.ZipFile(zip_path) as z:
+        for n in sorted(x for x in z.namelist() if x.endswith('.treefile')):
+            s=sum(Decimal(m.group(1).decode()) for m in num.finditer(z.read(n)))
+            rows.append((n,s))
+    return rows
+
+def median_decimal(vals):
+    vals=sorted(vals)
+    n=len(vals)
+    if n%2:
+        return vals[n//2]
+    return (vals[n//2-1]+vals[n//2])/Decimal(2)
+
+for mode, fn in [('phykit', phykit_lengths), ('exact_newick_sum', exact_lengths)]:
+    animals=fn('/workspace/inputs/scogs_animals.zip')
+    fungi=fn('/workspace/inputs/scogs_fungi.zip')
+    ma=median_decimal([v for _,v in animals])
+    mf=median_decimal([v for _,v in fungi])
+    print(mode)
+    print('counts', len(animals), len(fungi))
+    print('animal_median', ma)
+    print('fungi_median', mf)
+    print('fungi_over_animals', mf/ma)
+    print('animals_over_fungi', ma/mf)
+    print('animal_middle', sorted(v for _,v in animals)[len(animals)//2-1:len(animals)//2+1])
+    print('fungi_middle', sorted(v for _,v in fungi)[len(fungi)//2:len(fungi)//2+1])
+PY"

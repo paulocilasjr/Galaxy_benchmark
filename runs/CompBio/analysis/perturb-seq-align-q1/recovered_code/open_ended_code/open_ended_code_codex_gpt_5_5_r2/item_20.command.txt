@@ -1,0 +1,76 @@
+/bin/bash -lc "python - <<'PY'
+import h5py, numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+
+def decode_arr(a):
+    return np.array([x.decode() if isinstance(x,bytes) else str(x) for x in a])
+
+def load(fn):
+    with h5py.File(fn,'r') as f:
+        shape=tuple(int(x) for x in f['X'].attrs['shape'])
+        X=csc_matrix((f['X/data'][()], f['X/indices'][()], f['X/indptr'][()]), shape=shape).tocsr().astype(np.float32)
+        guides=decode_arr(f['obs/guide/categories'][()])
+        codes=f['obs/guide/codes'][()].astype(np.int32)
+        var=decode_arr(f['var/_index'][()])
+        target=None
+        if 'target_gene' in f['obs']:
+            target_cats=decode_arr(f['obs/target_gene/categories'][()])
+            target_codes=f['obs/target_gene/codes'][()].astype(np.int32)
+            target=np.array([target_cats[c] if c>=0 else '' for c in target_codes])
+    return X,guides,codes,var,target
+
+def lognorm(X):
+    X=X.copy().tocsr().astype(np.float32)
+    lib=np.asarray(X.sum(axis=1)).ravel().astype(np.float32)
+    scale=np.divide(1e4, lib, out=np.zeros_like(lib), where=lib>0)
+    reps=np.diff(X.indptr)
+    X.data *= np.repeat(scale, reps)
+    np.log1p(X.data, out=X.data)
+    return X
+
+def group_means(X, codes, ng):
+    rows=np.arange(codes.size)
+    G=csr_matrix((np.ones(codes.size, dtype=np.float32),(rows,codes)), shape=(codes.size,ng))
+    sums=(G.T @ X).toarray().astype(np.float32)
+    counts=np.bincount(codes, minlength=ng).astype(np.float32)
+    return sums / counts[:,None], counts
+
+refX, refg, refcodes, refvar, reftarget=load('perturb.seq.align.q1.ref.h5ad')
+qX, qg, qcodes, qvar, _=load('perturb.seq.align.q1.query.h5ad')
+print('var same', np.array_equal(refvar,qvar), 'shapes', refX.shape, qX.shape)
+refL=lognorm(refX); qL=lognorm(qX)
+refM, refN=group_means(refL, refcodes, len(refg))
+qM, qN=group_means(qL, qcodes, len(qg))
+ref_nt=np.array([g.startswith('NT-') for g in refg])
+q_nt=np.array([g.startswith('NT-') for g in qg])
+ref_ctrl=(refM[ref_nt]*refN[ref_nt,None]).sum(axis=0)/refN[ref_nt].sum()
+q_ctrl=(qM[q_nt]*qN[q_nt,None]).sum(axis=0)/qN[q_nt].sum()
+refE=refM-ref_ctrl
+qE=qM-q_ctrl
+ref_tidx=np.where(~ref_nt)[0]
+q_tidx=np.where(~q_nt)[0]
+# select genes with adequate control expression and variable effects
+ref_ctrl_mean=ref_ctrl; q_ctrl_mean=q_ctrl
+for name, mask in [
+    ('all', np.ones(refE.shape[1], dtype=bool)),
+    ('ctrl>0.05', (ref_ctrl_mean>0.05)&(q_ctrl_mean>0.05)),
+    ('ctrl>0.1', (ref_ctrl_mean>0.1)&(q_ctrl_mean>0.1)),
+    ('effect_var_top5000', np.argsort(refE[ref_tidx].var(axis=0)+qE[q_tidx].var(axis=0))[-5000:]),
+    ('effect_var_top2000', np.argsort(refE[ref_tidx].var(axis=0)+qE[q_tidx].var(axis=0))[-2000:]),
+]:
+    if isinstance(mask, tuple) or getattr(mask,'dtype',None)"'!=bool:
+        boolmask=np.zeros(refE.shape[1], dtype=bool); boolmask[mask]=True; mask=boolmask
+    A=refE[ref_tidx][:,mask].copy(); B=qE[q_tidx][:,mask].copy()
+    # zscore/pearson rows
+    A-=A.mean(axis=1, keepdims=True); B-=B.mean(axis=1, keepdims=True)
+    A/=np.linalg.norm(A, axis=1, keepdims=True)+1e-9
+    B/=np.linalg.norm(B, axis=1, keepdims=True)+1e-9
+    C=A@B.T
+    print('"'\\nMASK', name, 'n_genes', mask.sum())
+    for target in ['PABPC1','NUDT21','LEO1']:
+        # ref guide index with this prefix/target
+        rid=[i for i in ref_tidx if refg[i].startswith(target+'-')][0]
+        row=np.where(ref_tidx==rid)[0][0]
+        order=np.argsort(C[row])[::-1][:8]
+        print(target, refg[rid], 'top:', [(qg[q_tidx[j]], round(float(C[row,j]),4), int(qN[q_tidx[j]])) for j in order])
+PY"

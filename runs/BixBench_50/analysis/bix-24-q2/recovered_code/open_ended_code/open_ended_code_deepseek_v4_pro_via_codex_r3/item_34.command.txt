@@ -1,0 +1,44 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, time, json
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+# normalize column names underscores to hyphens, then map layout order
+col_map = {c: c.replace('_','-') for c in counts.columns}
+counts = counts.rename(columns=col_map)
+layout = pd.read_csv('/workspace/inputs/sample_layout.csv')
+print('layout shape', layout.shape)
+# map by SampleID
+meta = layout.set_index('SampleID')[['Group']].copy()
+# ensure same order as counts; counts already 1-1 etc
+print('all samples in meta', meta.index.isin(counts.columns).all())
+print('counts not in meta', [c for c in counts.columns if c not in meta.index])
+counts = counts[meta.index]
+meta['group'] = pd.Categorical(meta['Group'], categories=['DMSO','CBD_IC50','Untreated','Serum_starvation','DMSO_Serum_starvation','Cisplatin_IC50','Cisplatin_IC50_Serum_starvation_16h','CBD_IC50_Serum_starvation_16h','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h'])
+meta = meta[['group']]
+# PyDESeq2 wants counts rows samples, columns genes
+ct = counts.T.copy()
+ct.index.name='sample'
+print('counts orient', ct.shape, ct.index[:3], ct.columns[:3])
+t0=time.time()
+dds = DeseqDataSet(counts=ct, metadata=meta, design='~group', quiet=False, n_cpus=4)
+print('built', time.time()-t0)
+t0=time.time()
+dds.deseq2()
+print('fit done', time.time()-t0)
+print(dds.obsm['design_matrix'].columns.tolist())
+print(dds.obsm['design_matrix'].head())
+# save dds? Use pickle maybe but object may contain anndata. Save results via stats.
+t0=time.time()
+stat = DeseqStats(dds, contrast=['group','CBD_IC50','DMSO'], alpha=0.05, independent_filter=True, cooks_filter=True, n_cpus=4)
+stat.summary()
+print('stats done', time.time()-t0)
+res = stat.results_df.copy()
+print('res shape', res.shape)
+print(res.head())
+print(res['padj'].notna().sum(), (res['padj']<0.05).sum())
+print('sig', ((res['padj']<0.05)&(res['log2FoldChange'].abs()>0.5)).sum())
+res.to_csv('/workspace/tmp/deseq2_cbd_vs_dmso.tsv', sep='\\t')
+print('saved')
+PY"

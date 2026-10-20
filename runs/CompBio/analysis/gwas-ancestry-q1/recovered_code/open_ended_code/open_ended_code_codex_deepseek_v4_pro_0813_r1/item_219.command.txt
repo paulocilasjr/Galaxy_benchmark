@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import re,subprocess,zlib
+entries=[]
+for line in open('GIA_Vitals_toc.txt'):
+ m=re.match(r'([-d])\\S+\\s+\\S+\\s+(\\d+)\\s+\\S+\\s+\\S+\\s+(.*)"'$'"', line.strip())
+ if m: entries.append((m.group(1),int(m.group(2)),m.group(3).strip()))
+off=0; pos={}; sizes={}
+for typ,size,name in entries:
+    if len(name.encode())>100: off += 512 + ((len(name.encode())+511)//512)*512
+    pos[name]=off+512; sizes[name]=size
+    off += 512 + ((size+511)//512)*512
+base='https://ftp.ncbi.nlm.nih.gov/dbgap/studies/phs002453/phs002453.v1.p1/analyses/GIA/phs002453.MVP_R4.1000G_AGR.GIA.Surveys_Vitals_Quantitative.analysis-PI.MULTI.tar'
+targets=[name for name in pos if 'Height_' in name and name.endswith('.txt.gz') and ('Mean_INT' in name or 'Max_INT' in name or 'Min_INT' in name)]
+print('targets',len(targets))
+for target in targets:
+    start=pos[target]; size=sizes[target]
+    chunk=min(20_000_000,size)
+    data=subprocess.check_output(['curl','-L','--max-time','120','-s','-r',f'{start}-{start+chunk-1}',base])
+    out=bytearray(); d=zlib.decompressobj(16+zlib.MAX_WBITS); buf=data
+    try:
+        while buf:
+            out += d.decompress(buf)
+            if d.unused_data:
+                buf=d.unused_data; d=zlib.decompressobj(16+zlib.MAX_WBITS)
+            else:
+                out += d.flush(); break
+    except zlib.error:
+        out += d.flush()
+    text=out.decode(errors='replace')
+    idx=text.find('rs9435734')
+    if idx"'!=-1:
+        line=text[idx:text.find('"'\\n',idx)]
+        cols=line.split('\\t')
+        pval=cols[9] if len(cols)>9 else 'NA'
+        print(target.split('/')[-1], 'pval', pval)
+    else:
+        lines=text.splitlines()[1:]
+        lastpos=lines[-1].split('\\t')[2] if lines and len(lines[-1].split('\\t'))>2 else '?'
+        print('NOT FOUND', target.split('/')[-1], 'decomp',len(out), 'lastpos', lastpos)
+PY"

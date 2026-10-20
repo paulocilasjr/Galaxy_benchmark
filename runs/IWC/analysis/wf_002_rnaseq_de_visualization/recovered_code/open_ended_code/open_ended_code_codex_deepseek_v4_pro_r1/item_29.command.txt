@@ -1,0 +1,47 @@
+/usr/bin/bash -lc "/usr/bin/micromamba run -p /tmp/de-env Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+ref_dir <- '/workspace/data/inputs/counts_from_reference_condition'
+chg_dir <- '/workspace/data/inputs/counts_from_changed_condition'
+files_ref <- list.files(ref_dir, pattern='[.]dat"'$'"', recursive=TRUE, full.names=TRUE)
+files_chg <- list.files(chg_dir, pattern='[.]dat"'$'"', recursive=TRUE, full.names=TRUE)
+files <- c(files_ref, files_chg)
+ord <- order(basename(files))
+files <- files[ord]
+condition <- factor(ifelse(grepl('counts_from_changed_condition', files), 'changed', 'reference'),
+                    levels=c('reference','changed'))
+sample_names <- gsub('[.]dat"'$'"', '', basename(files))
+names(condition) <- sample_names
+print(condition)
+read_one <- function(f) {
+  x <- read.delim(f, check.names=FALSE, stringsAsFactors=FALSE, colClasses=c('character','integer'))
+  stopifnot(ncol(x)==2, identical(colnames(x)[1], 'Geneid'))
+  x
+}
+lst <- lapply(files, read_one)
+ids <- lapply(lst, function(x) x[[1]])
+stopifnot(all(vapply(ids, identical, logical(1), ids[[1]])))
+counts <- do.call(cbind, lapply(lst, function(x) x[[2]]))
+colnames(counts) <- sample_names
+rownames(counts) <- ids[[1]]
+keep <- rowSums(counts >= 10) >= 2
+counts_f <- counts[keep, , drop=FALSE]
+col_data <- data.frame(condition=condition[colnames(counts_f)], row.names=colnames(counts_f))
+col_data"'$condition <- factor(col_data$condition, levels=c('"'reference','changed'))
+dds <- DESeqDataSetFromMatrix(countData=counts_f, colData=col_data, design=~condition)
+dds <- DESeq(dds)
+res <- results(dds, contrast=c('condition','changed','reference'), independentFiltering=FALSE, cooksCutoff=FALSE)
+manual_fdr <- p.adjust(res"'$pvalue, method='"'BH')
+cat('retained', nrow(counts_f), '\\n')
+cat('NA p', sum(is.na(res"'$pvalue)), '"'nonfinite p', sum("'!is.finite(res$pvalue)), '"'\\n')
+cat('nonfinite lfc', sum("'!is.finite(res$log2FoldChange)), '"'\\n')
+cat('p range', paste(format(range(res"'$pvalue, na.rm=TRUE), digits=8), collapse='"' '), '\\n')
+cat('fdr range', paste(format(range(manual_fdr, na.rm=TRUE), digits=8), collapse=' '), '\\n')
+cat('DESeq padj equal manual maxdiff', max(abs(res"'$padj - manual_fdr), na.rm=TRUE), '"'\\n')
+cat('lfc range', paste(format(range(res"'$log2FoldChange), digits=8), collapse='"' '), '\\n')
+cat('head\\n')
+print(head(data.frame(gene_id=rownames(res), log2_fold_change=res"'$log2FoldChange, p_value=res$pvalue, fdr=manual_fdr, stringsAsFactors=FALSE), 8), row.names=FALSE)
+# one zero-changed retained gene
+zero_chg <- rownames(counts_f)[rowSums(counts_f[, condition=='"'changed', drop=FALSE]) == 0]
+cat('zero changed retained genes:\\n')
+print(data.frame(gene_id=zero_chg, counts=counts_f[zero_chg,,drop=FALSE], lfc=res[zero_chg,'log2FoldChange'], p=res[zero_chg,'pvalue'], fdr=manual_fdr[zero_chg], row.names=NULL))
+RS"

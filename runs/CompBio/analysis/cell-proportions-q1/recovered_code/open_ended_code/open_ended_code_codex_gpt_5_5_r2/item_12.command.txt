@@ -1,0 +1,48 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from scipy.io import mmread
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances
+
+X = np.asarray(mmread('cell.proportions.q1.mtx.gz'), dtype=np.float64).T
+lib = X.sum(1); det=(X>0).sum(1); zeros=(X==0).mean(1); maxgene=X.max(1)
+Y=np.log1p(X/lib[:,None]*np.median(lib))
+idx=np.argsort(Y.var(0))[-500:]
+PC=PCA(n_components=20, random_state=1).fit_transform(StandardScaler().fit_transform(Y[:,idx]))
+km=KMeans(n_clusters=6, n_init=100, random_state=2).fit(PC[:,:20])
+lab=km.labels_
+# sort clusters descending size
+order=sorted(range(6), key=lambda c: (lab==c).sum(), reverse=True)
+print('cluster size pct lib_med lib_q05_q95 det_med det_q05_q95 zero_med max_med')
+for rank,c in enumerate(order):
+    m=lab==c
+    print(rank, c, m.sum(), round(m.mean()*100,2),
+          round(np.median(lib[m]),1), tuple(np.round(np.quantile(lib[m],[.05,.95]),1)),
+          round(np.median(det[m]),1), tuple(np.round(np.quantile(det[m],[.05,.95]),1)),
+          round(np.median(zeros[m]),3), round(np.median(maxgene[m]),1))
+print('\\noverall lib/det correlation', np.corrcoef(lib,det)[0,1])
+# distance separation: center norms, pairwise centers first 5 pcs
+centers=[]
+for c in order:
+    centers.append(PC[lab==c,:5].mean(0))
+D=pairwise_distances(np.vstack(centers))
+print('\\ncenter dist first 5 PCs')
+print(np.round(D,2))
+# confusion with QC thresholds from median/MAD for lib and detected
+def mad(a): return np.median(np.abs(a-np.median(a)))
+for metric,name in [(lib,'lib'),(det,'det')]:
+    med=np.median(metric); m=mad(metric)
+    for z in [3,4,5]:
+        lo=med-z*1.4826*m; hi=med+z*1.4826*m
+        keep=(metric>=lo)&(metric<=hi)
+        print(name,'z',z,'lohi',round(lo,1),round(hi,1),'drop',len(metric)-keep.sum(),'sizes kept', sorted(np.bincount(lab[keep], minlength=6), reverse=True))
+# combined
+for z in [3,4,5]:
+    keep=np.ones(len(lib), dtype=bool)
+    for metric in [lib,det]:
+        med=np.median(metric); m=mad(metric); lo=med-z*1.4826*m; hi=med+z*1.4826*m
+        keep &= (metric>=lo)&(metric<=hi)
+    print('combined z',z,'drop',len(lib)-keep.sum(),'kept cluster sizes desc', sorted(np.bincount(lab[keep], minlength=6), reverse=True), 'pct', [round(x/keep.sum()*100,1) for x in sorted(np.bincount(lab[keep], minlength=6), reverse=True) if x])
+PY"

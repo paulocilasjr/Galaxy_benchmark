@@ -1,0 +1,89 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile,re,math
+import numpy as np
+from scipy.stats import fisher_exact
+candidates=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']
+# exact profile mapping from JASPAR2024 PFM headers; include only exact symbols except known case.
+profiles={c:[] for c in candidates}
+z=zipfile.ZipFile('PFMs.zip')
+for name in z.namelist():
+    if not name.endswith('.jaspar'): continue
+    lines=z.read(name).decode().strip().splitlines()
+    hdr=lines[0]
+    m=re.match(r'>\\s*(\\S+)\\s+(\\S+)',hdr)
+    if not m: continue
+    mid,gene=m.groups()
+    for c in candidates:
+        if gene.upper()==c:
+            arr=[]
+            for line in lines[1:]:
+                nums=[float(x) for x in re.findall(r'[0-9.]+',line)]
+                arr.append(nums)
+            mat=np.array(arr)  # A,C,G,T x L
+            # pseudocount 0.8-ish; stable threshold only uses relative score
+            pc=0.1
+            probs=(mat+pc)/(mat.sum(axis=0,keepdims=True)+4*pc)
+            pwm=np.log2(probs/0.25)
+            mn=pwm.min(axis=0).sum(); mx=pwm.max(axis=0).sum()
+            profiles[c].append((mid,gene,pwm,mn,mx))
+print('profiles')
+for c,v in profiles.items(): print(c, [x[0] for x in v])
+comp=np.array([3,2,1,0],dtype=np.int8)
+def read_fa(fn):
+    seqs=[]; cur=[]
+    trans=np.full(256,4,dtype=np.uint8)
+    for ch,i in zip(b'ACGT',range(4)): trans[ch]=i
+    with open(fn,'rb') as f:
+        for line in f:
+            if line.startswith(b'>'):
+                if cur: seqs.append(b''.join(cur)); cur=[]
+            else:
+                cur.append(line.strip().upper())
+        if cur: seqs.append(b''.join(cur))
+    L=max(map(len,seqs))
+    arr=np.full((len(seqs),L),4,dtype=np.uint8)
+    for i,s in enumerate(seqs):
+        a=trans[np.frombuffer(s,dtype=np.uint8)]
+        arr[i,:len(a)]=a
+    return arr
+
+def scan(arr, prof_list, thr_rel):
+    N,L=arr.shape
+    best=np.full(N,-1e9,dtype=np.float32)
+    hit=np.zeros(N,dtype=bool)
+    for mid,gene,pwm,mn,mx in prof_list:
+        m=pwm.shape[1]
+        thr=mn+thr_rel*(mx-mn)
+        # forward and revcomp pwm (columns reversed, rows complemented)
+        for mat in (pwm, pwm[comp, ::-1]):
+            scores=np.zeros((N,L-m+1),dtype=np.float32)
+            valid=np.ones((N,L-m+1),dtype=bool)
+            for j in range(m):
+                bases=arr[:,j:j+L-m+1]
+                valid &= bases<4
+                sc=np.zeros_like(scores)
+                ok=bases<4
+                # fancy indexing only safe for valid bases
+                b2=bases.copy(); b2[~ok]=0
+                scores += mat[b2,j]
+            scores[~valid]=-1e9
+            mxs=scores.max(axis=1)
+            rel=(mxs-mn)/(mx-mn)
+            best=np.maximum(best,rel)
+            hit |= mxs>=thr
+    return hit,best
+for N in [1000,3000]:
+    gain=read_fa(f'gain_top{N}.fa'); bg=read_fa(f'bg_top{N}.fa')
+    print('\\nN',N,'seq shapes',gain.shape,bg.shape)
+    for thr in [0.8,0.85,0.9]:
+        rows=[]
+        for c in candidates:
+            h1,b1=scan(gain,profiles[c],thr); h0,b0=scan(bg,profiles[c],thr)
+            a=int(h1.sum()); b=len(h1)-a; c0=int(h0.sum()); d=len(h0)-c0
+            odds,p=fisher_exact([[a,b],[c0,d]],alternative='greater')
+            rows.append((p, odds, a/len(h1), c0/len(h0), a, c0, c, float(np.mean(b1)), float(np.mean(b0))))
+        rows.sort()
+        print('thr',thr)
+        for r in rows:
+            print(f'{r[6]:7s} p={r[0]:.2e} OR={r[1]:.2f} gain={r[4]}/{N}({r[2]:.3f}) bg={r[5]}/{N}({r[3]:.3f}) meanrel={r[7]:.3f}/{r[8]:.3f}')
+PY"

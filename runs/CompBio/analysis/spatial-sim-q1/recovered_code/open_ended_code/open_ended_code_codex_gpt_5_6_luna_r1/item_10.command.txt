@@ -1,0 +1,28 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+meta = pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc = pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+print('meta', meta.shape, flush=True)
+print('sc', sc.shape, flush=True)
+print(meta['cell_type'].value_counts().to_dict(), flush=True)
+M = mmread('matrix.mtx.gz').tocsr()
+print('spatial', M.shape, M.nnz, M.sum(), flush=True)
+barcodes = pd.read_csv('barcodes.tsv.gz', header=None)[0]
+features = pd.read_csv('features.tsv.gz', sep='\\t', header=None)
+print('barcodes', len(barcodes), barcodes.iloc[710], 'features',features.shape,flush=True)
+x = np.asarray(M[:,710].todense()).ravel()
+print('target', x.sum(), (x>0).sum(), flush=True)
+scv=sc.to_numpy(dtype=float)
+means={}
+for typ, idx in meta.groupby('cell_type').groups.items():
+    a=scv[idx,:]
+    means[typ]=a.mean(0)
+    print(typ, 'total', a.sum(1).mean(), 'top', [(sc.columns[i], round(a[:,i].mean(),2)) for i in np.argsort(a.mean(0))[-10:][::-1]], flush=True)
+for normname, f in [('raw',lambda a:a),('log1p',lambda a:np.log1p(a)),('binary',lambda a:(a>0).astype(float))]:
+    tx=f(x)
+    print(normname,flush=True)
+    for typ,mu in means.items():
+      v=f(mu)
+      print(typ, round(np.corrcoef(tx,v)[0,1],4), round(tx.dot(v)/(np.linalg.norm(tx)*np.linalg.norm(v)),4),flush=True)
+PY"

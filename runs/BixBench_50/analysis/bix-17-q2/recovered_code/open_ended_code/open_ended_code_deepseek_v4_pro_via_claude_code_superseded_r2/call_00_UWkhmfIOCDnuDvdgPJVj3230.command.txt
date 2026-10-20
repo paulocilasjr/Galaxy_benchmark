@@ -1,0 +1,79 @@
+/tmp/myenv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import os, glob
+
+# Read Trio Status
+trio = pd.read_excel('inputs/230215_Trio_Status.xlsx')
+trio['Sample ID'] = trio['Sample ID'].astype(str).str.strip()
+
+# Build CHIP file map
+chip_files = glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+chip_map = {}
+for f in chip_files:
+    basename = os.path.basename(f)
+    identifier = basename.replace('230209_Exome_GRCh38_CHIP_', '').replace('.xlsx', '')
+    if '-' in identifier and not identifier.startswith('SRR'):
+        sample_id = identifier.split('-')[0]
+    else:
+        sample_id = identifier
+    chip_map[sample_id] = f
+
+exclude_so = {
+    'intron_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+def count_somatic_chip(sample_id):
+    """Count somatic CHIP variants for a sample. Returns None if no file."""
+    if sample_id not in chip_map:
+        return None
+    df = pd.read_excel(chip_map[sample_id])
+    zyg_col = df.columns[4]
+    vaf_col = df.columns[9]
+    so_col = df.columns[13]
+    
+    data_df = df[df[zyg_col] != 'Zygosity'].copy()
+    data_df = data_df[data_df[so_col] != 'Sequence Ontology (Combined)']
+    data_df['VAF_num'] = pd.to_numeric(data_df[vaf_col], errors='coerce')
+    
+    filtered = data_df[
+        (data_df['VAF_num'].notna()) &
+        (data_df['VAF_num'] < 0.3) &
+        (data_df[zyg_col] != 'Reference') &
+        (~data_df[so_col].isin(exclude_so)) &
+        (~data_df[so_col].str.contains('intergenic', case=False, na=False))
+    ]
+    return len(filtered)
+
+# Interpretation 1: BLM Mutation Status == "Carrier"
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+counts1 = []
+for _, row in carriers.iterrows():
+    sid = str(row['Sample ID']).strip()
+    c = count_somatic_chip(sid)
+    if c is not None:
+        counts1.append(c)
+        print(f"Carrier {sid}: {c}")
+
+print(f"\nInterpretation 1 (Status == 'Carrier'):")
+print(f"  Counts: {sorted(counts1)}")
+print(f"  Median: {np.median(counts1)}")
+
+# Interpretation 2: BLM Mutation Status in ["Carrier", "Affected"]
+both = trio[trio['BLM Mutation Status'].isin(['Carrier', 'Affected'])]
+counts2 = []
+for _, row in both.iterrows():
+    sid = str(row['Sample ID']).strip()
+    c = count_somatic_chip(sid)
+    if c is not None:
+        counts2.append(c)
+        print(f"Carrier/Affected {sid} ({row['BLM Mutation Status']}): {c}")
+
+print(f"\nInterpretation 2 (Status in ['Carrier', 'Affected']):")
+print(f"  Counts: {sorted(counts2)}")
+print(f"  Median: {np.median(counts2)}")
+PYEOF
+

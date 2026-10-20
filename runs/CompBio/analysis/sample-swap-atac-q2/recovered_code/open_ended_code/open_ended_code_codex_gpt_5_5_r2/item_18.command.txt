@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,bisect
+import pandas as pd, numpy as np
+from collections import defaultdict,Counter
+counts=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t')
+cols=list(counts.columns[3:])
+lib=counts[cols].sum()
+log=np.log1p(counts[cols].div(lib,axis=1)*1e6)
+# robust z per row? calculate logFC target vs mean others, require counts
+# Load genes TSS
+bychr=defaultdict(list)
+seen=set()
+with gzip.open('refGene.hg38.txt.gz','rt') as f:
+    for row in csv.reader(f,delimiter='\\t'):
+        if len(row)<13: continue
+        chrom=row[2]; strand=row[3]; txStart=int(row[4]); txEnd=int(row[5]); gene=row[12]
+        if '_' in chrom: continue
+        # include all tss duplicates after unique coordinate
+        tss=txStart if strand=='+' else txEnd
+        key=(chrom,tss,gene)
+        if key in seen: continue
+        seen.add(key); bychr[chrom].append((tss,gene))
+for chrom in bychr: bychr[chrom].sort()
+
+def nearest(chrom,pos,maxdist=200000):
+    arr=bychr.get(chrom,[])
+    if not arr: return None
+    i=bisect.bisect_left(arr,(pos,''))
+    best=None
+    for j in [i-2,i-1,i,i+1,i+2]:
+        if 0<=j<len(arr):
+            d=abs(arr[j][0]-pos)
+            if best is None or d<best[0]: best=(d,arr[j][1])
+    if best and best[0]<=maxdist: return best[1],best[0]
+    return None
+chrom=counts['chrom'].values; mid=((counts['start'].values+counts['end'].values)//2)
+# filter blacklist? no just all bins, require mean normalized > threshold
+for c in cols:
+    others=[x for x in cols if x"'!=c]
+    score=log[c]-log[others].mean(axis=1)
+    # remove very low target cpm maybe score from zeros? require target > 1 logcpm? top handles
+    top=np.argsort(-score.values)[:500]
+    genes=[]
+    print('"'\\n###',c)
+    for idx in top[:50]:
+        n=nearest(chrom[idx],int(mid[idx]))
+        if n: genes.append(n[0])
+        print(f\"{chrom[idx]}:{counts['start'].iat[idx]}-{counts['end'].iat[idx]} score={score.iat[idx]:.2f} {n}\")
+    g500=[]
+    for idx in top:
+        n=nearest(chrom[idx],int(mid[idx]))
+        if n: g500.append(n[0])
+    print('top genes common:',Counter(g500).most_common(30))
+PY"

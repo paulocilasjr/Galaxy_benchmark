@@ -1,0 +1,19 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('extracted/spatial_q_sc_counts.csv',index_col=0);meta=pd.read_csv('extracted/spatial_q_sc_metadata.csv',index_col=0);sp=mmread('extracted/matrix.mtx.gz').tocsr().toarray().T;pos=pd.read_csv('extracted/tissue_positions.csv')
+types=sorted(meta.cell_type.unique());sn=sc.div(sc.sum(1),axis=0);ref=meta.join(sn).groupby('cell_type')[sc.columns].mean().loc[types].T.values;ref/=ref.sum(0,keepdims=True);y=sp/sp.sum(1,keepdims=True)
+co=np.array([nnls(ref,a)[0] for a in y]);co/=co.sum(1,keepdims=True)
+mean_total=sc.groupby(meta.cell_type).sum().sum(axis=1)/200
+print('means',mean_total.to_dict())
+# best n based total / average cell total, integer 1..6
+T=sp.sum(1);avg=mean_total.mean()
+n=np.clip(np.round(T/avg),1,10).astype(int)
+print('n counts',pd.Series(n).value_counts().sort_index().to_dict(),'total sum',n.sum())
+for j,t in enumerate(types):
+ x=co[:,j]*n
+ print(t,'fraction*n quantiles',np.quantile(x,[0,.1,.25,.5,.75,.9,.99,1]).round(2),'mean',x.mean(),'near int',np.mean(np.abs(x-np.round(x))<.1))
+# print n / inferred counts for high tumor
+for k in np.where(co[:,types.index('Tumor_Core')]>0.1)[0]: print(k,'pos',pos.loc[k,['array_row','array_col']].tolist(),'T',T[k],'n',n[k], 'counts',dict(zip(types,np.round(co[k]*n[k],2))))
+PY"

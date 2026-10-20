@@ -1,0 +1,25 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,json,urllib.request,concurrent.futures,time
+rows=[]
+with gzip.open('vcf.infer.build.q1.vcf.gz','rt') as f:
+    for line in f:
+        if not line.startswith('#'):
+            a=line.split('\\t');
+            if int(a[1])<62000000: rows.append((int(a[1]),a[3]))
+sample=[rows[round(i*(len(rows)-1)/15)] for i in range(16)]
+dbs=['hg18','hg19','hg38','hs1']
+def get(x):
+    db,(p,ref)=x
+    url=f'https://api.genome.ucsc.edu/getData/sequence?genome={db};chrom=chr20;start={p-1};end={p}'
+    try:
+      with urllib.request.urlopen(url,timeout=30) as h: base=json.load(h)['dna'].upper()
+      return db,p,ref,base,None
+    except Exception as e: return db,p,ref,'',str(e)
+res=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+  for z in ex.map(get,[(d,r) for d in dbs for r in sample]): res.append(z)
+for db in dbs:
+    z=[x for x in res if x[0]==db]; ok=[x for x in z if not x[4]]
+    print(db, sum(x[2]==x[3] for x in ok),'/',len(ok),'errors',sum(bool(x[4]) for x in z))
+    print(' ',[(x[1],x[2],x[3]) for x in ok[:5]])
+PY"

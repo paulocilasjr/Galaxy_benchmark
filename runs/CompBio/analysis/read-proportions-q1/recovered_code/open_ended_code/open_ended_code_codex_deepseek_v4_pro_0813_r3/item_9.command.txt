@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+from Bio import SeqIO
+import gzip, time
+from collections import defaultdict, Counter
+seqs={r.id:str(r.seq).upper() for r in SeqIO.parse('read.proportions.q1.fa','fasta')}
+comp=str.maketrans('ACGT','TGCA')
+L=36
+# Build 9-mer index for forward and reverse complement, per chr: dict kmer->set positions
+k=9
+index={name:{'f':defaultdict(list),'r':defaultdict(list)} for name in seqs}
+for name,s in seqs.items():
+    for i in range(len(s)-L+1):
+        index[name]['f'][s[i:i+k]].append(i)
+    rs=s.translate(comp)[::-1]
+    for i in range(len(rs)-L+1):
+        index[name]['r'][rs[i:i+k]].append(i)
+
+def min_dist(read, name):
+    best=L+1
+    # seeds at offsets 0,k,2*k,3*k
+    for strand in ['f','r']:
+        idx=index[name][strand]
+        for start in [0,k,2*k,3*k]:
+            seed=read[start:start+k]
+            if len(seed)<k: continue
+            for pos in idx.get(seed,()):
+                # pos is start in reference orientation; need compare read segment to ref[pos:pos+L]
+                if strand=='f':
+                    ref=seqs[name]
+                    sstr=ref
+                    p=pos
+                else:
+                    ref=seqs[name].translate(comp)[::-1]
+                    sstr=ref
+                    p=pos
+                d=0
+                # use local vars
+                ss=sstr; rr=read
+                for j in range(L):
+                    if ss[p+j]"'!=rr[j]:
+                        d+=1
+                        if d>=best: break
+                if d<best:
+                    best=d
+                    if best==0: return 0,name,strand,pos
+    return best
+
+start=time.time()
+counts=Counter(); unassigned=0; ntest=0
+# process all maybe
+reads=[]
+with gzip.open('"'read.proportions.q1.fq.gz','rt') as f:
+    for _ in range(2000):
+        h=f.readline()
+        if not h: break
+        seq=f.readline().strip().upper(); f.readline(); f.readline()
+        reads.append(seq)
+for r in reads:
+    ds={name:min_dist(r,name) for name in seqs}
+    md=min(ds.values())
+    tied=[n for n,d in ds.items() if d==md]
+    if len(tied)==1:
+        counts[tied[0]]+=1
+    else:
+        unassigned+=1
+print('test 2000 time',time.time()-start, counts, unassigned)
+PY"

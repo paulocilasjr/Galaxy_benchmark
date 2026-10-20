@@ -1,0 +1,114 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+from collections import Counter, defaultdict
+import re, math
+
+base=Path('inputs')
+status_file=base/'230215_Trio_Status.xlsx'
+wb=load_workbook(status_file, read_only=True, data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+headers=[str(x).strip() if x is not None else '' for x in rows[0]]
+idx={h:i for i,h in enumerate(headers)}
+status={str(r[idx['Sample ID']]).strip(): str(r[idx['BLM Mutation Status']]).strip() for r in rows[1:] if r[idx['Sample ID']] is not None}
+role={str(r[idx['Sample ID']]).strip(): str(r[idx['Status']]).strip() if r[idx['Status']] is not None else '' for r in rows[1:] if r[idx['Sample ID']] is not None}
+
+files=list((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+def sample_from_file(p):
+    name=p.stem
+    return name.split('230209_Exome_GRCh38_CHIP_')[1].split('-')[0]
+file_by_sample={sample_from_file(p): p for p in files}
+print('n files', len(files), 'samples in status', len(status))
+for group in ['Carrier','Affected','Unaffected']:
+    ids=[sid for sid,s in status.items() if s==group]
+    have=[sid for sid in ids if sid in file_by_sample]
+    miss=[sid for sid in ids if sid not in file_by_sample]
+    print(group, 'ids', len(ids), 'have', len(have), 'missing', miss)
+
+coding_terms=set('''transcript_ablation splice_acceptor_variant splice_donor_variant stop_gained frameshift_variant stop_lost start_lost transcript_amplification inframe_insertion inframe_deletion missense_variant protein_altering_variant synonymous_variant coding_sequence_variant incomplete_terminal_codon_variant start_retained_variant stop_retained_variant'''.split())
+# More conservative exonic coding: missense/synonymous/etc no intron/UTR. splice accepter/donor included? likely coding-relevant but not exactly coding.
+
+def parse_workbook(p):
+    wb=load_workbook(p, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    # header at row 2
+    row2=[c.value for c in next(ws.iter_rows(min_row=2,max_row=2))]
+    col={v:i for i,v in enumerate(row2) if v is not None}
+    wanted=['Variant Allele Freq','Sequence Ontology (Combined)','Effect (Combined)','Zygosity','Chr:Pos','Ref/Alt']
+    for w in wanted:
+        if w not in col:
+            raise Exception(f'{p} missing {w}')
+    out=[]
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        vals={w: row[col[w]] if col[w] < len(row) else None for w in wanted}
+        vaf=vals['Variant Allele Freq']
+        if vaf is None or vaf=='':
+            continue
+        try:
+            vaf=float(vaf)
+        except Exception:
+            continue
+        vals['VAF']=vaf
+        out.append(vals)
+    return out
+
+def classify_coding_so(so):
+    terms=re.split(r'[,&;|/ ]+', str(so)) if so is not None else []
+    return any(t in coding_terms for t in terms)
+
+def classify_coding_effect(effect):
+    return str(effect) "'!= '"'Other' and effect is not None and str(effect).strip()"'!='"''
+
+def is_syn(so,effect):
+    return ('synonymous_variant' in str(so)) or (str(effect).strip().lower()=='synonymous')
+
+def calc(ids, coding_mode='effect', collapse=False):
+    den=[]; num=[]
+    for sid in ids:
+        p=file_by_sample.get(sid)
+        if not p: continue
+        for r in parse_workbook(p):
+            if r['VAF'] < 0.3:
+                coding = classify_coding_effect(r['Effect (Combined)']) if coding_mode=='effect' else classify_coding_so(r['Sequence Ontology (Combined)'])
+                if coding:
+                    key=(r['Chr:Pos'], r['Ref/Alt']) if collapse else (sid, r['Chr:Pos'], r['Ref/Alt'])
+                    den.append((key,r))
+                    if is_syn(r['Sequence Ontology (Combined)'], r['Effect (Combined)']):
+                        num.append((key,r))
+    if collapse:
+        # if duplicate site rows, classify unique as synonymous if any row for that site says syn; denominator unique sites.
+        den_keys={k for k,r in den}
+        num_keys={k for k,r in num}
+        return len(num_keys), len(den_keys), len(num_keys)/len(den_keys) if den_keys else None
+    return len(num), len(den), len(num)/len(den) if den else None
+
+groups={
+ 'Carrier_only':[sid for sid,s in status.items() if s=='Carrier'],
+ 'Affected_only':[sid for sid,s in status.items() if s=='Affected'],
+ 'Carrier_plus_Affected':[sid for sid,s in status.items() if s in {'Carrier','Affected'}],
+ 'All_non_unaffected':[sid for sid,s in status.items() if s"'!='"'Unaffected'],
+}
+for gm,ids in groups.items():
+    print('\\nGROUP', gm, 'n status', len(ids), 'n files', sum(1 for sid in ids if sid in file_by_sample))
+    for mode in ['effect','so']:
+        print(' ', mode, 'row', calc(ids, mode, False), 'sitecollapse', calc(ids, mode, True))
+
+# Show unique effects/SO for carrier_only below VAF<0.3
+ids=groups['Carrier_only']
+counts=Counter(); socounts=Counter(); synrows=[]
+for sid in ids:
+    p=file_by_sample.get(sid)
+    if not p: continue
+    for r in parse_workbook(p):
+        if r['VAF']<0.3:
+            counts[str(r['Effect (Combined)'])]+=1
+            socounts[str(r['Sequence Ontology (Combined)'])]+=1
+            if is_syn(r['Sequence Ontology (Combined)'], r['Effect (Combined)']): synrows.append((sid,r['Chr:Pos'],r['Ref/Alt'],r['VAF'],r['Sequence Ontology (Combined)'],r['Effect (Combined)']))
+print('\\nCarrier VAF<0.3 effect counts')
+for k,v in counts.most_common(): print(v,k)
+print('\\nCarrier VAF<0.3 SO counts top/all')
+for k,v in socounts.most_common(): print(v,k)
+print('\\nsyn rows carrier below vaf .3 first 30 total', len(synrows))
+for x in synrows[:30]: print(x)
+PY"

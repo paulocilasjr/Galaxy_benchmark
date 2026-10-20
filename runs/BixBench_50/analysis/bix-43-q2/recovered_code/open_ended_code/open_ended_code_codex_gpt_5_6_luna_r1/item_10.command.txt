@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+# Map layout's hyphenated SampleID to count matrix's underscore column labels.
+layout['count_col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+print('counts', counts.shape, counts.index.nunique(), counts.columns.tolist()[:3], counts.columns.tolist()[-3:])
+print('layout groups', layout.groupby('Group', sort=False).size().to_dict())
+print('layout/count columns match', set(layout['count_col']) == set(counts.columns), layout['count_col'].duplicated().any())
+
+# filter based on all 30 samples as requested
+keep = (counts > 10).any(axis=1)
+counts_f = counts.loc[keep].copy()
+print('prefilter kept', int(keep.sum()))
+
+wanted = ['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+# preserve listed group order and count-column order
+sel = layout[layout['Group'].isin(wanted)].copy()
+sel['Group'] = pd.Categorical(sel['Group'], categories=wanted, ordered=True)
+sel = sel.sort_values(['Group','SampleID'])
+# But samples within group order irrelevant; ensure counts align
+cols = sel['count_col'].tolist()
+metadata = sel.set_index('count_col')[['Group']]
+counts_s = counts_f[cols].T.copy()
+counts_s.index.name = 'sample'
+print('selected', counts_s.shape, metadata['Group'].value_counts().to_dict())
+print('aligned', counts_s.index.equals(metadata.index))
+
+dds = DeseqDataSet(counts=counts_s, metadata=metadata, design_factors='Group', refit_cooks=True, n_cpus=1, quiet=True)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'], alpha=0.05, quiet=True)
+stat_res.summary()
+res = stat_res.results_df.copy()
+print('result columns', res.columns.tolist(), 'shape', res.shape)
+print(res.head())
+# thresholds
+res2=res.loc[res['padj'].notna() & (res['padj'] <= .05) & (res['log2FoldChange'].abs() >= .5) & (res['baseMean'] >= 10)].copy()
+print('DE selected',len(res2))
+print('padj<=.05',res['padj'].le(.05).sum(),'abs lfc',res['log2FoldChange'].abs().ge(.5).sum(),'basemean',res['baseMean'].ge(10).sum())
+print('selected symbols sample ids',res2.index[:20].tolist())
+print(res2[['baseMean','log2FoldChange','pvalue','padj']].sort_values('padj').head(10).to_string())
+PY"

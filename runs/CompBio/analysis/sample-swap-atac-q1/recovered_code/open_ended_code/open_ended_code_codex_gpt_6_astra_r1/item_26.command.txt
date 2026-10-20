@@ -1,0 +1,22 @@
+/bin/bash -lc "cat > validate_targets.py <<'PY'
+import pandas as pd, numpy as np, re
+from collections import defaultdict
+x=pd.read_pickle('counts.pkl'); names=x.columns[3:]; a=x.iloc[:,3:].to_numpy(); n=a/a.sum(0)*1e7
+cs=defaultdict(int);offs={}
+for l in open('sample.swap.atac.q1.chrom.sizes'):
+ c,s=l.split();p=c.split('_')[0];offs[c]=(p,cs[p]);cs[p]+=int(s)
+x['parent']=[offs[c][0] for c in x.chrom];x['pos']=x.start+np.array([offs[c][1] for c in x.chrom])
+coords={c:(g.pos.to_numpy(),g.index.to_numpy()) for c,g in x.groupby('parent')}
+seen=set()
+for l in open('target_transcripts.tsv'):
+ t=l.rstrip().split('\\t')
+ if len(t)<9 or t[0] not in coords or t[2]"'!='"'transcript':continue
+ attr=dict(re.findall(r'(\\w+) \"(["'^"]*)"'"',t[8])); name=attr['transcript_id'].rsplit('|',1)[0]
+ tss=int(t[3])-1 if t[6]=='+' else int(t[4])-1
+ key=(name,t[0],tss//10000)
+ if key in seen:continue
+ seen.add(key); pos,idx=coords[t[0]]
+ lo=np.searchsorted(pos,tss-20000);hi=np.searchsorted(pos,tss+20000);v=n[idx[lo:hi]].sum(0)
+ ix=np.argsort(v)[::-1];print(name,t[0],tss, ' '.join(f'{names[j]}:{v[j]:.1f}' for j in ix[:4]),f'Cloaca/Stomach={(v[2]+.1)/(v[-1]+.1):.2f}')
+PY
+python validate_targets.py > target_summary.txt"

@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess, re
+region='chrX:154398500-154398500'
+proc=subprocess.run(['samtools','view','variant.status.q1.bam',region], text=True, capture_output=True, check=True)
+pos=154398500
+ops_re=re.compile(r'(\\d+)([MIDNSHP=X])')
+counts={}
+for line in proc.stdout.strip().splitlines():
+    f=line.split('\\t')
+    qname,flag,rname,start,mapq,cigar,seq,qual=f[0],int(f[1]),f[2],int(f[3]),int(f[4]),f[5],f[9],f[10]
+    ref=start; qi=0; base=None; bq=None
+    for n,op in ops_re.findall(cigar):
+        n=int(n)
+        if op in 'M=X':
+            if ref <= pos < ref+n:
+                qi += pos-ref
+                base=seq[qi]
+                bq=ord(qual[qi])-33
+                break
+            ref += n; qi += n
+        elif op in 'DN':
+            if ref <= pos < ref+n:
+                base='DEL/SKIP'; break
+            ref += n
+        elif op in 'IS':
+            qi += n
+        elif op in 'HP':
+            pass
+    strand='-' if flag & 16 else '+'
+    tags={}
+    for x in f[11:]:
+        parts=x.split(':',2)
+        if len(parts)==3: tags[parts[0]]=parts[2]
+    counts[base]=counts.get(base,0)+1
+    print(base, 'bq', bq, 'strand', strand, 'start', start, 'cigar', cigar, 'mapq', mapq, 'nM', tags.get('nM'), qname)
+print('counts', counts)
+PY"

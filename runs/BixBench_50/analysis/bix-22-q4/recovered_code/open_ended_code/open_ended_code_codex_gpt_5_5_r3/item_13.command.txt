@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math, os
+sample_path='inputs/Sample_annotated_Zenodo.csv'
+gene_path='inputs/GeneMetaInfo_Zenodo.csv'
+count_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+
+with open(sample_path, newline='') as f:
+    cd14_samples=[row['sample'] for row in csv.DictReader(f) if row['celltype']=='CD14']
+cd14_set=set(cd14_samples)
+
+length_by_gene={}
+biotype_by_gene={}
+with open(gene_path, newline='') as f:
+    for row in csv.DictReader(f):
+        gene=row['Geneid']
+        length_by_gene[gene]=float(row['Length'])
+        biotype_by_gene[gene]=row['gene_biotype']
+
+n=0
+sx=sy=sxx=syy=sxy=0.0
+count_rows=0
+missing_meta=0
+protein_rows=0
+protein_expressed=0
+unmatched_cd14=[]
+seen_genes=set()
+with open(count_path, newline='') as f:
+    r=csv.reader(f)
+    header=next(r)
+    col_index={name:i for i,name in enumerate(header)}
+    unmatched_cd14=[s for s in cd14_samples if s not in col_index]
+    idx=[col_index[s] for s in cd14_samples if s in col_index]
+    for row in r:
+        count_rows+=1
+        gene=row[0]
+        seen_genes.add(gene)
+        if gene not in biotype_by_gene:
+            missing_meta+=1
+            continue
+        if biotype_by_gene[gene] "'!= '"'protein_coding':
+            continue
+        protein_rows+=1
+        total=math.fsum(float(row[i]) for i in idx)
+        if total < 10:
+            continue
+        protein_expressed+=1
+        x=length_by_gene[gene]
+        y=total/len(idx)
+        n += 1
+        sx += x
+        sy += y
+        sxx += x*x
+        syy += y*y
+        sxy += x*y
+
+num=n*sxy - sx*sy
+den=math.sqrt((n*sxx - sx*sx)*(n*syy - sy*sy))
+r=num/den
+print('cd14_samples', len(cd14_samples), 'matched', len(idx), 'unmatched', unmatched_cd14)
+print('count_rows', count_rows, 'protein_rows_in_counts', protein_rows, 'missing_meta', missing_meta)
+print('expressed_protein_coding', protein_expressed)
+print('r', repr(r))
+print(format(r, '.17g'))
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt','w', newline='') as out:
+    out.write(format(r, '.17g')+'\\n')
+PY"

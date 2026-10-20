@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np
+from scipy import sparse
+import pandas as pd
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0); qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+def d(X,guide,nt,g): return X[guide==g].mean(0)-nt
+refs=['LEO1-I2','PAF1-I6','CTR9-I7','CDC73-I2']
+queries=['guide14','guide28','guide10','guide12']
+genes=np.array(r.var_names)
+for refg in refs:
+    diff=d(R,rguide,rnt,refg)
+    # unique down genes: top negative excluding genes common to all four refs
+    common_down=set()
+    allneg=[]
+    for other in refs:
+        o=np.argsort(d(R,rguide,rnt,other))[:200]
+        if other"'!=refg: common_down.update(o)
+    rank=np.argsort(diff)
+    unique=[g for g in rank if g not in common_down][:30]
+    print('"'\\nREF',refg,'top unique down:')
+    print(', '.join(genes[unique]))
+    # query scores for those genes
+    for qg in queries:
+        qd=d(Q,qguide,qnt,qg)
+        vals=qd[unique]
+        print(qg,'mean unique diff',round(vals.mean(),3),'n neg',(vals<0).sum())
+PY"

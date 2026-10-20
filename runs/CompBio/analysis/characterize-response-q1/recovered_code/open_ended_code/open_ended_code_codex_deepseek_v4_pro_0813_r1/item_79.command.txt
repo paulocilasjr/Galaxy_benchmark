@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+# quick compute GSE63739 WT LPS vs WT 0h
+import GEOparse,numpy as np,pandas as pd
+from collections import defaultdict
+QFILE='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/characterize.response.q1.txt'
+DEST='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/geo'
+g=GEOparse.get_GEO(geo='GSE63739',destdir=DEST,silent=True)
+mats=[]
+for name,gsm in g.gsms.items():
+ t=gsm.table.copy();t=t[['ID_REF','VALUE']].rename(columns={'VALUE':'value'});t['sample']=name;mats.append(t)
+df=pd.concat(mats);expr=df.pivot(index='ID_REF',columns='sample',values='value').astype(float)
+cond=['GSM1556382'];ctrl=['GSM1556380']
+sym=None
+for gpl in g.gpls.values():
+ ann=gpl.table;c=next((c for c in ann.columns if c.lower() in ['gene symbol','genesymbol','symbol']),None)
+ if c:sym=ann.set_index('ID')[c];break
+m0=expr[cond].mean(axis=1);m1=expr[ctrl].mean(axis=1);logfc=np.log2((m0+1)/(m1+1))
+best=defaultdict(lambda:(0,0))
+for p in expr.index:
+ gene=str(sym.loc[p]).split('///')[0].strip().upper() if p in sym.index else ''
+ if gene and abs(logfc[p])>best[gene][0]:best[gene]=(abs(logfc[p]),logfc[p])
+ranked=sorted(best.items(),key=lambda kv:-kv[1][0]);top=[x for x,v in ranked[:112]]
+qlist=open(QFILE).read().split();q=set(x.upper() for x in qlist);inter=set(top)&q
+print('overlap',len(inter), sorted(inter,key=lambda x:qlist.index(x.capitalize()) if x.capitalize() in qlist else 999))
+rank={g:i+1 for i,(g,v) in enumerate(ranked)}
+print([(g.capitalize(),rank.get(g.upper())) for g in qlist if g.upper() in rank][:40])
+PY"

@@ -1,0 +1,24 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+allc=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0).T
+layout=pd.read_csv('inputs/sample_layout.csv'); layout['sid']=layout.SampleID.str.replace('-','_',regex=False)
+keep=layout.Group.isin(['DMSO','Cisplatin_IC50_CBD_IC50']); layout=layout[keep].copy()
+counts=allc.loc[layout.sid]; counts=counts.loc[:,counts.sum()>0]
+meta=layout.set_index('sid').loc[counts.index,['Group']]
+print('input',counts.shape,flush=True)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~Group',refit_cooks=True,n_cpus=1,quiet=True,low_memory=True)
+dds.deseq2()
+st=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],alpha=.05,n_cpus=1,quiet=True); st.summary()
+r=st.results_df
+sig=r[(r.padj<.05)&(r.log2FoldChange.abs()>=.5)]
+ann=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t').set_index('ENSG')
+genes=set(sig.join(ann).gene_name.dropna())
+lib=gp.get_library('Reactome_2022','Human'); key=[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes ')][0]
+hits=sorted(genes & set(lib[key]))
+print('DEGS',len(sig),'OVERLAP',f'{len(hits)}/{len(lib[key])}','HITS',','.join(hits),flush=True)
+rr=r.join(ann)
+print(rr[rr.gene_name.isin(lib[key])][['gene_name','log2FoldChange','padj']].sort_values('gene_name').to_string(index=False),flush=True)
+PY"

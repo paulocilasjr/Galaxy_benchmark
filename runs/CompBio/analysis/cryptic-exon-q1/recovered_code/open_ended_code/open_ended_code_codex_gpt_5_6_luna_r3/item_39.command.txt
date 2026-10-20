@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,pysam,collections
+ex={}
+with gzip.open('gencode.v47.annotation.gtf.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  a=line.rstrip('\\n').split('\\t')
+  if len(a)<9 or a[2]"'!='"'exon': continue
+  m=re.search(r'transcript_id \"(["'^"]+)"'"',a[8])
+  if m: ex.setdefault((a[0],m.group(1)),[]).append((int(a[3]),int(a[4])))
+known=set()
+for (chrom,tx), xs in ex.items():
+ xs=sorted(set(xs))
+ for (a,b),(c,d) in zip(xs,xs[1:]):
+  if c>b: known.add((chrom,b,c))
+# counts and per read IDs
+allc=collections.Counter(); novel=collections.Counter(); ids=collections.defaultdict(list)
+with pysam.AlignmentFile('genome.sam','r') as sam:
+ for r in sam:
+  if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+  pos=r.reference_start
+  for op,n in r.cigartuples or []:
+   if op in (0,2,3,7,8):
+    if op==3:
+     key=(r.reference_name,pos,pos+n+1)
+     allc[key]+=1
+     if key not in known:
+      novel[key]+=1
+      if len(ids[key])<5: ids[key].append(r.query_name)
+     pos+=n
+    elif op in (0,2,7,8): pos+=n
+# print top all and novel
+print('known junctions',len(known),'observed',len(allc),'novel',len(novel))
+print('TOP_NOVEL')
+for k,n in novel.most_common(100): print(n,*k,'known',k in known,'ids',','.join(ids[k]))
+PY"

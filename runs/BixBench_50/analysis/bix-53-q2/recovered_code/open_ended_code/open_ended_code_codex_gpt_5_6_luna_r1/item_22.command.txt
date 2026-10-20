@@ -1,0 +1,39 @@
+/bin/bash -lc "PYTHONPATH=/workspace/tmp/py python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+raw = pd.read_csv('/workspace/inputs/count.csv')
+
+def run(samples, label):
+    counts = raw.set_index('geneID')[samples].T
+    metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in samples]}, index=samples)
+    dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', quiet=True, n_cpus=2)
+    dds.deseq2()
+    st = DeseqStats(dds, contrast=['condition','WL','KL'], quiet=True, n_cpus=2)
+    st.summary()
+    coeff = [c for c in st.LFC.columns if c "'!= '"'Intercept'][0]
+    st.lfc_shrink(coeff=coeff, adapt=True)
+    r = st.results_df.copy()
+    sig = (r['pvalue'] < 0.05) & (r['baseMean'] > 10) & (r['log2FoldChange'].abs() > 1)
+    up = sig & (r['log2FoldChange'] > 1)
+    down = sig & (r['log2FoldChange'] < -1)
+    print(label)
+    print('samples', samples)
+    print('n genes', len(r), 'nonzero', len(dds.non_zero_genes), 'finite p', r.pvalue.notna().sum())
+    print('prior? coefficient', coeff)
+    print('sig', int(sig.sum()), 'up_WL_vs_KL', int(up.sum()), 'down_WL_vs_KL', int(down.sum()))
+    print('baseMean>10', int((r.baseMean>10).sum()), 'p<.05', int((r.pvalue<.05).sum()), 'absLFC>1', int((r.log2FoldChange.abs()>1).sum()))
+    print('p raw + padj sig', int(((r.pvalue < .05)&(r.baseMean>10)&(r.log2FoldChange.abs()>1)).sum()), int(((r.padj < .05)&(r.baseMean>10)&(r.log2FoldChange.abs()>1)).sum()))
+    print('prior LFC/range', r.log2FoldChange.min(), r.log2FoldChange.max())
+    return r
+
+r6=run(['KL1','KL2','KL3','WL1','WL2','WL3'], 'all6')
+r4=run(['KL1','KL2','WL1','WL2'], 'no3')
+mask6=(r6.pvalue < .05)&(r6.baseMean > 10)&(r6.log2FoldChange.abs() > 1)
+mask4=(r4.pvalue < .05)&(r4.baseMean > 10)&(r4.log2FoldChange.abs() > 1)
+print('comparison: all6', int(mask6.sum()), 'no3', int(mask4.sum()), 'difference no3-all6', int(mask4.sum()-mask6.sum()))
+print('direction', 'increase' if mask4.sum()>mask6.sum() else 'decrease' if mask4.sum()<mask6.sum() else 'no change')
+# Some overlap diagnostics
+print('overlap', int((mask6 & mask4).sum()), 'lost', int((mask6 & ~mask4).sum()), 'gained', int((mask4 & ~mask6).sum()))
+PY"

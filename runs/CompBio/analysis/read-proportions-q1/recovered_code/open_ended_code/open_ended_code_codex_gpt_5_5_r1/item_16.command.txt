@@ -1,0 +1,101 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+from collections import defaultdict, Counter
+names=[]; seqs=[]; name=None; parts=[]
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if not line: continue
+    if line.startswith('>'):
+        if name is not None:
+            names.append(name); seqs.append(''.join(parts).upper())
+        name=line[1:].split()[0]; parts=[]
+    else: parts.append(line.upper())
+if name is not None: names.append(name); seqs.append(''.join(parts).upper())
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+L=36; k=9; offsets=[0,9,18,27]
+refs=[(s,rc(s)) for s in seqs]
+index=defaultdict(list)
+for ci,(f,r) in enumerate(refs):
+    for strand,g in enumerate((f,r)):
+        for p in range(len(g)-k+1):
+            index[g[p:p+k]].append((ci,strand,p))
+reads=Counter()
+with gzip.open('read.proportions.q1.fq.gz','rt') as fh:
+    while True:
+        h=fh.readline()
+        if not h: break
+        read=fh.readline().strip().upper(); fh.readline(); fh.readline()
+        reads[read]+=1
+print('unique reads',len(reads),'total',sum(reads.values()))
+
+def hdist(a,b): return sum(x"'!=y for x,y in zip(a,b))
+# store mismatch counts per chr for candidate alignments, aggregated by unique read count
+read_dists=[]; fallback=0; zeros=0
+for read,cnt in reads.items():
+    cand=set()
+    for off in offsets:
+        seed=read[off:off+k]
+        for ci,strand,p in index.get(seed,()):
+            start=p-off
+            if 0 <= start <= len(refs[ci][strand])-L:
+                cand.add((ci,strand,start))
+    # If no candidate, find all alignments up to best+2 by brute (unlikely)
+    if not cand:
+        fallback+=1
+        best=99; al=[]
+        for ci,(f,r) in enumerate(refs):
+            for strand,g in enumerate((f,r)):
+                for start in range(len(g)-L+1):
+                    d=hdist(read,g[start:start+L])
+                    if d<best:
+                        best=d; al=[(ci,d)]
+                    elif d==best:
+                        al.append((ci,d))
+        ds=[[] for _ in seqs]
+        for ci,d in al: ds[ci].append(d)
+    else:
+        ds=[[] for _ in seqs]
+        for ci,strand,start in cand:
+            d=hdist(read, refs[ci][strand][start:start+L])
+            # include only plausible alignments; candidates from random 9-mers can be high-d noise
+            if d <= 8:
+                ds[ci].append(d)
+        if not any(ds):
+            zeros+=1
+    read_dists.append((cnt,ds))
+print('"'fallback unique',fallback,'zeros',zeros)
+
+def em_for_eps(eps):
+    q=eps/(3*(1-eps))
+    weights=[]
+    for cnt,ds in read_dists:
+        p=[]
+        for arr in ds:
+            if arr:
+                p.append(sum(q**d for d in arr))
+            else:
+                p.append(0.0)
+        # add tiny background for completely missed very-error alignments? not needed
+        weights.append((cnt,p))
+    pi=[0.25]*4
+    for it in range(10000):
+        new=[0.0]*4; ll=0.0
+        for cnt,p in weights:
+            den=sum(pi[i]*p[i] for i in range(4))
+            if den<=0:
+                # ignore; shouldn't happen
+                continue
+            ll += cnt*math.log(den)
+            for i in range(4):
+                new[i] += cnt*pi[i]*p[i]/den
+        tot=sum(new)
+        new=[x/tot for x in new]
+        if max(abs(new[i]-pi[i]) for i in range(4))<1e-12:
+            return new,ll,it+1
+        pi=new
+    return pi,ll,10000
+for eps in [0.001,0.002,0.005,0.01,0.02,0.03,0.05,0.08,0.1]:
+    pi,ll,it=em_for_eps(eps)
+    print('eps',eps,'pi', ['%.4f'%(100*x) for x in pi], 'it',it)
+PY"

@@ -1,0 +1,23 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+sel_groups=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+sel=layout[layout.Group.isin(sel_groups)]
+cols=[s.replace('-','_') for s in sel.SampleID]
+meta=sel.set_index('SampleID')[['Group']].rename_axis(index='sample'); meta.index=meta.index.str.replace('-','_')
+sub=counts[cols]
+keep=(sub>10).any(axis=1)
+sub=sub.loc[keep]
+dds=DeseqDataSet(counts=sub.T,metadata=meta,design='~Group',n_cpus=4)
+dds.deseq2()
+ds=DeseqStats(dds,contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],n_cpus=4)
+ds.summary()
+res=ds.results_df
+sig=res[(res.padj<=.05)&(res.log2FoldChange.abs()>=.5)&(res.baseMean>=10)]
+sig.to_csv('/workspace/tmp/sig_deg_alt_subset_prefilter.csv')
+print('saved alt sig',sig.shape)
+PY"

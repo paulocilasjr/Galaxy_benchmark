@@ -1,0 +1,53 @@
+/bin/bash -c "cd /workspace && python3 - <<'PY'
+import subprocess, json, re, zipfile, html, xml.etree.ElementTree as ET, math, statistics
+# get RDS lfc via Rscript output tsv to stdout
+rscript='''
+a<-readRDS('/workspace/inputs/res_1vs97.rds'); b<-readRDS('/workspace/inputs/res_1vs98.rds')
+rna<-attr(a,'rownames',exact=T); rnb<-attr(b,'rownames',exact=T)
+lda<-unclass(attr(a,'listData',exact=T)); ldb<-unclass(attr(b,'listData',exact=T))
+cat('gene\\\\t97\\\\t98\\\\n')
+for(g in sort(union(rna,rnb))) {
+ ia<-match(g,rna); ib<-match(g,rnb)
+ cat(g, format(lda"'$log2FoldChange[ia],digits=12), format(ldb$log2FoldChange[ib],digits=12), sep='"'\\\\t'); cat('\\\\n')
+}
+'''
+out=subprocess.check_output(['Rscript','-e',rscript],cwd='/workspace').decode()
+rds={}
+for line in out.strip().splitlines()[1:]:
+ g,a,b=line.split('\\t'); rds[g]=(float(a),float(b))
+print('rds genes',len(rds),'target',rds.get('PA14_35160'))
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(path):
+ z=zipfile.ZipFile(path); root=ET.fromstring(z.read('word/document.xml'))
+ tbl=root.find('.//w:tbl',ns); rows=[]
+ for tr in tbl.findall('.//w:tr',ns):
+  cells=[]
+  for tc in tr.findall('.//w:tc',ns):
+   txt=''.join(p.text or '' for p in tc.findall('.//w:t',ns))
+   cells.append(txt)
+  rows.append(cells)
+ return rows
+for path,name in [('/workspace/tmp/s012.docx','S1_HCD'),('/workspace/tmp/s013.docx','S2_colony')]:
+ rows=parse(path)[2:]
+ for colidx,colname in [(1,'rhlR'),(2,'rhlI')]:
+  vals=[]
+  for r in rows:
+   if len(r)>=3 and r[0].startswith('PA14_') and r[colidx] not in ('','-'):
+    g=r[0].strip()
+    try: x=float(r[colidx])
+    except: continue
+    if g in rds:
+     # compare RDS 97 and 98 to x and -x? both
+     vals.append((x,rds[g][0],rds[g][1],g))
+  # correlations and MAE with direct and negative
+  for ridx in [0,1]:
+   y=[v[ridx] for v in vals]; x=[v[0] for v in vals]
+   if len(x)<2: continue
+   def cor(a,b):
+    ma=sum(a)/len(a); mb=sum(b)/len(b)
+    num=sum((ai-ma)*(bi-mb) for ai,bi in zip(a,b)); da=math.sqrt(sum((ai-ma)**2 for ai in a)); db=math.sqrt(sum((bi-mb)**2 for bi in b))
+    return num/(da*db) if da and db else 0
+   mae=sum(abs(a-b) for a,b in zip(x,y))/len(x)
+   print(name,colname,'vs rds'+(['97','98'][ridx]),'n',len(x),'cor',round(cor(x,y),3),'mae',round(mae,3),'sample',[(g,round(xi,2),round(yi,2)) for g,xi,yi in zip([v[3] for v in vals],x,y)][:3])
+   neg=[-a for a in x]; print('  vs neg cor',round(cor(neg,y),3),'mae',round(sum(abs(a-b) for a,b in zip(neg,y))/len(y),3))
+PY"

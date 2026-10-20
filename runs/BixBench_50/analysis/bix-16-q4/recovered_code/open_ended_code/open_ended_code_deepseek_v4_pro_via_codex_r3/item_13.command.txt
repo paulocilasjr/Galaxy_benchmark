@@ -1,0 +1,77 @@
+/bin/bash -lc "cat > /workspace/compute.py <<'PY'
+import pandas as pd, numpy as np, time
+from scipy import stats
+import os
+
+t0=time.time()
+crispr=pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', index_col=0)
+print('loaded crispr', crispr.shape, 'time', round(time.time()-t0,1), flush=True)
+expr=pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0)
+print('loaded expr', expr.shape, 'time', round(time.time()-t0,1), flush=True)
+
+common_rows=crispr.index.intersection(expr.index)
+common_cols=crispr.columns.intersection(expr.columns)
+print('common_rows',len(common_rows),'common_cols',len(common_cols), flush=True)
+
+C=crispr.loc[common_rows, common_cols].to_numpy(dtype=float, copy=True)
+E=expr.loc[common_rows, common_cols].to_numpy(dtype=float, copy=True)
+# free dataframes memory
+del crispr, expr
+n_samples, n_genes = C.shape
+print('matrix', C.shape, 'time', round(time.time()-t0,1), flush=True)
+
+pvals=np.empty(n_genes, dtype=float)
+rhos=np.empty(n_genes, dtype=float)
+valid_counts=np.empty(n_genes, dtype=int)
+# maybe process in blocks to print progress
+start=time.time()
+for j in range(n_genes):
+    c=C[:,j]; e=E[:,j]
+    mask=~np.isnan(c) & ~np.isnan(e)
+    valid_counts[j]=mask.sum()
+    r,p=stats.spearmanr(c[mask], e[mask], nan_policy='omit')
+    rhos[j]=r; pvals[j]=p
+print('correlation loop done', round(time.time()-start,1), 'total', round(time.time()-t0,1), flush=True)
+
+finite = np.isfinite(pvals)
+print('finite p', finite.sum(), 'nan p', n_genes-finite.sum(), flush=True)
+print('valid min/max', valid_counts.min(), valid_counts.max(), 'median', np.median(valid_counts), flush=True)
+print('valid <3 count', (valid_counts<3).sum(), 'valid==0', (valid_counts==0).sum(), flush=True)
+# constant cases
+cst=[]; cst_e=0
+for j in range(n_genes):
+    c=C[:,j]; e=E[:,j]
+    mask=~np.isnan(c) & ~np.isnan(e)
+    if np.all(c[mask]==c[mask][0]) if mask.sum() else False: cst.append(j)
+    if np.all(e[mask]==e[mask][0]) if mask.sum() else False: cst_e += 1
+print('constant crispr among valid', len(cst), 'constant expr among valid', cst_e, flush=True)
+
+# BH correction, treating nan as p=1 non-significant
+p_for_bh=pvals.copy()
+p_for_bh[~np.isfinite(p_for_bh)]=1.0
+m=len(p_for_bh)
+order=np.argsort(p_for_bh, kind='mergesort')
+sorted_p=p_for_bh[order]
+bh=np.empty(m, dtype=float)
+bh[order]=sorted_p * m / np.arange(1,m+1)
+# cumulative min from last to first
+cummin=1.0
+for i in range(m-1,-1,-1):
+    if bh[order][i] < cummin:
+        cummin=bh[order][i]
+    bh[order][i]=cummin
+bh=np.minimum(bh,1.0)
+sig=bh < 0.05
+print('sig BH < .05', sig.sum(), 'percent', 100*sig.sum()/m, flush=True)
+# directional counts with finite p and sig
+sig_finite = sig & finite
+pos = (rhos>0) & sig_finite
+neg = (rhos<0) & sig_finite
+zero = (rhos==0) & sig_finite
+print('sig pos', pos.sum(), 'sig neg', neg.sum(), 'zero', zero.sum(), flush=True)
+print('p range finite', np.nanmin(pvals), np.nanmax(pvals), flush=True)
+print('number p < .05 raw', (p_for_bh<.05).sum(), 'raw percent', 100*(p_for_bh<.05).sum()/m, flush=True)
+# save pvals/rhos optional? no.
+print('DONE percent', 100*sig.sum()/m, flush=True)
+PY
+/workspace/venv/bin/python /workspace/compute.py"

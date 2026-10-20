@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+import re
+from collections import Counter, defaultdict
+carrier={'184','185','285','287','381','353','354','396','397','489','490','499','500','503','504','556','557','613','614'}
+def num(x):
+ try:return float(x) if x not in (None,'') else None
+ except:return None
+rows=[]
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+ m=re.search(r'_CHIP_(\\d+)',p.name)
+ if not m or m.group(1) not in carrier: continue
+ sid=m.group(1); ws=load_workbook(p,data_only=True,read_only=False).active; h=[c.value for c in ws[2]]; ix={x:i for i,x in enumerate(h)}
+ for vals in ws.iter_rows(min_row=3,values_only=True):
+  v=num(vals[ix['Variant Allele Freq']]); ont=vals[ix['Sequence Ontology (Combined)']]
+  if v is not None and v<.3 and ont in ('synonymous_variant','missense_variant'):
+   rows.append(dict(sid=sid,pos=vals[ix['Chr:Pos']],refalt=vals[ix['Ref/Alt']],vaf=v,ont=ont,gene=vals[ix['Gene Names']]))
+print('sample rows',len(rows),Counter(r['ont'] for r in rows))
+for key in ['pos','posref','gene_pos']:
+ d={}
+ for r in rows:
+  k=r['pos'] if key=='pos' else (r['pos'],r['refalt']) if key=='posref' else (r['gene'],r['pos'])
+  d.setdefault(k,[]).append(r)
+ print(key,'unique',len(d),'syn',sum(any(x['ont']=='synonymous_variant' for x in z) for z in d.values()),'miss',sum(any(x['ont']=='missense_variant' for x in z) for z in d.values()))
+ for k,z in d.items():
+  if len(z)>1: print(' duplicate',k,[(x['sid'],x['vaf'],x['ont']) for x in z])
+PY"

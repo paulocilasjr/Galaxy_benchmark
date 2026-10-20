@@ -1,0 +1,105 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import numpy as np
+
+# Step 1: Load Trio Status and identify Carrier samples
+trio = pd.read_excel("inputs/230215_Trio_Status.xlsx")
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+print(f"Total Carrier samples in Trio: {len(carriers)}")
+
+# Step 2: Map Carrier samples to variant files
+variant_dir = "inputs/CHIP_DP10_GQ20_PASS"
+all_files = os.listdir(variant_dir)
+
+carrier_file_map = {}
+missing = []
+for _, row in carriers.iterrows():
+    sid = row['Sample ID']
+    matching = [f for f in all_files if f'CHIP_{sid}-' in f]
+    if matching:
+        carrier_file_map[sid] = matching[0]
+    else:
+        missing.append(sid)
+
+print(f"Carrier samples with variant files: {len(carrier_file_map)}")
+print(f"Missing: {missing}")
+
+# Sequence ontology terms to filter OUT
+exclude_seq_ontology = [
+    'intron_variant',
+    'intergenic_variant',
+    'intergenic_region',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+]
+
+# Classification values that count as Benign/Likely Benign
+benign_classes = ['Benign', 'Likely Benign']
+
+# Accumulate results
+total_with_clinvar = 0
+total_benign_likely_benign = 0
+
+# Detailed tracking
+all_filtered_variants = []
+
+for sid, fname in sorted(carrier_file_map.items()):
+    fpath = os.path.join(variant_dir, fname)
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:].copy()
+    
+    # Assign readable column names (using indices)
+    # Col 0: Chr:Pos, 1: Ref/Alt, 2: PrimaryFindings, 3: IncidentalFindings
+    # Col 4: Zygosity, 5: MendelError, 6: InheritedFrom, 7: ReadDepths
+    # Col 8: GenotypeQual, 9: VAF
+    # Col 10: InACMG_SF, 11: Match_ACMG
+    # Col 12: GeneNames, 13: SeqOntology, 14: Effect
+    # Col 15: Transcript, 16: ExonNum, 17: HGVSc, 18: HGVSp
+    # Col 19: Filter, 20: gnomAD_AF, 21: gnomAD_AC, 22: gnomAD_AN, 23: gnomAD_Hom
+    # Col 24: VariantID, 25: Classification
+    # Col 26: AggregateInterpretations, 27: ReviewStatus, 28: Conditions
+    # Col 29: In_CHIP, 30: Match_CHIP, 31: In_DNAm, 32: Match_DNAm
+    
+    zygosity = data[4]
+    seq_ontology = data[13]
+    vaf = pd.to_numeric(data[9], errors='coerce')
+    classification = data[25]
+    
+    # Filter 1: Remove reference calls
+    non_ref_mask = zygosity != 'Reference'
+    
+    # Filter 2: Remove intronic, intergenic, UTR
+    non_excluded_seq_mask = ~seq_ontology.isin(exclude_seq_ontology)
+    
+    # Filter 3: VAF < 0.3
+    vaf_mask = vaf < 0.3
+    
+    # Filter 4: Has ClinVar classification
+    has_clinvar_mask = classification.notna()
+    
+    # Combined mask
+    combined_mask = non_ref_mask & non_excluded_seq_mask & vaf_mask & has_clinvar_mask
+    
+    filtered = data[combined_mask]
+    
+    n_clinvar = len(filtered)
+    n_benign = len(filtered[filtered[25].isin(benign_classes)])
+    
+    total_with_clinvar += n_clinvar
+    total_benign_likely_benign += n_benign
+    
+    if n_clinvar > 0:
+        print(f"  Sample {sid}: {n_clinvar} variants with ClinVar, {n_benign} Benign/Likely Benign ({n_benign/n_clinvar*100:.1f}%)")
+
+print(f"\n=== RESULTS ===")
+print(f"Total somatic CHIP variants (VAF<0.3, non-ref, non-intronic/intergenic/UTR) with ClinVar: {total_with_clinvar}")
+print(f"Total Benign or Likely Benign: {total_benign_likely_benign}")
+if total_with_clinvar > 0:
+    proportion = total_benign_likely_benign / total_with_clinvar
+    print(f"Proportion: {proportion:.6f} ({proportion*100:.2f}%)")
+else:
+    print("No variants found matching criteria")
+
+PYEOF

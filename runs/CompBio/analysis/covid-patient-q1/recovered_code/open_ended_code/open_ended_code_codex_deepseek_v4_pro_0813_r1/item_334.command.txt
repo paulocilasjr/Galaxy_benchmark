@@ -1,0 +1,60 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd,numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.svm import SVC
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis,QuadraticDiscriminantAnalysis
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+orig=pd.read_csv('orig_signature_scores.csv',index_col=0); work=pd.read_csv('working_signature_scores2.csv',index_col=0)
+fsets={
+'all':['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro','myel_lymph_ratio','isg_lymph_ratio'],
+'no_ratios':['up','down','diff','ISG','Mono','T','NK','B','pDC','Platelet','Erythroid','Neutro'],
+'covid3':['up','down','diff'],
+'covid_isg':['up','down','diff','ISG'],
+'diff_isg':['diff','ISG'],
+}
+methods=[]
+for fs_name,fs in fsets.items():
+ X=orig[fs].values; y=orig['label'].values; W=work[fs].values
+ for mname in ['lr','svc','lda','qda','nb','knn5','rf']:
+  sc=StandardScaler().fit(X); Xz=sc.transform(X); Wz=sc.transform(W)
+  if mname=='lr': m=LogisticRegressionCV(Cs=10,cv=5,scoring='roc_auc',max_iter=10000,class_weight='balanced',random_state=0)
+  elif mname=='svc': m=SVC(kernel='linear',probability=True,class_weight='balanced',random_state=0)
+  elif mname=='lda': m=LinearDiscriminantAnalysis()
+  elif mname=='qda': m=QuadraticDiscriminantAnalysis(reg_param=0.5)
+  elif mname=='nb': m=GaussianNB()
+  elif mname=='knn5': m=KNeighborsClassifier(n_neighbors=5,weights='distance')
+  elif mname=='rf': m=RandomForestClassifier(n_estimators=500,class_weight='balanced',random_state=0)
+  m.fit(Xz,y); p=m.predict_proba(Wz)[:,1]
+  methods.append((f'{fs_name}_{mname}',p))
+# signature rank methods
+sig=work.copy(); cell=pd.read_csv('cell_covid_scores.csv').set_index('donor')
+for col in ['diff','up','ISG','Mono']:
+ p=-sig[col].rank().values
+ methods.append((f'rank_neg_{col}',p))
+methods.append(('rank_cell_diff', -cell['diff'].rank().values))
+# aggregate ranks average: for each method, rank HC probability descending; average rank
+ranks=[]
+for name,p in methods:
+ ranks.append(pd.Series(p,index=work.index).rank(ascending=False))
+avg=pd.concat(ranks,axis=1).mean(axis=1)
+res=avg.sort_values()
+print('num methods',len(methods))
+print(res.to_string())
+print('top14',','.join(map(str,res.head(14).index.str[5:].tolist())))
+# also majority of top14 sets
+sets=[]
+for name,p in methods:
+ s=pd.Series(p,index=work.index).sort_values(ascending=False).head(14).index.tolist(); sets.append(s)
+from collections import Counter
+cnt=Counter(tuple(sorted(s)) for s in sets)
+print('\\nmost common top14 sets:')
+for s,c in cnt.most_common(20): print(c,','.join(map(str,s)))
+# donor counts in top14 across methods
+from collections import Counter
+dc=Counter(x for s in sets for x in x)
+print('\\ndonor votes:')
+for d,c in sorted(dc.items(), key=lambda kv:(kv[1],kv[0]), reverse=True): print(d,c)
+PY"

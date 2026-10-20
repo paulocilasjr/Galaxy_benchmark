@@ -1,0 +1,41 @@
+/bin/bash -lc "cd /tmp && python - <<'PY'
+import torch, json, math
+W='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-6e845b76af504ee4e726ec8c/workspace'
+seq=json.load(open(f'{W}/seq_7792299_7793299.json'))['dna']
+logits=torch.load(f'{W}/caduceus/logits_full_no_sep.pt', map_location='cpu')
+print(logits.shape)
+L=len(seq)
+masked=logits[torch.arange(L),torch.arange(L)]
+# vocab ids A7 C8 G9 T10
+ids=[7,8,9,10]
+sub=masked[:,ids]
+probs=torch.softmax(sub.float(),-1)
+ent=-(probs*torch.log2(probs+1e-12)).sum(-1)
+print('ent min/max', ent.min().item(), ent.max().item())
+print('num <0.5', (ent<0.5).sum().item())
+# runs
+best=[]; cur=[]
+for i,e in enumerate(ent):
+    if e<0.5:
+        cur.append(i)
+    else:
+        if len(cur)>len(best): best=cur
+        cur=[]
+if len(cur)>len(best): best=cur
+print('best', best[0], len(best), seq[best[0]:best[0]+len(best)])
+# print all runs length >3
+runs=[]; cur=[]
+for i,e in enumerate(ent):
+    if e<0.5: cur.append(i)
+    else:
+        if cur: runs.append(cur)
+        cur=[]
+if cur: runs.append(cur)
+runs=sorted(runs,key=len,reverse=True)
+for r in runs[:10]:
+    print(len(r),r[0],seq[r[0]:r[0]+len(r)], 'entmax', max(ent[r].tolist()))
+# top probs at first positions
+for i in range(10):
+    p,idx=probs[i].max(-1)
+    print(i, ['A','C','G','T'][idx.item()], p.item(), ent[i].item())
+PY"

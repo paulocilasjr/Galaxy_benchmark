@@ -1,0 +1,23 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd,json,re,warnings
+warnings.filterwarnings('ignore')
+import gseapy
+res=pd.read_csv('/workspace/de_cbd_vs_dmso.csv',index_col=0); mp=json.load(open('/workspace/ensembl_mapping.json'))
+bg=sorted(set(v['symbol'] for i in res[res['padj'].notna()].index if (v:=mp.get(i)) and v.get('symbol')))
+sig=res[(res['padj']<0.05)&(res['log2FoldChange'].abs()>0.5)]
+def syms(ids): return sorted(set(v['symbol'] for i in ids if (v:=mp.get(i)) and v.get('symbol')))
+up=syms(sig[sig['log2FoldChange']>0].index); down=syms(sig[sig['log2FoldChange']<0].index)
+pat=r'metabolic|catabolic|biosynthetic|glycol|gluconeo|glucose|carbohydrate|pyruvate|respiration|ATP metabolic|lipid|fatty acid|cholesterol|steroid|retinoid|retinal|estrogen|hormone'
+core_pat=r'glycol|gluconeo|glucose|carbohydrate|pyruvate|ATP metabolic|aerobic respiration|lipid|fatty acid'
+for version in ['GO_Biological_Process_2021','GO_Biological_Process_2023','GO_Biological_Process_2026']:
+ gs=json.load(open(f'/workspace/{version}.json'))
+ print('\\nVERSION',version)
+ for lab,gl in [('UP',up),('DOWN',down)]:
+  r=gseapy.enrich(gene_list=gl,gene_sets=gs,background=bg,outdir=None,cutoff=0.05,no_plot=True,verbose=False).results
+  sigr=r[r['Adjusted P-value']<0.05].copy()
+  met=sigr[sigr['Term'].str.contains(pat, regex=True, case=False, na=False)]
+  core=sigr[sigr['Term'].str.contains(core_pat,regex=True,case=False,na=False)]
+  print(lab, 'sig',len(sigr),'metabolic-ish',len(met),'core-energy',len(core),'min_adj',round(r['Adjusted P-value'].min(),6) if len(r) else None)
+  if len(core):
+   print(core[['Term','Overlap','Adjusted P-value','Odds Ratio']].head(12).to_string(index=False, max_colwidth=65))
+PY"

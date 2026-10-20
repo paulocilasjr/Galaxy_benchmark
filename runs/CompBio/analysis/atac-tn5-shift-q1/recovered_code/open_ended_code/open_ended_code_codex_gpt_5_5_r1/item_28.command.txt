@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+chroms=['chr1','chr2','chr3']
+seqs={c:''.join(l.strip().upper() for l in open(f'hg38_{c}.fa') if not l.startswith('>')) for c in chroms}
+pts=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        c,s,e,*_=line.split('\\t')
+        if c in seqs: pts.append((c,int(s),int(e)))
+comp=str.maketrans('ACGT','TGCA')
+def prof(kind, shift, half=12, end_conv=0):
+    # end_conv=0: rc base at p-r; end_conv=-1: rc base at p-1-r
+    counts=[[0,0,0,0] for _ in range(2*half+1)]
+    bidx={b:i for i,b in enumerate('ACGT')}; n=0
+    for c,s,e in pts:
+        seq=seqs[c]; L=len(seq)
+        p=(s if kind=='start' else e)+shift
+        chars=[]; ok=True
+        for r in range(-half,half+1):
+            idx=p+r if kind=='start' else p+end_conv-r
+            if idx<0 or idx>=L: ok=False; break
+            b=seq[idx]
+            if b not in bidx: ok=False; break
+            if kind"'!='"'start': b=b.translate(comp)
+            chars.append(b)
+        if not ok: continue
+        n+=1
+        for i,b in enumerate(chars): counts[i][bidx[b]]+=1
+    freqs=[]
+    for row in counts:
+        tot=sum(row); freqs.append([x/tot for x in row])
+    return freqs,n
+def dist(ds,de,end_conv):
+    fs,ns=prof('start',ds,12,end_conv); fe,ne=prof('end',de,12,end_conv)
+    d=0
+    for i in range(len(fs)):
+        # optionally weight by IC avg
+        d+=sum((fs[i][j]-fe[i][j])**2 for j in range(4))
+    return d
+for conv in [0,-1]:
+    print('end_conv',conv)
+    res=[]
+    for ds in range(-5,6):
+        for de in range(-7,4):
+            res.append((dist(ds,de,conv),ds,de))
+    for x in sorted(res)[:15]: print(f'{x[0]:.5f} ds={x[1]} de={x[2]} diff={x[2]-x[1]}')
+    print('candidate ds=1 de=-2',dist(1,-2,conv))
+PY"

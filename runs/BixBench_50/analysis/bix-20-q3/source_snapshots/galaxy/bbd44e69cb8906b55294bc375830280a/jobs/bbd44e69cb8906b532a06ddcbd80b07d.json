@@ -1,0 +1,503 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b532a06ddcbd80b07d",
+  "history_id": "bbd44e69cb8906b55294bc375830280a",
+  "tool_id": "carrier-blm-chip-clinvar-proportion-v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-01T23:58:20.648821",
+  "update_time": "2026-08-01T23:59:22.266621",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > job.py <<'PY'\nfrom __future__ import print_function\nimport csv\nimport re\nimport sys\nfrom collections import Counter\nfrom io import BytesIO\nfrom openpyxl import load_workbook\n\nSAMPLE_IDS = [\"179\",\"184\",\"185\",\"285\",\"286\",\"287\",\"353\",\"354\",\"360\",\"364\",\"380\",\"381\",\"396\",\"397\",\"409\",\"488\",\"489\",\"490\",\"498\",\"499\",\"500\",\"502\",\"503\",\"504\",\"556\",\"557\",\"613\",\"614\",\"615\",\"SRR5456220\",\"SRR5456232\",\"SRR5462651\",\"SRR5462820\",\"SRR5462858\",\"SRR5462872\",\"SRR5462955\",\"SRR5462967\",\"SRR5463095\",\"SRR5463149\",\"SRR5463270\",\"SRR5463506\",\"SRR5466052\",\"SRR5466100\",\"SRR5469760\",\"SRR5469979\",\"SRR5470425\",\"SRR5550148\",\"SRR5550381\",\"SRR5550774\",\"SRR5550794\",\"SRR5551062\",\"SRR5553488\",\"SRR5555687\",\"SRR5556325\",\"SRR5560909\",\"SRR5560927\",\"SRR5561089\",\"SRR5561107\",\"SRR5561237\",\"SRR5561287\",\"SRR5561319\",\"SRR5561584\",\"SRR5561706\",\"SRR5561875\",\"SRR5561934\",\"SRR5561950\",\"SRR5562000\",\"SRR5562034\",\"SRR5562184\",\"SRR5562220\",\"SRR5562238\",\"SRR5565258\",\"SRR5565278\",\"SRR5565931\",\"SRR5565968\",\"SRR5566591\",\"SRR5566906\",\"SRR5567694\",\"SRR5567876\",\"SRR5567954\",\"SRR5571393\",\"SRR5688631\",\"SRR5688669\",\"SRR5688704\",\"SRR5688812\",\"SRR6447679\"]\n\ndef norm_id(value):\n    if value is None:\n        return \"\"\n    if isinstance(value, float) and value.is_integer():\n        return str(int(value))\n    return str(value).strip()\n\ndef truthy(value):\n    return str(value).strip().lower() in (\"true\", \"1\", \"yes\")\n\ndef values(row):\n    return [c.value for c in row]\n\ndef first_sheet(path):\n    with open(path, \"rb\") as handle:\n        wb = load_workbook(BytesIO(handle.read()), read_only=False, data_only=True)\n    return wb[wb.sheetnames[0]]\n\ndef index_of(headers, name):\n    for i, h in enumerate(headers):\n        if str(h).strip() == name:\n            return i\n    raise RuntimeError(\"Missing required column: \" + name)\n\ndef tokens(text):\n    return [x.upper() for x in re.findall(r\"[A-Za-z0-9_-]+\", str(text or \"\"))]\n\nstatus_path = sys.argv[1]\ngenes_path = sys.argv[2]\nvariant_paths = sys.argv[3:]\nif len(variant_paths) != len(SAMPLE_IDS):\n    raise RuntimeError(\"Expected %d variant inputs, received %d\" % (len(SAMPLE_IDS), len(variant_paths)))\n\nstatus_ws = first_sheet(status_path)\nstatus_headers = values(next(status_ws.iter_rows(min_row=1, max_row=1)))\nsid_i = index_of(status_headers, \"Sample ID\")\nblm_i = index_of(status_headers, \"BLM Mutation Status\")\ncarrier_ids = set()\nfor row in status_ws.iter_rows(min_row=2):\n    vals = values(row)\n    if len(vals) > blm_i and str(vals[blm_i]).strip().lower() == \"carrier\":\n        carrier_ids.add(norm_id(vals[sid_i]))\n\ngenes_ws = first_sheet(genes_path)\nchip_genes = set()\nfor row in genes_ws.iter_rows():\n    vals = values(row)\n    if vals and vals[0] is not None and str(vals[0]).strip():\n        chip_genes.add(str(vals[0]).strip().upper())\n\nstage = Counter()\nclass_counts = Counter()\nconsequence_counts = Counter()\nselected = []\ncarrier_files = set()\nchip_gene_mismatches = 0\n\nfor sample_id, path in zip(SAMPLE_IDS, variant_paths):\n    if sample_id not in carrier_ids:\n        continue\n    carrier_files.add(sample_id)\n    ws = first_sheet(path)\n    headers = values(next(ws.iter_rows(min_row=2, max_row=2)))\n    idx = dict((name, index_of(headers, name)) for name in [\n        \"Chr:Pos\", \"Zygosity\", \"Variant Allele Freq\", \"Gene Names\",\n        \"Sequence Ontology (Combined)\", \"Classification\", \"In_CHIP\"\n    ])\n    chip_match_i = idx[\"In_CHIP\"] + 1\n    for row in ws.iter_rows(min_row=3):\n        vals = values(row)\n        stage[\"carrier_variant_rows\"] += 1\n        if idx[\"In_CHIP\"] >= len(vals) or not truthy(vals[idx[\"In_CHIP\"]]):\n            continue\n        stage[\"chip_annotated\"] += 1\n\n        gene_text = vals[idx[\"Gene Names\"]] if idx[\"Gene Names\"] < len(vals) else \"\"\n        match_text = vals[chip_match_i] if chip_match_i < len(vals) else \"\"\n        observed_gene_tokens = set(tokens(gene_text)) | set(tokens(match_text))\n        if not (observed_gene_tokens & chip_genes):\n            chip_gene_mismatches += 1\n\n        zygosity = str(vals[idx[\"Zygosity\"]] or \"\").strip()\n        if zygosity.lower() == \"reference\":\n            continue\n        stage[\"non_reference\"] += 1\n\n        raw_vaf = vals[idx[\"Variant Allele Freq\"]]\n        try:\n            vaf = float(raw_vaf)\n        except (TypeError, ValueError):\n            continue\n        if not vaf < 0.3:\n            continue\n        stage[\"vaf_lt_0_3\"] += 1\n\n        consequence = str(vals[idx[\"Sequence Ontology (Combined)\"]] or \"\").strip()\n        low_consequence = consequence.lower()\n        excluded_region = (\"intron\" in low_consequence or\n                           \"intergenic\" in low_consequence or\n                           \"utr\" in low_consequence)\n        consequence_counts[(consequence, \"excluded\" if excluded_region else \"retained\")] += 1\n        if excluded_region:\n            continue\n        stage[\"region_retained\"] += 1\n\n        classification = str(vals[idx[\"Classification\"]] or \"\").strip()\n        if classification.lower() in (\"\", \"none\", \"na\", \"n/a\", \"-\", \"not provided\"):\n            continue\n        stage[\"clinvar_classified\"] += 1\n        class_counts[classification] += 1\n\n        benign = classification.lower() in (\"benign\", \"likely benign\")\n        if benign:\n            stage[\"benign_or_likely_benign\"] += 1\n        selected.append([\n            sample_id,\n            vals[idx[\"Chr:Pos\"]],\n            vals[idx[\"Gene Names\"]],\n            consequence,\n            zygosity,\n            (\"%.12g\" % vaf),\n            classification,\n            \"1\" if benign else \"0\"\n        ])\n\ndenominator = stage[\"clinvar_classified\"]\nnumerator = stage[\"benign_or_likely_benign\"]\nif denominator == 0:\n    raise RuntimeError(\"No eligible ClinVar-classified variants; proportion is undefined\")\nproportion = float(numerator) / float(denominator)\n\nwith open(\"summary.tsv\", \"w\") as out:\n    w = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    w.writerow([\"metric\", \"value\"])\n    w.writerow([\"numerator_benign_or_likely_benign\", numerator])\n    w.writerow([\"denominator_all_clinvar_classified\", denominator])\n    w.writerow([\"proportion\", repr(proportion)])\n\nwith open(\"selected_variants.tsv\", \"w\") as out:\n    w = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    w.writerow([\"sample_id\", \"chr_pos\", \"gene_names\", \"sequence_ontology\", \"zygosity\", \"vaf\", \"clinvar_classification\", \"benign_or_likely_benign\"])\n    w.writerows(selected)\n\nwith open(\"audit.tsv\", \"w\") as out:\n    w = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    w.writerow([\"metric\", \"value\"])\n    w.writerow([\"carrier_status_rows\", len(carrier_ids)])\n    w.writerow([\"carrier_samples_with_variant_files\", len(carrier_files)])\n    w.writerow([\"carrier_samples_missing_variant_file\", len(carrier_ids - carrier_files)])\n    for key in [\"carrier_variant_rows\", \"chip_annotated\", \"non_reference\", \"vaf_lt_0_3\", \"region_retained\", \"clinvar_classified\", \"benign_or_likely_benign\"]:\n        w.writerow([key, stage[key]])\n    w.writerow([\"chip_annotation_gene_list_mismatches\", chip_gene_mismatches])\n    w.writerow([\"carrier_sample_ids_with_files\", \",\".join(sorted(carrier_files))])\n    w.writerow([\"carrier_sample_ids_missing_files\", \",\".join(sorted(carrier_ids - carrier_files))])\n\nwith open(\"classifications.tsv\", \"w\") as out:\n    w = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    w.writerow([\"clinvar_classification\", \"count\"])\n    for key in sorted(class_counts):\n        w.writerow([key, class_counts[key]])\n\nwith open(\"consequences.tsv\", \"w\") as out:\n    w = csv.writer(out, delimiter=\"\\t\", lineterminator=\"\\n\")\n    w.writerow([\"sequence_ontology\", \"region_filter\", \"count\"])\n    for key in sorted(consequence_counts):\n        w.writerow([key[0], key[1], consequence_counts[key]])\n\nPY\npython job.py \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_6955b5af-94f9-469b-a283-d865876d56a4.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_008c7c10-a982-482e-acdf-f773b85b69c8.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_82747522-818e-49d3-8975-319842b76d80.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_83632a91-a3e7-4899-ac0c-9977846b4109.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_ddfd68fd-0bd3-46dc-813f-38730bc75a7e.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_cdd62478-953c-4594-98c7-a657a7ff9b12.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_d084279e-9aad-4732-9716-7328729f3ef8.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_79884454-6edb-47ca-af43-efb56f318e1c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_b98010a0-4ea1-4291-b709-cdd63f92a39a.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_1beac627-3e9e-420c-8cff-93d41fb1416a.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_06398e24-2744-46d5-abaf-58bc1c59daa9.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_5a12be62-89d1-482e-b1c1-1cc414c90b1c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_ac0bcf88-97a9-4a91-9725-56f1bc2d1fe1.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_9f609a6f-c5a0-4f69-8856-9e7bdf3c5a9c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_72afc5f2-eb65-42bf-952a-f5e33f75dd7e.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_637c8263-d487-4c2c-b2e5-512e54831f1d.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_385c7d8e-66bd-459a-a3ab-92878df1f3d1.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_ff77cd8e-bf58-4d94-9316-abadb785fe4c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_2689b00b-7151-4796-9117-9057f8d43bbb.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_72928dbb-f115-41d4-a6f0-b8e56bc33b6e.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_1d1f9b6e-480b-4e6e-b7b3-b464f9fe77ed.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_40770273-469e-450d-89ae-9b4defe3a34c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_f493a0b8-6724-4358-9741-099d57e6ea3f.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_5806ef31-93d9-4665-bdf6-6f3a75b24b9b.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_d3e8aa20-5c77-417c-926f-3fa49e140c16.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_32a84800-1c32-450e-a4f7-52c35e9eb2f1.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_d77b0c59-adf7-4b4e-9139-a41f347ce935.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_90d6c0a1-d420-48b4-b9bc-5b3b99a7da73.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_548688a5-c1d3-40d6-b775-662f665dcc66.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_60996697-611b-4ee5-9f34-726db06ca396.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_038c8f93-6929-4bcf-afa7-0468fe2cbb73.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_2fae4752-5d59-41c8-bab3-d14377b8dc7a.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_2cf37e7d-e9a9-44c4-867f-89409af2594e.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_65e59b37-82e5-4f43-9d33-36899f254dfd.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_0377f901-8b36-4b5a-a892-34b4dd445a57.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_5835808e-05c5-4184-a306-b948eccb0b22.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_45a1ed1b-e002-43c3-bbd3-b0522312ef7a.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_0154abb6-29a8-49ac-ad5d-773e6570cec3.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_acb51121-2c08-4957-b939-c7f208c92f05.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_765bcc1d-782c-4d7a-a4e4-63b8ab674d67.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_7102ff1b-5340-49bf-93c7-9fb9537964db.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_2af2ca81-5114-41ab-9c76-c602738b5e71.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_c8a7fe20-441f-40da-819f-172cb2d34ca7.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_73bc4c11-b46c-4b4d-9a6b-025cb9c0a22d.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_d96af0d3-cd63-4cb9-8678-e4041777e0e5.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_c5721a2c-5b5c-4249-9970-da3b3a9d3d23.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_69776a0b-e7dc-4973-919c-db9eeb89b28d.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_96e5cdb6-dc06-4eee-b0e2-d664f1028bd2.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_845c50e0-b70e-41ba-a24b-df9ecc0ee275.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_2d7d69b0-1197-4671-b007-936b66cf2f69.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_5ab71256-f42d-48d9-a5e4-96692493233e.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_9716229b-7762-45f9-b64c-61eca7a67fa4.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_77517eb8-bfdf-48cd-aa63-750bf30356ff.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_1caec770-b5db-421e-968e-75b9cda44669.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_b72f5dac-7fd7-42ec-808a-a238a8f320f8.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_42c27435-00ab-4cb0-b6d5-103c2c952064.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_c83b1b00-71b8-495f-8d34-568680ff451d.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_33625bff-5b7c-46a7-b862-23c5bf80d8a4.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_add7acd0-d3dd-4079-92d1-9756ef9f49de.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_34c62248-84d3-4331-a9db-25780e25beee.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_0b49b9aa-3f71-47b1-af2d-46a539ebd1fb.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_9f9724d9-435c-4470-910d-21f4464f9219.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_78a22ade-03ca-4f65-8bcc-e524c1c4e975.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_ff46d37b-271a-4638-b1e6-a0164c74f912.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_a2e7bf91-3c9c-483f-b126-467a2b21424e.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_f0589dbb-177c-436d-9f57-44998d67e3b1.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_5ddb4e04-1e6a-4754-a5e9-484ab71a42dd.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_120a6ed6-19d0-415d-a695-7a7a7a33cf9f.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_4a7110fd-a466-4e85-abb9-4013d51b743c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_c8314b6a-03b0-4902-9080-4ed75d8dc540.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_d06d33e1-0f0d-4cfe-81c9-3aa7627ff8f8.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_e9270697-0ba0-403e-9e06-9e4a33ad6b98.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_babdd107-b388-461f-b3db-3fa574bc7d4d.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_ad417fe1-4d7c-4367-943f-ad9d64e1325c.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_e970e44e-c5ed-4399-b851-14d538dbcb64.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_044902d7-5efa-4843-a600-b74d4dcd6497.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_4b21f2fc-3c0e-46b7-9b85-6ff7435e8f2d.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_c31c9fd1-4f23-4c6c-9c37-12b95d6c8cda.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_d5ef2bf3-5969-4ced-9ce3-19ae2eca584a.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_b82e5b77-7423-4fa7-beb1-66c13b1c3261.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_0fb52ab1-44e8-4770-8002-b586b625d688.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_aab30db9-35e8-4fc9-8133-03de430c89e4.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_59d2bb0d-43f7-4a9e-b4b9-be1fade018e1.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_f9c295c5-04f1-41cb-9962-111dcec29b2a.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_cb756b62-f3e5-441a-aa6b-8f5a2c76eafd.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_24d4c0f3-e7eb-4dbb-9b86-783e4d569c64.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_3520dbe1-409b-4e7b-afaf-3191d69ef508.dat\" \"/jetstream2/scratch/main/jobs/78858004/inputs/dataset_00ff814b-aa27-4fcc-a1a0-cc55c07be8bb.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "v058": {
+      "id": "f9cad7b01a4721357cd196652f258239",
+      "src": "hda",
+      "uuid": "34c62248-84d3-4331-a9db-25780e25beee"
+    },
+    "v059": {
+      "id": "f9cad7b01a472135ab7ff0449d71a93e",
+      "src": "hda",
+      "uuid": "0b49b9aa-3f71-47b1-af2d-46a539ebd1fb"
+    },
+    "v060": {
+      "id": "f9cad7b01a4721358a39155b6ff29dab",
+      "src": "hda",
+      "uuid": "9f9724d9-435c-4470-910d-21f4464f9219"
+    },
+    "v061": {
+      "id": "f9cad7b01a472135bd94fb110d076e75",
+      "src": "hda",
+      "uuid": "78a22ade-03ca-4f65-8bcc-e524c1c4e975"
+    },
+    "v062": {
+      "id": "f9cad7b01a4721350ec9fad7721fd78c",
+      "src": "hda",
+      "uuid": "ff46d37b-271a-4638-b1e6-a0164c74f912"
+    },
+    "v063": {
+      "id": "f9cad7b01a472135470d1d7d6d8edc48",
+      "src": "hda",
+      "uuid": "a2e7bf91-3c9c-483f-b126-467a2b21424e"
+    },
+    "v064": {
+      "id": "f9cad7b01a4721355feb33e3bf4f7ff3",
+      "src": "hda",
+      "uuid": "f0589dbb-177c-436d-9f57-44998d67e3b1"
+    },
+    "v065": {
+      "id": "f9cad7b01a4721356933d84d78af2c5b",
+      "src": "hda",
+      "uuid": "5ddb4e04-1e6a-4754-a5e9-484ab71a42dd"
+    },
+    "v066": {
+      "id": "f9cad7b01a4721355dafcfee8c7b0096",
+      "src": "hda",
+      "uuid": "120a6ed6-19d0-415d-a695-7a7a7a33cf9f"
+    },
+    "v067": {
+      "id": "f9cad7b01a472135892760ae53c31bb4",
+      "src": "hda",
+      "uuid": "4a7110fd-a466-4e85-abb9-4013d51b743c"
+    },
+    "v068": {
+      "id": "f9cad7b01a4721350a8cc3b2e9a3c172",
+      "src": "hda",
+      "uuid": "c8314b6a-03b0-4902-9080-4ed75d8dc540"
+    },
+    "status": {
+      "id": "f9cad7b01a47213501dc94ce1e8378cc",
+      "src": "hda",
+      "uuid": "6955b5af-94f9-469b-a283-d865876d56a4"
+    },
+    "genes": {
+      "id": "f9cad7b01a472135d038d39ab29c978a",
+      "src": "hda",
+      "uuid": "008c7c10-a982-482e-acdf-f773b85b69c8"
+    },
+    "v001": {
+      "id": "f9cad7b01a4721351f176d0ed77209fa",
+      "src": "hda",
+      "uuid": "82747522-818e-49d3-8975-319842b76d80"
+    },
+    "v002": {
+      "id": "f9cad7b01a472135875b0a1893bbe2b0",
+      "src": "hda",
+      "uuid": "83632a91-a3e7-4899-ac0c-9977846b4109"
+    },
+    "v003": {
+      "id": "f9cad7b01a47213560d216926dd18334",
+      "src": "hda",
+      "uuid": "ddfd68fd-0bd3-46dc-813f-38730bc75a7e"
+    },
+    "v004": {
+      "id": "f9cad7b01a472135388c781ef6c81c94",
+      "src": "hda",
+      "uuid": "cdd62478-953c-4594-98c7-a657a7ff9b12"
+    },
+    "v005": {
+      "id": "f9cad7b01a4721358627eb2c4a5bd2c3",
+      "src": "hda",
+      "uuid": "d084279e-9aad-4732-9716-7328729f3ef8"
+    },
+    "v006": {
+      "id": "f9cad7b01a472135a16cf9de3b3a284d",
+      "src": "hda",
+      "uuid": "79884454-6edb-47ca-af43-efb56f318e1c"
+    },
+    "v007": {
+      "id": "f9cad7b01a472135020f38e83858e582",
+      "src": "hda",
+      "uuid": "b98010a0-4ea1-4291-b709-cdd63f92a39a"
+    },
+    "v008": {
+      "id": "f9cad7b01a4721359b399c463b11f9d4",
+      "src": "hda",
+      "uuid": "1beac627-3e9e-420c-8cff-93d41fb1416a"
+    },
+    "v009": {
+      "id": "f9cad7b01a472135df437a3c46f94f2e",
+      "src": "hda",
+      "uuid": "06398e24-2744-46d5-abaf-58bc1c59daa9"
+    },
+    "v010": {
+      "id": "f9cad7b01a4721355a4ceb9261ce72bb",
+      "src": "hda",
+      "uuid": "5a12be62-89d1-482e-b1c1-1cc414c90b1c"
+    },
+    "v011": {
+      "id": "f9cad7b01a4721354176e9768208a15e",
+      "src": "hda",
+      "uuid": "ac0bcf88-97a9-4a91-9725-56f1bc2d1fe1"
+    },
+    "v012": {
+      "id": "f9cad7b01a4721356e7278b7013416b8",
+      "src": "hda",
+      "uuid": "9f609a6f-c5a0-4f69-8856-9e7bdf3c5a9c"
+    },
+    "v013": {
+      "id": "f9cad7b01a4721354c63b4ee8414f205",
+      "src": "hda",
+      "uuid": "72afc5f2-eb65-42bf-952a-f5e33f75dd7e"
+    },
+    "v014": {
+      "id": "f9cad7b01a4721357342c759660a8e4f",
+      "src": "hda",
+      "uuid": "637c8263-d487-4c2c-b2e5-512e54831f1d"
+    },
+    "v015": {
+      "id": "f9cad7b01a47213579d23d6090b40519",
+      "src": "hda",
+      "uuid": "385c7d8e-66bd-459a-a3ab-92878df1f3d1"
+    },
+    "v016": {
+      "id": "f9cad7b01a47213549395d9b5164755f",
+      "src": "hda",
+      "uuid": "ff77cd8e-bf58-4d94-9316-abadb785fe4c"
+    },
+    "v017": {
+      "id": "f9cad7b01a47213522c228dee5819e22",
+      "src": "hda",
+      "uuid": "2689b00b-7151-4796-9117-9057f8d43bbb"
+    },
+    "v018": {
+      "id": "f9cad7b01a4721356a4d65cb9eb375aa",
+      "src": "hda",
+      "uuid": "72928dbb-f115-41d4-a6f0-b8e56bc33b6e"
+    },
+    "v019": {
+      "id": "f9cad7b01a4721357add750a82e0a939",
+      "src": "hda",
+      "uuid": "1d1f9b6e-480b-4e6e-b7b3-b464f9fe77ed"
+    },
+    "v020": {
+      "id": "f9cad7b01a472135c713c3583931ede8",
+      "src": "hda",
+      "uuid": "40770273-469e-450d-89ae-9b4defe3a34c"
+    },
+    "v021": {
+      "id": "f9cad7b01a4721352bd95aad904d9ec2",
+      "src": "hda",
+      "uuid": "f493a0b8-6724-4358-9741-099d57e6ea3f"
+    },
+    "v022": {
+      "id": "f9cad7b01a472135c4c7e33adb89580d",
+      "src": "hda",
+      "uuid": "5806ef31-93d9-4665-bdf6-6f3a75b24b9b"
+    },
+    "v023": {
+      "id": "f9cad7b01a472135c3e547f5334314d5",
+      "src": "hda",
+      "uuid": "d3e8aa20-5c77-417c-926f-3fa49e140c16"
+    },
+    "v024": {
+      "id": "f9cad7b01a472135339c51ac1c63c871",
+      "src": "hda",
+      "uuid": "32a84800-1c32-450e-a4f7-52c35e9eb2f1"
+    },
+    "v025": {
+      "id": "f9cad7b01a472135b0b8fad6f98b0c4c",
+      "src": "hda",
+      "uuid": "d77b0c59-adf7-4b4e-9139-a41f347ce935"
+    },
+    "v026": {
+      "id": "f9cad7b01a47213511b160d4f9e818a7",
+      "src": "hda",
+      "uuid": "90d6c0a1-d420-48b4-b9bc-5b3b99a7da73"
+    },
+    "v027": {
+      "id": "f9cad7b01a4721354fe8fc8167070900",
+      "src": "hda",
+      "uuid": "548688a5-c1d3-40d6-b775-662f665dcc66"
+    },
+    "v028": {
+      "id": "f9cad7b01a4721357753e1e9e354e920",
+      "src": "hda",
+      "uuid": "60996697-611b-4ee5-9f34-726db06ca396"
+    },
+    "v029": {
+      "id": "f9cad7b01a472135b22882abcdd405b8",
+      "src": "hda",
+      "uuid": "038c8f93-6929-4bcf-afa7-0468fe2cbb73"
+    },
+    "v030": {
+      "id": "f9cad7b01a472135ef63d6151faac046",
+      "src": "hda",
+      "uuid": "2fae4752-5d59-41c8-bab3-d14377b8dc7a"
+    },
+    "v031": {
+      "id": "f9cad7b01a472135bf459b3011c85588",
+      "src": "hda",
+      "uuid": "2cf37e7d-e9a9-44c4-867f-89409af2594e"
+    },
+    "v032": {
+      "id": "f9cad7b01a4721356b5ba4bfc4bd2b7c",
+      "src": "hda",
+      "uuid": "65e59b37-82e5-4f43-9d33-36899f254dfd"
+    },
+    "v033": {
+      "id": "f9cad7b01a472135c137193ac443c5d7",
+      "src": "hda",
+      "uuid": "0377f901-8b36-4b5a-a892-34b4dd445a57"
+    },
+    "v034": {
+      "id": "f9cad7b01a472135838ca0ad1ccbf8fd",
+      "src": "hda",
+      "uuid": "5835808e-05c5-4184-a306-b948eccb0b22"
+    },
+    "v035": {
+      "id": "f9cad7b01a472135ba9bc77278f33319",
+      "src": "hda",
+      "uuid": "45a1ed1b-e002-43c3-bbd3-b0522312ef7a"
+    },
+    "v036": {
+      "id": "f9cad7b01a4721359723a81280514a46",
+      "src": "hda",
+      "uuid": "0154abb6-29a8-49ac-ad5d-773e6570cec3"
+    },
+    "v037": {
+      "id": "f9cad7b01a4721358d401d2906574e7d",
+      "src": "hda",
+      "uuid": "acb51121-2c08-4957-b939-c7f208c92f05"
+    },
+    "v038": {
+      "id": "f9cad7b01a4721356ee2c417c0e59987",
+      "src": "hda",
+      "uuid": "765bcc1d-782c-4d7a-a4e4-63b8ab674d67"
+    },
+    "v039": {
+      "id": "f9cad7b01a472135fb76d1b0f20fbfba",
+      "src": "hda",
+      "uuid": "7102ff1b-5340-49bf-93c7-9fb9537964db"
+    },
+    "v040": {
+      "id": "f9cad7b01a4721354cf5f8e273d22934",
+      "src": "hda",
+      "uuid": "2af2ca81-5114-41ab-9c76-c602738b5e71"
+    },
+    "v041": {
+      "id": "f9cad7b01a47213565c64baaf19d38e8",
+      "src": "hda",
+      "uuid": "c8a7fe20-441f-40da-819f-172cb2d34ca7"
+    },
+    "v042": {
+      "id": "f9cad7b01a4721358cc90c71878dcfe7",
+      "src": "hda",
+      "uuid": "73bc4c11-b46c-4b4d-9a6b-025cb9c0a22d"
+    },
+    "v043": {
+      "id": "f9cad7b01a472135b4d30d033dda32fb",
+      "src": "hda",
+      "uuid": "d96af0d3-cd63-4cb9-8678-e4041777e0e5"
+    },
+    "v044": {
+      "id": "f9cad7b01a47213555933a6a136100d9",
+      "src": "hda",
+      "uuid": "c5721a2c-5b5c-4249-9970-da3b3a9d3d23"
+    },
+    "v045": {
+      "id": "f9cad7b01a4721355ad88ee9b84d8996",
+      "src": "hda",
+      "uuid": "69776a0b-e7dc-4973-919c-db9eeb89b28d"
+    },
+    "v046": {
+      "id": "f9cad7b01a4721351e701b9e181a2260",
+      "src": "hda",
+      "uuid": "96e5cdb6-dc06-4eee-b0e2-d664f1028bd2"
+    },
+    "v047": {
+      "id": "f9cad7b01a472135b6226c4b5a8fc5ec",
+      "src": "hda",
+      "uuid": "845c50e0-b70e-41ba-a24b-df9ecc0ee275"
+    },
+    "v048": {
+      "id": "f9cad7b01a47213550fa72863367619d",
+      "src": "hda",
+      "uuid": "2d7d69b0-1197-4671-b007-936b66cf2f69"
+    },
+    "v049": {
+      "id": "f9cad7b01a472135418334fcac29a831",
+      "src": "hda",
+      "uuid": "5ab71256-f42d-48d9-a5e4-96692493233e"
+    },
+    "v050": {
+      "id": "f9cad7b01a472135e4934d0dc82dbce0",
+      "src": "hda",
+      "uuid": "9716229b-7762-45f9-b64c-61eca7a67fa4"
+    },
+    "v051": {
+      "id": "f9cad7b01a472135380d6daa69cd833d",
+      "src": "hda",
+      "uuid": "77517eb8-bfdf-48cd-aa63-750bf30356ff"
+    },
+    "v052": {
+      "id": "f9cad7b01a472135ae0c0ced2baada6f",
+      "src": "hda",
+      "uuid": "1caec770-b5db-421e-968e-75b9cda44669"
+    },
+    "v053": {
+      "id": "f9cad7b01a4721357ae15951aaf516b4",
+      "src": "hda",
+      "uuid": "b72f5dac-7fd7-42ec-808a-a238a8f320f8"
+    },
+    "v054": {
+      "id": "f9cad7b01a4721354419aaf9219b7bdb",
+      "src": "hda",
+      "uuid": "42c27435-00ab-4cb0-b6d5-103c2c952064"
+    },
+    "v055": {
+      "id": "f9cad7b01a47213593bd45874c54e521",
+      "src": "hda",
+      "uuid": "c83b1b00-71b8-495f-8d34-568680ff451d"
+    },
+    "v056": {
+      "id": "f9cad7b01a4721353bc7fc9d9622ca2a",
+      "src": "hda",
+      "uuid": "33625bff-5b7c-46a7-b862-23c5bf80d8a4"
+    },
+    "v057": {
+      "id": "f9cad7b01a4721352898e512b1a1319a",
+      "src": "hda",
+      "uuid": "add7acd0-d3dd-4079-92d1-9756ef9f49de"
+    },
+    "v069": {
+      "id": "f9cad7b01a47213545d51ddb24367b1e",
+      "src": "hda",
+      "uuid": "d06d33e1-0f0d-4cfe-81c9-3aa7627ff8f8"
+    },
+    "v070": {
+      "id": "f9cad7b01a472135cb8d5a89852f0012",
+      "src": "hda",
+      "uuid": "e9270697-0ba0-403e-9e06-9e4a33ad6b98"
+    },
+    "v071": {
+      "id": "f9cad7b01a4721355144d8b770bba0f2",
+      "src": "hda",
+      "uuid": "babdd107-b388-461f-b3db-3fa574bc7d4d"
+    },
+    "v072": {
+      "id": "f9cad7b01a47213583c8ea03f617e690",
+      "src": "hda",
+      "uuid": "ad417fe1-4d7c-4367-943f-ad9d64e1325c"
+    },
+    "v073": {
+      "id": "f9cad7b01a472135b468c597de8af082",
+      "src": "hda",
+      "uuid": "e970e44e-c5ed-4399-b851-14d538dbcb64"
+    },
+    "v074": {
+      "id": "f9cad7b01a47213558f60bb25d44bff8",
+      "src": "hda",
+      "uuid": "044902d7-5efa-4843-a600-b74d4dcd6497"
+    },
+    "v075": {
+      "id": "f9cad7b01a472135518495d9f1b9bc83",
+      "src": "hda",
+      "uuid": "4b21f2fc-3c0e-46b7-9b85-6ff7435e8f2d"
+    },
+    "v076": {
+      "id": "f9cad7b01a472135b521508cce2973a0",
+      "src": "hda",
+      "uuid": "c31c9fd1-4f23-4c6c-9c37-12b95d6c8cda"
+    },
+    "v077": {
+      "id": "f9cad7b01a47213537c829e31476157b",
+      "src": "hda",
+      "uuid": "d5ef2bf3-5969-4ced-9ce3-19ae2eca584a"
+    },
+    "v078": {
+      "id": "f9cad7b01a472135f478bcf66fec7085",
+      "src": "hda",
+      "uuid": "b82e5b77-7423-4fa7-beb1-66c13b1c3261"
+    },
+    "v079": {
+      "id": "f9cad7b01a472135a32b70d61553e769",
+      "src": "hda",
+      "uuid": "0fb52ab1-44e8-4770-8002-b586b625d688"
+    },
+    "v080": {
+      "id": "f9cad7b01a4721351e98caa23cdf6757",
+      "src": "hda",
+      "uuid": "aab30db9-35e8-4fc9-8133-03de430c89e4"
+    },
+    "v081": {
+      "id": "f9cad7b01a4721357eba46cdd0ec4705",
+      "src": "hda",
+      "uuid": "59d2bb0d-43f7-4a9e-b4b9-be1fade018e1"
+    },
+    "v082": {
+      "id": "f9cad7b01a472135e420e0c8b392ffb7",
+      "src": "hda",
+      "uuid": "f9c295c5-04f1-41cb-9962-111dcec29b2a"
+    },
+    "v083": {
+      "id": "f9cad7b01a47213520e57b449f83aae3",
+      "src": "hda",
+      "uuid": "cb756b62-f3e5-441a-aa6b-8f5a2c76eafd"
+    },
+    "v084": {
+      "id": "f9cad7b01a4721350e7cfd405fc48198",
+      "src": "hda",
+      "uuid": "24d4c0f3-e7eb-4dbb-9b86-783e4d569c64"
+    },
+    "v085": {
+      "id": "f9cad7b01a4721356e3a5b8b2cfb5b99",
+      "src": "hda",
+      "uuid": "3520dbe1-409b-4e7b-afaf-3191d69ef508"
+    },
+    "v086": {
+      "id": "f9cad7b01a4721359851ba5827483812",
+      "src": "hda",
+      "uuid": "00ff814b-aa27-4fcc-a1a0-cc55c07be8bb"
+    }
+  },
+  "outputs": {
+    "summary": {
+      "id": "f9cad7b01a4721356c3a2346b9b0ba1c",
+      "src": "hda",
+      "uuid": "f72d7723-81ba-41a5-a6e4-507412ee786a"
+    },
+    "selected_variants": {
+      "id": "f9cad7b01a472135fce8d26e8a407490",
+      "src": "hda",
+      "uuid": "56b45578-e3f4-4303-bf9f-5ac46b95b961"
+    },
+    "audit": {
+      "id": "f9cad7b01a472135b686f3a1c01934e7",
+      "src": "hda",
+      "uuid": "12f5619c-959d-489a-8904-76947856017a"
+    },
+    "classifications": {
+      "id": "f9cad7b01a4721351b59e8a614be6b2f",
+      "src": "hda",
+      "uuid": "3437ee8c-e188-4224-a619-4c29f067bc07"
+    },
+    "consequences": {
+      "id": "f9cad7b01a4721355ca2f30c90a776a1",
+      "src": "hda",
+      "uuid": "ed16e0eb-7e37-40c8-b8a2-e1d118a2123b"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

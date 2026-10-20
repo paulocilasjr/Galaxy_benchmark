@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b58c661529858dc646",
+  "history_id": "bbd44e69cb8906b5bfdd2fc07c6b529b",
+  "tool_id": "gene_length_expression_pearson_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-16T05:04:24.455772",
+  "update_time": "2026-07-16T05:04:59.283266",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.py <<'PY'\nimport csv\nimport math\nimport sys\n\ncounts_path, meta_path, sample_path, corr_out, answer_out = sys.argv[1:6]\ntarget_celltypes = [\"CD4\", \"CD8\", \"CD14\", \"CD19\"]\n\n# Map annotated samples to the requested immune-cell labels.\ncelltype_samples = {ct: [] for ct in target_celltypes}\nwith open(sample_path, newline='') as handle:\n    reader = csv.DictReader(handle)\n    required = {\"sample\", \"celltype\"}\n    if not required.issubset(reader.fieldnames or []):\n        raise SystemExit(\"Sample annotation must contain sample and celltype columns\")\n    for row in reader:\n        ct = row[\"celltype\"]\n        if ct in celltype_samples:\n            celltype_samples[ct].append(row[\"sample\"])\n\n# Protein-coding genes and their lengths define the analysis rows.\nlength_by_gene = {}\nwith open(meta_path, newline='') as handle:\n    reader = csv.DictReader(handle)\n    required = {\"Geneid\", \"Length\", \"gene_biotype\"}\n    if not required.issubset(reader.fieldnames or []):\n        raise SystemExit(\"Gene metadata must contain Geneid, Length, and gene_biotype columns\")\n    for row in reader:\n        if row[\"gene_biotype\"] == \"protein_coding\":\n            gene = row[\"Geneid\"]\n            try:\n                length = float(row[\"Length\"])\n            except ValueError:\n                continue\n            if math.isfinite(length):\n                length_by_gene[gene] = length\n\n# Match requested samples to expression columns.\nwith open(counts_path, newline='') as handle:\n    reader = csv.reader(handle)\n    header = next(reader)\n    sample_to_index = {name: idx for idx, name in enumerate(header) if idx > 0}\n    indices_by_celltype = {}\n    for ct, samples in celltype_samples.items():\n        indices = [sample_to_index[sample] for sample in samples if sample in sample_to_index]\n        if not indices:\n            raise SystemExit(f\"No expression columns found for {ct}\")\n        indices_by_celltype[ct] = indices\n\n    lengths = {ct: [] for ct in target_celltypes}\n    means = {ct: [] for ct in target_celltypes}\n\n    for row in reader:\n        if not row:\n            continue\n        gene = row[0]\n        if gene not in length_by_gene:\n            continue\n        gene_length = length_by_gene[gene]\n        for ct in target_celltypes:\n            vals = []\n            for idx in indices_by_celltype[ct]:\n                try:\n                    val = float(row[idx])\n                except (IndexError, ValueError):\n                    continue\n                if math.isfinite(val):\n                    vals.append(val)\n            if vals:\n                lengths[ct].append(gene_length)\n                means[ct].append(sum(vals) / len(vals))\n\ndef pearson(xs, ys):\n    n = len(xs)\n    if n != len(ys) or n < 2:\n        raise SystemExit(\"Pearson correlation requires paired vectors with at least two rows\")\n    mean_x = sum(xs) / n\n    mean_y = sum(ys) / n\n    sxx = 0.0\n    syy = 0.0\n    sxy = 0.0\n    for x, y in zip(xs, ys):\n        dx = x - mean_x\n        dy = y - mean_y\n        sxx += dx * dx\n        syy += dy * dy\n        sxy += dx * dy\n    denom = math.sqrt(sxx * syy)\n    if denom == 0.0:\n        raise SystemExit(\"Pearson correlation undefined for zero-variance vector\")\n    return sxy / denom\n\nresults = []\nfor ct in target_celltypes:\n    r = pearson(lengths[ct], means[ct])\n    results.append({\n        \"celltype\": ct,\n        \"n_genes\": len(lengths[ct]),\n        \"n_samples\": len(indices_by_celltype[ct]),\n        \"pearson_r\": r,\n        \"abs_pearson_r\": abs(r),\n    })\n\nweakest = min(results, key=lambda item: item[\"abs_pearson_r\"])[\"celltype\"]\n\nwith open(corr_out, \"w\", newline='') as handle:\n    writer = csv.DictWriter(handle, fieldnames=[\"celltype\", \"n_genes\", \"n_samples\", \"pearson_r\", \"abs_pearson_r\"], delimiter='\\t')\n    writer.writeheader()\n    for item in results:\n        writer.writerow({\n            \"celltype\": item[\"celltype\"],\n            \"n_genes\": item[\"n_genes\"],\n            \"n_samples\": item[\"n_samples\"],\n            \"pearson_r\": format(item[\"pearson_r\"], \".17g\"),\n            \"abs_pearson_r\": format(item[\"abs_pearson_r\"], \".17g\"),\n        })\n\nwith open(answer_out, \"w\") as handle:\n    handle.write(weakest + \"\\n\")\nPY\npython analysis.py \"/jetstream2/scratch/main/jobs/78549527/inputs/dataset_1dd625a3-b9ea-4bc6-b420-7175061e40ac.dat\" \"/jetstream2/scratch/main/jobs/78549527/inputs/dataset_35b40e1a-a815-457e-af97-cd387a73f7f1.dat\" \"/jetstream2/scratch/main/jobs/78549527/inputs/dataset_19d6c629-740f-4bbf-8cce-96ec08fb40c9.dat\" correlations.tsv answer.txt",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "read_counts": {
+      "id": "f9cad7b01a47213553710f6e4296c2cf",
+      "src": "hda",
+      "uuid": "1dd625a3-b9ea-4bc6-b420-7175061e40ac"
+    },
+    "gene_meta": {
+      "id": "f9cad7b01a472135e513bca1d5e130e3",
+      "src": "hda",
+      "uuid": "35b40e1a-a815-457e-af97-cd387a73f7f1"
+    },
+    "sample_annot": {
+      "id": "f9cad7b01a4721351859faad3d4926c7",
+      "src": "hda",
+      "uuid": "19d6c629-740f-4bbf-8cce-96ec08fb40c9"
+    }
+  },
+  "outputs": {
+    "correlations": {
+      "id": "f9cad7b01a472135c52f502dfa9c046d",
+      "src": "hda",
+      "uuid": "a0e058f8-6b20-43b6-a179-8bb2510b64fc"
+    },
+    "answer": {
+      "id": "f9cad7b01a4721350fe9f0f6d902935c",
+      "src": "hda",
+      "uuid": "30d4be39-a370-4b15-b793-f1e1e5439e9d"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

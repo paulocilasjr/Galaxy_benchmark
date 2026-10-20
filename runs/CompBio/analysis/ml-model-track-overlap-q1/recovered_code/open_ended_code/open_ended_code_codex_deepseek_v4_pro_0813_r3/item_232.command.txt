@@ -1,0 +1,42 @@
+/bin/bash -lc "cat > fetch_borzoi_libraries.py <<'PY'
+import requests,json,time,sys
+from concurrent.futures import ThreadPoolExecutor,as_completed
+reps=json.load(open('borzoi_exp_reps.json'))
+libs=[]
+for e in reps:
+ for r in e.get('replicates',[]):
+  if r.get('library'): libs.append(r['library'])
+libs=list(dict.fromkeys(libs))
+print('libs',len(libs))
+def chunks(lst,n):
+ for i in range(0,len(lst),n): yield lst[i:i+n]
+chunks_list=list(chunks(libs,100))
+print('chunks',len(chunks_list))
+
+def fetch(chunk):
+ params=[('type','Library'),('format','json'),('limit','all'),('field','accession'),('field','dbxrefs')]
+ for a in chunk: params.append(('accession',a))
+ last=None
+ for attempt in range(6):
+  try:
+   r=requests.get('https://www.encodeproject.org/search/',params=params,timeout=120)
+   if r.status_code==200: return r.json().get('@graph',[])
+   last=(r.status_code,r.text[:200]); time.sleep(2*(attempt+1))
+  except Exception as e: last=repr(e); time.sleep(2)
+ print('FAIL',chunk[0],last,file=sys.stderr); return []
+results=[None]*len(chunks_list)
+with ThreadPoolExecutor(max_workers=5) as ex:
+ futs={ex.submit(fetch,c):i for i,c in enumerate(chunks_list)}
+ for fut in as_completed(futs):
+  i=futs[fut]
+  try: results[i]=fut.result()
+  except Exception as e: print('future',i,e); results[i]=[]
+out={}
+for res in results:
+ for g in res:
+  gsms=[x.split(':',1)[1] for x in g.get('dbxrefs',[]) if x.startswith('GEO:GSM')]
+  out[g['accession']]=gsms
+json.dump(out,open('borzoi_lib_gsm_map.json','w'))
+print('saved',len(out),'missing',len(libs)-len(out))
+PY
+python3 fetch_borzoi_libraries.py"

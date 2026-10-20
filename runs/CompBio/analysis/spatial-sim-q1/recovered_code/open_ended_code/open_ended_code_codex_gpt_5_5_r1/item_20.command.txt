@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+print('sc shape', sc.shape)
+print('meta match', sc.index.equals(meta.index))
+# spatial
+X=mmread('matrix.mtx.gz').tocsc() # genes x spots
+barcodes=[l.strip() for l in gzip.open('barcodes.tsv.gz','rt')]
+features=[l.strip().split('\\t')[1] for l in gzip.open('features.tsv.gz','rt')]
+print('spatial', X.shape, 'target idx', barcodes.index('Spot_710-1'), 'features align', features[:3], sc.columns[:3].tolist(), features==sc.columns.tolist())
+idx=barcodes.index('Spot_710-1')
+y=np.asarray(X[:,idx].todense()).ravel()
+print('target total', y.sum(), 'nnz', np.count_nonzero(y), 'max', y.max())
+types=sorted(meta.cell_type.unique())
+means=np.vstack([sc.loc[meta.cell_type==t].mean(axis=0).to_numpy() for t in types]).T
+# fit raw counts as weighted combo of mean cell profile
+coef, rnorm = nnls(means, y)
+print('types', types)
+print('coef', dict(zip(types, coef.round(3))), 'sumcoef', coef.sum(), 'rnorm', rnorm)
+print('coef_norm', dict(zip(types, (coef/coef.sum()).round(4))))
+# correlation with each mean and cosine
+for t,i in zip(types, range(len(types))):
+    m=means[:,i]
+    corr=np.corrcoef(y,m)[0,1]
+    cos=y@m/np.sqrt((y@y)*(m@m))
+    print(t,'corr',round(corr,4),'cos',round(cos,4),'mean sum',m.sum())
+# fit normalized composition on normalized vectors? proportions only
+M=means/means.sum(axis=0) # gene probabilities per type
+yn=y/y.sum()
+coef2,r2=nnls(M, yn)
+print('nnls prob',dict(zip(types,coef2.round(4))), 'sum',coef2.sum(),'normed', dict(zip(types,(coef2/coef2.sum()).round(4))), 'r2',r2)
+PY"

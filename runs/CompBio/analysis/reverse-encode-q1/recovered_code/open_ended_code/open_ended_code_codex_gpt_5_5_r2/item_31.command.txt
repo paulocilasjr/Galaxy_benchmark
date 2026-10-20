@@ -1,0 +1,63 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request,json,urllib.parse,concurrent.futures,time,os,sys
+base='https://www.encodeproject.org'
+url=base+'/search/?'+urllib.parse.urlencode({'type':'Analysis','pipelines':'/pipelines/ENCPL848KLD/','assembly':'GRCh38','limit':'all','format':'json'})
+with urllib.request.urlopen(urllib.request.Request(url,headers={'accept':'application/json','user-agent':'Mozilla/5.0'}),timeout=120) as r:data=json.load(r)
+ids=[x['@id'] for x in data['@graph']]
+print('ids',len(ids))
+
+def fetch(id):
+    for tries in range(3):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(base+id+'?format=json',headers={'accept':'application/json','user-agent':'Mozilla/5.0'}),timeout=60) as r:
+                return json.load(r)
+        except Exception as e:
+            if tries==2: return {'@id':id,'ERROR':repr(e)}
+            time.sleep(1+tries)
+res=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    futs=[ex.submit(fetch,i) for i in ids]
+    for idx,fut in enumerate(concurrent.futures.as_completed(futs),1):
+        res.append(fut.result())
+        if idx%100==0: print('done',idx, flush=True)
+with open('encode4_dnase_v3alpha2_grch38_analyses.json','w') as f: json.dump(res,f)
+print('saved',len(res),'errors',sum('ERROR' in x for x in res))
+# extract alignment bam files
+def get_q(f,typ,key):
+    for q in f.get('quality_metrics',[]) or []:
+        if typ in q.get('@type',[]): return q.get(key)
+    return None
+rows=[]
+for a in res:
+    if 'ERROR' in a: continue
+    datasets=[d.strip('/').split('/')[-1] for d in a.get('datasets',[])]
+    for f in a.get('files',[]):
+        if f.get('file_format')=='bam' and f.get('output_type')=='alignments' and f.get('assembly')=='GRCh38':
+            rows.append({
+                'analysis':a.get('accession') or a.get('@id'),
+                'datasets':datasets,
+                'file':f.get('accession'),
+                'status':f.get('status'),
+                'size':f.get('file_size'),
+                'href':f.get('href'),
+                'biorep':f.get('biological_replicates'),
+                'total':get_q(f,'SamtoolsStatsQualityMetric','raw total sequences') or get_q(f,'SamtoolsStatsQualityMetric','reads mapped') or get_q(f,'SamtoolsFlagstatsQualityMetric','total'),
+                'mapped':get_q(f,'SamtoolsStatsQualityMetric','reads mapped') or get_q(f,'SamtoolsFlagstatsQualityMetric','mapped'),
+                'mq0':get_q(f,'SamtoolsStatsQualityMetric','reads MQ0'),
+                'spot':get_q(f,'HotspotQualityMetric','spot1_score'),
+            })
+print('bam rows',len(rows))
+with open('encode4_filtered_bams.json','w') as f: json.dump(rows,f,indent=2)
+# closest sums by dataset (pool all bam files in analysis? Usually per analysis one dataset; all alignments files in same analysis)
+from collections import defaultdict
+TARGET=76923697 # provisional
+by=defaultdict(list)
+for r in rows:
+    key=tuple(r['datasets'])
+    if r['total']: by[key].append(r)
+out=[]
+for key,rs in by.items():
+    s=sum(r['total'] for r in rs)
+    out.append((abs(s-TARGET),s,key,[(r['file'],r['total'],r['biorep'],r['analysis']) for r in rs]))
+for x in sorted(out)[:50]: print(x)
+PY"

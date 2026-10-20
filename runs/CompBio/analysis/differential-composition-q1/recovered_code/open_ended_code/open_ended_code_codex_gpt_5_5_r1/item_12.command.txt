@@ -1,0 +1,97 @@
+/bin/bash -lc "cat > cluster_check.py <<'PY'
+import gzip
+import numpy as np
+import pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import silhouette_score
+
+# Load genes
+genes=[]
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        genes.append(p[1].upper())
+idx={g:i for i,g in enumerate(genes)}
+markers={
+'astrocyte':['GFAP','AQP4','ALDH1L1','SLC1A3','SOX9','GJA1','S100B'],
+'microglial cell':['CX3CR1','P2RY12','TMEM119','AIF1','C1QA','C1QB','C1QC','TYROBP','CSF1R'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','TYR','MITF','MERTK','TTR'],
+'cone cell':['OPN1SW','OPN1MW','OPN1LW','ARR3','GNAT2','PDE6C','GNGT2','CNGB3','GUCA1A'],
+'rod cell':['RHO','NRL','SAG','GNAT1','PDE6A','PDE6B','GNGT1','CNGA1','ROM1','RCVRN'],
+'horizontal cell':['ONECUT1','ONECUT2','LHX1','PROX1','CALB1','CALB2','TFAP2A'],
+'bipolar cell':['VSX2','TRPM1','GRM6','PRKCA','CABP5','PCP2','OTX2','ISL1'],
+'RGC':['RBPMS','SNCG','NEFL','NEFM','THY1','POU4F1','POU4F2','ISL1'],
+'T cells':['CD3D','CD3E','CD3G','TRAC','IL7R','CD2','CD247','LCK','TRBC1'],
+'macrophage':['CD68','LYZ','FCGR3A','MSR1','MRC1','CD163','LST1','FCER1G'],
+'Schwann cell':['MPZ','PLP1','SOX10','PMP22','MBP','S100B','ERBB3','NGFR'],
+'Pericyte':['RGS5','PDGFRB','CSPG4','MCAM','ACTA2','NOTCH3','KCNJ8','ABCC9'],
+'B cell':['MS4A1','CD79A','CD79B','CD19','BANK1','CD74','HLA-DRA','MZB1'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','FBLN1','PDGFRA','THY1'],
+'endothelial cell':['PECAM1','VWF','KDR','CLDN5','FLT1','RAMP2','ESAM','CDH5'],
+'muller glia cell':['RLBP1','GLUL','APOE','CLU','VIM','CRYAB','AQP4','SLC1A3','SLC1A2'],
+}
+
+print('load')
+with gzip.open('differential.composition.q1.1.mtx.gz','rb') as f: X1=mmread(f).tocsc().astype(np.float32)
+with gzip.open('differential.composition.q1.2.mtx.gz','rb') as f: X2=mmread(f).tocsc().astype(np.float32)
+n1=X1.shape[1]; n2=X2.shape[1]
+C=sparse.vstack([X1.T.tocsr(), X2.T.tocsr()], format='csr')
+lib=np.asarray(C.sum(axis=1)).ravel().astype(np.float32)
+# normalize/log sparse in place
+C=C.astype(np.float32)
+scale=1e4/np.maximum(lib,1)
+C=sparse.diags(scale).dot(C).tocsr()
+C.data=np.log1p(C.data)
+print('norm', C.shape, C.nnz)
+
+# gene variability on lognorm data
+mean=np.asarray(C.mean(axis=0)).ravel()
+C2=C.copy(); C2.data **= 2
+mean2=np.asarray(C2.mean(axis=0)).ravel()
+var=mean2-mean**2
+# Exclude very rare/zero; select high variance-to-mean, also remove ribosomal/mito maybe not necessary
+valid=(mean>0.005)
+disp=np.zeros_like(mean); disp[valid]=var[valid]/(mean[valid]+1e-8)
+# Avoid top ambient photoreceptor genes dominating? first all HVG
+hvg=np.argsort(disp)[-3000:]
+# add marker genes
+marker_idx=sorted(set(i for ms in markers.values() for m in ms if m in idx for i in [idx[m]]))
+cols=np.array(sorted(set(hvg.tolist()+marker_idx)))
+print('features', len(cols))
+Cf=C[:,cols]
+svd=TruncatedSVD(n_components=50, random_state=1)
+Z=svd.fit_transform(Cf)
+Z=StandardScaler().fit_transform(Z)
+print('explained', svd.explained_variance_ratio_[:10], svd.explained_variance_ratio_.sum())
+
+# marker scores on all cells using lognorm C
+scores={}
+for ct,ms in markers.items():
+    present=[idx[m] for m in ms if m in idx]
+    scores[ct]=np.asarray(C[:,present].mean(axis=1)).ravel() if present else np.zeros(C.shape[0])
+S=pd.DataFrame(scores)
+# also per cluster top markers
+for k in [12,16,20,24,30,40]:
+    km=MiniBatchKMeans(n_clusters=k, random_state=2, n_init=20, batch_size=2048, max_iter=500)
+    lab=km.fit_predict(Z)
+    rows=[]
+    for cl in range(k):
+        mask=lab==cl
+        c1=((np.arange(n1+n2)<n1)&mask).sum(); c2=((np.arange(n1+n2)>=n1)&mask).sum()
+        means=S.loc[mask].mean().sort_values(ascending=False)
+        top=means.index[0]; top2=means.index[1]
+        rows.append(dict(k=k,cl=cl,total=int(mask.sum()),s1=int(c1),s2=int(c2),s1_frac=c1/n1,s2_frac=c2/n2,ratio=(c2/n2+1e-6)/(c1/n1+1e-6),top=top,top_score=means.iloc[0],second=top2,second_score=means.iloc[1]))
+    tab=pd.DataFrame(rows).sort_values(['top','ratio'])
+    print('\\nK',k)
+    print(tab.sort_values('ratio').to_string(index=False))
+    agg=tab.groupby('top')[['s1','s2']].sum()
+    agg['s1_frac']=agg.s1/n1; agg['s2_frac']=agg.s2/n2; agg['ratio']=(agg.s2_frac+1e-6)/(agg.s1_frac+1e-6)
+    print('agg by top')
+    print(agg.sort_values('ratio').to_string())
+PY
+python3 cluster_check.py"

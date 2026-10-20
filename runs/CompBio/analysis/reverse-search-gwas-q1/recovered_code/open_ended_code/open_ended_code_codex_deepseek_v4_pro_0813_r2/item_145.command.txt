@@ -1,0 +1,25 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests,json,math
+url='https://api.platform.opentargets.org/api/v4/graphql'
+targets={'1_161531006_C_G':9.31382e-23,'1_161540726_C_G':1.07244e-22,'17_16939677_G_A':1.4221e-16,'19_49525049_CCTGCTG_C':1.04146e-10,'4_3445429_C_T':1.61837e-10,'6_32067917_C_T':4.85572e-19,'6_32668221_G_T':1.67865e-18}
+# for indels use exact id format maybe alternate/ref; skip if null
+for vid,target in targets.items():
+    q={'query':f'''query {{ variant(variantId: \"{vid}\") {{ id rsIds credibleSets {{ rows {{ pValueMantissa pValueExponent studyId study {{ traitFromSource pubmedId }} }} }} }} }}'''}
+    r=requests.post(url,json=q)
+    data=r.json().get('data',{}).get('variant')
+    if not data:
+        print('\\n',vid,'variant null')
+        continue
+    print('\\n',vid,'target',target,'credible rows',len(data['credibleSets']['rows']))
+    for row in data['credibleSets']['rows']:
+        man=row.get('pValueMantissa'); exp=row.get('pValueExponent')
+        if man is None or exp is None: continue
+        p=man*10**exp
+        if abs(math.log10(p)+math.log10(target))<0.01 if False else abs(p-target)<max(target*0.01,1e-25):
+            study=row.get('study') or {}
+            print('MATCH',row['studyId'],p,study.get('traitFromSource'),study.get('pubmedId'))
+        # print close maybe
+        if abs(math.log10(p)-math.log10(target))<0.05:
+            study=row.get('study') or {}
+            print('CLOSE',row['studyId'],p,study.get('traitFromSource'),study.get('pubmedId'))
+PY"

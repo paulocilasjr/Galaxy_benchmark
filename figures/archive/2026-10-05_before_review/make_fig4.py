@@ -34,7 +34,7 @@ import pandas as pd
 from scipy.stats import rankdata
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -46,10 +46,10 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-EVIDENCE = [os.path.join(ROOT, 'BixBench_50', 'analysis', '*', 'history_analysis_evidence.json'),
-            os.path.join(ROOT, 'CompBio', 'analysis', '*', 'history_analysis_evidence.json')]
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+EVIDENCE = [os.path.join(ROOT, 'runs/BixBench_50', 'analysis', '*', 'history_analysis_evidence.json'),
+            os.path.join(ROOT, 'runs/CompBio', 'analysis', '*', 'history_analysis_evidence.json')]
 OUT = os.path.join(ROOT, 'figures')
 B, SEED, B_PERM = 20000, 20261002, 20000
 W, MM = 180.0, 1 / 25.4

@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter
+meta='inputs/230215_Trio_Status.xlsx'
+wb=load_workbook(meta,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions(); rows=list(ws.iter_rows(values_only=True)); carriers={str(r[0]).strip() for r in rows[1:] if r[3]=='Carrier'}
+files={p.stem.split('CHIP_',1)[1].split('-',1)[0]:p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+counts=Counter(); samples=Counter(); exact=[]; unique=set(); uniq_type={}
+for sid in sorted(carriers & files.keys()):
+ wb=load_workbook(files[sid],read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions(); it=ws.iter_rows(values_only=True); next(it); h=next(it); ix={v:i for i,v in enumerate(h)}
+ assert {'Chr:Pos','Ref/Alt','Sequence Ontology (Combined)','Variant Allele Freq'} <= ix.keys()
+ for r in it:
+  try: v=float(r[ix['Variant Allele Freq']])
+  except (TypeError,ValueError): continue
+  so=r[ix['Sequence Ontology (Combined)']]
+  if v==.3 and so in {'synonymous_variant','missense_variant'}: exact.append((sid,r[ix['Chr:Pos']],so))
+  if v < .3 and so in {'synonymous_variant','missense_variant'}:
+   counts[so]+=1; samples[(sid,so)]+=1
+   key=(r[ix['Chr:Pos']],r[ix['Ref/Alt']])
+   unique.add(key); uniq_type.setdefault(key,set()).add(so)
+print('eligible coding calls',sum(counts.values()))
+print('synonymous calls',counts['synonymous_variant'])
+print('missense calls',counts['missense_variant'])
+print('fraction',counts['synonymous_variant']/sum(counts.values()))
+print('per sample')
+for k,v in sorted(samples.items()): print(k,v)
+print('exactly 0.3 coding',exact)
+print('unique eligible coding sites',len(unique),Counter(next(iter(uniq_type[k])) for k in unique))
+PY"

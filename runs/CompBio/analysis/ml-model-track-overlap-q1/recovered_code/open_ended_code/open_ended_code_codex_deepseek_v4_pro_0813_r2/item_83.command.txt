@@ -1,0 +1,42 @@
+/bin/bash -lc "cat > compute_answer.py <<'PY'
+import json,csv,re
+# Sei tracks with Cistrome ID
+sei_targets=open('sei_repo/model/target.names').read().splitlines()
+sei_cistrome=[]
+for line in sei_targets:
+    m=re.search(r'ID:(\\d+)\\s*"'$'"', line)
+    if m:
+        sei_cistrome.append((line,int(m.group(1))))
+# Cistrome DB3 mapping (fetched)
+mapping=json.load(open('sei_cistrome_map.json'))
+assert len(sei_cistrome)==19905
+
+# Borzoi provenance source IDs from file paths (both human and mouse tracks)
+borzoi_sources=set()
+borzoi_identifiers=set()
+for fn in ['borzoi_targets_human.tsv','borzoi_targets_mouse.tsv']:
+    with open(fn) as f:
+        for r in csv.DictReader(f, delimiter='\\t'):
+            ident=r['identifier']; borzoi_identifiers.add(ident)
+            m=re.search(r'/(?:encode|geo|fantom|recount3)/(["'^/]+)/'"', r['file'])
+            src=m.group(1) if m else ident
+            borzoi_sources.add(src)
+            # Also treat file path source normalized for ENCSR replicates if any (none in Borzoi)
+            if src.startswith('ENCSR'):
+                borzoi_sources.add(re.sub(r'_\\d+"'$'"','',src))
+
+matches=[]
+for line,sid in sei_cistrome:
+    s=mapping[str(sid)]
+    ext=s['external_id']; typ=s['external_id_type']
+    norm=re.sub(r'_\\d+"'$'"','',ext) if typ=='ENCODE' else ext
+    if norm in borzoi_sources:
+        matches.append((sid,typ,ext,norm,line))
+print('Sei Cistrome tracks:',len(sei_cistrome))
+print('Borzoi source tokens:',len(borzoi_sources))
+print('Matches:',len(matches))
+from collections import Counter
+print('By type:',Counter(m[1] for m in matches))
+print('Rounded to nearest 100:', round(len(matches)/100)*100)
+PY
+python3 compute_answer.py"

@@ -1,0 +1,45 @@
+/workspace/venv/bin/python3 -c "
+import dendropy
+import zipfile, tempfile, os, statistics
+
+def compute_treeness_dendropy(zip_path, label):
+    results = []
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        tree_files = sorted([f for f in zf.namelist() if f.endswith('.treefile')])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for tf in tree_files:
+                zf.extract(tf, tmpdir)
+                tree_path = os.path.join(tmpdir, tf)
+                try:
+                    tree = dendropy.Tree.get(path=tree_path, schema='newick', preserve_underscores=True)
+                except Exception as e:
+                    print(f'  ERROR: {tf}: {e}')
+                    continue
+                
+                # Compute treeness
+                total_bl = 0.0
+                internal_bl = 0.0
+                
+                for edge in tree.postorder_edge_iter():
+                    if edge.length is not None:
+                        total_bl += edge.length
+                        # A leaf edge connects to a leaf node
+                        if edge.head_node.is_leaf():
+                            pass  # terminal
+                        else:
+                            internal_bl += edge.length
+                
+                if total_bl > 0:
+                    treeness = internal_bl / total_bl
+                    results.append(treeness)
+                else:
+                    results.append(0.0)
+    
+    med = statistics.median(results)
+    print(f'{label}: N={len(results)}, median treeness={med:.8f}')
+    return med
+
+animal_med = compute_treeness_dendropy('/workspace/inputs/scogs_animals.zip', 'ANIMALS')
+fungi_med = compute_treeness_dendropy('/workspace/inputs/scogs_fungi.zip', 'FUNGI')
+print(f'Diff (fungi-animals): {fungi_med - animal_med:.8f}')
+" 2>&1

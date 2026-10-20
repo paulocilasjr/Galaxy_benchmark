@@ -1,0 +1,47 @@
+/bin/bash -lc "cd /workspace && python3 - <<'PY'
+import zipfile, subprocess, os, tempfile, re
+from scipy import stats
+from scipy.stats import mannwhitneyu
+
+def calc_pis(path):
+    p=subprocess.run(['/opt/agent-venv/bin/phykit','parsimony_informative_sites',path],capture_output=True,text=True,check=True)
+    # output tabs: count total percentage
+    parts=p.stdout.strip().split('\\t')
+    return float(parts[2]), int(parts[0]), int(parts[1])
+
+def extract(zipname, dest):
+    z=zipfile.ZipFile(zipname)
+    for n in z.namelist():
+        if n.endswith('.faa.mafft'):
+            data=z.read(n)
+            path=os.path.join(dest,os.path.basename(n))
+            with open(path,'wb') as f:f.write(data)
+    z.close()
+extract('inputs/scogs_animals.zip','tmp/scogs_a')
+extract('inputs/scogs_fungi.zip','tmp/scogs_f')
+for label,d in [('a','tmp/scogs_a'),('f','tmp/scogs_f')]:
+    vals=[]
+    for fn in sorted(os.listdir(d)):
+        if fn.endswith('.faa.mafft'):
+            pct,c,t=calc_pis(os.path.join(d,fn))
+            vals.append((fn,pct,c,t))
+    print(label, len(vals), 'mean pct', sum(v[1] for v in vals)/len(vals), 'minmax',min(v[1] for v in vals),max(v[1] for v in vals))
+    # save
+    globals()[label]=vals
+# Need same order maybe common files paired? First independent all
+pct_a=[v[1] for v in a]; pct_f=[v[1] for v in f]
+res=mannwhitneyu(pct_a,pct_f, alternative='two-sided', method='auto')
+print('scipy default auto', res)
+# R-like U = sum ranks group x - n*(n+1)/2? 
+import numpy as np
+x=np.array(pct_a); y=np.array(pct_f)
+# scipy U1 = stat
+U1=res.statistic; U2=len(x)*len(y)-U1
+print('U1 U2',U1,U2,'R W for x',U1, 'W y',U2)
+# method exact maybe
+for method in ['auto','exact','asymptotic']:
+    try:
+      r=mannwhitneyu(pct_a,pct_f, alternative='two-sided', method=method)
+      print(method, r)
+    except Exception as e: print(method,e)
+PY"

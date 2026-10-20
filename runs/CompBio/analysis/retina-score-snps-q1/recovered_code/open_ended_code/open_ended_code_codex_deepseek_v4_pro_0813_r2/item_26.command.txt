@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, pathlib, threading, time, struct, zlib, os
+url='https://zenodo.org/api/records/6330053/files/retina_models.zip/content'
+outdir=pathlib.Path('models/raw'); outdir.mkdir(parents=True, exist_ok=True)
+h5dir=pathlib.Path('models/h5'); h5dir.mkdir(parents=True, exist_ok=True)
+entries=[]
+# parse cd
+b=pathlib.Path('[REDACTED LOCAL PATH]').read_bytes(); pos=0
+while pos+46<=len(b):
+    vals=struct.unpack('<6H3L5H2L', b[pos+4:pos+46])
+    version_made, version_needed, flags, comp, mtime, mdate=vals[:6]
+    crc,csize,usize=vals[6:9]
+    fnlen,extralen,commentlen,diskstart,intattr=vals[9:14]
+    extattr,local_off=vals[14:16]
+    name=b[pos+46:pos+46+fnlen].decode('utf-8','replace')
+    if '/Rod.h5' in name and not name.startswith('__MACOSX'):
+        fold=name.split('/')[1]
+        start=local_off+30+fnlen+extralen
+        entries.append((fold,start,csize,usize,crc,name))
+    pos += 46+fnlen+extralen+commentlen
+print('entries', entries)
+def download(e):
+    fold,start,csize,usize,crc,name=e
+    raw=outdir/f'Rod_{fold}.raw'
+    if raw.exists() and raw.stat().st_size==csize:
+        print('exists',raw)
+        return raw,csize,usize,crc,name
+    req=urllib.request.Request(url, headers={'Range':f'bytes={start}-{start+csize-1}'})
+    with urllib.request.urlopen(req, timeout=120) as resp, open(raw,'wb') as f:
+        total=0
+        while True:
+            chunk=resp.read(1024*1024)
+            if not chunk: break
+            f.write(chunk); total+=len(chunk)
+            if total% (20*1024*1024) < len(chunk): print(fold, f'{total/1e6:.1f}/{csize/1e6:.1f} MB')
+    print('downloaded',fold,total)
+    return raw,csize,usize,crc,name
+threads=[]
+for e in entries:
+    t=threading.Thread(target=lambda e=e: (download(e), None), daemon=True); t.start(); threads.append(t)
+for t in threads: t.join()
+print('downloads complete')
+PY
+ls -lh models/raw"

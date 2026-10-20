@@ -1,0 +1,26 @@
+/usr/bin/bash -lc "tools/bin/python workflow/trace_step.py --stage successful_branch_selection --status success --tool 'workflow branch selection' --parameters '{\"selected_reference_index\":\"UCSC hg19.p13.plusMT.no_alt Bowtie2 index\",\"selected_aligner\":\"Bowtie2\",\"selected_alignment_output\":\"work/alignment/name_sorted.bam\",\"selected_filtered_output\":\"work/alignment/deduplicated.bam\",\"selected_peak_output\":\"work/peaks/SRR891269_peaks.narrowPeak\"}' --inputs '[\"work/qc/trimmed_R1.fastq.gz\",\"work/qc/trimmed_R2.fastq.gz\"]' --outputs '[\"work/alignment/deduplicated.bam\",\"work/peaks/SRR891269_peaks.narrowPeak\"]' --validation '{\"excluded_branches\":[\"de_novo_BWA_index\",\"BWA_alignment_high_memory\",\"BWA_alignment_low_memory\"],\"final_chain\":\"fastp->Bowtie2->samtools pair/MAPQ/mitochondrial filtering->samtools markdup->MACS3\"}' --chain successful; tools/bin/python workflow/trace_step.py --stage final_export --status success --tool 'cut -f1-3; method metadata creation' --parameters '{\"bed_columns\":[\"chromosome\",\"start\",\"end\"],\"preserve_order\":true,\"deduplicate\":false}' --inputs '[\"work/peaks/SRR891269_peaks.narrowPeak\"]' --outputs '[\"final_answer/peaks.bed\",\"final_answer/method.json\"]' --validation '{\"source_peak_records\":33797,\"exported_bed_records\":33797,\"record_count_preserved\":true,\"method_keys\":[\"aligner\",\"peak_caller\"]}' --chain successful; tools/bin/python - <<'PY'
+import json
+from pathlib import Path
+
+peak_source = Path('work/peaks/SRR891269_peaks.narrowPeak')
+bed_path = Path('final_answer/peaks.bed')
+method_path = Path('final_answer/method.json')
+
+source_rows = [line.rstrip('\\n').split('\\t')[:3] for line in peak_source.open()]
+bed_rows = [line.rstrip('\\n').split('\\t') for line in bed_path.open()]
+assert len(source_rows) == 33797 == len(bed_rows)
+assert bed_rows == source_rows, 'BED export differs from source order/content'
+for i, row in enumerate(bed_rows, 1):
+    assert len(row) == 3, (i, row)
+    start, end = int(row[1]), int(row[2])
+    assert 0 <= start < end, (i, row)
+method = json.loads(method_path.read_text())
+assert method == {'aligner': 'Bowtie2', 'peak_caller': 'MACS3'}
+trace_rows = [json.loads(line) for line in Path('run_trace/analysis_steps.jsonl').open()]
+required = {'stage','status','tool_or_command','effective_parameters','inputs','outputs','validation'}
+assert trace_rows and all(required <= row.keys() for row in trace_rows)
+final_files = sorted(p.name for p in Path('final_answer').iterdir() if p.is_file())
+assert final_files == ['method.json', 'peaks.bed'], final_files
+print(json.dumps({'bed_records':len(bed_rows),'bed_matches_all_source_records_in_order':True,'method':method,'trace_records':len(trace_rows),'final_files':final_files},indent=2))
+PY
+sha256sum final_answer/peaks.bed final_answer/method.json; tail -n 8 run_trace/analysis_steps.jsonl"

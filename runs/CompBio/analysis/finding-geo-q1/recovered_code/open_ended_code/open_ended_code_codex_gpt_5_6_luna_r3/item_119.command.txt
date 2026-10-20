@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import h5py,numpy as np,time
+src='GSM3578982.h5'; tar='finding.geo.q1.h5ad'
+t=time.time()
+with h5py.File(src,'r') as sf, h5py.File(tar,'r') as tf:
+ g=sf['output_genome2']; x=tf['X']
+ sb=[z.decode() for z in g['barcodes'][:]]; si={z:i for i,z in enumerate(sb)}
+ tb=[z.decode() for z in tf['obs']['_index'][:]]
+ gids=[z.decode() for z in g['genes'][:]]; tids=[z.decode() for z in tf['var']['_index'][:]]
+ gm={z:i for i,z in enumerate(gids)}; tm=np.array([gm[z] for z in tids],dtype=np.int64)
+ # target arrays
+ td=x['data'][:]; ti=x['indices'][:]; tp=x['indptr'][:]
+ sd=g['data']; siarr=g['indices']; sp=g['indptr']
+ mism=0; maxdiff=0; exsum=0; srcsums=[]; tarsums=[]; missing=0
+ # mapping target feature index -> source feature index; source source indices convert to target if present
+ rev=np.full(len(gids),-1,dtype=np.int32)
+ rev[tm]=np.arange(len(tm),dtype=np.int32)
+ first_m=None
+ for r,bc in enumerate(tb):
+  j=si[bc]
+  a,b=int(sp[j]),int(sp[j+1]); ids=siarr[a:b]; vals=sd[a:b]
+  srcsums.append(int(vals.sum())); tarsums.append(int(td[tp[r]:tp[r+1]].sum()))
+  # compare after removing extra source features; source h5 indices sorted
+  mask=rev[ids]>=0
+  mapped=rev[ids[mask]]
+  # target row indices sorted and should equal mapped
+  ta,tb2=int(tp[r]),int(tp[r+1]); tirow=ti[ta:tb2]; tdrow=td[ta:tb2]
+  if len(mapped)"'!=len(tirow) or not np.array_equal(mapped,tirow) or not np.array_equal(vals[mask],tdrow):
+   mism+=1
+   if first_m is None: first_m=(r,bc,len(mapped),len(tirow),mapped[:10],tirow[:10],vals[mask][:10],tdrow[:10])
+  exsum+=int(vals[~mask].sum())
+ print('"'target cell/source overlap and exact mismatching rows',len(tb),mism,'time',time.time()-t)
+ print('target sum',sum(tarsums),'source selected sum incl extras',sum(srcsums),'source extras sum',exsum)
+ print('sum diff per row range',min(np.array(srcsums)-np.array(tarsums)),max(np.array(srcsums)-np.array(tarsums)))
+ print('first mismatch',first_m)
+ print('source extra genes',[(i,gids[i]) for i in range(len(gids)) if rev[i]<0])
+PY"

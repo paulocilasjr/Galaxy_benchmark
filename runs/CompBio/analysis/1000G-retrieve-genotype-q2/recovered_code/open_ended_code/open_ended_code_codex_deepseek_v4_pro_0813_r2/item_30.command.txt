@@ -1,0 +1,64 @@
+/bin/bash -lc "cat > scripts/build_genotype_tsv.py <<'PY'
+import sys, os
+
+# load target positions (1-based)
+target=set()
+with open('data/snp151Common_chr1_biallelic.tsv') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>=2:
+            target.add(int(p[1]))
+
+# sample header and order
+header=open('data/raw_chr1_header.txt').read().rstrip('\\n').split('\\t')
+sample_order=header[9:]
+sorted_samples=sorted(sample_order)
+# for reordering just in case; likely identity
+sample_idx={s:i for i,s in enumerate(sample_order)}
+sorted_indices=[sample_idx[s] for s in sorted_samples]
+
+acgt=set('ACGT')
+
+def norm_gt(gt):
+    # gt is first colon-separated field
+    # Normalize any / or | and sort alleles
+    parts=gt.replace('|','/').split('/')
+    # If there are two alleles; strip potential trailing
+    if len(parts)==2:
+        a,b=parts
+        if a in ('0','1') and b in ('0','1'):
+            return '/'.join(sorted([a,b]))
+    # allow unphased exact already maybe covered
+    return './.'
+
+records=[]
+for line in sys.stdin:
+    if line.startswith('#'):
+        continue
+    fields=line.rstrip('\\n').split('\\t')
+    if len(fields) < 10:
+        continue
+    chrom=fields[0]; pos=int(fields[1]); ref=fields[3]; alt=fields[4]
+    if pos not in target:
+        continue
+    if ref not in acgt or alt not in acgt:
+        continue
+    # convert genotypes
+    gts=[]
+    for idx in sorted_indices:
+        val=fields[9+idx]
+        gt=val.split(':',1)[0]
+        gts.append(norm_gt(gt))
+    records.append((chrom,pos,ref,alt,gts))
+
+records.sort(key=lambda x:x[1])
+
+outpath='data/genotypes_chr1_common_top_peaks.tsv'
+with open(outpath,'w') as f:
+    f.write('CHROM\\tPOS\\tREF\\tALT\\t' + '\\t'.join(sorted_samples) + '\\n')
+    for chrom,pos,ref,alt,gts in records:
+        f.write(f'{chrom}\\t{pos}\\t{ref}\\t{alt}\\t' + '\\t'.join(gts) + '\\n')
+print(f'wrote {len(records)} variant lines to {outpath}', file=sys.stderr)
+PY
+# Test with one region first to verify script works
+VCFR='https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000G_2504_high_coverage/working/20201028_3202_raw_GT_with_annot/20201028_CCDG_14151_B01_GRM_WGS_2020-08-05_chr1.recalibrated_variants.vcf.gz'; head -1 data/top1000_chr1_regions.tsv > [REDACTED LOCAL PATH] bcftools view -H -R [REDACTED LOCAL PATH] \""'$VCFR" | python3 scripts/build_genotype_tsv.py; wc -l data/genotypes_chr1_common_top_peaks.tsv; head -1 data/genotypes_chr1_common_top_peaks.tsv | cut -c1-500; head -2 data/genotypes_chr1_common_top_peaks.tsv | cut -c1-500'

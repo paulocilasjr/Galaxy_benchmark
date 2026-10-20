@@ -1,0 +1,45 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp
+from scipy.sparse import issparse
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+X=a.X
+lib=np.asarray(X.sum(axis=1)).ravel(); med=np.median(lib)
+Xn=X.multiply(1.0/lib[:,None]).tocsr()*med
+Xn.data=np.log1p(Xn.data)
+sym=a.var.symbol.values
+sym_to_idx=pd.Series(np.arange(a.n_vars),index=sym)
+# marker sets
+sets={
+'cDC1':['CLEC9A','XCR1','BATF3','IRF8','CADM1','THBD','CLNK','WDFY4'],
+'cDC2':['CD1C','CLEC10A','FCER1A','CD1E','SIRPA','ITGAX','FCGR2B'],
+'pDC':['LILRA4','IL3RA','CLEC4C','IRF7','TCF4','GZMB','SPIB'],
+'DC_mature':['LAMP3','CCR7','FSCN1','CD83','CD40','IDO1','CD80','CD86'],
+'DC_general':['ITGAX','FLT3','HLA-DPA1','HLA-DPB1','HLA-DQA1','HLA-DQB1','HLA-DRA','CD74','CST3'],
+'Tcell':['CD3D','CD3E','CD3G','CD2','TRAC','TRBC1','CD4','CD8A','CD8B','NKG7'],
+'NK':['NKG7','GNLY','KLRD1','KLRB1','NCAM1','NCR1','FCGR3A','PRF1'],
+'Bcell':['CD19','MS4A1','CD79A','CD79B','BANK1','MZB1'],
+'myeloid':['LYZ','CD14','FCGR3A','CD68','CSF1R','ITGAM','MARCO','MRC1'],
+'Mast':['TPSAB1','TPSB2','CPA3','KIT','MS4A2'],
+'epithelial':['EPCAM','KRT18','KRT8','CDH1'],
+'LUAD':['NKX2-1','NAPSA','SFTPA1','SFTPB','SFTPC','AGER','SCGB1A1','SCGB3A2'],
+'LUSC_basal':['KRT5','KRT6A','KRT6B','KRT13','KRT14','KRT17','TP63','DSC3','DSG3','SOX2','SERPINB3','SERPINB4'],
+'prolif':['MKI67','TOP2A','PCNA','UBE2C','CENPF','BIRC5'],
+}
+# score function mean of selected genes
+def score(genes):
+    idx=[sym_to_idx[g] for g in genes if g in sym_to_idx.index]
+    return np.asarray(Xn[:,idx].mean(axis=1)).ravel()
+scores=pd.DataFrame({k:score(g) for k,g in sets.items()}, index=a.obs.index)
+scores['sampleID']=a.obs.sampleID.values
+for s in ['Patient_018','Patient_040']:
+    sub=scores[scores.sampleID==s].copy()
+    print('\\n',s,'n',len(sub))
+    print(sub.drop(columns='sampleID').describe().round(3).to_string())
+    for k in ['cDC1','cDC2','pDC','DC_mature','DC_general','Tcell','NK','Bcell','myeloid','Mast']:
+        # proportion cells above different thresholds
+        q=sub[k].quantile([.5,.7,.8,.9,.95,.99])
+        print(k,'quant',q.round(3).to_dict())
+    # top cells by DC_general
+    print('top DC general cells')
+    print(sub.nlargest(20,'DC_general')[['cDC1','cDC2','pDC','DC_mature','DC_general','Tcell','myeloid']].round(2).to_string())
+PY"

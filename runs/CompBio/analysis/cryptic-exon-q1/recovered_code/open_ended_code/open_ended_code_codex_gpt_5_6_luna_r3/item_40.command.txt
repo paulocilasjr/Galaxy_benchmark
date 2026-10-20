@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,pysam,collections
+ex={}
+with gzip.open('gencode.v47.annotation.gtf.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  a=line.rstrip().split('\\t')
+  if a[2]"'!='"'exon': continue
+  m=re.search(r'transcript_id \"(["'^"]+)"'"',a[8])
+  if m: ex.setdefault((a[0],m.group(1)),[]).append((int(a[3]),int(a[4])))
+known=set()
+for (c,t),xs in ex.items():
+ xs=sorted(set(xs))
+ for (a,b),(d,e) in zip(xs,xs[1:]):
+  if d>b: known.add((c,b,d))
+nov=collections.Counter(); allc=collections.Counter()
+with pysam.AlignmentFile('genome.sam') as sam:
+ for r in sam:
+  if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+  if not re.fullmatch(r'chr([1-9]|1[0-9]|2[0-2]|X|Y)',r.reference_name): continue
+  pos=r.reference_start
+  for op,n in r.cigartuples or []:
+   if op==3:
+    k=(r.reference_name,pos,pos+n+1); allc[k]+=1
+    if k not in known: nov[k]+=1
+    pos+=n
+   elif op in (0,2,7,8): pos+=n
+for k,n in nov.most_common(150):
+ print(n,*k,'intron_len',k[2]-k[1]-1)
+PY"

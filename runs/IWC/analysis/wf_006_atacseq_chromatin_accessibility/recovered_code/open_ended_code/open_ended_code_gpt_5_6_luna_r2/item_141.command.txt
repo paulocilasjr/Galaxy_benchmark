@@ -1,0 +1,28 @@
+/usr/bin/bash -lc 'export PATH="/opt/conda/bin:/workspace/atac_env/bin:$PATH"
+set -e
+printf '"'%s\\n' '--- deliverables ---'
+find /workspace/final_answer -maxdepth 1 -type f -printf '%f\\t%s bytes\\n' | sort
+python - <<'PY'
+import json
+from pathlib import Path
+p = Path(\"/workspace/final_answer/method.json\")
+obj = json.loads(p.read_text())
+assert set(obj) == {\"aligner\", \"peak_caller\"}
+assert obj[\"aligner\"] == \"BWA-MEM\"
+assert obj[\"peak_caller\"] == \"MACS2\"
+print(\"method_json_valid=1\")
+PY
+printf '%s\\n' '--- BED structure/ranges ---'
+awk -F '\\t' 'BEGIN{bad=0; n=0} NF "'!= 3 {bad++; next} {n++; if ($2 !~ /''^[0-9]+$/ || $3 !~ /''^[0-9]+$/ || $2 >= $3) bad++} END {printf "bed_records=%d bed_bad_records=%d'"\\n\",n,bad; exit (bad "'!= 0)}'"' /workspace/final_answer/peaks.bed
+printf '%s\\n' '--- source projection ---'
+cmp -s /workspace/final_answer/peaks.bed <(cut -f1-3 /tmp/atac_pipeline_srr891269_v3/macs2/SRR891269_peaks.narrowPeak)
+printf 'source_projection_match=1\\n'
+printf '%s\\n' '--- coordinate duplicates in source (not removed) ---'
+awk -F '\\t' '{k="'$1 FS $2 FS $3; c[k]++} END {dups=0; for (k in c) if (c[k]>1) {dups++; if (dups<=5) print c[k], k} printf "duplicate_coordinate_keys=%d'"\\n\",dups}' /tmp/atac_pipeline_srr891269_v3/macs2/SRR891269_peaks.narrowPeak
+printf '%s\\n' '--- final stats checks ---'
+test \""'$(awk '"'"'$1=="chrM"{print $3}'"' /tmp/atac_pipeline_srr891269_v3/final.idxstats)\" = 0
+test \""'$(awk '"'NR==1{print "'$1}'"' /tmp/atac_pipeline_srr891269_v3/final.flagstat)\" = 23000348
+test \""'$(awk '"'"'$1=="DUPLICATE" && $2=="TOTAL:"{print $3}'"' /tmp/atac_pipeline_srr891269_v3/markdup.stats)\" = 8307534
+printf 'final_bam_checks=1\\n'
+printf '%s\\n' '--- run trace ---'
+sed -n '1,200p' /workspace/run_trace/execution.log"

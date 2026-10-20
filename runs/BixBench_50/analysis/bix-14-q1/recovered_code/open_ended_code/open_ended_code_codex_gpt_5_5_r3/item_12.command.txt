@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+import re
+
+# status summary
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+header=rows[0]
+idx={h:i for i,h in enumerate(header) if h}
+status=[]
+for r in rows[1:]:
+    if r[idx['Sample ID']] is None: continue
+    status.append((str(int(r[idx['Sample ID']])), r[idx['Status']], r[idx['BLM Mutation Status']]))
+print('BLM status counts:', Counter(s[2] for s in status))
+print('clinical status counts:', Counter(s[1] for s in status))
+print('first 20:', status[:20])
+
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+file_ids={re.search(r'CHIP_(.+)\\.xlsx"'$'"', p.name).group(1): p for p in files}
+# extract numeric sample id before - for non SRR
+num_files={m.group(1):p for p in files if (m:=re.search(r'CHIP_(\\d+)-', p.name))}
+print('num sample files', len(num_files), 'srr files', len(files)-len(num_files), 'total', len(files))
+for blm in sorted(Counter(s[2] for s in status)):
+    ids=[sid for sid,_,b in status if b==blm]
+    print(blm, len(ids), 'with files', sum(sid in num_files for sid in ids), 'ids', ids[:30])
+
+# carrier variants unique annotations/effects in numeric carrier files
+carrier_ids=[sid for sid,_,b in status if b=='Carrier']
+ann=Counter(); eff=Counter(); nrows=0; vafnon=0; vaflt=0
+for sid in carrier_ids:
+    p=num_files.get(sid)
+    if not p: continue
+    wb=load_workbook(p, read_only=True, data_only=True)
+    ws=wb.active; ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True)
+    next(it); hdr=next(it)
+    col={h:i for i,h in enumerate(hdr) if h}
+    for r in it:
+        if not r or r[0] is None: continue
+        nrows+=1
+        ann[str(r[col['Sequence Ontology (Combined)']])]+=1
+        eff[str(r[col['Effect (Combined)']])]+=1
+        v=r[col['Variant Allele Freq']]
+        if v is not None:
+            vafnon+=1
+            try:
+                if float(v)<0.3: vaflt+=1
+            except: pass
+print('carrier rows', nrows, 'vaf non-null', vafnon, 'vaf<0.3', vaflt)
+print('annotations:', ann)
+print('effects:', eff)
+PY"

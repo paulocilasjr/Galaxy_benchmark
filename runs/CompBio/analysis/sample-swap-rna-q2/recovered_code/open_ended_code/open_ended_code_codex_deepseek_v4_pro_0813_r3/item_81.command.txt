@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re
+# Use corrected stable markers
+stab=pd.read_csv('refs/wheat_root_atlas/GRN_regulon_analysis/input/stability_and_specificity_info.csv', sep=';')
+ms=stab[(stab['Specificity']=='specific') & (stab['Stability']=='stable') & stab['is_Marker_of_Cluster'].notna()].copy()
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+cols=df.columns.tolist()
+exact_map={'1Epidermis':'epidermis','2Cortex':'cortex','3Meristems':'meristems','4ProvascularCells':'provascular','5Unknown':'root_cap','6Pericycle':'pericycle','7Epidermis':'epidermis','8RootHair':'root_hair','9Endodermis':'endodermis','10Xylem':'xylem','11Endodermis/Phloem':'root_cap','12DividingCells':'meristems','13Phloem':'phloem','14RootCap':'root_cap'}
+sets={ct:set() for ct in cols}
+for lab,bt in exact_map.items():
+ sets[bt].update(ms.loc[ms['is_Marker_of_Cluster'].str.contains(re.escape(lab), na=False),'Gene'].tolist())
+pres={ct:[g for g in genes if g in df.index] for ct,genes in sets.items()}
+# score each actual column against each marker set, using proportion max
+S=pd.DataFrame(index=cols,columns=cols,dtype=float)
+for true in cols:
+ mat=df.loc[pres[true]]
+ prop=mat.div(mat.max(axis=1),axis=0).fillna(0)
+ for col in cols:
+  S.loc[true,col]=prop[col].mean()
+print('score matrix rows=true markers, cols=actual columns')
+print(S.round(3))
+print('argmax per actual column')
+for col in cols:
+ print(col,'->',S[col].idxmax(), S[col].max().round(3), 'second', S[col].nlargest(2).index.tolist()[1], S[col].nlargest(2).iloc[1].round(3))
+print('argmax per marker set')
+for true in cols:
+ print(true,'->',S.loc[true].idxmax(), S.loc[true].max().round(3), 'second', S.loc[true].nlargest(2).index.tolist()[1], S.loc[true].nlargest(2).iloc[1].round(3))
+PY"

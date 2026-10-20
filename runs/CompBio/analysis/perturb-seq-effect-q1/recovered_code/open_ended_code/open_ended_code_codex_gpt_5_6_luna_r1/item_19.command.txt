@@ -1,0 +1,25 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.stats import ranksums, ttest_ind
+features=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','gene','type'])
+genes=features.gene.tolist(); X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float).T.toarray()
+calls=pd.read_csv('protospacer_calls_per_cell.csv'); ref=pd.read_csv('feature_reference.csv')
+mp=ref.set_index('id').target_gene_name; target=calls.feature_call.map(mp)
+Y=np.log1p(X/X.sum(1,keepdims=True)*1e4)
+ctrl=target.eq('Non-Targeting').values
+sig=genes[:20]; idx=[genes.index(g) for g in sig]
+print('gene\\tctrl_mean\\tSTAT1_n5\\tISG15_n50\\tISG15_delta\\tSTAT1_delta')
+for g,j in zip(sig,idx):
+ cm=Y[ctrl,j].mean(); a=Y[target.eq('STAT1').values,j]; b=Y[target.eq('ISG15').values,j]
+ print(f'{g}\\t{cm:.3f}\\t{a.mean():.3f}\\t{b.mean():.3f}\\t{b.mean()-cm:.3f}\\t{a.mean()-cm:.3f}')
+print('\\nper-cell score distributions')
+for t in ['Non-Targeting','STAT1','ISG15']:
+ z=Y[target.eq(t).values][:,idx].mean(1)
+ print(t,len(z),'mean',z.mean(),'median',np.median(z),'sd',z.std(ddof=1),'minmax',z.min(),z.max(),'q',np.percentile(z,[0,10,25,50,75,90,100]))
+print('\\nraw stats / fraction below control 1st percentile')
+cs=Y[ctrl][:,idx].mean(1)
+for t in ['STAT1','ISG15']:
+ z=Y[target.eq(t).values][:,idx].mean(1)
+ print(t,'fraction below ctrl min',np.mean(z<cs.min()),'below ctrl 5%',np.mean(z<np.percentile(cs,5)),'ranksum',ranksums(z,cs), 'ttest',ttest_ind(z,cs,equal_var=False))
+PY"

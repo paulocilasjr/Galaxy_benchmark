@@ -1,0 +1,30 @@
+/bin/bash -lc "cat > work/locate.py <<'PY'
+import struct,gzip,numpy as np,json
+f=open('work/hg38.2bit','rb')
+sig=f.read(4)
+endian='>' if struct.unpack('>I',sig)[0]==0x1a412743 else '<'
+def u():return struct.unpack(endian+'I',f.read(4))[0]
+version,nseq,res=u(),u(),u()
+index={}
+for i in range(nseq):
+ n=f.read(1)[0];name=f.read(n).decode();index[name]=u()
+lookup=np.array([''.join('TCAG'[(b>>s)&3] for s in [6,4,2,0]) for b in range(256)],dtype='S4')
+with gzip.open('phase.chain.q1.R1.fq.gz','rt') as g:next(g);seq=next(g).strip()
+rc=seq.translate(str.maketrans('ACGT','TGCA'))[::-1]
+queries=[(strand,i,s[i:i+40].encode()) for strand,s in [('+',seq),('-',rc)] for i in [0,50,100]]
+hits=[]
+for name,offset in index.items():
+ f.seek(offset);n=u();nb=u();ns=[u() for _ in range(nb)];nl=[u() for _ in range(nb)];mb=u();f.seek(8*mb+4,1)
+ s=lookup[np.frombuffer(f.read((n+3)//4),dtype=np.uint8)].tobytes()[:n]
+ for strand,i,q in queries:
+  pos=s.find(q)
+  while pos>=0:
+   print(name,strand,i,pos,flush=True);hits.append([name,strand,i,pos])
+   start=max(0,pos-3000);end=min(n,pos+3000)
+   out=s[start:end].decode()
+   with open('work/region.fa','w') as o:o.write('>'+name+':'+str(start)+'-'+str(end)+'\\n'+out+'\\n')
+   pos=s.find(q,pos+1)
+ if hits: break
+ print('Scanned',name,n,flush=True)
+json.dump(hits,open('work/locations.json','w'))
+PY"

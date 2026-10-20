@@ -1,0 +1,78 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, numpy as np, anndata as ad, pandas as pd, scipy.sparse as sp, time
+p='luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad'
+# common mapping
+our=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r')
+oursym=our.var['symbol'].values
+oursym_to_idx=pd.Series(np.arange(len(oursym)),index=oursym)
+with h5py.File(p,'r') as f:
+    fvar=f['var/_index'][:].astype(str)
+common_full=[]; common_our=[]
+for j,g in enumerate(fvar):
+    if g in oursym_to_idx.index:
+        common_full.append(j); common_our.append(oursym_to_idx[g])
+common_full=np.array(common_full,dtype=np.int64); common_our=np.array(common_our,dtype=np.int64)
+mask=np.zeros(len(fvar),dtype=bool); mask[common_full]=True
+print('common',len(common_full))
+# compute full hashes
+h=h5py.File(p,'r')
+g=h['layers/raw_counts']; indices=g['indices']; data=g['data']; indptr=g['indptr']; n=len(indptr)-1
+hashes=np.zeros((n,2),dtype=np.uint64)
+chunk=100000
+t=time.time()
+for start in range(0,n,chunk):
+    end=min(start+chunk,n)
+    idx=indices[indptr[start]:indptr[end]].astype(np.uint64)
+    val=data[indptr[start]:indptr[end]].astype(np.uint64)
+    valid=mask[indices[indptr[start]:indptr[end]]]
+    val=val.copy()
+    val[~valid]=0
+    h1=(idx*0x9E3779B185EBCA87 + val*0x100000001B3).astype(np.uint64)
+    h2=((idx<<32) "'^ (val*0xC2B2AE3D27D4EB4F) ''^ 0x165667B19E3779F9).astype(np.uint64)
+    # row reduce
+    rowcounts=np.diff(indptr[start:end+1])
+    sums=np.add.reduceat(h1, indptr[start:end]-indptr[start])
+    xors=np.bitwise_xor.reduceat(h2, indptr[start:end]-indptr[start])
+    # reduceat empty rows? indptr offsets valid; for empty rows need handle separately, but start offsets reduceat may produce entries repeated? Let'"'s check and fix.
+    hashes[start:end,0]=sums
+    hashes[start:end,1]=xors
+    if start%300000==0: print('full chunk',start,'elapsed',time.time()-t,flush=True)
+h.close()
+# compute our hashes
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+X=a.X[:,common_our]
+# map our columns to full col j for hash. Build j array length n_common
+full_col_for_our=np.arange(len(common_full),dtype=np.uint64)
+# build CSR full col per entry? X.tocoo
+Xc=X.tocsr()
+indptr_o=Xc.indptr; indices_o=Xc.indices.astype(np.uint64); data_o=Xc.data.astype(np.uint64)
+col_full=full_col_for_our[indices_o]
+h1o=(col_full*0x9E3779B185EBCA87 + data_o*0x100000001B3).astype(np.uint64)
+h2o=((col_full<<32) "'^ (data_o*0xC2B2AE3D27D4EB4F) ''^ 0x165667B19E3779F9).astype(np.uint64)
+sums_o=np.add.reduceat(h1o, indptr_o[:-1])
+xors_o=np.bitwise_xor.reduceat(h2o, indptr_o[:-1])
+our_hashes=np.stack([sums_o,xors_o],axis=1)
+print('"'our hashes',our_hashes.shape)
+# build dict full
+full_dict={}
+for i,(a,b) in enumerate(hashes):
+    full_dict.setdefault((int(a),int(b)),[]).append(i)
+print('dict built',len(full_dict),'time',time.time()-t)
+# check first 1000 ours matches
+for i in range(0,1000):
+    key=(int(our_hashes[i,0]),int(our_hashes[i,1]))
+    if key in full_dict:
+        print('MATCH',i,'full indices',full_dict[key][:5])
+        break
+else:
+    print('no matches in first 1000')
+# count total matches first 10000
+cnt=0; examples=[]
+for i in range(0,10000):
+    key=(int(our_hashes[i,0]),int(our_hashes[i,1]))
+    if key in full_dict:
+        cnt+=1
+        if len(examples)<5: examples.append((i,full_dict[key][0]))
+print('matches in first 10000',cnt,examples)
+PY
+python [REDACTED LOCAL PATH]"

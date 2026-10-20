@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,struct
+files={'scATAC_scRNA_integration.zip':58647071,'scATAC.zip':1634356338,'multiome.zip':2085358297}
+urlbase='https://zenodo.org/api/records/8313962/files/{}/content'
+for name,size in files.items():
+ start=size-2_000_000
+ req=urllib.request.Request(urlbase.format(name),headers={'Range':f'bytes={start}-{size-1}'})
+ with urllib.request.urlopen(req) as r:
+  data=r.read()
+  print(name,r.status,r.headers.get('Content-Range'),len(data))
+ open(name+'.tail','wb').write(data)
+ # zip64 eocd
+ p=data.rfind(b'PK\\x06\\x06')
+ if p>=0:
+  vals=struct.unpack_from('<4sQ2H2L4Q',data,p)
+  cdsize=vals[8]; cdoff=vals[9]; n=vals[7]
+ else:
+  p=data.rfind(b'PK\\x05\\x06'); vals=struct.unpack_from('<4s4H2LH',data,p); n=vals[4]; cdsize=vals[5]; cdoff=vals[6]
+ cdstart=cdoff-(size-len(data))
+ print('n',n,'cdsize',cdsize,'cdoff',cdoff,'tailstart',size-len(data),'cdstart',cdstart)
+ o=cdstart
+ for i in range(n):
+  if data[o:o+4]"'!=b'"'PK\\x01\\x02': print('bad at',i,o,data[o:o+4]);break
+  vals=struct.unpack_from('<4s6H3L5H2L',data,o)
+  _,vm,vn,flag,comp,tm,dt,crc,cs,us,nl,xl,cl,disk,ia,ea,off=vals
+  name2=data[o+46:o+46+nl].decode('utf8','replace')
+  # parse zip64
+  extra=data[o+46+nl:o+46+nl+xl]
+  if cs==0xffffffff or us==0xffffffff or off==0xffffffff:
+   e=0
+   while e+4<=len(extra):
+    et,el=struct.unpack_from('<HH',extra,e); ed=extra[e+4:e+4+el];e+=4+el
+    if et==1:
+     q=0
+     for label,v in [('us',us),('cs',cs),('off',off)]:
+      if v==0xffffffff:
+       nv=struct.unpack_from('<Q',ed,q)[0];q+=8
+       if label=='us':us=nv
+       elif label=='cs':cs=nv
+       else:off=nv
+  print(' ',name2,'csize',cs,'usize',us,'offset',off)
+  o+=46+nl+xl+cl
+PY"

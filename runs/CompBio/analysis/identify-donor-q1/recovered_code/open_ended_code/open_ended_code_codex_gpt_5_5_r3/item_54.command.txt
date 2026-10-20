@@ -1,0 +1,70 @@
+/bin/bash -lc "cat > score_nonref.py <<'PY'
+#"'!/usr/bin/env python3
+import subprocess, sys, math
+query_vcf='"'query.panelalleles.vcf.gz'
+panel_vcf='panel.chr22.30_35.5M.snps.vcf.gz'
+q={}; qgt={}; regions=[]
+cmd=['bcftools','query','-f','%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT\\t%DP\\t%PL\\t%AD]\\n',query_vcf]
+with subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True) as p:
+    for line in p.stdout:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<8: continue
+        chrom,pos,ref,alt,gt,dp_s,pl_s,ad=parts[:8]
+        gt=gt.replace('|','/')
+        if gt in ('0/0','./.','.') or pl_s in ('','.'): continue
+        try:
+            dp=int(dp_s) if dp_s"'!='"'.' else 0
+            pls=[int(x) for x in pl_s.split(',')[:3]]
+        except ValueError:
+            continue
+        if dp < 2 or len(pls)"'!=3: continue
+        m=min(pls)
+        pls=[min(x-m,200) for x in pls]
+        key=(chrom,int(pos),ref,alt)
+        q[key]=tuple(pls); qgt[key]=gt; regions.append((chrom,int(pos)))
+    if p.wait(): sys.exit(1)
+with open('"'query_nonref.regions','w') as out:
+    for chrom,pos in regions:
+        out.write(f'{chrom}\\t{pos}\\t{pos}\\n')
+print('query_nonref_sites',len(q),file=sys.stderr)
+
+samples=subprocess.check_output(['bcftools','query','-l',panel_vcf],text=True).splitlines()
+n=len(samples)
+scores=[0]*n; sites=[0]*n; exact=[0]*n; share=[0]*n
+
+def dosage(gt):
+    gt=gt.split(':',1)[0].replace('|','/')
+    if gt in ('.','./.'): return None
+    a=gt.split('/')
+    if len(a)"'!=2 or '"'.' in a: return None
+    try: return int(a[0])+int(a[1])
+    except ValueError: return None
+fmt='%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT]\\n'
+cmd=['bcftools','query','-R','query_nonref.regions','-f',fmt,panel_vcf]
+used=0
+with subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1024*1024) as p:
+    for line in p.stdout:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<5: continue
+        key=(parts[0],int(parts[1]),parts[2],parts[3])
+        pls=q.get(key)
+        if pls is None: continue
+        used += 1
+        qd=dosage(qgt[key])
+        for i,gt in enumerate(parts[4:]):
+            d=dosage(gt)
+            if d is None or d>2: continue
+            scores[i] += pls[d]
+            sites[i] += 1
+            if d == qd: exact[i] += 1
+            if d > 0: share[i] += 1
+    if p.wait(): sys.exit(1)
+print('used_panel_records',used,file=sys.stderr)
+rank=sorted(range(n), key=lambda i:(scores[i]/sites[i] if sites[i] else math.inf, scores[i], -exact[i], -share[i]))
+print('rank\\tsample\\tavgPL\\tscore\\tsites\\texact_dosage\\tpanel_nonref_at_query_nonref')
+for r,i in enumerate(rank[:100],1):
+    avg=scores[i]/sites[i] if sites[i] else float('inf')
+    print(f'{r}\\t{samples[i]}\\t{avg:.6f}\\t{scores[i]}\\t{sites[i]}\\t{exact[i]}\\t{share[i]}')
+PY
+python score_nonref.py > nonref_scores.tsv
+head -n 30 nonref_scores.tsv"

@@ -1,0 +1,71 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) {
+  x <- readRDS(f)
+  ld <- attr(x, 'listData')
+  data.frame(gene=attr(x,'rownames'), baseMean=ld"'$baseMean, log2FoldChange=ld$log2FoldChange,
+             pvalue=ld$pvalue, padj=ld$padj, stringsAsFactors=FALSE)
+}
+files <- c('"'97'='inputs/res_1vs97.rds','98'='inputs/res_1vs98.rds','99'='inputs/res_1vs99.rds')
+res <- lapply(files, read_res)
+# Fetch current KEGG membership for P. aeruginosa PA14 (pau)
+link <- read.table('https://rest.kegg.jp/link/pathway/pau', sep='\\t', stringsAsFactors=FALSE, col.names=c('gene','path'))
+link"'$gene <- sub('"'"'^pau:'"', '', link"'$gene)
+link$path <- sub('"'"'^path:'"', '', link"'$path)
+path_names <- read.table('"'https://rest.kegg.jp/list/pathway/pau', sep='\\t', quote='', stringsAsFactors=FALSE, col.names=c('path','name'))
+term2genes_all <- split(link"'$gene, link$path)
+ora <- function(genes, universe, minGS=1, maxGS=Inf) {
+  universe <- intersect(unique(universe), unique(link$gene))
+  genes <- intersect(unique(genes), universe)
+  t2g <- lapply(term2genes_all, function(g) intersect(unique(g), universe))
+  sizes <- lengths(t2g)
+  keep <- sizes >= minGS & sizes <= maxGS
+  t2g <- t2g[keep]
+  N <- length(universe); n <- length(genes)
+  out <- data.frame(path=names(t2g), M=lengths(t2g), k=integer(length(t2g)), pvalue=NA_real_)
+  for (i in seq_along(t2g)) {
+    k <- length(intersect(genes, t2g[[i]]))
+    out$k[i] <- k
+    out$pvalue[i] <- if (k > 0) phyper(k-1, out$M[i], N-out$M[i], n, lower.tail=FALSE) else NA_real_
+  }
+  # clusterProfiler-style: only terms with hits are tested/adjusted/reported
+  out <- out[!is.na(out$pvalue),]
+  out$padj <- p.adjust(out$pvalue, method='"'BH')
+  out"'$name <- path_names$name[match(out$path, path_names$path)]
+  out[order(out$padj, out$pvalue),]
+}
+count_intersections <- function(alpha=0.05, fg_rule=c('"'lfc','padj05','padj10'), minGS=1, maxGS=Inf) {
+  fg_rule <- match.arg(fg_rule)
+  universe <- Reduce(intersect, lapply(res, "'`[[`, '"'gene'))
+  sigsets <- list(up=list(), down=list())
+  fg_counts <- c()
+  sig_counts <- c()
+  for (strain in names(res)) {
+    d <- res[[strain]]
+    if (fg_rule == 'lfc') filt <- rep(TRUE, nrow(d))
+    if (fg_rule == 'padj05') filt <- "'!is.na(d$padj) & d$padj < 0.05
+    if (fg_rule == '"'padj10') filt <- "'!is.na(d$padj) & d$padj < 0.1
+    for (dir in c('"'up','down')) {
+      genes <- d"'$gene[filt & if (dir=='"'up') d"'$log2FoldChange > 1.5 else d$log2FoldChange < -1.5]
+      er <- ora(genes, universe, minGS=minGS, maxGS=maxGS)
+      sig <- er$path[er$padj < alpha]
+      sigsets[[dir]][[strain]] <- sig
+      fg_counts[paste(strain,dir,sep='"'_')] <- length(intersect(genes, link"'$gene))
+      sig_counts[paste(strain,dir,sep='"'_')] <- length(sig)
+    }
+  }
+  int_up <- Reduce(intersect, sigsets"'$up)
+  int_down <- Reduce(intersect, sigsets$down)
+  list(total=length(union(int_up, int_down)), up=sort(int_up), down=sort(int_down), fg=fg_counts, sig=sig_counts)
+}
+variants <- expand.grid(alpha=c(0.05,0.1), fg_rule=c('"'lfc','padj05','padj10'), minmax=c('all','cp'), stringsAsFactors=FALSE)
+for (i in seq_len(nrow(variants))) {
+  v <- variants[i,]
+  mm <- if (v"'$minmax=='"'cp') c(10,500) else c(1,Inf)
+  ans <- count_intersections(v"'$alpha, v$fg_rule, mm[1], mm[2])
+  cat('"'\\nVAR', paste(names(v), v, sep='=', collapse=' '), 'total', ans"'$total, '"'up', length(ans"'$up), '"'down', length(ans"'$down), '"'\\n')
+  cat('fg:', paste(names(ans"'$fg), ans$fg, sep='"'=', collapse=' '), '\\n')
+  cat('sig:', paste(names(ans"'$sig), ans$sig, sep='"'=', collapse=' '), '\\n')
+  cat('up_paths:', paste(ans"'$up, collapse='"','), '\\n')
+  cat('down_paths:', paste(ans"'$down, collapse='"','), '\\n')
+}
+RS"

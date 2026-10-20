@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter
+from math import log
+files={'mix':'exogenous.mix.reads.q1.mix.fq','exo':'exogenous.mix.reads.q1.exo.fq','endo':'exogenous.mix.reads.q1.endo.fq'}
+def readseqs(fn):
+    with open(fn) as f:
+        while True:
+            h=f.readline()
+            if not h: break
+            s=f.readline().strip(); f.readline(); f.readline()
+            yield s
+seqs={k:list(readseqs(v)) for k,v in files.items()}
+
+def kcnt(ss,k):
+    c=Counter()
+    for s in ss:
+        for i in range(len(s)-k+1):
+            c[s[i:i+k]] += 1
+    return c
+for k in [10,12,15,20,25,31,40,50]:
+    C={name:kcnt(ss,k) for name,ss in seqs.items()}
+    # normalize to probabilities over kmer tokens
+    keys=set(C['mix'])|set(C['exo'])|set(C['endo'])
+    mt=sum(C['mix'].values()); et=sum(C['exo'].values()); dt=sum(C['endo'].values())
+    M={x:C['mix'][x]/mt for x in keys}; E={x:C['exo'][x]/et for x in keys}; D={x:C['endo'][x]/dt for x in keys}
+    # least squares p = dot(M-D,E-D)/||E-D||"'^2
+    num=sum((M[x]-D[x])*(E[x]-D[x]) for x in keys)
+    den=sum((E[x]-D[x])**2 for x in keys)
+    p=num/den if den else float('"'nan')
+    # bounded grid likelihood with pseudo count; aggregate kmer counts approximate
+    print('k',k,'unique', {n:len(C[n]) for n in C}, 'overlap exo-endo', len(set(C['exo'])&set(C['endo'])), 'LS p',p)
+PY"

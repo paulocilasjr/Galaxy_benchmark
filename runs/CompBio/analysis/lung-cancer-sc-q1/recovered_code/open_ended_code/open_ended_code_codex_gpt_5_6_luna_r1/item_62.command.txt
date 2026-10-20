@@ -1,0 +1,19 @@
+/bin/bash -lc "python -u - <<'PY'
+import anndata as ad,numpy as np,h5py
+A=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r'); sy=np.asarray(A.var['symbol'].astype(str))
+imm=['PTPRC','CD3D','CD3E','TRBC1','TRBC2','CD247','IL7R','CCR7','LTB','CD79A','MS4A1','CD37','CD74','HLA-DRA','HLA-DPA1','HLA-DPB1','HLA-DQB1','CD68','LST1','TYROBP','FCER1A','CD1C','CLEC10A','CLEC9A','CST3','LYZ','FCER1G','CTSS','AIF1','LGALS3','CSTA','FCGR3A','S100A8','S100A9','NKG7','GNLY','KLRD1','GZMB','GZMH','PRF1','FOXP3','MKI67','TRAC','MS4A1','CD8A','CD8B','MALAT1']
+bs=['KRT5','KRT14','KRT17','TP63','SOX2','KRT6A','KRT13','KRT15','KRT16','S100A2','S100A7','SFN','CLCA2','TRIM29','DSC3','DSG3','SERPINB13','GPC1','FSCN1','GPNMB','HOXA1','FGFBP1','PERP','SLC6A8'];ls=['NAPSA','NKX2-1','SFTPB','SFTPA1','SFTPA2','SFTPC','SFTPD','SCGB1A1','SCGB3A2','AQP5','MUC1','WFDC2','FOLR1','SLC34A2','EPCAM','KRT8','KRT18','KRT19'];epi=['EPCAM','KRT8','KRT18','KRT19','KRT5','KRT14','KRT17','KRT6A','KRT13','KRT15','KRT16','MUC1','SFN']
+gs=list(dict.fromkeys(imm+bs+ls+epi));idx=[int(np.flatnonzero(sy==g)[0]) for g in gs];mi={g:i for i,g in enumerate(gs)};X=A.X[:,idx].toarray().astype(np.float32)
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ ip=np.asarray(f['X/indptr']);data=f['X/data'];rows=np.diff(ip);tot=np.zeros(len(rows),np.int64)
+ for st in range(0,len(rows),10000):
+  en=min(len(rows),st+10000);a=int(ip[st]);b=int(ip[en]);nz=np.flatnonzero(rows[st:en]);tot[st:en][nz]=np.add.reduceat(np.asarray(data[a:b],np.int64),ip[st:en][nz]-a,dtype=np.int64)
+Z=np.log1p(X/tot[:,None]*1e4);I=Z[:,[mi[g] for g in imm]].mean(1);B=Z[:,[mi[g] for g in bs]].mean(1);L=Z[:,[mi[g] for g in ls]].mean(1);E=Z[:,[mi[g] for g in epi]].mean(1);s=np.asarray(A.obs['sampleID'].astype(str))
+for threshold in [0,.02,.05,.1,.2,.3,.4,.5,.7,1]:
+ # immune score >= threshold, but score=0 means no markers
+ im=I>=threshold; print('I>=',threshold,int(im.sum()),'non',int((~im).sum()),'pct basal21k',round(100*21100/(~im).sum(),2))
+print('I quant',np.quantile(I,[0,.25,.5,.75,.9,.95,.99,1]))
+# count marker-defined immune, requiring lineage markers
+line=(X[:,[mi[g] for g in ['PTPRC','CD3D','CD3E','TRBC1','CD79A','MS4A1','CD68','LST1','TYROBP','LYZ','FCER1A','CD1C','CLEC10A','CLEC9A','NKG7','GNLY','FCGR3A']]].sum(1)>0)
+print('any lineage marker',line.sum(),'non',(~line).sum())
+PY"

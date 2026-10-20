@@ -1,0 +1,53 @@
+/bin/bash -c "python3 - <<'EOF'
+import json, os, numpy as np
+from Bio import SeqIO
+from scipy.stats import mannwhitneyu, fisher_exact
+from sklearn.metrics import roc_auc_score
+motifs=json.load(open('candidate_motifs.json'))
+bg=np.array([0.295,0.205,0.205,0.295])
+matrices={}
+for tf,m in motifs.items():
+    pfm=m['pfm']; cols=len(pfm['A'])
+    counts=np.array([[pfm[b][i] for i in range(cols)] for b in 'ACGT'], dtype=float)
+    counts += 0.01
+    probs=counts/counts.sum(axis=0, keepdims=True)
+    matrices[tf]=np.log2(probs/bg[:,None])
+table=bytes.maketrans(b'ACGT', b'\\x00\\x01\\x02\\x03')
+def max_scores(path):
+    seqs=[str(rec.seq).upper().encode('ascii') for rec in SeqIO.parse(path,'fasta')]
+    out={tf:np.full(len(seqs), -np.inf) for tf in matrices}
+    for tf,W in matrices.items():
+        L=W.shape[1]; maxs=np.full(len(seqs), -np.inf)
+        for i,s in enumerate(seqs):
+            if len(s)<L: continue
+            codes=np.array(np.frombuffer(s.translate(table), dtype=np.uint8), copy=True)
+            bad=codes>3; codes[bad]=0
+            windows=np.lib.stride_tricks.sliding_window_view(codes,L)
+            scores=W[windows, np.arange(L)].sum(axis=1)
+            if np.any(bad):
+                badwin=np.any(np.lib.stride_tricks.sliding_window_view(bad,L), axis=1)
+                scores=np.where(badwin,-np.inf,scores)
+            maxs[i]=scores.max(initial=-np.inf)
+        out[tf]=maxs
+    return out
+for k in [500,1000,2000,5000]:
+    G=max_scores(f'matched_g{k}.fa'); B=max_scores(f'gc_len_bg{k}.fa')
+    y=np.r_[np.ones(len(G['FOXA1'])), np.zeros(len(B['FOXA1']))]
+    print('\\n=== k',k,'g',len(G['FOXA1']),'bg',len(B['FOXA1']),'===')
+    rows=[]
+    for tf in motifs:
+        x=np.r_[G[tf],B[tf]]
+        auc=roc_auc_score(y,x) if len(np.unique(x))>1 else 0.5
+        p=mannwhitneyu(G[tf],B[tf], alternative='greater').pvalue
+        rows.append((tf,auc,p,np.mean(G[tf]),np.mean(B[tf])))
+    rows.sort(key=lambda r:-r[1])
+    for tf,auc,p,mg,mb in rows:
+        print(f'{tf:8s} AUC={auc:.4f} p={p:.3g} mean_g={mg:.3f} mean_bg={mb:.3f}')
+    print(' Fisher threshold 95% bg:')
+    for tf in motifs:
+        th=np.quantile(B[tf],0.95)
+        a=(G[tf]>=th).sum(); b=len(G[tf])-a
+        c=(B[tf]>=th).sum(); d=len(B[tf])-c
+        orr,p=fisher_exact([[a,b],[c,d]], alternative='greater')
+        print(f'{tf:8s} g {a}/{len(G[tf])} bg {c}/{len(B[tf])} OR={orr:.2f} p={p:.3g}')
+EOF"

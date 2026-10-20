@@ -1,0 +1,23 @@
+/bin/bash -lc "PYTHONPATH=./pydeps python - <<'PY'
+import pandas as pd
+m=pd.read_csv('site_meta.csv',low_memory=False)
+# sample IDs from h5ad known derive by counts? hardcode mapping via cell barcode prefixes/size
+import h5py,numpy as np
+with h5py.File('lung.cancer.sc.h5ad','r') as f:
+ idx=f['obs/_index'][:].astype(str); codes=f['obs/sampleID/codes'][:]; cats=f['obs/sampleID/categories'][:].astype(str)
+site_sets={s:set(sub['Cells'].astype(str).str.rsplit('_',n=1).str[-1]) for s,sub in m.groupby('SampleID',sort=False)}
+mp={}
+for i,cat in enumerate(cats):
+ su={v.split('_',2)[2] for v in idx[codes==i]}
+ cand=[s for s,ss in site_sets.items() if len(su&ss)==len(su) and len(ss)==len(su)]
+ mp[cat]=cand[0]
+sub=m[m.SampleID.isin(mp.values())]
+# all nonimmune labels as source
+nonlabels=['Basal','ATII','Epi','Cilia','Club','EC','Fib','NE']
+print(sub[sub.CellName.isin(nonlabels)].groupby(['Disease','CellName']).size().unstack(fill_value=0).to_string())
+print(sub[sub.CellName.isin(nonlabels)].groupby('Disease').size())
+# full source set counts
+print('\\nfull site nonimm by Disease:')
+print(m[m.CellName.isin(nonlabels)].groupby(['Disease','CellName']).size().unstack(fill_value=0).to_string())
+print(m[m.CellName.isin(nonlabels)].groupby('Disease').size())
+PY"

@@ -1,0 +1,63 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b598b2d8d9ef99dd88",
+  "history_id": "bbd44e69cb8906b5769338530e0bd610",
+  "tool_id": "codex_cd14_gene_stats_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-03T00:12:12.674896",
+  "update_time": "2026-08-03T00:21:00.180456",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > job.py <<'PY'\nimport csv\nimport sys\nfrom pathlib import Path\n\nimport numpy as np\n\ncounts_path = Path(sys.argv[1])\ngene_meta_path = Path(sys.argv[2])\nsample_meta_path = Path(sys.argv[3])\n\nwith sample_meta_path.open(\"r\", newline=\"\") as fh:\n    sample_reader = csv.DictReader(fh)\n    required = {\"sample\", \"celltype\"}\n    if not required.issubset(set(sample_reader.fieldnames or [])):\n        raise ValueError(\"Sample metadata lacks sample/celltype columns\")\n    cd14_samples = [\n        row[\"sample\"]\n        for row in sample_reader\n        if row.get(\"celltype\") == \"CD14\"\n    ]\nif not cd14_samples:\n    raise ValueError(\"No CD14 samples found\")\n\ngene_meta = {}\nwith gene_meta_path.open(\"r\", newline=\"\") as fh:\n    gene_reader = csv.DictReader(fh)\n    required = {\"Geneid\", \"Length\", \"gene_biotype\"}\n    if not required.issubset(set(gene_reader.fieldnames or [])):\n        raise ValueError(\"Gene metadata lacks Geneid/Length/gene_biotype columns\")\n    for row in gene_reader:\n        gene_id = row[\"Geneid\"]\n        if not gene_id:\n            raise ValueError(\"Blank Geneid in gene metadata\")\n        if gene_id in gene_meta:\n            raise ValueError(\"Duplicate Geneid in gene metadata: \" + gene_id)\n        gene_meta[gene_id] = (\n            int(float(row[\"Length\"])),\n            row[\"gene_biotype\"],\n        )\n\nkept = 0\nseen_counts = set()\nwith counts_path.open(\"r\", newline=\"\") as fh:\n    count_reader = csv.reader(fh)\n    header = next(count_reader)\n    if len(header) < 2:\n        raise ValueError(\"Count matrix has no sample columns\")\n    count_samples = header[1:]\n    if len(set(count_samples)) != len(count_samples):\n        raise ValueError(\"Duplicate sample names in count matrix header\")\n    sample_to_col = {sample: idx + 1 for idx, sample in enumerate(count_samples)}\n    missing = [sample for sample in cd14_samples if sample not in sample_to_col]\n    if missing:\n        raise ValueError(\"CD14 samples missing from count matrix: \" + \",\".join(missing[:5]))\n    selected_cols = [sample_to_col[sample] for sample in cd14_samples]\n\n    with Path(\"gene_lengths.tsv\").open(\"w\") as length_out, Path(\"gene_means.tsv\").open(\"w\") as mean_out:\n        length_out.write(\"gene_id\\tgene_length\\n\")\n        mean_out.write(\"gene_id\\tmean_expression\\n\")\n        for row in count_reader:\n            if not row:\n                continue\n            gene_id = row[0]\n            if gene_id in seen_counts:\n                raise ValueError(\"Duplicate gene in count matrix: \" + gene_id)\n            seen_counts.add(gene_id)\n            meta = gene_meta.get(gene_id)\n            if meta is None:\n                raise ValueError(\"Count gene missing from gene metadata: \" + gene_id)\n            length, biotype = meta\n            if biotype != \"protein_coding\":\n                continue\n            if len(row) != len(header):\n                raise ValueError(\"Count row has wrong number of columns for \" + gene_id)\n            values = np.fromiter(\n                (row[col] for col in selected_cols),\n                dtype=np.float64,\n                count=len(selected_cols),\n            )\n            total_counts = np.sum(values, dtype=np.float64)\n            if total_counts < 10.0:\n                continue\n            mean_expression = np.mean(values, dtype=np.float64)\n            length_out.write(gene_id + \"\\t\" + str(length) + \"\\n\")\n            mean_out.write(\n                gene_id + \"\\t\" + format(float(mean_expression), \".17g\") + \"\\n\"\n            )\n            kept += 1\n\nif kept < 3:\n    raise ValueError(\"Fewer than three genes passed the filter\")\nprint(\"CD14 samples:\", len(cd14_samples), file=sys.stderr)\nprint(\"Protein-coding genes passing total-count filter:\", kept, file=sys.stderr)\n\nPY\npython job.py \"/jetstream2/scratch/main/jobs/78873971/inputs/dataset_1dd625a3-b9ea-4bc6-b420-7175061e40ac.dat\" \"/jetstream2/scratch/main/jobs/78873971/inputs/dataset_35b40e1a-a815-457e-af97-cd387a73f7f1.dat\" \"/jetstream2/scratch/main/jobs/78873971/inputs/dataset_19d6c629-740f-4bbf-8cce-96ec08fb40c9.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "counts": {
+      "id": "f9cad7b01a472135d692961a5a991016",
+      "src": "hda",
+      "uuid": "1dd625a3-b9ea-4bc6-b420-7175061e40ac"
+    },
+    "gene_meta": {
+      "id": "f9cad7b01a47213588ed5500209ce4b9",
+      "src": "hda",
+      "uuid": "35b40e1a-a815-457e-af97-cd387a73f7f1"
+    },
+    "sample_meta": {
+      "id": "f9cad7b01a472135007f26e3bc93af52",
+      "src": "hda",
+      "uuid": "19d6c629-740f-4bbf-8cce-96ec08fb40c9"
+    }
+  },
+  "outputs": {
+    "gene_lengths": {
+      "id": "f9cad7b01a472135a5083f817924470c",
+      "src": "hda",
+      "uuid": "52633433-cf54-4430-b06b-f06f180dc434"
+    },
+    "gene_means": {
+      "id": "f9cad7b01a472135f897ea61a71e09bc",
+      "src": "hda",
+      "uuid": "40b203f2-7220-4e49-a9fc-1421ec27ca1d"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "CD14 samples: 132\nProtein-coding genes passing total-count filter: 16096\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "CD14 samples: 132\nProtein-coding genes passing total-count filter: 16096\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

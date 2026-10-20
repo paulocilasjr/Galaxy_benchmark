@@ -1,0 +1,64 @@
+/bin/bash -c "python3 - <<'PY'
+# Use previously parser quickly from scratch maybe just save values from zip with our parser
+import zipfile, statistics, math, re
+
+def parse_newick(s):
+    s=s.strip().rstrip(';')
+    tokens=[]; i=0
+    while i<len(s):
+        c=s[i]
+        if c in '(),:': tokens.append(c); i+=1
+        elif c.isspace(): i+=1
+        else:
+            j=i
+            while j<len(s) and s[j] not in '(),: \\t\\n': j+=1
+            tokens.append(s[i:j]); i=j
+    pos=0
+    def parse_node():
+        nonlocal pos
+        children=[]
+        label=''; length=None
+        if tokens[pos]=='(':
+            pos+=1
+            while True:
+                children.append(parse_node())
+                if pos<len(tokens) and tokens[pos]==',': pos+=1
+                else: break
+            if pos<len(tokens) and tokens[pos]==')': pos+=1
+            else: raise ValueError('missing )')
+            if pos<len(tokens) and tokens[pos] not in [':',',',')',';']:
+                label=tokens[pos]; pos+=1
+        else:
+            label=tokens[pos]; pos+=1
+        if pos<len(tokens) and tokens[pos]==':':
+            pos+=1
+            length=float(tokens[pos]); pos+=1
+        return {'children':children,'length':length}
+    return parse_node()
+
+def tness(s):
+    root=parse_newick(s)
+    total=0.; internal=0.
+    def rec(node):
+        nonlocal total,internal
+        is_leaf=not node['children']
+        if node is not root:
+            bl=node['length'] if node['length'] is not None else 0.0
+            total+=bl
+            if not is_leaf: internal+=bl
+        for ch in node['children']: rec(ch)
+    rec(root)
+    return internal/total if total else 0.
+
+for zname in ['scogs_animals.zip','scogs_fungi.zip']:
+    vals=[]
+    with zipfile.ZipFile('/workspace/inputs/'+zname) as z:
+        for n in [n for n in z.namelist() if n.endswith('.treefile')]:
+            vals.append(tness(z.read(n).decode()))
+    r4=[round(v,4) for v in vals]
+    print(zname)
+    print('full median',repr(statistics.median(vals)))
+    print('r4 median',repr(statistics.median(r4)))
+    print('full sorted around median', sorted(vals)[(len(vals)-1)//2:(len(vals)+2)//2+2])
+    print('r4 sorted around median', sorted(r4)[(len(vals)-1)//2:(len(vals)+2)//2+2])
+PY"

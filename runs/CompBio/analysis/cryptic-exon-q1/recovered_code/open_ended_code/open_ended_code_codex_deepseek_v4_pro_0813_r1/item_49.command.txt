@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, re, collections
+rows=[]
+for line in subprocess.Popen(['samtools','view','-F','4','cand_aln.bam'],stdout=subprocess.PIPE,text=True).stdout:
+    f=line.split('\\t')
+    if len(f)<6: continue
+    flag=int(f[1]); mapq=int(f[4]); cigar=f[5]
+    if flag & 0x900: continue
+    if mapq<10: continue
+    Ns=re.findall(r'(\\d+)N', cigar)
+    if len(Ns)>=2:
+        rname=f[2]; pos=int(f[3]);
+        m=re.match(r'"'^([''^|]+)'"\\|(["'^:]+):('"\\d+)-(\\d+)"'$'"',rname)
+        if m:
+            gene=m.group(1); ref_start=int(m.group(3))
+            # compute N intervals with +1 offset
+            left=0; intervals=[]; ops=re.findall(r'(\\d+)([MIDNSHP=X])',cigar)
+            for n,op in ops:
+                n=int(n)
+                if op=='N':
+                    gs=ref_start+1+(pos-1)+left
+                    intervals.append((gs,gs+n-1,n))
+                    left+=n
+                elif op in 'MDN=X': left+=n
+            rows.append((gene,rname,pos,mapq,cigar,intervals))
+print('reads with >=2 Ns:',len(rows))
+for row in rows[:200]:
+    print(row)
+# summarize genes
+cnt=collections.Counter(r[0] for r in rows)
+print('genes',cnt.most_common(30))
+PY"

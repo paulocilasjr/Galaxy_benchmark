@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter,defaultdict
+from math import log
+comp=str.maketrans('ACGT','TGCA')
+def rc(s): return s.translate(comp)[::-1]
+def can(s):
+    r=rc(s); return min(s,r)
+def readseqs(fn):
+    with open(fn) as f:
+        while True:
+            h=f.readline()
+            if not h: break
+            s=f.readline().strip(); f.readline(); f.readline()
+            yield s
+seqs={n:list(readseqs(f)) for n,f in {'mix':'exogenous.mix.reads.q1.mix.fq','exo':'exogenous.mix.reads.q1.exo.fq','endo':'exogenous.mix.reads.q1.endo.fq'}.items()}
+
+def read_kmers(s,k): return [can(s[i:i+k]) for i in range(len(s)-k+1)]
+for k in [15,20,25,31]:
+    ex=Counter(); en=Counter()
+    for s in seqs['exo']: ex.update(read_kmers(s,k))
+    for s in seqs['endo']: en.update(read_kmers(s,k))
+    keys=set(ex)|set(en)
+    V=len(keys); Tex=sum(ex.values()); Ten=sum(en.values())
+    print('k',k)
+    for alpha in [0.01,0.1,1.0,10.0]:
+        # probability for a read under source = product smoothed kmer probs, scaled logs
+        vals=[]
+        for s in seqs['mix']:
+            km=read_kmers(s,k)
+            le=sum(log((ex[x]+alpha)/(Tex+alpha*V)) for x in km)
+            ln=sum(log((en[x]+alpha)/(Ten+alpha*V)) for x in km)
+            vals.append((le,ln))
+        best=None
+        for pi_i in range(0,1001):
+            pi=pi_i/1000
+            ll=0.0
+            for le,ln in vals:
+                a=log(pi)+le if pi>0 else -1e300
+                b=log(1-pi)+ln if pi<1 else -1e300
+                m=max(a,b); ll += m + log((0 if a<-1e200 else pow(2.718281828459045,a-m)) + (0 if b<-1e200 else pow(2.718281828459045,b-m)))
+            if best is None or ll>best[1]: best=(pi,ll)
+        # posterior hard-ish classification at best pi
+        pi=best[0]; post=[]
+        for le,ln in vals:
+            a=log(pi)+le; b=log(1-pi)+ln; m=max(a,b)
+            pe=pow(2.718281828459045,a-m); pn=pow(2.718281828459045,b-m)
+            post.append(pe/(pe+pn))
+        print(' alpha',alpha,'MLE pi',best[0],'mean posterior',sum(post)/len(post))
+PY"

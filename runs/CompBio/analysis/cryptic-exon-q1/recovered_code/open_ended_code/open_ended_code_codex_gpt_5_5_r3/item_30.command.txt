@@ -1,0 +1,25 @@
+/bin/bash -lc "samtools view aln.minimap.splice.bam | python3 - <<'PY'
+import sys,re,collections
+cig_re=re.compile(r'(\\d+)([MIDNSHP=X])')
+counts=collections.Counter(); strands=collections.Counter(); examples={}
+for line in sys.stdin:
+    if line.startswith('@'): continue
+    fields=line.rstrip('\\n').split('\\t')
+    flag=int(fields[1]); rname=fields[2]; pos=int(fields[3]); cigar=fields[5]; mapq=int(fields[4])
+    if rname=='*' or 'N' not in cigar: continue
+    ref=pos
+    for n,op in cig_re.findall(cigar):
+        n=int(n)
+        if op=='N':
+            donor=ref-1; acceptor=ref+n
+            key=(rname,donor,acceptor)
+            counts[key]+=1
+            strands[(key, '-' if (flag & 16) else '+')]+=1
+            examples.setdefault(key, fields[0]+':'+cigar)
+            ref+=n
+        elif op in 'MD=X':
+            ref+=n
+for (r,d,a),cnt in counts.most_common(100):
+    st_plus=strands[((r,d,a),'+')]; st_minus=strands[((r,d,a),'-')]
+    print(cnt, r, d, a, a-d-1, '+', st_plus, '-', st_minus, examples[(r,d,a)])
+PY"

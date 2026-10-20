@@ -1,0 +1,57 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reuse logic but print examples for bio pair SP1->MYC
+import subprocess,re as regex
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip();tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'):trans_gene[tid]=part.split(':',1)[1];break
+
+def qint(c):
+ m=regex.findall(r'(\\d+)([MIDNSHP=X])',c);q=0;qs=None;qe=None
+ for ln,op in m:
+  ln=int(ln)
+  if op in 'SH':q+=ln
+  elif op in 'M=X':
+   if qs is None:qs=q
+   q+=ln;qe=q
+  elif op=='I':q+=ln
+ return (qs,qe)
+seen=set();n=0
+for line in subprocess.Popen(['samtools','view','-F','0x900','reads_cdna.bam'],stdout=subprocess.PIPE,text=True).stdout:
+ p=line.rstrip().split('\\t');flag=int(p[1]);rname=p[2]
+ tags={}
+ for f in p[11:]:
+  if ':' in f:
+   k,t,v=f.split(':',2);tags[k]=v
+ sa=tags.get('SA')
+ if not sa:continue
+ g1=trans_gene.get(rname,'');q1=qint(p[5]);strand1='-' if flag&16 else '+'
+ if not q1 or q1[0] is None:continue
+ for entry in sa.rstrip(';').split(';'):
+  if not entry:continue
+  parts=entry.split(',')
+  if len(parts)<6:continue
+  rt=parts[0];g2=trans_gene.get(rt,'')
+  if {g1,g2}"'!={'"'SP1','MYC'}:continue
+  q2=qint(parts[3]);strand2=parts[2]
+  if not q2 or q2[0] is None:continue
+  ov=max(0,min(q1[1],q2[1])-max(q1[0],q2[0]))
+  if ov>8:continue
+  key=(p[0],tuple(sorted((g1,g2))))
+  if key in seen:continue
+  seen.add(key)
+  if q1[0]<=q2[0]:
+   left_g,right_g=g1,g2;left_s,right_s=strand1,strand2
+  else:
+   left_g,right_g=g2,g1;left_s,right_s=strand2,strand1
+  if left_s==right_s=='+':bio=(left_g,right_g)
+  elif left_s==right_s=='-':bio=(right_g,left_g)
+  else:continue
+  if bio==('SP1','MYC'):
+   print(p[0],'flag',flag,'strands',strand1,strand2,'g1',g1,p[2],p[5],'g2',g2,rt,parts[3],'q1',q1,'q2',q2,'left',left_g,left_s,'right',right_g,right_s)
+   n+=1
+   if n>=5:break
+PY"

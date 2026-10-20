@@ -1,0 +1,111 @@
+/bin/bash -lc "cat > score_pwm.py <<'PY'
+import gzip, py2bit, numpy as np, pandas as pd, time, sys
+frag='unknown.shift.frag.bed.gz'
+tb=py2bit.open('hg38.2bit')
+valid=set(tb.chroms()); chromlen=tb.chroms()
+# parse PWM
+mat=[]
+with open('Tn5_sepcat_bias.transfac') as f:
+ for line in f:
+  parts=line.strip().split()
+  if len(parts)==5 and parts[0].isdigit():
+   mat.append([float(x) for x in parts[1:]])
+mat=np.array(mat)
+print('PWM shape',mat.shape, file=sys.stderr)
+# log odds with uniform bg
+bg=np.array([0.25]*4)
+tot=mat.sum(axis=1,keepdims=True)
+p=(mat+0.1)/(tot+0.4)
+logp=np.log(p/bg)
+# sequences width
+Wseq=120; off=-60
+df=pd.read_csv(frag,sep='\\t',header=None,names=['chrom','start','end','barcode','count'],usecols=['chrom','start','end'],dtype={'chrom':str,'start':int,'end':int})
+mask=df['chrom'].isin(valid).values; df=df[mask].reset_index(drop=True); N=len(df)
+print('N',N, file=sys.stderr)
+# encode
+base_idx=np.full(256,-1,dtype=np.int8)
+for i,b in enumerate('ACGT'): base_idx[ord(b)]=i
+Larr=np.full((N,Wseq),-1,dtype=np.int8); Rarr=np.full((N,Wseq),-1,dtype=np.int8)
+t=time.time()
+for idx,row in df.iterrows():
+ chrom=row['chrom']; s=int(row['start']); e=int(row['end']); clen=chromlen[chrom]
+ for arr,pos in [(Larr,s),(Rarr,e)]:
+  st=pos+off; en=st+Wseq
+  qs=max(st,0); qe=min(en,clen)
+  seq=''
+  if qs<qe: seq=tb.sequence(chrom,qs,qe).upper()
+  filloff=qs-st
+  arr[idx,filloff:filloff+len(seq)] = base_idx[np.frombuffer(seq.encode('ascii'),dtype=np.uint8).copy()]
+ if (idx+1)%20000==0: print('fetched',idx+1,'time',time.time()-t,file=sys.stderr)
+print('done fetch',time.time()-t,file=sys.stderr)
+# score function for candidate shifts, orientations
+vals=np.arange(-10,11,dtype=int)
+base_left=49 # (s-A+4-15)-(s-60)=49-A
+base_right=40 # (e-B-5-15)-(e-60)=40-B
+def score_orientation(arr, base_shift, rc=False):
+    scores=np.zeros((len(vals),2))
+    # convert arr (N,W) with -1 N; score each base via logp matrix
+    # For speed use logp indexed by arr; arr code -1 -> 0? ignore Ns
+    L=len(mat)
+    for i,v in enumerate(vals):
+        si=base_shift-v
+        sub=arr[:,si:si+L]  # N,L
+        if rc:
+            sub=sub[:,::-1] # reverse positions
+            # complement code: A<->T (0<->3), C<->G (1<->2), -1 remains
+            comp=np.full(sub.shape,-1,dtype=np.int8)
+            validmask=sub>=0
+            comp[validmask]=3-sub[validmask]
+            sub=comp
+        # scores per base: logp[code] if code>=0 else 0
+        codes=sub.copy()
+        sc=np.zeros((N,L),dtype=np.float64)
+        for b in range(4):
+            mask=codes==b
+            sc[mask]=logp[:,b][np.where(mask)[1] if False else 0]
+        # simpler loop over positions
+        sc=np.zeros(N,dtype=np.float64)
+        for p in range(L):
+            codes=sub[:,p]
+            for b in range(4):
+                m=codes==b
+                sc[m]+=logp[p,b]
+        scores[i,0]=sc.mean()
+        scores[i,1]=sc.std()/np.sqrt(N)
+    return scores
+# vectorized scoring per position using take maybe
+def score_orient(arr, base_shift, rc=False):
+    L=len(mat); out=[]
+    for i,v in enumerate(vals):
+        si=base_shift-v
+        sub=arr[:,si:si+L]
+        if rc:
+            sub=sub[:,::-1]
+            comp=np.where(sub>=0, 3-sub, -1).astype(np.int8)
+            sub=comp
+        sc=np.zeros(N,dtype=np.float64)
+        # use logp[sub, arange] with mask; direct fancy
+        posidx=np.arange(L)
+        codes=sub
+        mask=codes>=0
+        # logp indices: rows codes, cols pos; fill -1 index last? use where
+        safe=np.where(mask,codes,0)
+        contrib=np.where(mask, logp[safe,posidx], 0.0)
+        sc=contrib.sum(axis=1)
+        out.append(sc.mean())
+    return np.array(out)
+print('scoring left',file=sys.stderr)
+ls_f=score_orient(Larr,base_left,False); ls_r=score_orient(Larr,base_left,True)
+print('scoring right',file=sys.stderr)
+rs_f=score_orient(Rarr,base_right,False); rs_r=score_orient(Rarr,base_right,True)
+print('LEFT forward')
+for v,x in zip(vals,ls_f): print(v, f'{x:.4f}')
+print('LEFT revcomp')
+for v,x in zip(vals,ls_r): print(v, f'{x:.4f}')
+print('RIGHT forward')
+for v,x in zip(vals,rs_f): print(v, f'{x:.4f}')
+print('RIGHT revcomp')
+for v,x in zip(vals,rs_r): print(v, f'{x:.4f}')
+tb.close()
+PY
+python score_pwm.py > pwm_scores.txt"

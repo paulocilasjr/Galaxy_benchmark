@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > query_gwas_catalog.py <<'PY'
+import json, urllib.request, urllib.parse, time, os, sys
+rsids='rs72717048 rs144126567 rs379794 rs140970775 rs7554873 rs1150756 rs1150753 rs3132451 rs1150757 rs3132941 rs4690098 rs34562254 rs374039502 rs4849748'.split()
+# use requests maybe
+for rs in rsids:
+    url=f'https://www.ebi.ac.uk/gwas/rest/api/associations/search/findByRsId?rsId={rs}'
+    out=f'catalog_{rs}.json'
+    if not os.path.exists(out):
+      try:
+        req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+        data=urllib.request.urlopen(req, timeout=60).read()
+        open(out,'wb').write(data)
+      except Exception as e:
+        print('ERR',rs,e); continue
+    try:
+      j=json.load(open(out))
+      assoc=j.get('_embedded',{}).get('associations',[])
+    except Exception as e:
+      print('parse err',rs,e); continue
+    print('\\n###',rs,'assoc',len(assoc))
+    for idx,a in enumerate(assoc):
+      p=a.get('pvalue')
+      risk=a.get('riskFrequency')
+      # study link
+      study_url=a.get('_links',{}).get('study',{}).get('href','').replace('http:','https:')
+      if p and p < 1e-7:
+        # fetch study cached
+        sf='study_'+str(idx)+'_'+rs+'.json'
+        if not os.path.exists(sf) and study_url:
+          try:
+            sd=urllib.request.urlopen(urllib.request.Request(study_url,headers={'User-Agent':'Mozilla/5.0'}),timeout=30).read()
+            open(sf,'wb').write(sd)
+          except Exception as e: print('study err',study_url,e)
+        info={}
+        if os.path.exists(sf):
+          try:
+            sj=json.load(open(sf)); info['acc']=sj.get('accessionId'); info['pub']=sj.get('pubmedId'); info['trait']=sj.get('diseaseTrait',{}).get('trait')
+          except: pass
+        print(' ',idx,'p',p,'risk',risk,'study',info)
+PY
+python3 query_gwas_catalog.py"

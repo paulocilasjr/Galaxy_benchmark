@@ -1,0 +1,73 @@
+/bin/bash -c "cat > custom_doublet_peaks.py <<'PY'
+import numpy as np, time, gc
+from scipy.sparse import csr_matrix, vstack, random as sp_random
+from sklearn.decomposition import TruncatedSVD
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import normalize
+import snapatac2 as snap
+
+adata=snap.read('atac_peaks_scrub.h5ad')
+X=adata.X.copy().tocsr()
+cell_ids=np.array(adata.obs_names)
+print('X',X.shape,X.nnz, 'sum per cell quantiles', np.quantile(np.asarray(X.sum(axis=1)).ravel(),[0,.25,.5,.75,1]), flush=True)
+# binarize? Use raw counts for doublet sum; for observed normalized use log1p raw. Let's keep raw counts.
+counts=np.asarray(X.sum(axis=1)).ravel()
+# TF-IDF normalize function
+def tfidf(M):
+    M=M.astype(np.float32).tocsr()
+    M.data=np.log1p(M.data)
+    return normalize(M, norm='l2', axis=1, copy=False)
+Xobs=tfidf(X.copy())
+# fit SVD on observed only (good for projection); ncomp 50
+svd=TruncatedSVD(n_components=50, algorithm='randomized', random_state=0)
+Zobs=svd.fit_transform(Xobs)
+print('svd explained top', svd.explained_variance_ratio_[:10], flush=True)
+n_cells=X.shape[0]; n_sim=2*n_cells
+rng=np.random.default_rng(0)
+i1=rng.integers(0,n_cells,n_sim); i2=rng.integers(0,n_cells,n_sim)
+# function simulate downsampled
+def make_sim(p, seed):
+    sim=[]
+    rng=np.random.default_rng(seed)
+    for a,b in zip(i1,i2):
+        row=X[a].tocoo()+X[b].tocoo() # sums duplicate positions? coo addition with duplicate entries? scipy sums duplicates if coo_matrix and then? Let's avoid.
+        # Build dict? 8000 * 2000 = 16M okay but Python slow. Use sparse addition row_a + row_b.
+        r=X[a]+X[b]
+        r=r.tocsr()
+        total=counts[a]+counts[b]
+        # downsample each nonzero by binomial p if p<1
+        if p<0.999:
+            r.data=np.random.binomial(r.data.astype(np.int64), p)
+            r.eliminate_zeros()
+        # if p maybe target/avg
+        sim.append(r)
+    return vstack(sim)
+# Sim with p=1 (no downsampling)
+Xsim_nod=make_sim(1.0,1)
+Zsim_nod=svd.transform(tfidf(Xsim_nod.copy()))
+# Sim with p=0.5
+Xsim_half=make_sim(0.5,2)
+Zsim_half=svd.transform(tfidf(Xsim_half.copy()))
+# Combined scoring function
+def score(Zobs, Zsim):
+    Zall=np.vstack([Zobs,Zsim]); labels=np.array([0]*len(Zobs)+[1]*len(Zsim))
+    nn=NearestNeighbors(n_neighbors=30, metric='cosine', n_jobs=-1).fit(Zall)
+    _, inds=nn.kneighbors(Zobs,n_neighbors=30)
+    return labels[inds].sum(axis=1)/30
+for name,Zsim in [('nod',Zsim_nod),('half',Zsim_half)]:
+    s=score(Zobs,Zsim)
+    print(name,'obs score q',np.quantile(s,[0,.25,.5,.75,.9,.95,.99,1]),'max',s.max())
+    # score sim too
+    Zall=np.vstack([Zobs,Zsim]); labels=np.array([0]*len(Zobs)+[1]*len(Zsim))
+    nn=NearestNeighbors(n_neighbors=30, metric='cosine', n_jobs=-1).fit(Zall)
+    _, inds=nn.kneighbors(Zsim,n_neighbors=30)
+    ss=labels[inds].sum(axis=1)/30
+    print(name,'sim score q',np.quantile(ss,[0,.25,.5,.75,.9,.95,.99,1]),'max',ss.max())
+    idx=np.argsort(-s)
+    print('top 30:')
+    for i in idx[:30]: print(cell_ids[i],s[i])
+    np.savetxt(f'peak_scrub_{name}.txt',np.c_[cell_ids,s],fmt='%s')
+del Xsim_nod, Xsim_half
+gc.collect()
+PY
+python3 custom_doublet_peaks.py"

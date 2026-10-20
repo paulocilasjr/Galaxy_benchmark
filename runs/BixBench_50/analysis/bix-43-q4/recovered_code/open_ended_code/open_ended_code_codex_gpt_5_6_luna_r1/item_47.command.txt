@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+layout['count_col']=layout['SampleID'].str.replace('-','_',regex=False)
+sel=layout[layout['Group'].isin(['DMSO','Cisplatin_IC50_CBD_IC50'])].copy()
+sel['condition']=sel['Group'].map({'DMSO':'DMSO','Cisplatin_IC50_CBD_IC50':'CBD_cisplatin'})
+count_matrix=counts[sel['count_col'].tolist()].T
+count_matrix.columns=counts.index.astype(str)
+count_matrix=count_matrix.loc[:,count_matrix.sum(axis=0)>0]
+metadata=sel.set_index('count_col')[['condition']]
+metadata['condition']=pd.Categorical(metadata['condition'],categories=['DMSO','CBD_cisplatin'])
+
+dds=DeseqDataSet(counts=count_matrix,metadata=metadata,design_factors='condition',refit_cooks=True,n_cpus=2)
+dds.deseq2()
+stat=DeseqStats(dds,contrast=['condition','CBD_cisplatin','DMSO'],alpha=0.05,n_cpus=2)
+stat.summary()
+res=stat.results_df
+deg=res[(res['padj']<0.05)&(res['log2FoldChange'].abs()>=0.5)]
+
+mapping=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t')
+name_map=mapping.drop_duplicates('ENSG').set_index('ENSG')['gene_name']
+gene_list=name_map.reindex(deg.index.astype(str)).dropna().tolist()
+lib=gp.get_library('Reactome_2022',organism='Human')
+key=next(k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes'))
+enr=gp.enrichr(gene_list=gene_list,gene_sets={key:lib[key]},outdir=None,no_plot=True,verbose=False)
+row=enr.results.loc[enr.results['Term'].eq(key)].iloc[0]
+print('DEGs',len(deg),'mapped query genes',len(gene_list))
+print('target result',row[['Term','Overlap','Genes']].to_dict())
+assert row['Overlap']=='8/49'
+PY"

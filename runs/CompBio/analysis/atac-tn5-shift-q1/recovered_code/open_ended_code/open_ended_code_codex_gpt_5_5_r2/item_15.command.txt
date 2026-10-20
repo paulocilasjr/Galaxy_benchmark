@@ -1,0 +1,92 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import sys, os, gzip, math, random
+sys.path.insert(0, os.path.abspath('pydeps'))
+import py2bit
+import numpy as np
+
+# Load fragments, avoid mitochondrial/alt for nuclear Tn5 signal and keep a stable sample
+frags=[]
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        chrom,s,e,bc,c=line.rstrip().split('\\t')[:5]
+        if chrom in std:
+            frags.append((chrom,int(s),int(e),int(c)))
+# deterministic downsample if needed; 93k ok
+print('frags',len(frags))
+
+tb=py2bit.open('hg38.2bit')
+sizes=tb.chroms()
+base_idx={'A':0,'C':1,'G':2,'T':3}
+comp_idx=np.array([3,2,1,0])
+K=12
+L=2*K+1
+Ds=range(-20,21)
+left={}
+right={}
+for d in Ds:
+    matL=np.zeros((L,4),dtype=np.float64)
+    matR=np.zeros((L,4),dtype=np.float64)
+    nL=nR=0
+    for chrom,s,e,w in frags:
+        size=sizes.get(chrom)
+        # left site coord = s+d, fetch centered odd window [pos-K, pos+K+1)
+        pos=s+d
+        if pos-K>=0 and pos+K+1<=size:
+            seq=tb.sequence(chrom,pos-K,pos+K+1).upper()
+            if len(seq)==L and 'N' not in seq:
+                for i,b in enumerate(seq):
+                    j=base_idx.get(b)
+                    if j is None: break
+                    matL[i,j]+=w
+                else:
+                    nL+=w
+        pos=e+d
+        if pos-K>=0 and pos+K+1<=size:
+            seq=tb.sequence(chrom,pos-K,pos+K+1).upper()
+            if len(seq)==L and 'N' not in seq:
+                # reverse complement orientation
+                rc = seq.translate(str.maketrans('ACGT','TGCA'))[::-1]
+                for i,b in enumerate(rc):
+                    j=base_idx.get(b)
+                    if j is None: break
+                    matR[i,j]+=w
+                else:
+                    nR+=w
+    left[d]=(matL,nL)
+    right[d]=(matR,nR)
+print('built')
+
+def freq(mat):
+    return (mat+0.5)/(mat.sum(axis=1,keepdims=True)+2.0)
+
+def centered_logodds(mat):
+    f=freq(mat)
+    # log odds vs 0.25, flatten; remove per-position base mean maybe not needed
+    x=np.log2(f/0.25)
+    return x
+
+def corr(a,b):
+    x=a.ravel(); y=b.ravel()
+    x=x-x.mean(); y=y-y.mean()
+    den=np.linalg.norm(x)*np.linalg.norm(y)
+    return float(np.dot(x,y)/den) if den else -9
+scores=[]
+for dl in Ds:
+    for dr in Ds:
+        c=corr(centered_logodds(left[dl][0]), centered_logodds(right[dr][0]))
+        scores.append((c,dl,dr))
+scores.sort(reverse=True)
+print('top corr dl dr -> u5,u3')
+for c,dl,dr in scores[:20]:
+    print(f'{c:.5f}\\tdl={dl}\\tdr={dr}\\tu={4-dl};{-5-dr}')
+
+# print IC profile for best offsets maybe
+for name,dic,d in [('L',left,scores[0][1]),('R',right,scores[0][2])]:
+    f=freq(dic[d][0])
+    ic=(f*np.log2(f/0.25)).sum(axis=1)
+    cons=''.join('ACGT'[i] for i in f.argmax(axis=1))
+    print(name,d,'n',dic[d][1],'cons',cons,'ic', ['%.3f'%x for x in ic])
+PY"

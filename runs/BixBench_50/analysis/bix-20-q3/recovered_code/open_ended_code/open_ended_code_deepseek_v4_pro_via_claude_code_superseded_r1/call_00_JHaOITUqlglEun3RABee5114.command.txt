@@ -1,0 +1,75 @@
+source /tmp/myenv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import numpy as np
+
+trio = pd.read_excel("inputs/230215_Trio_Status.xlsx")
+carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+
+variant_dir = "inputs/CHIP_DP10_GQ20_PASS"
+all_files = os.listdir(variant_dir)
+
+exclude_seq = ['intron_variant', 'intergenic_variant', 'intergenic_region', 
+               '3_prime_UTR_variant', '5_prime_UTR_variant',
+               '5_prime_UTR_premature_start_codon_gain_variant']
+
+benign_classes = ['Benign', 'Likely Benign']
+
+print("=== DETAILED VARIANT-LEVEL REPORT ===")
+header = f"{'Sample':<8} {'Chr:Pos':<20} {'Ref/Alt':<8} {'VAF':<10} {'Gene':<15} {'SeqOntology':<40} {'ClinVar':<25}"
+print(header)
+print("-" * len(header))
+
+all_passing = []
+
+for _, row in carriers.iterrows():
+    sid = row['Sample ID']
+    matching = [f for f in all_files if f'CHIP_{sid}-' in f]
+    if not matching:
+        continue
+    fpath = os.path.join(variant_dir, matching[0])
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:]
+    
+    zygosity = data[4]
+    seq_ontology = data[13]
+    vaf = pd.to_numeric(data[9], errors='coerce')
+    classification = data[25]
+    
+    combined = data[(zygosity != 'Reference') & 
+                    (~seq_ontology.isin(exclude_seq)) & 
+                    (vaf < 0.3) & 
+                    (classification.notna())]
+    
+    for _, v in combined.iterrows():
+        all_passing.append({
+            'sample': sid,
+            'chrpos': str(v[0]),
+            'refalt': str(v[1]),
+            'vaf': v[9],
+            'gene': str(v[12]),
+            'seq': str(v[13]),
+            'clinvar': str(v[25]),
+            'zygosity': str(v[4])
+        })
+        print(f"{str(sid):<8} {str(v[0]):<20} {str(v[1]):<8} {str(v[9]):<10} {str(v[12]):<15} {str(v[13]):<40} {str(v[25]):<25}")
+
+n_with_files = sum(1 for _, r in carriers.iterrows() if any(f for f in all_files if 'CHIP_' + str(r['Sample ID']) + '-' in f))
+print(f"\n=== SUMMARY ===")
+print(f"Total Carrier samples with variant files: {n_with_files}")
+print(f"Total variants passing all filters: {len(all_passing)}")
+
+from collections import Counter
+class_counts = Counter(v['clinvar'] for v in all_passing)
+print(f"\nClinVar classification distribution:")
+for cls, count in class_counts.most_common():
+    print(f"  {cls}: {count}")
+
+total = len(all_passing)
+benign_lb = class_counts.get('Benign', 0) + class_counts.get('Likely Benign', 0)
+print(f"\nBenign + Likely Benign: {benign_lb}")
+print(f"Total with ClinVar: {total}")
+if total > 0:
+    print(f"Proportion: {benign_lb}/{total} = {benign_lb/total:.6f}")
+
+PYEOF

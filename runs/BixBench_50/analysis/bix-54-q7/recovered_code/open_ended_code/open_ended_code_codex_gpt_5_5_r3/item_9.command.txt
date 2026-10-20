@@ -1,0 +1,42 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+parse_p287 <- function(strain, ratio) {
+  if (strain == '287') return(1)
+  if (strain == '98') return(0)
+  if (strain == '287_98') {
+    parts <- as.numeric(strsplit(ratio, ':', fixed=TRUE)[[1]])
+    return(parts[1] / sum(parts))
+  }
+  NA_real_
+}
+d"'$p287 <- mapply(parse_p287, d$StrainNumber, d$Ratio)
+curve <- d[!is.na(d$p287), ]
+models <- list(
+  quadratic = lm(Area ~ poly(p287, 2, raw=TRUE), data=curve),
+  cubic = lm(Area ~ poly(p287, 3, raw=TRUE), data=curve),
+  natural_spline_df4 = lm(Area ~ ns(p287, df=4), data=curve)
+)
+best_name <- names(which.min(sapply(models, AIC)))
+best <- models[[best_name]]
+# For the natural spline, optimize over all basis knot intervals plus boundaries.
+basis <- ns(curve$p287, df=4)
+breaks <- sort(unique(c(attr(basis, '"'Boundary.knots'), attr(basis, 'knots'))))
+pred <- function(x) as.numeric(predict(best, newdata=data.frame(p287=x)))
+cands <- data.frame(p=breaks, y=vapply(breaks, pred, numeric(1)))
+for (i in seq_len(length(breaks) - 1L)) {
+  lo <- breaks[i]; hi <- breaks[i + 1L]
+  opt <- optimize(function(x) -pred(x), interval=c(lo, hi))
+  cands <- rbind(cands, data.frame(p=opt"'$minimum, y=-opt$objective))
+}
+ans <- max(cands$y)
+dir.create('"'codex_output', showWarnings=FALSE)
+writeLines(format(ans, digits=17), 'codex_output/answer.txt')
+cat('best_model=', best_name, '\\n', sep='')
+cat('AICs\\n')
+print(sapply(models, AIC))
+cat('knots=', paste(format(breaks, digits=17), collapse=', '), '\\n', sep='')
+cat('max_p=', format(cands"'$p[which.max(cands$y)], digits=17), '"'\\n', sep='')
+cat('max_pred=', format(ans, digits=17), '\\n', sep='')
+RS
+printf 'answer.txt: '; cat codex_output/answer.txt; printf '\\n'"

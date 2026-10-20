@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import time
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata
+
+base=Path('inputs')
+t0=time.time()
+def read_numeric_matrix(path):
+    h=pd.read_csv(path,nrows=0).columns
+    d={c:np.float32 for c in h[1:]}
+    return pd.read_csv(path,index_col=0,dtype=d,low_memory=False)
+crispr=read_numeric_matrix(base/'CRISPRGeneEffect.csv')
+expr=read_numeric_matrix(base/'OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+model_set=set(pd.read_csv(base/'Model.csv',usecols=['ModelID'],dtype='string')['ModelID'].astype(str))
+expr_ids=set(expr.index.astype(str))
+common_ids=[idx for idx in crispr.index.astype(str) if idx in expr_ids and idx in model_set]
+crispr=crispr.loc[common_ids]
+expr=expr.loc[common_ids]
+
+def gene_symbol(s):
+    s=str(s)
+    return s.rsplit(' (',1)[0] if s.endswith(')') and ' (' in s else s
+cmap={gene_symbol(c):c for c in crispr.columns}
+emap={gene_symbol(c):c for c in expr.columns}
+common=sorted(set(cmap)&set(emap))
+print('paired_models',len(common_ids),'symbol_matches',len(common),'exact_matches',len(set(crispr.columns)&set(expr.columns)),flush=True)
+results=[]
+for sym in common:
+    x=crispr[cmap[sym]].to_numpy(dtype=np.float64,copy=False)
+    y=expr[emap[sym]].to_numpy(dtype=np.float64,copy=False)
+    mask=np.isfinite(x)&np.isfinite(y)
+    x=x[mask]; y=y[mask]
+    if len(x)<2 or np.all(x==x[0]) or np.all(y==y[0]):
+        continue
+    rx=rankdata(x,method='average'); ry=rankdata(y,method='average')
+    rx-=rx.mean(); ry-=ry.mean()
+    rho=float(np.dot(rx,ry)/np.sqrt(np.dot(rx,rx)*np.dot(ry,ry)))
+    results.append((rho,sym,len(x)))
+results.sort(key=lambda z:(z[0],z[1]))
+print('valid',len(results),'elapsed_sec',round(time.time()-t0,2),flush=True)
+for z in results[:25]: print(z)
+PY"

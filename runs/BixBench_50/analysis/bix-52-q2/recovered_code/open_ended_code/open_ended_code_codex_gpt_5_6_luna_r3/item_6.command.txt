@@ -1,0 +1,75 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections, math, statistics
+
+path = 'inputs/JD_AgeRelated_CpG_noMT_Final.csv'
+rows = []
+with open(path, newline='') as f:
+    reader = csv.DictReader(f)
+    print('fields:', reader.fieldnames)
+    for row in reader:
+        rows.append(row)
+
+print('rows:', len(rows))
+pos_counts = collections.Counter(r['Pos'] for r in rows)
+print('unique Pos:', len(pos_counts))
+print('rows per Pos:', collections.Counter(pos_counts.values()).most_common(10))
+print('positions with >1 row:', sum(n > 1 for n in pos_counts.values()))
+print('unique Sample:', len(set(r['Sample'] for r in rows)))
+print('unique chromosomes:', sorted(set(r['Chromosome'] for r in rows), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x)))
+
+# Check whether Pos encodes Chromosome_StartPosition consistently.
+mismatch = []
+for r in rows:
+    p = r['Pos']
+    if '_' in p:
+        c, s = p.rsplit('_', 1)
+        if c "'!= r['"'Chromosome'] or s "'!= r['"'StartPosition'] or s "'!= r['"'EndPosition']:
+            mismatch.append((p, r['Chromosome'], r['StartPosition'], r['EndPosition']))
+print('Pos coordinate mismatches:', len(mismatch), mismatch[:3])
+
+methyl = [float(r['MethylationPercentage']) for r in rows]
+print('methylation range:', min(methyl), max(methyl))
+filtered_rows = [r for r in rows if (float(r['MethylationPercentage']) > 90 or float(r['MethylationPercentage']) < 10)]
+filtered_pos = set(r['Pos'] for r in filtered_rows)
+filtered_coord = set((r['Chromosome'], r['StartPosition']) for r in filtered_rows)
+print('filtered rows:', len(filtered_rows))
+print('filtered unique Pos:', len(filtered_pos))
+print('filtered unique chromosome/start:', len(filtered_coord))
+print('filtered positions repeated rows:', sum(n > 1 for n in collections.Counter(r['Pos'] for r in filtered_rows).values()))
+
+# Are duplicate Pos rows all identical in relevant coordinates?
+groups = collections.defaultdict(list)
+for r in rows:
+    groups[r['Pos']].append(r)
+multichr = [(p, {(r['Chromosome'], r['StartPosition'], r['EndPosition']) for r in rs}) for p,rs in groups.items() if len({(r['Chromosome'], r['StartPosition'], r['EndPosition']) for r in rs}) > 1]
+print('Pos with inconsistent coordinates:', len(multichr), multichr[:3])
+
+# Per chromosome row and unique counts
+lengths = {}
+with open('inputs/JD_Chromosome_Length.csv', newline='') as f:
+    rd = csv.DictReader(f)
+    print('length fields:', rd.fieldnames)
+    for r in rd:
+        lengths[r['Chromosome'].strip().lstrip('\\ufeff')] = int(r['Length'])
+
+chroms = sorted(lengths, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x))
+rowcnt = collections.Counter(r['Chromosome'] for r in filtered_rows)
+pos_chrom = {}
+for r in filtered_rows:
+    pos_chrom.setdefault(r['Pos'], r['Chromosome'])
+uniqcnt = collections.Counter(pos_chrom.values())
+print('filtered chromosome row counts:', dict(rowcnt))
+print('filtered chromosome unique Pos counts:', dict(uniqcnt))
+print('lengths missing in filtered data:', [c for c in chroms if c not in uniqcnt])
+print('data chromosomes missing length:', [c for c in set(uniqcnt) if c not in lengths])
+
+densities = {c: uniqcnt[c]/lengths[c] for c in chroms if uniqcnt[c] > 0}
+print('included chromosome count:', len(densities))
+print('density sum:', sum(densities.values()))
+print('mean density:', statistics.mean(densities.values()))
+print('mean density repr:', format(statistics.mean(densities.values()), '.17g'))
+print('densities:')
+for c in chroms:
+    if c in densities:
+        print(c, uniqcnt[c], lengths[c], format(densities[c], '.17g'))
+PY"

@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+# rank genes based on expression differences and compare ATAC candidate promoter columns
+import gzip,numpy as np,collections
+
+def load(fn):
+ with gzip.open(fn,'rt') as f:
+  next(f); n=[]; v=[]
+  for l in f:
+   z=l.rstrip().split('\\t'); n.append(z[0]); v.append([float(x) for x in z[1:]])
+ return n,np.array(v,float)
+rn,R=load('multiome.match.atac.rna.q1.rna.tsv.gz'); an,A=load('multiome.match.atac.rna.q1.atac.tsv.gz')
+amap={(n.rsplit('_',2)[0],int(n.rsplit('_',2)[1])):i for i,n in enumerate(an)}
+chroms={f'chr{i}' for i in range(1,23)}|{'chrX'}; t=collections.defaultdict(list)
+with gzip.open('hg38.ncbiRefSeq.txt.gz','rt') as f:
+ for l in f:
+  z=l.rstrip().split('\\t')
+  if len(z)>=13 and z[2] in chroms:
+   c,s=z[2],z[3]; x,y=int(z[4]),int(z[5]); t[z[12]].append((c,x if s=='+' else y-1))
+# promoter average +-20k
+P=np.full((len(rn),8),np.nan)
+for gi,sym in enumerate(rn):
+ inds=[]
+ for c,pos in t.get(sym,[]):
+  inds += [amap[(c,b)] for b in range(max(0,(pos-20000)//10000*10000),(pos+20000)//10000*10000+10000,10000) if (c,b) in amap]
+ if inds: P[gi]=np.nanmean(A[np.unique(inds)],axis=0)
+for i in range(8):
+ # top genes with high z / log fold vs other columns
+ x=np.log1p(R[:,i]); y=np.log1p(np.delete(R,i,1)).mean(1); d=x-y
+ ix=np.argsort(d)[::-1]
+ print('\\nRNA',i,'top differential; columns at promoter (ATAC 1 and 5 emphasized)')
+ n=0
+ for k in ix:
+  if np.isfinite(P[k]).all() and R[k,i]>0.1:
+   print(f'{rn[k]:20s} R={R[k,i]:8.1f} d={d[k]:6.2f} A1={P[k,1]:5.1f} A5={P[k,5]:5.1f} Aall=' + ','.join(f'{q:.1f}' for q in P[k])); n+=1
+   if n==12:break
+# summarize correlation expression i vs A1/A5 over genes, and differential slopes
+print('\\nColumn 0 vs 1 pair scores with A1/A5')
+for i in [0,1]:
+ for j in [1,5]:
+  ok=np.isfinite(P).all(1)
+  x=np.log1p(R[ok,i]); y=np.log1p(P[ok,j]); print(i,j,np.corrcoef(x,y)[0,1])
+for i,j in [(0,1),(1,5),(0,5),(1,1)]:
+ ok=np.isfinite(P).all(1)
+ dx=np.log1p(R[ok,i])-np.log1p(R[ok,1-i]) if i in [0,1] else None
+ dy=np.log1p(P[ok,j])-np.log1p(P[ok,1 if j==5 else 5]) if j in [1,5] else None
+ if dx is not None: print('diff',i,j,np.corrcoef(dx,dy)[0,1])
+PY"

@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, urllib.request, json, os, time
+INP_LEN=2114
+os.makedirs('cache/ucsc_hg19', exist_ok=True)
+rows=list(csv.DictReader(open('retina.score.snps.q1.tsv'), delimiter='\\t'))
+mis=[]
+for idx,row in enumerate(rows):
+    chrom=row['chr']; pos=int(row['start'])+1
+    s=pos-INP_LEN//2; e=pos+INP_LEN//2
+    fn=f\"cache/ucsc_hg19/{chrom}_{s}_{e}.json\"
+    if os.path.exists(fn):
+        d=json.load(open(fn))
+    else:
+        url=f'https://api.genome.ucsc.edu/getData/sequence?genome=hg19;chrom={chrom};start={s};end={e}'
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(url, timeout=30) as r:
+                    d=json.load(r)
+                open(fn,'w').write(json.dumps(d))
+                break
+            except Exception:
+                if attempt==4: raise
+                time.sleep(1+attempt)
+    seq=d['dna'].upper()
+    if seq[INP_LEN//2-1] "'!= row['"'ref'].upper():
+        mis.append((idx,chrom,pos,seq[INP_LEN//2-1],row['ref'],row['alt']))
+print('shifted rows',len(rows),'mismatches',len(mis))
+print(mis[:10])
+PY"

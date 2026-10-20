@@ -1,0 +1,31 @@
+/bin/bash -c "python3 - <<'PY'
+# rigorous ORA: N=all tested, K=all DEGs, m=pathway size among tested, q=overlap; p=hypergeom; BH over all pathways tested (or all? use all 138?); likely mulea tests all pathways with background all genes and q query)
+import pandas as pd, numpy as np
+from scipy.stats import hypergeom
+
+def bh(p):
+ p=np.asarray(p,float); o=np.argsort(p); n=len(p); scaled=p[o]*n/np.arange(1,n+1); adj_sorted=np.minimum.accumulate(scaled[::-1])[::-1]; out=np.empty(n); out[o]=adj_sorted; return np.minimum(1,out)
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path']); link['gene']=link['gene'].str.split(':',expand=True)[1]; link['path']=link['path'].str.split(':',expand=True)[1]
+files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+for size_filter in [False, True]:
+ print('\\nSIZE FILTER',size_filter)
+ res={}
+ for st,fn in files.items():
+  df=pd.read_csv('/workspace/tmp/'+fn); N=len(df); U=set(df.gene)
+  for dir,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+   gene=set(df.loc[expr,'gene']); K=len(gene); rows=[]
+   for p,gdf in link.groupby('path'):
+    term=set(gdf.gene)&U; m=len(term)
+    if size_filter and (m<10 or m>500): continue
+    q=len(term&gene)
+    # include q=0 for BH over all tested pathways? mulea likely tests all ontology terms with m? we'll include all with m>0
+    pv=hypergeom.sf(q-1,N,m,K)
+    rows.append((p,pv,q,m))
+   d=pd.DataFrame(rows,columns=['path','pval','q','m']); d['padj']=bh(d.pval.values)
+   res[(st,dir)]=d
+   print(st,dir,'tested',len(d),'sig padj',int((d.padj<=.05).sum()))
+ for dir in ['up','down']:
+  sets=[set(res[(st,dir)].loc[res[(st,dir)].padj<=.05,'path']) for st in ['97','98','99']]
+  common=set.intersection(*sets)
+  print('common',dir,len(common),sorted(common)[:20])
+PY"

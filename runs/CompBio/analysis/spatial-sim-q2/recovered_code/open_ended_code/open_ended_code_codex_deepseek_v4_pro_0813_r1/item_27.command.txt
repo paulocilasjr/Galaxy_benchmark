@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.spatial.distance import cdist
+R=pd.read_csv('deconv_raw.csv',index_col=0)
+pos=pd.read_csv('tissue_positions.csv').set_index('barcode')
+coords=pos.loc[R.index,['pxl_row_in_fullres','pxl_col_in_fullres']].values
+# integer round counts >0.5
+C=pd.DataFrame(index=R.index,columns=R.columns,dtype=int)
+for ct in R.columns:
+    vals=np.where(R[ct].values>0.5, np.round(R[ct].values), 0).astype(int)
+    C[ct]=vals
+print('rounded counts total per spot')
+print(C.sum(axis=1).describe())
+print('counts per type total cells', C.sum(axis=0).to_dict())
+tumor_spots=C.index[C['Tumor_Core']>0].tolist()
+tumor_idx=np.where(C['Tumor_Core'].values>0)[0]
+print('tumor spots', len(tumor_idx), 'tumor cells', C['Tumor_Core'].sum())
+# average location of tumor cells maybe
+# For each non-tumor type, compute cell-level distance to nearest tumor spot.
+dist_spot=cdist(coords, coords[tumor_idx]).min(axis=1)
+for ct in [c for c in C.columns if c"'!='"'Tumor_Core']:
+    counts=C[ct].values
+    n=counts.sum()
+    wmean=np.sum(counts*dist_spot)/n
+    # compare to all cells excluding tumor? all non-tumor cell instances
+    all_counts=sum(C[c].values for c in C.columns if c"'!='"'Tumor_Core')
+    all_mean=np.sum(all_counts*dist_spot)/all_counts.sum()
+    # permutation of cell labels among non-tumor cell instances maybe
+    rng=np.random.default_rng(1)
+    # create instance distances repeated by counts
+    instance_dist=np.repeat(dist_spot, all_counts.astype(int))
+    sims=[]
+    for _ in range(1000):
+        chosen=rng.choice(len(instance_dist),size=n,replace=False)
+        sims.append(instance_dist[chosen].mean())
+    p=(np.sum(sims<=wmean)+1)/(len(sims)+1)
+    print(ct,'n cells',n,'cell-level mean dist',wmean,'all_nonTumor',all_mean,'z',(wmean-np.mean(sims))/np.std(sims),'p',p)
+PY"

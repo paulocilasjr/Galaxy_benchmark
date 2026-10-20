@@ -1,0 +1,56 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, gzip, re, collections
+fn='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std=set([f'chr{i}' for i in list(range(1,23))+['X','Y']])
+tx=collections.defaultdict(lambda: {'exons':[], 'cds':[], 'strand':None})
+with gzip.open(fn,'rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  p=line.rstrip('\\n').split('\\t')
+  if len(p)<9: continue
+  chrom=p[0]; typ=p[2]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+  if chrom not in std: continue
+  m=re.search(r'transcript_id \"(["'^"]+)"'"',attrs)
+  if not m: continue
+  tid=m.group(1)
+  if 'tag \"MANE Select\"' not in attrs: continue
+  tx[tid]['strand']=strand
+  if typ=='exon': tx[tid]['exons'].append((start,end))
+  elif typ in ('CDS','stop_codon','start_codon'): tx[tid]['cds'].append((start,end))
+def union(intervals):
+ if not intervals: return []
+ intervals=sorted(intervals); out=[]; a,b=intervals[0]
+ for c,d in intervals[1:]:
+  if c<=b+1: b=max(b,d)
+  else: out.append((a,b)); a,b=c,d
+ out.append((a,b)); return out
+arr=[[],[],[]]
+for tid,d in tx.items():
+ exons=union(d['exons']); cds=union(d['cds']); strand=d['strand']
+ if strand=='+':
+  intervals=exons
+ else:
+  intervals=exons[::-1]
+ pos=1 # 1-based transcript position of current first base
+ coding=set()
+ for a,b in intervals:
+  length=b-a+1
+  for c,d in cds:
+   o=max(a,c); e=min(b,d)
+   if o<=e:
+    if strand=='+':
+     coding.update(range(pos+(o-a), pos+(e-a)+1))
+    else:
+     coding.update(range(pos+(b-e), pos+(b-o)+1))
+  pos+=length
+ total=pos-1
+ first=min(coding); last=max(coding)
+ five=first-1
+ three=total-last
+ cds_len=len(coding)
+ arr[0].append(five); arr[1].append(cds_len); arr[2].append(three)
+ if total "'!= five+three+cds_len:
+  print('"'bad',tid,total,five,three,cds_len)
+print(len(arr[0]))
+print([int(np.floor(np.median(a))) for a in arr])
+PY"

@@ -31,7 +31,7 @@ import panel_io  # noqa: E402  (figures/panel_io.py)
 import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -45,8 +45,8 @@ style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 ANN = os.path.join(OUT, 'annotations')
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-SUMMARIES = os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+SUMMARIES = os.path.join(ROOT, 'manuscript/manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
 W, MM, B, SEED = 180.0, 1 / 25.4, 20000, 20261002
 ENVS = style.ENVS
 CODE, GAL = ENVS

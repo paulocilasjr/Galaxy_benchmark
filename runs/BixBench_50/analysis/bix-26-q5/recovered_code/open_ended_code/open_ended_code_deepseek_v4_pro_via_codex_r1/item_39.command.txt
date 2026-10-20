@@ -1,0 +1,96 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, requests, math, time, os
+from scipy.stats import hypergeom
+
+def read_csv(path):
+    df=pd.read_csv(path)
+    df['padj']=pd.to_numeric(df['padj'], errors='coerce')
+    df['log2FoldChange']=pd.to_numeric(df['log2FoldChange'], errors='coerce')
+    return df
+
+def fetch_kegg(species='pau', cache_dir='/tmp'):
+    cache_link=os.path.join(cache_dir, f'kegg_link_pathway_{species}.txt')
+    cache_list=os.path.join(cache_dir, f'kegg_list_pathway_{species}.txt')
+    if not os.path.exists(cache_link):
+        r=requests.get(f'https://rest.kegg.jp/link/pathway/{species}', timeout=120)
+        r.raise_for_status()
+        open(cache_link,'w').write(r.text)
+    if not os.path.exists(cache_list):
+        r=requests.get(f'https://rest.kegg.jp/list/pathway/{species}', timeout=120)
+        r.raise_for_status()
+        open(cache_list,'w').write(r.text)
+    return open(cache_link).read().splitlines(), open(cache_list).read().splitlines()
+
+def parse_mapping(link, names):
+    rows=[]
+    for line in link:
+        if not line.strip(): continue
+        parts=line.split('\\t')
+        if len(parts)<2: continue
+        g=parts[0].split(':',1)[-1]
+        p=parts[1].split(':',1)[-1]
+        rows.append((p,g))
+    path2gene=pd.DataFrame(rows, columns=['path','gene']).dropna().drop_duplicates()
+    path2name={}
+    for line in names:
+        if not line.strip(): continue
+        parts=line.split('\\t')
+        if len(parts)<2: continue
+        path2name[parts[0]]=parts[1]
+    path2gene=path2gene[path2gene['path'].isin(path2name.keys())].copy()
+    return path2gene, path2name
+
+def r_bh(p):
+    p=np.asarray(p, dtype=float)
+    n=len(p)
+    if n==0: return np.array([])
+    i=np.arange(n,0,-1)
+    o=np.argsort(p, kind='stable')[::-1] # decreasing p
+    ro=np.argsort(o, kind='stable')
+    return np.minimum(1.0, np.minimum.accumulate((n/i)*p[o]))[ro]
+
+def ora(genes, path2gene):
+    genes=list(dict.fromkeys(str(g) for g in genes))
+    g2p=path2gene.groupby('gene')['path'].apply(list).to_dict()
+    qmap={g:g2p[g] for g in genes if g in g2p}
+    if not qmap: return None, {}
+    rows=[]
+    for g,ps in qmap.items():
+        for p in ps: rows.append((p,g))
+    df=pd.DataFrame(rows,columns=['path','gene']).drop_duplicates()
+    qterm2ext={p:list(grp['gene']) for p,grp in df.groupby('path')}
+    extID=list(dict.fromkeys(path2gene['gene']))
+    qterm2ext={p:[g for g in gs if g in extID] for p,gs in qterm2ext.items()}
+    qterms=list(qterm2ext.keys())
+    term2ext={p:[g for g in path2gene.loc[path2gene.path==p,'gene'] if g in extID] for p in qterms}
+    idx={p for p in qterms if 10 <= len(term2ext[p]) <= 500}
+    qterms=[p for p in qterms if p in idx]
+    qterm2ext={p:qterm2ext[p] for p in qterms}
+    term2ext={p:term2ext[p] for p in qterms}
+    qterms=list(dict.fromkeys(qterm2ext.keys()))
+    if not qterms: return None, {}
+    k=np.array([len(qterm2ext[p]) for p in qterms], dtype=int)
+    M=np.array([len(term2ext[p]) for p in qterms], dtype=int)
+    N=len(extID); n=len(qmap)
+    pvals=np.array([hypergeom.sf(kk-1, N, mm, n) for kk,mm in zip(k,M)], dtype=float)
+    adj=r_bh(pvals)
+    return pd.DataFrame({'ID':qterms,'Count':k,'Size':M,'pvalue':pvals,'p.adjust':adj,
+                         'geneID':['/'.join(qterm2ext[p]) for p in qterms]}), {}
+
+def show(label,file,path2gene,p2n):
+    df=read_csv(file)
+    sig=df[(df['log2FoldChange'].abs()>1.5)&(df['padj']<0.05)]
+    genes=sig['gene'].tolist()
+    print('\\n',label,'input',len(genes))
+    res,_=ora(genes,path2gene)
+    if res is None: print('no result'); return
+    print('tested',len(res),'sig',(res.p.adjust<0.05).sum())
+    print(res[res.p.adjust<0.05].sort_values('p.adjust').to_string(index=False))
+    print('non-sig top:'); print(res.sort_values('p.adjust').head(20).to_string(index=False))
+
+link,names=fetch_kegg('pau')
+p2g,p2n=parse_mapping(link,names)
+print('mapping rows',len(p2g),'genes',p2g.gene.nunique(),'terms',p2g.path.nunique())
+show('GluFe','/workspace/res_GluFevsGluFePlus.csv',p2g,p2n)
+show('Succ','/workspace/res_SuccvsGluFePlus.csv',p2g,p2n)
+PY"

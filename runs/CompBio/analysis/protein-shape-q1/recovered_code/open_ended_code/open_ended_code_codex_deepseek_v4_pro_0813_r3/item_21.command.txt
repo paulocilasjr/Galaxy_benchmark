@@ -1,0 +1,57 @@
+/bin/bash -c "cat > ascii_skeleton.py <<'PY'
+import numpy as np
+from scipy.ndimage import binary_dilation, binary_closing, grey_dilation
+from skimage.morphology import skeletonize, disk, binary_dilation as skdil, binary_closing as skclose
+coords=np.load('ca_coords.npy'); chains=np.load('ca_chains.npy')
+coords=coords-coords.mean(0)
+paths=[coords[chains==ch] for ch in np.unique(chains)]
+
+def project_img(axis, W=160,H=80):
+    uv=coords[:,list(axis)]
+    umin,umax=uv[:,0].min(),uv[:,0].max(); vmin,vmax=uv[:,1].min(),uv[:,1].max()
+    # preserve aspect with padding
+    span=max(umax-umin, vmax-vmin, 1e-9)
+    scaleu=(W-1)/span; scalev=(H-1)/span
+    # center
+    img=np.zeros((H,W),dtype=bool)
+    for p in paths:
+        u=(p[:,0]-(umin+umax)/2)*scaleu + (W-1)/2
+        v=(p[:,1]-(vmin+vmax)/2)*scalev + (H-1)/2
+        for k in range(len(u)-1):
+            steps=max(1,int(np.hypot(u[k+1]-u[k],v[k+1]-v[k])*2)+1)
+            tt=np.linspace(0,1,steps)
+            xs=np.rint(u[k]+tt*(u[k+1]-u[k])).astype(int)
+            ys=np.rint(v[k]+tt*(v[k+1]-v[k])).astype(int)
+            valid=(xs>=0)&(xs<W)&(ys>=0)&(ys<H)
+            img[ys[valid],xs[valid]]=1
+        # endpoints
+        xs=np.clip(np.rint(u).astype(int),0,W-1); ys=np.clip(np.rint(v).astype(int),0,H-1); img[ys,xs]=1
+    return img
+
+def clean_print(img,W=160,H=80):
+    # close/dilate then skeletonize
+    from scipy.ndimage import binary_dilation
+    d=binary_dilation(img, iterations=2)
+    sk=skeletonize(d)
+    # downsample x for printing
+    outW=110; outH=40
+    chars=' .:-=+*#%@'
+    for r in range(outH):
+        yy=int((r+0.5)*H/outH)
+        # combine 2 rows maybe
+        line=''
+        for c in range(outW):
+            xx=int((c+0.5)*W/outW)
+            # max over block
+            x0=int(c*W/outW); x1=max(x0+1,int((c+1)*W/outW))
+            y0=int(r*H/outH); y1=max(y0+1,int((r+1)*H/outH))
+            v=sk[y0:y1,x0:x1].sum()
+            # also d sum
+            line += '#' if v>0 else ' '
+        print(line)
+for name,axis in [('XY',(0,1)),('XZ',(0,2)),('YZ',(1,2))]:
+    img=project_img(axis)
+    print('\\n===',name,'skeleton (all chains)')
+    clean_print(img)
+PY
+python ascii_skeleton.py"

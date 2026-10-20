@@ -1,0 +1,42 @@
+/bin/bash -lc "python -u - <<'PY'
+import os, time
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from pydeseq2.default_inference import DefaultInference
+
+start=time.time()
+count_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+meta_path='inputs/Sample_annotated_Zenodo.csv'
+print('reading counts', flush=True)
+counts_gxs=pd.read_csv(count_path,index_col=0)
+print('loaded',counts_gxs.shape,counts_gxs.dtypes.value_counts().to_dict(),'elapsed',time.time()-start,flush=True)
+meta=pd.read_csv(meta_path,index_col='sample')
+assert counts_gxs.columns.is_unique and counts_gxs.index.is_unique and meta.index.is_unique
+assert set(counts_gxs.columns)==set(meta.index)
+meta=meta.loc[counts_gxs.columns, ['batch','sex']].copy()
+meta['batch']=meta['batch'].astype(str)
+meta['sex']=pd.Categorical(meta['sex'],categories=['F','M'])
+counts=counts_gxs.T
+# Free only the alternate frame name; transpose is generally a view until AnnData materializes.
+del counts_gxs
+print('matrix',counts.shape,'target mean',float(counts['FAM138A'].mean()),'sex',meta.sex.value_counts().to_dict(),'batch',meta.batch.value_counts().to_dict(),flush=True)
+print('all integer',bool(np.equal(np.mod(counts.to_numpy(copy=False),1),0).all()),'min',int(counts.min().min()),flush=True)
+inference=DefaultInference(n_cpus=min(8, os.cpu_count() or 1))
+print('constructing dds',flush=True)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~ batch + sex',refit_cooks=True,inference=inference,quiet=False)
+print('design columns',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+print('fitting deseq2',flush=True)
+dds.deseq2()
+print('fit complete elapsed',time.time()-start,flush=True)
+contrast=['sex','M','F']
+stats=DeseqStats(dds,contrast=contrast,inference=inference,quiet=False)
+stats.summary()
+print('unshrunk target',stats.results_df.loc['FAM138A'].to_dict(),flush=True)
+print('shrinking sex[T.M]',flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+print('shrunken target',stats.results_df.loc['FAM138A'].to_dict(),flush=True)
+print('qualifies thresholds',bool((abs(stats.results_df.loc['FAM138A','log2FoldChange'])>0.5) and (stats.results_df.loc['FAM138A','baseMean']>10)),flush=True)
+print('FINAL_VALUE',repr(float(stats.results_df.loc['FAM138A','log2FoldChange'])),flush=True)
+PY"

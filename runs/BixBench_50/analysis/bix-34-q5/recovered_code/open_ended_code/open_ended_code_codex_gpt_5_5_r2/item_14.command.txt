@@ -1,0 +1,67 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, statistics, itertools
+# reuse compact parser from previous run
+class Node:
+    __slots__=('name','length','children')
+    def __init__(self,name='',length=0.0,children=None): self.name=name; self.length=length; self.children=children or []
+def parse_newick(s):
+    s=s.strip();
+    if s.endswith(';'): s=s[:-1]
+    i=0; n=len(s)
+    def sub():
+        nonlocal i
+        ch=[]
+        if i<n and s[i]=='(':
+            i+=1
+            while True:
+                ch.append(sub())
+                if i<n and s[i]==',': i+=1; continue
+                if i<n and s[i]==')': i+=1; break
+                raise ValueError((i,s))
+        st=i
+        while i<n and s[i] not in ':,()': i+=1
+        name=s[st:i].strip(); length=0.0
+        if i<n and s[i]==':':
+            i+=1; st=i
+            while i<n and s[i] not in ',()': i+=1
+            length=float(s[st:i])
+        return Node(name,length,ch)
+    return sub()
+def mean_pd(root):
+    paths={}; leaves=[]
+    def walk(node,dist,path):
+        d=dist+node.length; p=path+[(node,d)]
+        if node.children:
+            for c in node.children: walk(c,d,p)
+        else:
+            leaves.append(node.name); paths[node.name]=p
+    walk(root,0,[])
+    vals=[]
+    for a,b in itertools.combinations(leaves,2):
+        pa,pb=paths[a],paths[b]; last=0
+        for (na,da),(nb,db) in zip(pa,pb):
+            if na is nb: last=da
+            else: break
+        vals.append(pa[-1][1]+pb[-1][1]-2*last)
+    return sum(vals)/len(vals), len(leaves)
+def collect(path):
+    d={}
+    with zipfile.ZipFile(path) as z:
+        for n in z.namelist():
+            if n.endswith('.treefile'):
+                busco=n.split('.')[0]
+                mpd,nt=mean_pd(parse_newick(z.read(n).decode()))
+                d[busco]=(mpd,nt)
+    return d
+a=collect('inputs/scogs_animals.zip'); f=collect('inputs/scogs_fungi.zip')
+common=sorted(set(a)&set(f))
+print('animal tree IDs',len(a),'fungi tree IDs',len(f),'common',len(common))
+print('common first last', common[:10], common[-10:])
+print('common med animals', statistics.median(a[x][0] for x in common))
+print('common med fungi', statistics.median(f[x][0] for x in common))
+print('common fungi/animals', statistics.median(f[x][0] for x in common)/statistics.median(a[x][0] for x in common))
+print('common n taxa animals', {k:sum(a[x][1]==k for x in common) for k in [3,4]})
+print('common n taxa fungi', {k:sum(f[x][1]==k for x in common) for k in [3,4]})
+common4=[x for x in common if a[x][1]==4 and f[x][1]==4]
+print('common both4',len(common4), statistics.median(f[x][0] for x in common4)/statistics.median(a[x][0] for x in common4) if common4 else None)
+PY"

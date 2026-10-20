@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import anndata as ad, pandas as pd, numpy as np
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+wnames=np.array([str(x) if x is not None else '' for x in A.var['feature_name']])
+orig=pd.read_csv('group_sums_Donor.csv',index_col=0)
+onames=np.array([str(x) for x in orig.index])
+wl=np.char.lower(wnames.astype('U')); ol=np.char.lower(onames.astype('U'))
+common=np.intersect1d(wl,ol)
+omap={s.lower():s for s in onames}
+# get donor pseudobulk log cpm
+D=np.load('donor_sum.npz'); wsum=D['sum']
+# map working common indices in wl order (not sorted) for variance later
+# easier: use original group sums and working sums common
+widx=np.array([np.where(wl==c)[0][0] for c in common])
+oidx=np.array([np.where(ol==c)[0][0] for c in common])
+W=wsum[widx,:].astype(float); O=orig.values[oidx,:].astype(float)
+def logcpm(X):
+ lib=X.sum(axis=0,keepdims=True); return np.log1p(X/lib*1e6)
+allm=np.concatenate([logcpm(W),logcpm(O)],axis=1)
+mu=allm.mean(axis=1,keepdims=True); sd=allm.std(axis=1,keepdims=True); sd[sd==0]=1
+Z=(allm-mu)/sd
+var=Z.var(axis=1)
+# select top 1500 common genes by variance; plus sex/control marker
+idx=np.argsort(-var)[:1500]
+sel=[omap[c] for c in common[idx]]
+# ensure some marker genes present? already in common likely
+extra=['XIST','RPS4Y1','DDX3Y','ISG15','IFI27','S100A8','S100A9','LYZ','CD3D','CD14','MS4A1','NKG7','HBB']
+for g in extra:
+    if g in omap.values() and g not in sel: sel.append(g)
+# unique preserving order
+seen=set(); out=[]
+for g in sel:
+    if g not in seen: out.append(g); seen.add(g)
+print('selected',len(out))
+with open('match_genes.txt','w') as f: f.write('\\n'.join(out))
+PY
+Rscript - <<'RS'
+library(Seurat)
+library(Matrix)
+cat('reading\\n'); t0<-Sys.time(); obj<-readRDS('GSE161918_AllBatches_SeuratObj.rds'); cat('read',format(difftime(Sys.time(),t0,units='mins')),'\\n')
+counts<-GetAssayData(obj,assay='RNA',slot='counts')
+genes<-readLines('match_genes.txt'); idx<-match(genes,rownames(counts)); cat('matched',sum("'!is.na(idx)),'"'of',length(genes),'\\n'); idx<-idx["'!is.na(idx)]
+sub<-counts[idx,,drop=FALSE]
+cat('"'sub dim',dim(sub),'nnz',length(sub@x),'\\n')
+subT<-Matrix::t(sub)
+writeMM(subT,'match_common_counts.mtx')
+cat('wrote mtx\\n')
+RS"

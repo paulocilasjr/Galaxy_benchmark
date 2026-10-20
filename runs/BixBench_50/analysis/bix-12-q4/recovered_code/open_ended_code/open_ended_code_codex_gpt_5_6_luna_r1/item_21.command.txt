@@ -1,0 +1,85 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, collections, os, math
+from scipy.stats import mannwhitneyu, rankdata
+
+def load(fn):
+ out=[]
+ with zipfile.ZipFile(fn) as z:
+  for name in z.namelist():
+   if not name.endswith('.mafft'): continue
+   text=z.read(name).decode()
+   seqs=[]; h=None; ss=[]; hs=[]
+   for line in text.splitlines():
+    if line.startswith('>'):
+     if h is not None: seqs.append(''.join(ss))
+     h=line[1:].strip(); hs.append(h); ss=[]
+    else: ss.append(line.strip())
+   if h is not None: seqs.append(''.join(ss))
+   assert len(set(map(len,seqs)))==1,(name,list(map(len,seqs)))
+   out.append((name,hs,seqs))
+ return out
+A=load('inputs/scogs_animals.zip'); F=load('inputs/scogs_fungi.zip')
+
+def metric(item, gap='missing', denom='all', minseq=None):
+ name,hs,seqs=item
+ if minseq and len(seqs)<minseq: return None
+ cols=list(zip(*seqs));
+ def state_col(col):
+  if gap=='missing': vals=[x for x in col if x not in '-?']
+  elif gap=='state': vals=list(col)
+  elif gap=='exclude_column':
+   if any(x in '-?' for x in col): return None
+   vals=list(col)
+  else: raise ValueError
+  c=collections.Counter(vals)
+  return sum(v>=2 for v in c.values())>=2
+ flags=[state_col(c) for c in cols]
+ pi=sum(x is True for x in flags)
+ if denom=='all': d=len(cols)
+ elif denom=='nongap': d=sum(x is not None for x in flags) # for missing, only nonempty? not enough
+ elif denom=='complete': d=sum(not any(x in '-?' for x in c) for c in cols)
+ elif denom=='variable':
+  d=sum(len(set(x for x in c if x not in '-?'))>1 for c in cols)
+ elif denom=='informative_possible': d=len(cols)
+ else: raise ValueError
+ return 100*pi/d if d else 0
+
+# Better denominator definitions: non-gap columns means no gaps at all; missing denominator maybe columns with >=? 
+def metrics(item,gap='missing',denom='all'):
+ _,_,seqs=item; cols=list(zip(*seqs));
+ if gap=='missing':
+  clean=[[x for x in c if x not in '-?'] for c in cols]
+ elif gap=='state': clean=[list(c) for c in cols]
+ elif gap=='complete':
+  cols=[c for c in cols if not any(x in '-?' for x in c)]; clean=[list(c) for c in cols]
+ def inf(vals):
+  c=collections.Counter(vals)
+  return sum(v>=2 for v in c.values())>=2
+ if gap=='complete': pi=sum(inf(c) for c in clean)
+ else: pi=sum(inf(c) for c in clean)
+ if denom=='all': d=len(list(zip(*seqs)))
+ elif denom=='available': d=sum(bool(c) for c in clean)
+ elif denom=='complete': d=len(clean)
+ elif denom=='variable': d=sum(len(set(c))>1 for c in clean)
+ else: raise ValueError
+ return 100*pi/d if d else 0
+
+for label,kwargs in [
+ ('all-gapmissing-all',dict(gap='missing',denom='all')),
+ ('all-gapstate-all',dict(gap='state',denom='all')),
+ ('all-complete-complete',dict(gap='complete',denom='complete')),
+ ('all-gapmissing-available',dict(gap='missing',denom='available')),
+ ('all-gapmissing-variable',dict(gap='missing',denom='variable')),
+]:
+ av=[metrics(x,**kwargs) for x in A]; fv=[metrics(x,**kwargs) for x in F]
+ u=mannwhitneyu(av,fv,alternative='two-sided',method='auto').statistic
+ print(label,'U_A',u,'p',mannwhitneyu(av,fv,alternative='two-sided',method='auto').pvalue,'n',len(av),len(fv),'ranges',min(av),max(av),min(fv),max(fv),'zero',sum(x==0 for x in av),sum(x==0 for x in fv))
+ for minseq in [4]:
+  aa=[metrics(x,**kwargs) for x in A if len(x[1])>=minseq]; ff=[metrics(x,**kwargs) for x in F if len(x[1])>=minseq]
+  print('  nseq>=',minseq,'U',mannwhitneyu(aa,ff).statistic,'p',mannwhitneyu(aa,ff).pvalue,'n',len(aa),len(ff),'zero',sum(x==0 for x in aa),sum(x==0 for x in ff))
+# common IDs all gapmissing-all
+ad={x[0].replace('.mafft',''): metrics(x,gap='missing',denom='all') for x in A}; fd={x[0].replace('.mafft',''): metrics(x,gap='missing',denom='all') for x in F}
+for scope,ids in [('common',set(ad)&set(fd)),('all',set(ad)|set(fd))]:
+ aa=[ad[i] for i in ids if i in ad]; ff=[fd[i] for i in ids if i in fd]
+ print(scope,'n',len(aa),len(ff),'U',mannwhitneyu(aa,ff).statistic)
+PY"

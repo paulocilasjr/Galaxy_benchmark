@@ -1,0 +1,71 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import exp, log, isfinite
+p='inputs/data.xlsx'
+ws=load_workbook(p,data_only=True,read_only=True).active
+obs=[]
+for row in ws.iter_rows(min_row=2,max_col=12,values_only=True):
+    efficacy=row[2]
+    bmi=row[10]
+    if efficacy is None:
+        continue
+    if not isinstance(bmi,(int,float)):
+        raise ValueError(('nonnumeric BMI',row))
+    y=1.0 if efficacy=='PR' else 0.0
+    obs.append((float(bmi),y,efficacy))
+print('n',len(obs),'y1',sum(y for x,y,e in obs),'y0',sum(1-y for x,y,e in obs))
+print('BMI range',min(x for x,y,e in obs),max(x for x,y,e in obs))
+
+def sigmoid(z):
+    if z>=0:
+        ez=exp(-z)
+        return 1/(1+ez)
+    ez=exp(z)
+    return ez/(1+ez)
+
+def log1pexp(z):
+    if z>0: return z+log1p(exp(-z))
+    return log1p(exp(z))
+from math import log1p
+b0=0.0;b1=0.0
+for it in range(100):
+    g0=g1=0.0
+    # negative Hessian information entries
+    h00=h01=h11=0.0
+    ll=0.0
+    for x,y,e in obs:
+        z=b0+b1*x
+        p=sigmoid(z)
+        g0 += y-p
+        g1 += x*(y-p)
+        w=p*(1-p)
+        h00 += w
+        h01 += x*w
+        h11 += x*x*w
+        ll += y*z-log1pexp(z)
+    det=h00*h11-h01*h01
+    # solve H * step = gradient where H is information (negative log-likelihood Hessian), Newton b += H"'^-1 grad
+    d0=(h11*g0-h01*g1)/det
+    d1=(-h01*g0+h00*g1)/det
+    # line search ensure ll increase
+    step=1.0
+    old=(b0,b1,ll)
+    while step>1e-12:
+        nb0=b0+step*d0;nb1=b1+step*d1
+        nll=sum(y*(nb0+nb1*x)-log1pexp(nb0+nb1*x) for x,y,e in obs)
+        if nll>=ll:
+            b0,b1,ll=nb0,nb1,nll
+            break
+        step*=0.5
+    if it<10 or it%10==0:
+        print(it,'"'b',b0,b1,'ll',ll,'g',g0,g1,'d',d0,d1,'step',step)
+    if max(abs(step*d0),abs(step*d1))<1e-14:
+        print('converged',it)
+        break
+print('coef',repr(b0),repr(b1))
+print('logLik',repr(ll),'AIC',repr(4-2*ll))
+# compute null AIC too
+p0=sum(y for x,y,e in obs)/len(obs)
+ll0=sum(y*log(p0)+(1-y)*log(1-p0) for x,y,e in obs)
+print('null',repr(ll0),'AIC',repr(2-2*ll0),'LR',repr(2*(ll-ll0)))
+PY"

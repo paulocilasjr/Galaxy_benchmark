@@ -1,0 +1,38 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(Matrix)
+obj <- readRDS('tissue.fibroblast.q1.rds')
+dn <- attr(obj,'Dimnames'); genes <- dn[[1]]; cells <- dn[[2]]
+targets <- c('Cell_11249_MCI','Cell_10369_WXV')
+cs <- Matrix::colSums(obj)
+# log CPM-ish sparse: scale nonzero x by 1e4/cs then log1p
+X <- obj
+for (j in seq_len(ncol(X))) {
+  st <- X@p[j]+1; en <- X@p[j+1]
+  if (en >= st) X@x[st:en] <- log1p(X@x[st:en] / cs[j] * 1e4)
+}
+# keep variable genes by nonzero frequency and variance approximation
+# Use all genes but compute cosine target similarity
+col_norm <- sqrt(Matrix::colSums(X"'^2))
+for (tar in targets) {
+  ti <- match(tar, cells)
+  tv <- X[,ti,drop=FALSE]
+  dots <- as.numeric(Matrix::crossprod(tv, X))
+  sim <- dots/(col_norm[ti]*col_norm)
+  sim[ti] <- NA
+  top <- order(sim, decreasing=TRUE, na.last=NA)[1:100]
+  nums <- as.integer(sub('"'Cell_([0-9]+)_.*','\\\\1', cells[top]))
+  cat('\\nTARGET', tar, 'top sim range', round(range(sim[top]),3), '\\n')
+  cat('top cells:', paste(cells[top[1:20]], collapse=', '), '\\n')
+  cat('numeric summary:', paste(summary(nums), collapse=' '), '\\n')
+  # aggregate marker expression among top100 raw counts detection and mean
+  markers <- c('Adipoq','Lpl','Fabp4','Plin1','Cfd','Ccl19','Ccl21a','Ccl21b','Ccl21c','Cxcl13','Il7','Pdpn','Lyve1','Tnmd','Scx','Mkx','Col22a1','Thbs4','Myod1','Myog','Myl1','Tnnt3','Tnnt2','Myh6','Myh7','Nppa','Myl2','Alb','Apoa1','Cyp2e1','Rbp4','Sftpc','Sftpa1','Scgb1a1','Krt14','Krt5','Krt10','Krt17','Epcam','Muc2','Reg3g','Fabp1','Amy2a5','Prss2','Pnlip','Ins1','Ins2','Sost','Bglap','Ibsp','Mmp13','Spp1','Mgp','Vcam1','Icam1','Msln','Wt1','Upk3b','Pdgfra','Dcn','Col1a1','Col1a2','Lum','Clec3b','Pi16','Dpt','Col15a1','Cxcl14','Postn','Acta2','Tagln','Rgs5','Myh11')
+  markers <- markers[markers %in% genes]
+  raw <- obj[match(markers,genes), c(ti,top), drop=FALSE]
+  det <- Matrix::rowMeans(raw[, -1, drop=FALSE] > 0)
+  mean_expr <- Matrix::rowMeans(raw[, -1, drop=FALSE])
+  tar_expr <- as.numeric(raw[,1])
+  names(det) <- markers; names(mean_expr) <- markers; names(tar_expr) <- markers
+  ord <- order(det, mean_expr, decreasing=TRUE)
+  print(data.frame(gene=markers[ord][1:25], target=tar_expr[ord][1:25], det=round(det[ord][1:25],2), mean=round(mean_expr[ord][1:25],2)), row.names=FALSE)
+}
+RS"

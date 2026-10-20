@@ -1,0 +1,52 @@
+/usr/bin/bash -lc "/opt/conda/bin/python - <<'PY'
+import re, math, os, glob, collections, time
+base='data/inputs'
+with open(base+'/distinct_peptides_for_pepquery/Distinct_Peptides_for_PepQuery.tabular') as f: peptides=[x.strip() for x in f if x.strip()]
+AA={'A':71.037113805,'R':156.10111105,'N':114.04292747,'D':115.026943065,'C':103.009184505,'E':129.042593135,'Q':128.05857754,'G':57.021463735,'H':137.058911875,'I':113.084064015,'L':113.084064015,'K':128.09496305,'M':131.040484645,'F':147.068413945,'P':97.052763875,'S':87.032028435,'T':101.047678505,'W':186.07931298,'Y':163.063328575,'V':99.068413945}
+H2O=18.010564684; PROTON=1.007276466621; TMT=229.162932; CAM=57.021463735; OX=15.99491462
+
+def mass(seq,ox=0): return sum(AA[x] for x in seq)+H2O+TMT+seq.count('K')*TMT+seq.count('C')*CAM+ox*OX
+# expected dictionary by charge and rounded m/z
+entries=[]
+for p in peptides:
+  for o in range(p.count('M')+1):
+    nm=mass(p,o)
+    for z in range(2,7): entries.append((nm,z,(nm+z*PROTON)/z,p,o))
+# sorted by mz for scan windows
+entries.sort(key=lambda x:x[2])
+# candidate indexes per charge via binary search maybe use bisect
+from bisect import bisect_left,bisect_right
+byz={z:[] for z in range(2,7)}
+for e in entries: byz[e[1]].append(e)
+for z in byz: byz[z].sort(key=lambda x:x[2])
+starts={z:[e[2] for e in byz[z]] for z in byz}
+match=collections.defaultdict(list); spec_count=0; t0=time.time()
+for fn in sorted(glob.glob(base+'/tandem_mass_spectrometry_ms_ms_datasets/*/*.mgf')):
+  file=os.path.basename(fn)
+  mz=None; z=None; title=None; rt=None
+  with open(fn,errors='replace') as f:
+    for line in f:
+      if line.startswith('BEGIN IONS'):
+        mz=z=title=rt=None
+      elif line.startswith('TITLE='): title=line.rstrip()[6:]
+      elif line.startswith('RTINSECONDS='): rt=float(line.rstrip().split('=',1)[1])
+      elif line.startswith('PEPMASS='): mz=float(line.rstrip().split('=',1)[1].split()[0])
+      elif line.startswith('CHARGE='):
+        mm=re.search(r'(\\d+)',line)
+        z=int(mm.group(1)) if mm else None
+      elif line.startswith('END IONS'):
+        spec_count+=1
+        if mz is not None and z in byz:
+          arr=byz[z]; a=starts[z]; tol=mz*10e-6
+          lo=bisect_left(a,mz-tol); hi=bisect_right(a,mz+tol)
+          for nm,zz,emz,p,o in arr[lo:hi]:
+            ppm=(mz-emz)/emz*1e6
+            match[p].append((file,title,rt,z,mz,ppm,o,emz))
+  print(file,'done',spec_count,'elapsed',round(time.time()-t0,1),'matches so far',sum(map(len,match.values())))
+print('spectra',spec_count,'peptides with precursor matches',len(match),'total matches',sum(map(len,match.values())))
+for p in peptides:
+  mm=match.get(p,[])
+  if mm:
+    print(p,len(mm))
+    for x in mm[:20]: print(' ',x[0],x[3],f'mz={x[4]:.6f}',f'ppm={x[5]:.3f}','ox',x[6],x[1])
+PY"

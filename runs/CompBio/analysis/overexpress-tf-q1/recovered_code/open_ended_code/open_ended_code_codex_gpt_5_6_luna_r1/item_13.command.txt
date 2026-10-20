@@ -1,0 +1,50 @@
+/bin/bash -lc "samtools faidx hg38.fa && python3 - <<'PY'
+import gzip, os, math, numpy as np
+from collections import OrderedDict
+B=500
+chrom_sizes={}
+with open('hg38.fa.fai') as f:
+ for line in f:
+  c,n,*_=line.split();
+  if c in {f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}:
+   chrom_sizes[c]=int(n)
+chroms=list(chrom_sizes)
+
+def count_file(fn):
+ arr={c:np.zeros((n+B-1)//B,dtype=np.int32) for c,n in chrom_sizes.items()}
+ total=0
+ with gzip.open(fn,'rt') as f:
+  for line in f:
+   c,s,e=line.split()[:3]
+   if c in arr:
+    mid=(int(s)+int(e))//2
+    arr[c][mid//B]+=1
+    total+=1
+ return arr,total
+r,nr=count_file('overexpress.tf.q1.ref.bed.gz')
+p,npn=count_file('overexpress.tf.q1.perturb.bed.gz')
+print('main totals',nr,npn,'ratio',npn/nr)
+# build top normalized shifts, filter min count
+scale=nr/npn
+rows=[]
+for c,a in r.items():
+ b=p[c]
+ for i,(x,y) in enumerate(zip(a,b)):
+  if x+y>=20 and (x>=10 or y>=10):
+   # normalized pert / ref with modest prior to rank low counts
+   l2=math.log2((y*scale+2)/(x+2))
+   # approximate poisson z of difference after scaling
+   z=(y*scale-x)/math.sqrt(y*scale+x+4)
+   rows.append((l2,z,c,i*B,min((i+1)*B,chrom_sizes[c]),int(x),int(y)))
+rows.sort(reverse=True)
+with open('diff_bins500.tsv','w') as out:
+ out.write('log2fc\\tz\\tchrom\\tstart\\tend\\tref\\tpert\\n')
+ for row in rows: out.write('\\t'.join(map(str,row))+'\\n')
+print('candidate bins',len(rows))
+print('top l2')
+for x in rows[:30]: print(x)
+print('top z')
+for x in sorted(rows,key=lambda z:z[1],reverse=True)[:30]: print(x)
+print('bottom l2')
+for x in sorted(rows)[:30]: print(x)
+PY"

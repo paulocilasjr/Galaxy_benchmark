@@ -1,0 +1,76 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import gzip, py2bit, numpy as np, sys, time
+# file and 2bit
+frag='unknown.shift.frag.bed.gz'
+tb=py2bit.open('hg38.2bit')
+# canonical chroms existing
+valid=set(tb.chroms())
+bases='ACGT'
+# ranges
+Amin,Amax=-15,15
+Bmin,Bmax=-15,15
+w=15  # window radius
+# count matrices left/right: [A index][pos 2w+1][4]
+Avals=list(range(Amin,Amax+1))
+Bvals=list(range(Bmin,Bmax+1))
+left_counts=np.zeros((len(Avals),2*w+1,4),dtype=np.float64)
+right_counts=np.zeros((len(Bvals),2*w+1,4),dtype=np.float64)
+n=0
+skipped=0
+start_t=time.time()
+with gzip.open(frag,'rt') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        chrom=parts[0]
+        if chrom not in valid:
+            skipped+=1
+            continue
+        s=int(parts[1]); e=int(parts[2])
+        # broad windows
+        ls=s-40; le=s+50
+        rs=e-50; re=e+40
+        try:
+            lseq=tb.sequence(chrom,ls,le)
+            rseq=tb.sequence(chrom,rs,re)
+        except Exception as ex:
+            skipped+=1
+            continue
+        lseq=lseq.upper(); rseq=rseq.upper()
+        # For each A: L=s-A+4; window pos p=-w..w => coordinate L+p. Index in lseq: (L+p)-ls = s-A+4+p - (s-40)=44-A+p
+        for ia,A in enumerate(Avals):
+            start_idx=44-A-w
+            for p in range(2*w+1):
+                b=lseq[start_idx+p]
+                if b in bases:
+                    left_counts[ia,p,bases.index(b)] += 1
+        # For each B: R=e-B-5; window coordinate R+p; idx=(R+p)-rs=(e-B-5+p)-(e-50)=45-B+p
+        for ib,B in enumerate(Bvals):
+            start_idx=45-B-w
+            for p in range(2*w+1):
+                b=rseq[start_idx+p]
+                if b in bases:
+                    right_counts[ib,p,bases.index(b)] += 1
+        n+=1
+        if n%10000==0:
+            print('processed',n,'time',time.time()-start_t, 'skipped',skipped, file=sys.stderr)
+print('total',n,'skipped',skipped)
+# background from all windows maybe uniform; use hg38 global A/T=0.295 C/G=0.205? compute from total counts over all shifts? use .25 first
+bg=np.array([0.25,0.25,0.25,0.25])
+def score(counts):
+    # KL per position sum
+    totals=counts.sum(axis=2,keepdims=True)
+    freq=counts/np.maximum(totals,1e-9)
+    kl=np.sum(freq*np.log((freq+1e-12)/(bg+1e-12)),axis=2)
+    return kl.sum(axis=1)
+ls=score(left_counts); rs=score(right_counts)
+print('LEFT scores')
+for A,sc in zip(Avals,ls):
+    print(A, f'{sc:.4f}', 'count', left_counts[len(Avals)//2].sum(axis=0).sum() if A==Avals[0] else '')
+print('RIGHT scores')
+for B,sc in zip(Bvals,rs):
+    print(B, f'{sc:.4f}')
+# save matrices
+np.savez('shift_counts.npz', Avals=Avals,Bvals=Bvals,left_counts=left_counts,right_counts=right_counts)
+tb.close()
+PY
+python [REDACTED LOCAL PATH]"

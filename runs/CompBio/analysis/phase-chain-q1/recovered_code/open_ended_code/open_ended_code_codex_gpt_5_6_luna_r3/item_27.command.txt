@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.parse,urllib.request,edlib,re,collections
+from Bio.Seq import Seq
+url='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'+urllib.parse.urlencode({'db':'nuccore','id':'AL008638.1','seq_start':'60000','seq_stop':'70000','rettype':'fasta','strand':'1','retmode':'text'})
+out=urllib.request.urlopen(url,timeout=30).read().decode(); ref=''.join(x.strip() for x in out.splitlines() if not x.startswith('>'))
+def reads(p):
+ with gzip.open(p,'rt') as f:
+  while True:
+   h=f.readline().strip()
+   if not h:return
+   s=f.readline().strip();f.readline();f.readline();yield h,s
+def aln(s):
+ arr=[]
+ for ori,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+  a=edlib.align(q,ref,mode='HW',task='path',k=-1)
+  arr.append((a['editDistance'],ori,q,a['locations'][0],a['cigar']))
+ return min(arr,key=lambda x:(x[0], x[3][0]))
+def parse_cigar(c):
+ return [(op,int(n)) for n,op in re.findall(r'(\\d+)([=XID])',c)]
+base=[collections.Counter() for _ in ref]; cov=[0]*len(ref); dels=collections.Counter(); ins=collections.Counter();
+reads_aln=[]
+for fn in ['phase.chain.q1.R1.fq.gz','phase.chain.q1.R2.fq.gz']:
+ for h,s in reads(fn):
+  d,ori,q,(st,en),c=aln(s); t=st; qi=0
+  for op,n in parse_cigar(c):
+   if op in '=X':
+    for j in range(n): base[t][q[qi]]=base[t].get(q[qi],0)+1;cov[t]+=1;t+=1;qi+=1
+   elif op=='I':
+    ins[(t,q[qi:qi+n])]+=1;qi+=n
+   else:
+    dels[(t,n)]+=1;t+=n
+  if qi "'!= len(q): print('"'q err',h,qi,len(q),c)
+  reads_aln.append((h,fn[-8:-6],ori,st,en,d,c))
+print('reads',len(reads_aln),'ref len',len(ref))
+print('SNP-ish positions')
+for i,cnt in enumerate(base):
+ if len(cnt)>1:
+  # only positions covered enough; all positions range
+  print(f'{60000+i+1:5d} ref {ref[i]} cov {cov[i]:4d} '+ ' '.join(f'{b}:{n}' for b,n in cnt.most_common()))
+print('insertions')
+for (t,s),n in ins.most_common(): print(60000+t+1,'before ref',ref[t:t+10],repr(s),n)
+print('deletions')
+for (t,l),n in dels.most_common(): print(60000+t+1,'ref',ref[t:t+l],l,n)
+PY"

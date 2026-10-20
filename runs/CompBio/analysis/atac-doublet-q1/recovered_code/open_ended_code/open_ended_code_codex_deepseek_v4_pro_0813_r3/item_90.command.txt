@@ -1,0 +1,23 @@
+/bin/bash -c "python3 - <<'PY'
+import snapatac2 as snap, numpy as np, time
+adata=snap.read('atac.snap.h5ad')
+df=adata.uns['macs3_pseudobulk']
+chroms=df['chrom'].to_list(); starts=df['start'].to_list(); ends=df['end'].to_list()
+peaks=[f'{c}:{s}-{e}' for c,s,e in zip(chroms,starts,ends)]
+print(peaks[:5], len(peaks))
+adata.uns['peaks']=peaks
+adata2=snap.pp.make_peak_matrix(adata, use_rep=None, inplace=False, counting_strategy='fragment')
+print('peak mat', adata2.shape, type(adata2.X), getattr(adata2.X,'nnz',None))
+# save peak names maybe var
+print(adata2.var[:5])
+# select features maybe not needed? Try all peaks with scrublet (185k features, 1000 cells; spectral may handle but maybe too many)
+snap.pp.select_features(adata2, n_features=50000, filter_lower_quantile=0.005, filter_upper_quantile=0.005)
+print('selected sum', np.array(adata2.var['selected']).sum() if 'selected' in adata2.var else '?')
+snap.pp.scrublet(adata2, expected_doublet_rate=0.06, sim_doublet_ratio=2.0, n_comps=30, random_state=0)
+print('scrub done')
+p=np.array(adata2.obs['doublet_probability']); s=np.array(adata2.obs['doublet_score']); names=np.array(adata2.obs_names)
+print('p max',p.max(),'p>0.5',(p>0.5).sum(),'p>0.1',(p>0.1).sum(),'s max',s.max())
+idx=np.argsort(-s)
+for i in idx[:40]: print(names[i],p[i],s[i])
+adata2.write('atac_peaks_scrub.h5ad')
+PY"

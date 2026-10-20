@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import urllib.parse, urllib.request, time, re, json, sys
+query=open('unmapped_sample1000.fa').read()
+params={'CMD':'Put','PROGRAM':'blastn','DATABASE':'nt','MEGABLAST':'on','QUERY':query,'FORMAT_TYPE':'JSON2_S','HITLIST_SIZE':'5','DESCRIPTIONS':'5','ALIGNMENTS':'0'}
+data=urllib.parse.urlencode(params).encode()
+print('submitting bytes',len(data),flush=True)
+resp=urllib.request.urlopen(urllib.request.Request('https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi',data=data),timeout=180)
+text=resp.read().decode()
+print('submit len',len(text),flush=True)
+m=re.search(r'RID = (\\S+)', text)
+print('rid',m.group(1) if m else 'none',flush=True)
+rid=m.group(1); open('unmapped1000_rid.txt','w').write(rid)
+for i in range(120):
+    time.sleep(5)
+    try:
+        url='https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?'+urllib.parse.urlencode({'CMD':'Get','FORMAT_TYPE':'JSON2_S','RID':rid})
+        txt=urllib.request.urlopen(url,timeout=120).read().decode()
+        status='unknown'
+        if txt.lstrip().startswith('{'):
+            status='READY'
+        else:
+            ms=re.search(r'Status=(\\w+)',txt)
+            status=ms.group(1) if ms else 'HTML'
+        print('poll',i+1,'status',status,'len',len(txt),flush=True)
+        if status=='READY':
+            open('unmapped1000_blast.json','w').write(txt)
+            print('DONE',flush=True); sys.exit(0)
+        if status in ('FAILED','UNKNOWN'):
+            print(txt[:2000],flush=True); sys.exit(2)
+    except Exception as e:
+        print('poll error',repr(e),flush=True)
+print('TIMEOUT',flush=True)
+PY"

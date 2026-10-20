@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import scanpy as sc
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+
+files=['pbmc3k.h5ad','10x_pbmc68k_reduced.h5ad']
+adatas=[]
+for f in files:
+    a=sc.read_h5ad(f)
+    # Exclude rows with missing gene_symbols, if column exists
+    if 'gene_symbols' in a.var.columns:
+        a = a[:, ~a.var['gene_symbols'].isna()].copy()
+    adatas.append(a)
+# Resolve common genes using exact string values from adata.var_names
+common = np.intersect1d(np.asarray(adatas[0].var_names, dtype=str),
+                        np.asarray(adatas[1].var_names, dtype=str))
+print('common genes:', len(common))
+subs=[]
+for a in adatas:
+    b=a[:, common].copy()
+    sc.pp.highly_variable_genes(b, flavor='seurat')
+    subs.append(b)
+
+allowed = {'True','1','TRUE'}  # dedup of [\"True\",\"True\",\"1\",\"TRUE\"]
+hvg_sets=[]
+for i,b in enumerate(subs):
+    mask = b.var['highly_variable'].astype(str).isin(allowed)
+    genes = set(b.var_names[mask])
+    hvg_sets.append(genes)
+    print(files[i], 'n_hvg', len(genes))
+inter = len(hvg_sets[0] & hvg_sets[1])
+union = len(hvg_sets[0] | hvg_sets[1])
+print('inter', inter, 'union', union)
+if union == 0:
+    ans = float('nan')
+else:
+    ans = inter / union
+print('raw jaccard', ans)
+print('rounded', format(round(ans,2), '.2f'))
+PY"

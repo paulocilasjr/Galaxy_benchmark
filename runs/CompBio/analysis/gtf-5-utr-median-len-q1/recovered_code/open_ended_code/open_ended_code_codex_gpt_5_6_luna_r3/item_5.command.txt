@@ -1,0 +1,80 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, re
+from collections import defaultdict, Counter
+import numpy as np
+
+path='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+
+def attrs(s):
+    d=defaultdict(list)
+    for k,v in re.findall(r'(\\S+) \"(["'^"]*)"'"',s): d[k].append(v)
+    return d
+
+def union_len(iv):
+    if not iv: return 0
+    iv=sorted((min(a,b),max(a,b)) for a,b in iv)
+    n=0; a,b=iv[0]
+    for c,d in iv[1:]:
+        if c<=b+1: b=max(b,d)
+        else: n += b-a+1; a,b=c,d
+    return n+b-a+1
+
+def subtract_len(a, b):
+    # length of union a minus union b
+    if not a: return 0
+    # simple coordinate set-free sweep
+    total=0
+    for x,y in sorted(a):
+        pieces=[(x,y)]
+        for u,v in sorted(b):
+            new=[]
+            for p,q in pieces:
+                if v<p or u>q: new.append((p,q)); continue
+                if p<u: new.append((p,u-1))
+                if v<q: new.append((v+1,q))
+            pieces=new
+        total += sum(q-p+1 for p,q in pieces)
+    return total
+
+tr={}
+with gzip.open(path,'rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)"'!=9: continue
+        seq,src,typ,start,end,score,strand,frame,at=p
+        if seq not in std: continue
+        d=attrs(at)
+        tid=d['"'transcript_id'][0] if d['transcript_id'] else ''
+        if not tid or 'MANE Select' not in d.get('tag',[]): continue
+        x=tr.setdefault(tid, {'seq':seq,'strand':strand,'exon':[],'CDS':[],'stop':[],'start':[]})
+        x[typ].append((int(start),int(end))) if typ in x else None
+print('transcripts',len(tr), 'seqs',Counter(x['seq'] for x in tr.values()).most_common()[:5])
+rows=[]
+for tid,x in tr.items():
+    ex=x['exon']; cds=x['CDS']; stop=x['stop']
+    coding=cds+stop
+    if not ex or not cds:
+        print('missing',tid, {k:len(x[k]) for k in ['exon','CDS','stop','start']})
+        continue
+    cmin=min(a for a,b in coding); cmax=max(b for a,b in coding)
+    if x['strand']=='+':
+        five=[(a,min(b,cmin-1)) for a,b in ex if a<cmin]
+        three=[(max(a,cmax+1),b) for a,b in ex if b>cmax]
+    else:
+        five=[(max(a,cmax+1),b) for a,b in ex if b>cmax]
+        three=[(a,min(b,cmin-1)) for a,b in ex if a<cmin]
+    # filter malformed intervals
+    five=[z for z in five if z[0]<=z[1]]; three=[z for z in three if z[0]<=z[1]]
+    rows.append((tid, union_len(five), union_len(cds)+union_len(stop), union_len(three), union_len(ex), union_len(cds), union_len(stop)))
+arr=np.array([r[1:4] for r in rows],dtype=int)
+print('rows',arr.shape)
+print('medians',np.median(arr,axis=0), 'floors',np.floor(np.median(arr,axis=0)).astype(int))
+print('mins',arr.min(0),'maxs',arr.max(0),'zeros',(arr==0).sum(0))
+print('CDS method sum total med',np.median([r[5]+r[6] for r in rows]))
+# check totals
+print('total discrepancies ex vs components',sum(r[4] "'!= sum(r[1:4]) for r in rows))
+for i,n in enumerate(['"'5','CDS','3']):
+ print(n, 'first sorted', sorted(arr[:,i])[:10], 'last',sorted(arr[:,i])[-10:])
+PY"

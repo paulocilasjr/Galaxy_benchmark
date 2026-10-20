@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math
+base='/workspace/inputs'
+# load ann cd14 ids, meta pc
+with open(base+'/Sample_annotated_Zenodo.csv', newline='') as fh:
+    ann=list(csv.DictReader(fh))
+cd14_ids={r['sample'] for r in ann if r['celltype']=='CD14'}
+meta={}; pc=set()
+with open(base+'/GeneMetaInfo_Zenodo.csv', newline='') as fh:
+    r=csv.reader(fh); h=next(r)
+    gi=h.index('Geneid'); li=h.index('Length'); bi=h.index('gene_biotype')
+    for row in r:
+        if len(row)<=max(gi,li,bi): continue
+        meta[row[gi]]=float(row[li])
+        if row[bi]=='protein_coding': pc.add(row[gi])
+
+def pearson(pairs):
+    x=[p[0] for p in pairs]; y=[p[1] for p in pairs]
+    mx=sum(x)/len(x); my=sum(y)/len(y)
+    cov=sum((a-mx)*(b-my) for a,b in zip(x,y))
+    return cov/math.sqrt(sum((a-mx)**2 for a in x)*sum((b-my)**2 for b in y))
+variants={}
+with open(base+'/BatchCorrectedReadCounts_Zenodo.csv', newline='') as fh:
+    r=csv.reader(fh); header=next(r)
+    header=[x.strip() for x in header]
+    idx=[j for j,h in enumerate(header) if h in cd14_ids]
+    allidx=list(range(1,len(header)))
+    rows=[]
+    for row in r:
+        gid=row[0].strip()
+        if gid not in pc: continue
+        vals=[float(row[j]) for j in allidx]
+        cd14=[float(row[j]) for j in idx]
+        rows.append((meta[gid], sum(cd14), sum(vals)))
+    print('total pc in matrix',len(rows))
+    for desc, cond in [
+      ('cd14 total>=10',lambda a,b,c:a>=10),
+      ('all total>=10',lambda a,b,c:c>=10),
+      ('cd14 total>=0',lambda a,b,c:True),
+      ('cd14 mean>=1',lambda a,b,c:a>=len(cd14_ids)),
+    ]:
+        pairs=[(l,cd/len(idx)) for l,cd,all in rows if cond(l,cd,all)]
+        r=pearson(pairs)
+        print(desc, len(pairs), 'r', r)
+        variants[desc]=(len(pairs),r)
+PY"

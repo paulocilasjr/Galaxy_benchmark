@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter
+
+def read_fasta(path):
+    return ''.join(l.strip() for l in open(path) if not l.startswith('>')).upper()
+def rc(s): return s.translate(str.maketrans('ACGTN','TGCAN'))[::-1]
+def reads(path):
+    with open(path) as f:
+        for i,line in enumerate(f):
+            if i%4==1: yield line.strip()
+def bestpos(r,ref):
+    for rr in (r, rc(r)):
+        p=ref.find(rr)
+        if p>=0: return p,0
+    best=(999,None)
+    for rr in (r,rc(r)):
+        L=len(rr)
+        for i in range(len(ref)-L+1):
+            d=sum(a"'!=b for a,b in zip(rr,ref[i:i+L]))
+            if d<best[0]: best=(d,i)
+    return best[1],best[0]
+ref=read_fasta('"'KLF4_NM_004235.6.fa')
+pos={}
+for name in ['exo','endo','mix']:
+    pos[name]=[bestpos(r,ref)[0] for r in reads(f'exogenous.mix.reads.q1.{name}.fq')]
+lo=min(pos['exo']); hi=max(pos['exo'])
+print('exo support',lo,hi)
+for window in [(lo,hi),(600,2000),(604,1986),(604,2036),(554,1986),(500,2100)]:
+    a,b=window
+    pe=sum(a<=p<=b for p in pos['exo'])/len(pos['exo'])
+    pd=sum(a<=p<=b for p in pos['endo'])/len(pos['endo'])
+    pm=sum(a<=p<=b for p in pos['mix'])/len(pos['mix'])
+    f=(pm-pd)/(pe-pd) if pe"'!=pd else None
+    print(window,'"'pe pd pm f',pe,pd,pm,f,'counts',sum(a<=p<=b for p in pos['exo']),sum(a<=p<=b for p in pos['endo']),sum(a<=p<=b for p in pos['mix']))
+# MLE by bins positions with smoothing: Q = f P_ex + (1-f) P_end; use binned hist. Try bin widths.
+import math
+for bw in [1,5,10,25,50,100,200,500]:
+    nb=(len(ref)+bw-1)//bw
+    ce=[0]*nb; cd=[0]*nb; cm=[0]*nb
+    for p in pos['exo']: ce[p//bw]+=1
+    for p in pos['endo']: cd[p//bw]+=1
+    for p in pos['mix']: cm[p//bw]+=1
+    # Dirichlet smoothing alpha per bin
+    for alpha in [0,0.1,0.5,1,2]:
+        Ne=len(pos['exo']); Nd=len(pos['endo'])
+        pe=[(c+alpha)/(Ne+alpha*nb) for c in ce]
+        pd=[(c+alpha)/(Nd+alpha*nb) for c in cd]
+        best=None
+        for j in range(1001):
+            f=j/1000
+            ll=0
+            ok=True
+            for m,a,b in zip(cm,pe,pd):
+                q=f*a+(1-f)*b
+                if m and q<=0: ok=False; break
+                if m: ll += m*math.log(q)
+            if ok and (best is None or ll>best[0]): best=(ll,f)
+        print('bw',bw,'alpha',alpha,'f',best[1] if best else None)
+    print()
+# Least squares on bins with no smoothing
+for bw in [50,100,200,500]:
+    nb=(len(ref)+bw-1)//bw
+    import numpy as np
+    ce=np.zeros(nb); cd=np.zeros(nb); cm=np.zeros(nb)
+    for p in pos['exo']: ce[p//bw]+=1
+    for p in pos['endo']: cd[p//bw]+=1
+    for p in pos['mix']: cm[p//bw]+=1
+    pe=ce/len(pos['exo']); pd=cd/len(pos['endo']); pm=cm/len(pos['mix'])
+    x=pe-pd; y=pm-pd
+    f=(x@y)/(x@x)
+    print('LS bw',bw,'f',f)
+PY"

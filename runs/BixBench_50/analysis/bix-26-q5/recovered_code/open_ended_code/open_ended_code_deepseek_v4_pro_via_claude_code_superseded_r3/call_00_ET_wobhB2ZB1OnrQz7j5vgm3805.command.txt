@@ -1,0 +1,132 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+import json
+
+# Load pathway data
+with open("kegg_pathway_genes.json") as f:
+    data = json.load(f)
+
+pw_to_genes_raw = data["pw_to_genes"]
+pw_to_names = data["pw_to_names"]
+
+# Read gene lists
+sig_iron = set(pd.read_csv("genes_iron_depleted.txt", header=None)[0].tolist())
+sig_innate = set(pd.read_csv("genes_innate_media.txt", header=None)[0].tolist())
+all_genes_raw = set(pd.read_csv("all_genes.txt", header=None)[0].tolist())
+
+# For each pathway, convert KEGG IDs back to PA14 IDs
+def kegg_to_pa14(kegg_set):
+    return set(x.replace("pau:", "") for x in kegg_set)
+
+# Build pathway to PA14 gene mapping
+pw_to_pa14 = {}
+for pid, kegg_genes in pw_to_genes_raw.items():
+    pa14_genes = kegg_to_pa14(set(kegg_genes))
+    # Only keep genes that are in our data
+    pa14_genes_in_data = pa14_genes & all_genes_raw
+    if len(pa14_genes_in_data) > 0:
+        pw_to_pa14[pid] = pa14_genes_in_data
+
+print(f"Pathways with genes in our data: {len(pw_to_pa14)}")
+
+def run_ora(degs, background, pw_to_genes, pw_to_names):
+    """Run ORA using Fisher's exact test"""
+    N = len(background)  # total genes in universe
+    n = len(degs)        # total DEGs
+    
+    results = []
+    for pid, pw_genes in pw_to_genes.items():
+        K = len(pw_genes)           # genes in pathway
+        k = len(pw_genes & degs)    # DEGs in pathway
+        
+        if k == 0:
+            continue
+        
+        # Contingency table:
+        #           DEG  Not_DEG
+        # In_PW      k     K-k
+        # Not_in_PW  n-k   (N-K)-(n-k)
+        
+        a = k
+        b = K - k
+        c = n - k
+        d = N - K - n + k
+        
+        if d < 0:
+            continue
+        
+        table = [[a, b], [c, d]]
+        odds_ratio, p_value = fisher_exact(table, alternative='greater')
+        
+        results.append({
+            'pathway_id': pid,
+            'pathway_name': pw_to_names.get(pid, pid),
+            'pathway_size': K,
+            'overlap': k,
+            'p_value': p_value,
+            'odds_ratio': odds_ratio
+        })
+    
+    results_df = pd.DataFrame(results)
+    if len(results_df) > 0:
+        # Multiple testing correction (Benjamini-Hochberg)
+        reject, p_adj, _, _ = multipletests(results_df['p_value'].values, method='fdr_bh')
+        results_df['padj'] = p_adj
+        results_df = results_df.sort_values('padj')
+    
+    return results_df
+
+# Run ORA for both conditions
+print("\n=== Running ORA for iron-depleted condition (GluFe vs GluFePlus) ===")
+ora_iron = run_ora(sig_iron, all_genes_raw, pw_to_pa14, pw_to_names)
+print(f"Pathways tested: {len(ora_iron)}")
+n_sig_iron = len(ora_iron[ora_iron['padj'] < 0.05])
+print(f"Significant pathways (padj < 0.05): {n_sig_iron}")
+
+print("\n=== Running ORA for innate media condition (Succ vs GluFePlus) ===")
+ora_innate = run_ora(sig_innate, all_genes_raw, pw_to_pa14, pw_to_names)
+print(f"Pathways tested: {len(ora_innate)}")
+n_sig_innate = len(ora_innate[ora_innate['padj'] < 0.05])
+print(f"Significant pathways (padj < 0.05): {n_sig_innate}")
+
+# Show top results for iron-depleted
+print("\n=== Significant pathways in iron-depleted (padj < 0.05) ===")
+sig_iron_df = ora_iron[ora_iron['padj'] < 0.05]
+for _, row in sig_iron_df.iterrows():
+    print(f"  {row['pathway_id']}: {row['pathway_name'][:80]} overlap={row['overlap']}/{row['pathway_size']} padj={row['padj']:.3e}")
+
+print("\n=== Significant pathways in innate media (padj < 0.05) ===")
+sig_innate_df = ora_innate[ora_innate['padj'] < 0.05]
+for _, row in sig_innate_df.iterrows():
+    print(f"  {row['pathway_id']}: {row['pathway_name'][:80]} overlap={row['overlap']}/{row['pathway_size']} padj={row['padj']:.3e}")
+
+# Find pathways significant in iron-depleted but NOT in innate media
+iron_sig_ids = set(sig_iron_df['pathway_id'].tolist())
+innate_sig_ids = set(sig_innate_df['pathway_id'].tolist())
+
+iron_only = iron_sig_ids - innate_sig_ids
+print(f"\n=== Pathways significant ONLY in iron-depleted (NOT in innate): {len(iron_only)} ===")
+for pid in sorted(iron_only):
+    row = sig_iron_df[sig_iron_df['pathway_id'] == pid].iloc[0]
+    innate_row = ora_innate[ora_innate['pathway_id'] == pid]
+    innate_padj = innate_row['padj'].values[0] if len(innate_row) > 0 else 'N/A'
+    print(f"  {pid}: {row['pathway_name'][:80]}")
+    print(f"    Iron-depleted: overlap={row['overlap']}/{row['pathway_size']} padj={row['padj']:.3e}")
+    print(f"    Innate media: padj={innate_padj}")
+
+# Also show Venn diagram info
+both = iron_sig_ids & innate_sig_ids
+innate_only = innate_sig_ids - iron_sig_ids
+print(f"\n=== Summary ===")
+print(f"Iron-depleted only: {len(iron_only)}")
+print(f"Innate media only: {len(innate_only)}")
+print(f"Both: {len(both)}")
+
+# Save results
+ora_iron.to_csv("ora_iron.csv", index=False)
+ora_innate.to_csv("ora_innate.csv", index=False)
+
+PYEOF

@@ -1,0 +1,46 @@
+/bin/bash -c "python - <<'PY'
+import openpyxl, glob, os, re, collections, math
+meta={}
+wb=openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx', data_only=True); ws=wb.active
+for r in list(ws.iter_rows(values_only=True))[1:]:
+    meta[str(r[0]).strip()]=(r[2],r[3])
+carrier={k for k,v in meta.items() if v[1]=='Carrier'}
+files=glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx')
+rows=[]
+for f in files:
+    b=os.path.basename(f); full=re.search(r'CHIP_(.+?)\\.xlsx"'$'"',b).group(1); mm=re.match(r'(\\d+)',full); sid=mm.group(1) if mm else full
+    if sid not in carrier: continue
+    wb=openpyxl.load_workbook(f, data_only=True); ws=wb.active; rows_l=list(ws.iter_rows(values_only=True)); hdr=rows_l[1]
+    for r in rows_l[2:]:
+        d={hdr[i]:r[i] for i in range(min(len(hdr),len(r))) if hdr[i] is not None}
+        d['sample']=sid
+        rows.append(d)
+print('total rows',len(rows))
+# Count by zygosity and VAF status and classification
+from collections import Counter
+for desc, func in [
+('all rows',lambda d: True),
+('non-ref zyg',lambda d: d.get('Zygosity')"'!='"'Reference'),
+('non-ref and VAF<.3',lambda d: d.get('Zygosity')"'!='"'Reference' and isinstance(d.get('Variant Allele Freq'),(int,float,str))),
+]:
+    c=Counter(); 
+    for d in rows:
+        if func(d):
+            vaf=d.get('Variant Allele Freq'); z=d.get('Zygosity'); cl=d.get('Classification');
+            try: fv=float(vaf) if vaf is not None else None
+            except: fv=None
+            key=(z, fv is not None, (fv<.3 if fv is not None else None), cl is not None)
+            c[key]+=1
+    print('\\n',desc)
+    for k,v in sorted(c.items(), key=lambda x:str(x)): print(k,v)
+# Show vaf distribution non-ref numeric
+vals=[]
+for d in rows:
+    if d.get('Zygosity')"'!='"'Reference':
+        vaf=d.get('Variant Allele Freq')
+        try: vals.append(float(vaf))
+        except: pass
+import statistics
+print('nonref numeric vaf n',len(vals),'min max',min(vals),max(vals),'<.3',sum(1 for v in vals if v<.3),'< .3 with cl', sum(1 for v,d in zip(vals,[d for d in rows if d.get('Zygosity')"'!='"'Reference']) if False))
+# Need detailed below.
+PY"

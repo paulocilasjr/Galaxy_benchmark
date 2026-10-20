@@ -1,0 +1,18 @@
+/bin/bash -lc "python - <<'PY'
+import sys
+sys.path.insert(0,'scan_build')
+import torch
+from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+bs,dim,L,N=2,7,13,4
+torch.manual_seed(3)
+u=torch.randn(bs,dim,L); delta=torch.randn(bs,dim,L); A=-torch.rand(dim,N); Bv=torch.randn(bs,N,L); C=torch.randn(bs,N,L); Dv=torch.randn(dim); z=torch.randn(bs,dim,L); db=torch.randn(dim)
+out=selective_scan_fn(u,delta,A,Bv,C,Dv,z,db,True)
+def ref(u,delta,A,B,C,D=None,z=None,delta_bias=None):
+ dt=torch.nn.functional.softplus(delta.float()+delta_bias[...,None].float()); st=torch.zeros((u.shape[0],u.shape[1],A.shape[1])); ys=[]
+ for i in range(u.shape[2]):
+  st=torch.exp(dt[:,:,i,None]*A[None,:,:])*st+dt[:,:,i,None]*B[:,:,i][:,None,:]*u[:,:,i,None]
+  ys.append((st*C[:,:,i][:,None,:]).sum(-1))
+ y=torch.stack(ys,2)+u*D[None,:,None]; return y*torch.nn.functional.silu(z)
+r=ref(u,delta,A,Bv,C,Dv,z,db)
+print('max', (out-r).abs().max().item(),'mean',(out-r).abs().mean().item())
+PY"

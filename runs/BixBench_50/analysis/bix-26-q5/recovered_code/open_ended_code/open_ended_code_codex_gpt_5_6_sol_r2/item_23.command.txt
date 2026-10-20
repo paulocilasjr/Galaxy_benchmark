@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+from urllib.request import urlopen
+from collections import defaultdict
+import rdata,warnings,numpy as np
+from scipy.stats import hypergeom
+warnings.filterwarnings('ignore')
+p2g=defaultdict(set)
+for z in urlopen('https://rest.kegg.jp/link/pathway/pau').read().decode().strip().splitlines():
+ g,p=z.split('\\t');p2g[p.split(':')[1]].add(g.split(':')[1])
+names={z.split('\\t')[0]:z.split('\\t')[1] for z in urlopen('https://rest.kegg.jp/list/pathway/pau').read().decode().strip().splitlines()}
+def bh(p):
+ p=np.array(p);o=np.argsort(p);q=np.minimum.accumulate((p[o]*len(p)/np.arange(1,len(p)+1))[::-1])[::-1];out=np.empty(len(p));out[o]=np.minimum(q,1);return out
+def fg(f):
+ x=rdata.conversion.convert(rdata.parser.parse_file(f));a=x.listData;z=np.isfinite(a['padj'])&(abs(a['log2FoldChange'])>1.5)&(a['padj']<.05);return set(x.rownames[z])
+U=set().union(*p2g.values())
+for minsize in [1,5,10]:
+ ss=[]
+ print('\\nmin',minsize)
+ for f in ['inputs/res_GluFevsGluFePlus.rds','inputs/res_SuccvsGluFePlus.rds']:
+  F=fg(f)&U; rows=[]
+  for p,G in p2g.items():
+   if not(minsize<=len(G)<=500):continue
+   k=len(F&G)
+   if not k:continue
+   pv=hypergeom.sf(k-1,len(U),len(G),len(F));rows.append((p,k,len(G),pv))
+  qq=bh([x[3] for x in rows]);S={x[0] for x,q in zip(rows,qq) if q<.05};ss.append(S)
+  print(f,len(S),[(x[0],names[x[0]],x[1],x[2],q) for x,q in zip(rows,qq) if q<.05])
+ print('iron-only',[(p,names[p]) for p in ss[0]-ss[1]])
+PY"

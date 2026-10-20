@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter, defaultdict
+
+def reads(fn):
+    seqs=[]
+    with open(fn) as f:
+        for line in f:
+            if line.startswith('@'): continue
+            s=line.strip()
+            if s and not s.startswith('+'):
+                seqs.append(s)
+    return seqs
+files=['exogenous.mix.reads.q1.mix.fq','exogenous.mix.reads.q1.exo.fq','exogenous.mix.reads.q1.endo.fq']
+sets={}
+for fn in files:
+    seqs=reads(fn)
+    sets[fn]=seqs
+    print(fn, len(seqs), 'lengths', Counter(map(len,seqs)), 'unique', len(set(seqs)))
+    print('dup max', Counter(seqs).most_common(3))
+# exact overlaps
+exo=set(sets['exogenous.mix.reads.q1.exo.fq'])
+endo=set(sets['exogenous.mix.reads.q1.endo.fq'])
+mix=sets['exogenous.mix.reads.q1.mix.fq']
+print('exact mix in exo', sum(s in exo for s in mix), 'in endo', sum(s in endo for s in mix))
+# reverse complement
+comp=str.maketrans('ACGT','TGCA')
+def rc(s): return s.translate(comp)[::-1]
+exo_rc=set(rc(s) for s in exo); endo_rc=set(rc(s) for s in endo)
+print('mix rc in exo', sum(rc(s) in exo for s in mix), 'rc in endo', sum(rc(s) in endo for s in mix))
+# hamming/overlap? exact prefix/suffix
+# kmer exclusive sets
+for k in [15,20,25,31,40,50]:
+    def kmers(seqs): return Counter(k for s in seqs for k in (s[i:i+k] for i in range(len(s)-k+1)))
+    exok=set(kmers(exo)); endok=set(kmers(endo))
+    excl_exo=exok-endok; excl_endo=endok-exok
+    exo_mix=end_mix=amb=0
+    for s in mix:
+        ks=[s[i:i+k] for i in range(len(s)-k+1)]
+        a=any(x in excl_exo for x in ks)
+        b=any(x in excl_endo for x in ks)
+        if a and not b: exo_mix+=1
+        elif b and not a: end_mix+=1
+        else: amb+=1
+    print('k',k,'excl sizes',len(excl_exo),len(excl_endo),'mix exo',exo_mix,'endo',end_mix,'amb',amb,'frac', exo_mix/(exo_mix+end_mix) if exo_mix+end_mix else None)
+PY"

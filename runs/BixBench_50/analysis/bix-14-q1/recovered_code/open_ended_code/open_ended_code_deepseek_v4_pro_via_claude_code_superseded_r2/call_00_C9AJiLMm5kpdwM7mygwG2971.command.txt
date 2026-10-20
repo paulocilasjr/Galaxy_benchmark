@@ -1,0 +1,68 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import re
+
+var_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+
+trio = pd.read_excel('/workspace/inputs/230215_Trio_Status.xlsx')
+blm_carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+carrier_ids = set(blm_carriers['Sample ID'].astype(str).tolist())
+
+# Define coding Sequence Ontology terms
+coding_so_terms = {
+    'synonymous_variant',
+    'missense_variant',
+    'inframe_insertion',
+    'inframe_deletion',
+    'frameshift_variant',
+    'stop_gained',
+    'stop_lost',
+    'start_lost',
+    'coding_sequence_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+total_coding_low_vaf = 0
+total_synonymous_low_vaf = 0
+all_details = []
+
+for fname in sorted(os.listdir(var_dir)):
+    m = re.search(r'CHIP_(\d+)-([^.]+)\.xlsx$', fname)
+    if not m:
+        continue
+    cid = m.group(1)
+    if cid not in carrier_ids:
+        continue
+    
+    fpath = os.path.join(var_dir, fname)
+    df = pd.read_excel(fpath, header=None)
+    
+    # Data starts at row 2 (0-indexed)
+    data = df.iloc[2:].copy()
+    data.columns = range(data.shape[1])
+    
+    # col 4: Zygosity, col 9: VAF, col 13: Sequence Ontology, col 12: Gene
+    data['VAF_num'] = pd.to_numeric(data[9], errors='coerce')
+    
+    # Filter to VAF < 0.3 (this naturally excludes NaN/Reference)
+    low_vaf = data[(data['VAF_num'].notna()) & (data['VAF_num'] < 0.3)].copy()
+    
+    # Filter to coding variants
+    coding = low_vaf[low_vaf[13].isin(coding_so_terms)]
+    
+    n_coding = len(coding)
+    n_syn = len(coding[coding[13] == 'synonymous_variant'])
+    
+    total_coding_low_vaf += n_coding
+    total_synonymous_low_vaf += n_syn
+    
+    if n_coding > 0:
+        print(f"Carrier {cid}: {n_syn}/{n_coding} synonymous among coding VAF<0.3")
+
+print(f"\n=== SUMMARY ===")
+print(f"Total coding variants with VAF < 0.3: {total_coding_low_vaf}")
+print(f"Total synonymous among those: {total_synonymous_low_vaf}")
+print(f"Fraction: {total_synonymous_low_vaf}/{total_coding_low_vaf} = {total_synonymous_low_vaf/total_coding_low_vaf:.6f}")
+print(f"Percentage: {100*total_synonymous_low_vaf/total_coding_low_vaf:.4f}%")
+PYEOF

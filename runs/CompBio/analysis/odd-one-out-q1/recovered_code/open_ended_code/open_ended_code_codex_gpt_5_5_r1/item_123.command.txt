@@ -1,0 +1,29 @@
+/bin/bash -lc "python3 - <<'PY'
+import glob, os, re, numpy as np
+chrom_re=re.compile(r'"'^chr([1-9]|1[0-9]|2[0-2]|X|Y)$'"')
+print('sample\\tadj_corr10k\\tadj_corr_log10k\\thigh99_runs\\tmedian_run\\tmax_run\\tq99\\tq999')
+for f in sorted(glob.glob('bins10000/*.tsv'), key=lambda p:int(os.path.basename(p).split('.')[0])):
+ d={}
+ maxbin={}
+ for line in open(f):
+  k,v=line.rstrip('\\n').split('\\t'); chrom,b=k.split(':');
+  if not chrom_re.match(chrom): continue
+  b=int(b); v=int(v); d[(chrom,b)]=v; maxbin[chrom]=max(maxbin.get(chrom,0),b)
+ xs=[]; ys=[]; xl=[]; yl=[]
+ vals=np.array(list(d.values()))
+ q99=np.percentile(vals,99); q999=np.percentile(vals,99.9)
+ runs=[]
+ for chrom,m in maxbin.items():
+  arr=np.array([d.get((chrom,b),0) for b in range(m+1)],float)
+  if len(arr)>1:
+   xs.append(arr[:-1]); ys.append(arr[1:]); xl.append(np.log1p(arr[:-1])); yl.append(np.log1p(arr[1:]))
+  mask=arr>=q99
+  run=0
+  for z in mask:
+   if z: run+=1
+   elif run: runs.append(run); run=0
+  if run: runs.append(run)
+ x=np.concatenate(xs); y=np.concatenate(ys); a=np.concatenate(xl); b=np.concatenate(yl)
+ corr=np.corrcoef(x,y)[0,1]; corrl=np.corrcoef(a,b)[0,1]
+ print(os.path.basename(f).split('.')[0], f'{corr:.4f}', f'{corrl:.4f}', len(runs), np.median(runs), max(runs), f'{q99:.1f}', f'{q999:.1f}', sep='\\t')
+PY"

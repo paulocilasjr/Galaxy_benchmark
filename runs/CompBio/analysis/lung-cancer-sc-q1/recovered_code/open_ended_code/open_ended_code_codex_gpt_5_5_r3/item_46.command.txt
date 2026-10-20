@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, anndata as ad, numpy as np
+adata=ad.read_h5ad('lung.cancer.sc.h5ad', backed='r')
+obs=adata.obs.copy()
+obs['bench_cell']=obs.index.astype(str)
+obs['bench_sample']=obs['sampleID'].astype(str)
+obs['barcode']=obs['bench_cell'].str.replace(r'"'^Patient_'"\\d+_', '', regex=True)
+meta=pd.read_csv('source_meta.csv')
+meta['barcode']=meta['Cells'].str.replace(r'"'^[''^_]+_'"', '', regex=True)
+source_sets={sid:set(g['barcode']) for sid,g in meta.groupby('SampleID')}
+bench_sets={sid:set(g['barcode']) for sid,g in obs.groupby('bench_sample')}
+map_rows=[]
+for bs,bset in bench_sets.items():
+    vals=[]
+    for ss,sset in source_sets.items():
+        inter=len(bset & sset)
+        if inter:
+            vals.append((inter, ss, len(bset), len(sset)))
+    vals=sorted(vals, reverse=True)
+    inter,ss,lb,ls=vals[0]
+    map_rows.append((bs, ss, inter, lb, ls, inter/lb, inter/ls))
+map_df=pd.DataFrame(map_rows, columns=['bench','source','inter','bench_n','source_n','frac_bench','frac_source']).sort_values('bench')
+print(map_df.to_string(index=False))
+print('all exact', (map_df.frac_bench==1).all(), (map_df.frac_source==1).all(), 'nmap', len(map_df))
+# build joined annotations
+mapdict=dict(zip(map_df.bench,map_df.source))
+obs['source_sample']=obs['bench_sample'].map(mapdict)
+obs['key']=obs['source_sample']+'|'+obs['barcode']
+meta['key']=meta['SampleID']+'|'+meta['barcode']
+ann=meta.set_index('key')[['SampleID','Cells','PatientID','Disease','Stage','Tissue','CellName']]
+joined=obs.join(ann, on='key')
+print('joined missing', joined['CellName'].isna().sum(), 'rows', len(joined))
+print('disease counts', joined['Disease'].value_counts(dropna=False).to_string())
+print('cell counts')
+print(joined['CellName'].value_counts().to_string())
+print('\\nselected sample disease/DC proportions')
+sel=['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']
+for s in sel:
+    j=joined[joined['bench_sample']==s]
+    print(s, 'source', j['source_sample'].iloc[0], 'patient', j['PatientID'].iloc[0], 'disease', j['Disease'].iloc[0], 'n',len(j), 'DC', int((j.CellName=='DC').sum()), 'prop', (j.CellName=='DC').mean())
+nonimmune=['AT1','AT2','Basal','Cilia','Club','EC','Fib','NE']
+non=joined[joined.CellName.isin(nonimmune)]
+num=non[(non.CellName=='Basal') & (non.Disease=='LUSC')]
+print('\\nnonimmune denom', len(non), 'LUSC basal numerator', len(num), 'pct', 100*len(num)/len(non))
+# all source tumor same calculation for comparison
+metatum=meta[meta['Tissue']=='Tumor']
+non2=metatum[metatum.CellName.isin(nonimmune)]
+num2=non2[(non2.CellName=='Basal') & (non2.Disease=='LUSC')]
+print('source tumor denom', len(non2), 'LUSC basal', len(num2), 'pct', 100*len(num2)/len(non2))
+# all source all tissues
+non3=meta[meta.CellName.isin(nonimmune)]
+num3=non3[(non3.CellName=='Basal') & (non3.Disease=='LUSC')]
+print('source all denom', len(non3), 'LUSC basal', len(num3), 'pct', 100*len(num3)/len(non3))
+joined[['bench_cell','bench_sample','source_sample','PatientID','Disease','Stage','Tissue','CellName']].to_csv('annotated_benchmark_cells.csv', index=False)
+PY"

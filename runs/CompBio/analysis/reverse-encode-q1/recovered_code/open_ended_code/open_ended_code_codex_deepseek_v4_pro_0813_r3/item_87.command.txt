@@ -1,0 +1,70 @@
+/bin/bash -c "cat > prep_track1000.py <<'PY'
+import json, math
+# aggregate chr10 track into 1000 equal bins as pyBigWig stats nBins does
+NB=1000
+chrom='chr10'
+bins=[]
+with open('track.tsv') as f:
+ for line in f:
+  c,s,e,v=line.split()
+  if c==chrom: bins.append((int(s),int(e),float(v)))
+length=bins[-1][1]  # 133797422
+# compute sums for each of NB windows [i*length/NB, (i+1)*length/NB)
+vals=[0.0]*NB
+for s,e,v in bins:
+ # distribute v by overlap to windows
+ w=length/NB
+ i1=int(s//w); i2=int((e-1)//w)
+ if i1==i2:
+  vals[i1]+=v
+ else:
+  # simple distribute proportional
+  for i in range(i1,i2+1):
+   a=max(s,i*w); b=min(e,(i+1)*w)
+   vals[i]+=v*(b-a)/(e-s)
+json.dump({'chrom':chrom,'length':length,'nb':NB,'vals':vals}, open('track_chr10_1000.json','w'))
+print('saved',sum(vals),len(vals),vals[:5])
+PY
+python3 prep_track1000.py
+cat > score_bw_worker.py <<'PY'
+import sys, json, math, pyBigWig
+acc,ds,url=sys.argv[1],sys.argv[2],sys.argv[3]
+tr=json.load(open('track_chr10_1000.json'))
+track=tr['vals']; n=len(track); meanv=sum(track)/n; sdv=math.sqrt(sum((x-meanv)**2 for x in track)/n)
+def rank(a):
+ order=sorted(range(len(a)), key=lambda i:a[i]); r=[0]*len(a)
+ for rank,i in enumerate(order): r[i]=rank
+ return r
+try:
+ bw=pyBigWig.open(url)
+ st=bw.stats(tr['chrom'],0,tr['length'],type='mean',nBins=n)
+ st=[0.0 if x is None else x for x in st]
+ means=sum(st)/n; sds=math.sqrt(sum((x-means)**2 for x in st)/n)
+ if sds==0: pear=0.0
+ else:
+  cov=sum((a-meanv)*(b-means) for a,b in zip(track,st))/n
+  pear=cov/(sdv*sds)
+ trr=rank(track); sr=rank(st)
+ mtr=sum(trr)/n; msr=sum(sr)/n
+ sdtr=math.sqrt(sum((x-mtr)**2 for x in trr)/n); sdsr=math.sqrt(sum((x-msr)**2 for x in sr)/n)
+ spear=sum((x-mtr)*(y-msr) for x,y in zip(trr,sr))/(sdtr*sdsr) if sdtr and sdsr else 0.0
+ print(json.dumps({'acc':acc,'ds':ds,'pear':pear,'spear':spear}))
+except Exception as e:
+ print(json.dumps({'acc':acc,'ds':ds,'error':repr(e)}))
+PY
+python3 - <<'PY'
+import json, subprocess, os
+j=json.load(open('dnase_v1_bigwigs.json'))['@graph']
+cand=[x for x in j if (x.get('analysis_step_version') or {}).get('name')=='dnase-peak-calling-step-v-1-0'][:20]
+for x in cand:
+ cmd=['python3','score_bw_worker.py',x['accession'],x['dataset'],x['cloud_metadata']['url']]
+ print(' '.join(cmd[:4]))
+PY
+# test one worker
+python3 - <<'PY'
+import json
+j=json.load(open('dnase_v1_bigwigs.json'))['@graph']
+x=[x for x in j if (x.get('analysis_step_version') or {}).get('name')=='dnase-peak-calling-step-v-1-0'][0]
+import subprocess,time
+t=time.time(); r=subprocess.run(['python3','score_bw_worker.py',x['accession'],x['dataset'],x['cloud_metadata']['url']],capture_output=True,text=True,timeout=15); print('time',time.time()-t,'out',r.stdout,'err',r.stderr)
+PY"

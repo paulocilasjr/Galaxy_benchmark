@@ -1,0 +1,22 @@
+/bin/bash -lc "PYTHONPATH=vendor:src/openspliceai_005 VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python3 -u - <<'PY'
+import glob,json
+import numpy as np
+import torch
+from openspliceai.train_base.openspliceai import SpliceAI
+src=json.load(open('downloads/ucsc_sequence.json'))['dna'].upper()
+seq=src.translate(str.maketrans('ACGT','TGCA'))[::-1]
+seq='N'*5000+seq+'N'*(5000+587)
+map_={'A':[1,0,0,0],'C':[0,1,0,0],'G':[0,0,1,0],'T':[0,0,0,1],'N':[0,0,0,0]}
+x=torch.tensor(np.array([map_[b] for b in seq],dtype='float32').T[None])
+W=np.array([11]*8+[21]*4+[41]*4); AR=np.array([1]*4+[4]*4+[10]*4+[25]*4)
+outputs=[]
+with torch.inference_mode():
+ for p in sorted(glob.glob('src/OpenSpliceAI-0.0.5/models/openspliceai-mane/10000nt/*.pt')):
+  m=SpliceAI(32,W,AR); m.load_state_dict(torch.load(p,map_location='cpu')); m.eval()
+  outputs.append(m(x).cpu())
+y=torch.mean(torch.stack(outputs),axis=0)[0,:,:4413].T.numpy()
+prior=np.load('results/ensemble_scores.npy')
+print('shape',y.shape,'max_abs_diff',np.max(np.abs(y-prior)))
+for channel,label in [(1,'A'),(2,'D')]:
+ print(label,np.flatnonzero(y[:,channel]>=0.9).tolist())
+PY"

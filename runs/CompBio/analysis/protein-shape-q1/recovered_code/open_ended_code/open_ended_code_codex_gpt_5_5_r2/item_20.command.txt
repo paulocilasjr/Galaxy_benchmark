@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter
+
+coords=[]; ca=[]; chains=[]; ca_ch=[]
+for line in open('protein.shape.q1.pdb'):
+    if line.startswith('ATOM'):
+        c=line[21]; atom=line[12:16].strip()
+        xyz=[float(line[30:38]),float(line[38:46]),float(line[46:54])]
+        coords.append(xyz); chains.append(c)
+        if atom=='CA': ca.append(xyz); ca_ch.append(c)
+coords=np.array(coords); ca=np.array(ca); chains=np.array(chains); ca_ch=np.array(ca_ch)
+X=coords-coords.mean(0)
+_,_,vh=np.linalg.svd(X, full_matrices=False)
+C=vh.T
+views=[('PC23',C[:,[1,2]]),('PC12',C[:,[0,1]]),('PC13',C[:,[0,2]])]
+colors={c:plt.cm.tab10(i) for i,c in enumerate('ABCDEF')}
+for name,mat in views:
+    uv=X@mat
+    fig,axs=plt.subplots(1,2,figsize=(10,5))
+    ax=axs[0]
+    for c in sorted(set(chains)):
+        m=chains==c
+        ax.scatter(uv[m,0],uv[m,1],s=.3,color=colors[c],alpha=.45,linewidths=0)
+    ax.set_aspect('equal','box'); ax.axis('off'); ax.set_title(name+' all atoms')
+    # density raster
+    u=uv.copy(); mn=u.min(0); mx=u.max(0); scale=220/max(mx-mn)
+    pix=(u-mn)*scale+18
+    img=np.zeros((256,256),float)
+    for x,y in pix.astype(int):
+        if 0<=x<256 and 0<=y<256: img[255-y,x]+=1
+    img=gaussian_filter(img,1.8)
+    axs[1].imshow(img>img.max()*0.03,cmap='gray_r')
+    axs[1].axis('off'); axs[1].set_title(name+' silhouette')
+    fig.tight_layout(); fig.savefig(f'all_{name}_large.png',dpi=200); plt.close(fig)
+print('saved large PC views')
+PY"

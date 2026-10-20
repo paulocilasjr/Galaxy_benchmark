@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('phase.bam','rb')
+events=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+def state_at(read,pos):
+    for q,r in read.get_aligned_pairs(matches_only=False):
+        if r is not None and r+1==pos:
+            return 'D' if q is None else read.query_sequence[q]
+    return None
+# pair vecs combine
+pairs=collections.defaultdict(lambda: collections.defaultdict(list))
+for read in bam.fetch('chr22', min(events)-300, max(events)+300):
+    if read.is_unmapped or read.is_secondary or read.is_supplementary: continue
+    name=read.query_name
+    for pos in events:
+        s=state_at(read,pos)
+        if s is not None: pairs[name][pos].append(s)
+# finalize
+PV={}
+for name,d in pairs.items():
+    PV[name]={p:collections.Counter(ss).most_common(1)[0][0] for p,ss in d.items()}
+# Build graph constraints among event positions: for each pair of positions, record which allele combinations seen, choose dominant pair
+# Use union of all pair vectors to infer relation via consensus
+edges=[]
+for i in range(len(events)):
+    for j in range(i+1,len(events)):
+        p1,p2=events[i],events[j]
+        tab=collections.Counter()
+        for vec in PV.values():
+            if p1 in vec and p2 in vec:
+                tab[(vec[p1],vec[p2])]+=1
+        if not tab: continue
+        # two dominant combos? use top 2
+        top=tab.most_common(2)
+        if len(top)==1:
+            continue
+        edges.append((i,j,top[0][0],top[1][0],top[0][1],top[1][1]))
+        print('edge',i,j,'top',top)
+PY"

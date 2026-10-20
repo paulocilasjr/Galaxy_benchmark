@@ -1,0 +1,55 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np,gzip,scipy.io as sio
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu, spearmanr
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rt') as f:S=sio.mmread(f).tocsr().toarray().T.astype(float)
+pos=pd.read_csv('tissue_positions.csv')
+types=list(meta.cell_type.unique()); X=sc.values.astype(float); Xn=X/X.sum(1,keepdims=True)*1e4
+C=np.array([Xn[meta.cell_type.values==t].mean(0) for t in types]).T
+Sn=S/S.sum(1,keepdims=True)*1e4
+# nnls marker-selected by cell type top 40 log fold / genes with type highest
+means=np.array([Xn[meta.cell_type.values==t].mean(0) for t in types])
+# select 30 top discriminative genes per type by log ratio to max other
+sets=[]
+for j,t in enumerate(types):
+ other=np.max(np.delete(means,j,axis=0),axis=0)
+ score=np.log2((means[j]+0.1)/(other+0.1))
+ sets.append(np.argsort(score)[-40:])
+marker=np.unique(np.concatenate(sets))
+print('marker n',len(marker))
+for use,name in [(marker,'marker'),(np.arange(1000),'all')]:
+ co=np.array([nnls(C[use,:],Sn[i,use])[0] for i in range(900)])
+ prop=co/(co.sum(1,keepdims=True)+1e-12)
+ lab=np.array(types)[prop.argmax(1)]
+ # place grid by row, col
+ grid=np.full((30,30),'? ',object)
+ grid2=np.full((30,30),'? ',object)
+ for i,p in pos.iterrows():
+  grid[int(p.array_row),int(p.array_col)]=lab[i][:2]
+  grid2[int(p.array_row),int(p.array_col)]=f'{prop[i,0]:.1f}' if prop[i,0]>.3 else ' . '
+ print('\\n====',name,'====')
+ print('labels',pd.Series(lab).value_counts().to_dict())
+ print('grid: rows=array_row, cols=array_col; labels initials')
+ for row in grid: print(' '.join(row))
+ print('tumor prop grid >.3')
+ for row in grid2: print(' '.join(row))
+ tumor=prop[:,types.index('Tumor_Core')]
+ print('tumor prop quantiles',np.quantile(tumor,[0,.5,.75,.9,.95,.97,.98,.99,1]))
+ for th in [.1,.2,.3,.4,.5,.6,.7]: print('tumor>',th,(tumor>th).sum())
+ # adjacency metrics to tumor > .3; labels or prop
+ tmask=tumor>.3
+ coords=pos[['array_row','array_col']].values
+ D=cdist(coords,coords,metric='euclidean')
+ D[:,~tmask]=np.inf
+ dmin=D.min(1)
+ print('tumor spots',tmask.sum(),'coords',coords[tmask].tolist())
+ for t in types[1:]:
+  m=lab==t
+  print(t,'n',m.sum(),'dmin mean/median',np.mean(dmin[m]),np.median(dmin[m]),'all median',np.median(dmin[np.isfinite(dmin)]),'within1/2/3',[(dmin[m]<=r).sum() for r in [1,1.5,2,3,4,5]])
+ # prop correlation with distance
+ for j,t in enumerate(types):
+  fin=np.isfinite(dmin)
+  print('corr',t,spearmanr(prop[fin,j],dmin[fin]).statistic)
+PY"

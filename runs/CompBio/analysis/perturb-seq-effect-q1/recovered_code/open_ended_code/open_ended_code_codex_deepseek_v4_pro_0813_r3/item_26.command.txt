@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,csv,numpy as np
+from scipy.io import mmread
+from scipy import stats
+
+X=mmread(gzip.open('filtered_feature_bc_matrix/matrix.mtx.gz','rb')).tocsc()
+feat=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+ for line in f: feat.append(line.rstrip('\\n').split('\\t')[0])
+bc=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+ for line in f: bc.append(line.rstrip('\\n'))
+calls={}
+with open('protospacer_calls_per_cell.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: calls[row[0]]=row[2]
+ref={}
+with open('feature_reference.csv') as f:
+ r=csv.reader(f); next(r)
+ for row in r: ref[row[0]]=row[7]
+guides=np.array([ref[calls[b]] for b in bc])
+lib=np.asarray(X.sum(axis=0)).ravel().astype(float)
+X=X.toarray().astype(float)
+logcpm=np.log1p(X*10000/lib[None,:])
+controls=guides=='Non-Targeting'
+rows=[]
+for t in np.unique(guides):
+ if t=='Non-Targeting': continue
+ m=guides==t
+ lfc=logcpm[:,m].mean(axis=1)-logcpm[:,controls].mean(axis=1)
+ path_lfc=lfc[:20]
+ non_lfc=lfc[20:]
+ n_down_path=(path_lfc < -0.1).sum()
+ n_down_non=(non_lfc < -0.1).sum()
+ med_path=np.median(path_lfc); mean_path=path_lfc.mean()
+ # gene-level t mean
+ ts=[]
+ for i in range(20):
+  tt,p=stats.ttest_ind(logcpm[i,m],logcpm[i,controls],equal_var=False)
+  ts.append(tt)
+ mean_t=np.mean(ts); min_t=np.min(ts)
+ rows.append((t,m.sum(),mean_path,med_path,n_down_path,n_down_non,mean_t,min_t,path_lfc.std()))
+print('rank by mean_path')
+for r in sorted(rows,key=lambda x:x[2])[:15]: print(r)
+print('\\nrank by n_down_path')
+for r in sorted(rows,key=lambda x:-x[4])[:15]: print(r)
+print('\\nrank by mean_t')
+for r in sorted(rows,key=lambda x:x[6])[:15]: print(r)
+PY"

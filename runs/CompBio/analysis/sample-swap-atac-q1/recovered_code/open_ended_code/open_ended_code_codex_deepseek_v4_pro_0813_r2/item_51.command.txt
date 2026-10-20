@@ -1,0 +1,87 @@
+/bin/bash -lc "cat > build_gene_promoter.py <<'PY'
+import gzip, re, sys, json, time, pickle
+import numpy as np
+
+# read chrom sizes and chunk order
+chunks=[]
+chrom_names=[]
+with open('sample.swap.atac.q1.chrom.sizes') as f:
+    for line in f:
+        name,size=line.strip().split()
+        chunks.append((name,int(size)))
+        chrom_names.append(name)
+
+def base_chrom(name):
+    # strip trailing _digits if present
+    m=re.match(r'"'^(.*)_('"\\d+)"'$'"',name)
+    if m:
+        return m.group(1)
+    return name
+
+# cumulative offsets per original chrom in order
+cum={}  # orig -> list of (chunkname, start, end)
+for name,size in chunks:
+    b=base_chrom(name)
+    arr=cum.setdefault(b,[])
+    start=arr[-1][2] if arr else 0
+    arr.append((name,start,start+size))
+
+# Parse GTF gene entries
+gene_names=[]
+gene_ids=[]
+tss=[]
+attrs_re=re.compile(r'gene_id \"(["'^"]+)"|gene_name "([''^"]+)"'"')
+print('parsing gtf...')
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2]"'!='"'gene':
+            continue
+        chrom=parts[0]; start=int(parts[3]); end=int(parts[4]); strand=parts[6]; attr=parts[8]
+        gid=gname=None
+        for m in attrs_re.finditer(attr):
+            if m.group(1): gid=m.group(1)
+            if m.group(2): gname=m.group(2)
+        if gid is None: gid=gname or 'NA'
+        if gname is None: gname=gid
+        tss=start if strand"'!='"'-' else end
+        gene_names.append(gname)
+        gene_ids.append(gid)
+        tss.append((chrom,tss))
+
+G=len(gene_names)
+print('genes',G)
+# Build bin key -> list gene indices
+keymap={}
+WINDOW=50000
+BIN=10000
+for idx,(chrom,tss) in enumerate(tss):
+    arr=cum.get(chrom)
+    if not arr:
+        continue
+    # find chunk and local coordinate
+    chunkname=None; local=None
+    for cname,cstart,cend in arr:
+        if cstart <= tss-1 < cend:  # 0-based? GTF 1-based coordinate, chunk local coordinate same 1-based-like? bins use 0-based start? We'll treat local = tss-1
+            chunkname=cname; local=tss-1
+            break
+    if chunkname is None:
+        # if tss == chunk end maybe in previous? skip
+        continue
+    center=(local//BIN)*BIN
+    for off in range(-WINDOW, WINDOW+1, BIN):
+        bs=center+off
+        if bs<0: continue
+        key=(chunkname,bs)
+        keymap.setdefault(key,[]).append(idx)
+
+print('keys',len(keymap),'total refs',sum(map(len,keymap.values())))
+# save keymap for scan
+with open('keymap.pkl','wb') as f:
+    pickle.dump(keymap,f)
+with open('gene_info.pkl','wb') as f:
+    pickle.dump({'gene_names':gene_names,'gene_ids':gene_ids,'tss':tss},f)
+PY
+python3 build_gene_promoter.py"

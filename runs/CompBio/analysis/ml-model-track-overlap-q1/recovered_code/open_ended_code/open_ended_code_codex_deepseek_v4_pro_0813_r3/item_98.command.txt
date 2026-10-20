@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,csv,re,collections
+filemeta=json.load(open('borzoi_encff_meta.json'))
+j=json.load(open('encode_experiments.json'))
+exp_by={g['accession']:g for g in j['@graph'] if 'accession' in g}
+rows=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+# sample rows
+for r in rows:
+ ident=r['identifier'].strip(); m=re.match(r'(ENCFF\\d{3}[A-Z]{3})[+-]?"'$'"',ident)
+ if not m: continue
+ base=m.group(1); fm=filemeta.get(base)
+ if not fm: continue
+ ds=fm.get('dataset',''); en=ds.split('/')[-2] if '/' in ds else None
+ print('base',base,'en',en,'bios',fm.get('biological_replicates'))
+ if en in exp_by:
+  g=exp_by[en]
+  print('exp reps',[(rep.get('biological_replicate_number'),(rep.get('library') or {}).get('dbxrefs')) for rep in g.get('replicates',[])])
+ break
+# Check selected total exp_gsm population by computing manually for first 100
+cnt=0; total=0; exp_bio=collections.defaultdict(set); exp_gsm=collections.defaultdict(set)
+for r in rows:
+ ident=r['identifier'].strip(); m=re.match(r'(ENCFF\\d{3}[A-Z]{3})[+-]?"'$'"',ident)
+ if not m: continue
+ base=m.group(1); fm=filemeta.get(base)
+ if not fm: continue
+ ds=fm.get('dataset',''); en=ds.split('/')[-2] if '/' in ds else None
+ bios=fm.get('biological_replicates',[])
+ if en and bios:
+  exp_bio[en].update(int(b) for b in bios)
+  g=exp_by.get(en)
+  if g:
+   for rep in g.get('replicates',[]) or []:
+    if rep.get('biological_replicate_number') in bios:
+     for dx in (rep.get('library') or {}).get('dbxrefs',[]) or []:
+      if dx.startswith('GEO:GSM'): exp_gsm[en].add(dx[4:])
+print('exp_bio count',len(exp_bio),'exp_gsm count',len(exp_gsm),'total gsm',sum(len(v) for v in exp_gsm.values()))
+print('sample exp_bio entries',list(exp_bio.items())[:3])
+PY"

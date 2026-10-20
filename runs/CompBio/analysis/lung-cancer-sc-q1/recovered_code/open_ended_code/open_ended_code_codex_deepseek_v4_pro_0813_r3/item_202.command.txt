@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, scipy.sparse as sp
+our=ad.read_h5ad('lung.cancer.sc.h5ad',backed='r')
+ref=ad.read_h5ad('luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad',backed='r')
+# map genes
+our_genes=our.var['symbol'].astype(str).to_numpy(); ref_genes=ref.var.index.to_numpy()
+ref_pos={g:i for i,g in enumerate(ref_genes)}
+our_idx=np.array([i for i,g in enumerate(our_genes) if g in ref_pos])
+ref_idx=np.array([ref_pos[g] for g in our_genes if g in ref_pos])
+# our cell index 3 (Patient_001_AAACCTGGTTCGAATC-1)
+oi=3
+xq=our.X[oi,our_idx]
+if sp.issparse(xq): xq=xq.toarray().ravel()
+# ref candidate index find barcode
+obc='AAACCTGGTTCGAATC'
+ref_obs=ref.obs
+matches=[i for i,b in enumerate(ref.obs.index) if b.split('_')[-1].split('-')[0]==obc]
+print('matches',matches)
+for mi in matches:
+    xr=ref.layers['raw_counts'][mi,ref_idx]
+    if sp.issparse(xr): xr=xr.toarray().ravel()
+    print('candidate',ref.obs.index[mi], 'ref sum intersection',xr.sum(),'our sum intersection',xq.sum())
+    print('equal',np.array_equal(xq,xr),'l1',np.abs(xq-xr).sum(),'common nonzero',np.sum((xq>0)&(xr>0)),'our nz',np.sum(xq>0),'ref nz',np.sum(xr>0))
+    # correlation among nonzero union
+    mask=(xq>0)|(xr>0)
+    if mask.sum()>1:
+        c=np.corrcoef(xq[mask],xr[mask])[0,1]
+        print('corr',c)
+PY"

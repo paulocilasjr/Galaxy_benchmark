@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv,gzip,collections,math
+# target vec
+with gzip.open('matrix.mtx.gz','rt') as f:
+ for line in f:
+  if line.startswith('%'): continue
+  p=line.split()
+  if len(p)==3: dims=map(int,p); dims=tuple(dims); break
+ vals={}
+ for line in f:
+  i,j,v=line.split();
+  if int(j)==711: vals[int(i)-1]=int(float(v))
+# sc summaries aggregate per type without storing all matrices
+meta=[]
+with open('spatial_q_sc_metadata.csv',newline='') as f:
+ rd=csv.DictReader(f); meta=[r['cell_type'] for r in rd]
+# csv read rows
+sums=collections.defaultdict(lambda:[0]*1000); nz=collections.defaultdict(lambda:[0]*1000); lib=collections.Counter()
+with open('spatial_q_sc_counts.csv',newline='') as f:
+ rd=csv.reader(f); next(rd)
+ for typ,row in zip(meta,rd):
+  ar=list(map(int,row[1:])); lib[typ]+=sum(ar)
+  for i,x in enumerate(ar):
+   sums[typ][i]+=x; nz[typ][i]+=x>0
+# print block totals for first 6 50-gene marker blocks, plus all genes chunks
+T=collections.OrderedDict((typ,[]) for typ in sums)
+for a in range(0,1000,50):
+ b=min(a+50,1000)
+ print(f'genes {a}-{b-1}', 'target',sum(vals.get(i,0) for i in range(a,b)), 'nz',sum(i in vals for i in range(a,b)), 'type mean totals', {typ:round(sum(sums[typ][i] for i in range(a,b))/200,1) for typ in sums})
+print('target total',sum(vals.values()),'nz',len(vals))
+# type marker score: block fraction target, means
+print('target top genes by blocks (all):')
+for a in range(0,1000,50):
+ x=sorted([(vals.get(i,0),i) for i in range(a,min(a+50,1000))],reverse=True)[:5]
+ print(a,[(i,v) for v,i in x])
+# type-specific expected scores based on first 300 genes, ratio target / type mean *? 
+print('target block normalized by type mean total')
+for typ in sums:
+ print(typ,[round(sum(vals.get(i,0) for i in range(a,a+50))/(sum(sums[typ][i] for i in range(a,a+50))/200),3) if sum(sums[typ][i] for i in range(a,a+50)) else None for a in range(0,300,50)])
+PY"

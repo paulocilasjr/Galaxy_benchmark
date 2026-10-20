@@ -1,0 +1,24 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 python -u - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); m=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0).iloc[:,0]; X=mmread('matrix.mtx.gz').toarray().T; pos=pd.read_csv('tissue_positions.csv'); types=sorted(m.unique()); A=np.column_stack([sc.loc[m.eq(c)].mean().values for c in types]); C=np.rint(np.array([nnls(A,x)[0] for x in X])).astype(int)
+G=np.zeros((30,30,len(types)),int)
+for i,r in pos.iterrows(): G[int(r.array_row),int(r.array_col)]=C[i]
+xy=np.indices((30,30)).reshape(2,-1).T; T=G[:,:,types.index('Tumor_Core')].ravel()>0; d=cdist(xy,xy[T]).min(1).reshape(30,30)
+print('circular-shift null:')
+for j,c in enumerate(types[:-1]):
+ P=G[:,:,j]>0; obs=d[P].mean(); vals=[]
+ for a in range(30):
+  for b in range(30):
+   if a or b: vals.append(d[np.roll(P,(a,b),(0,1))].mean())
+ vals=np.array(vals); print(c,'obs',round(obs,3),'null',np.round([vals.min(),vals.mean(),vals.max()],3),'p',(np.sum(vals<=obs)+1)/900,'z',round((obs-vals.mean())/vals.std(),2))
+D=cdist(xy,xy); n1=((D>0)&(D<=1.01))[:,T].any(1).reshape(30,30); nDiag=((D>0)&(D<=1.5))[:,T].any(1).reshape(30,30)
+print('enrichment fold:')
+for j,c in enumerate(types[:-1]):
+ P=G[:,:,j]>0; base=P.mean(); print(c,'same',round(P.ravel()[T].mean()/base,2),'orthNbr',round(P[n1].mean()/base,2),'diagNbr',round(P[nDiag].mean()/base,2),'d<=3',round(P[d<=3].mean()/base,2),'d>=8',round(P[d>=8].mean()/base,2))
+print('dominant grid')
+lab=np.argmax(G,axis=2); chars='BEFMTC'
+for row in lab: print(''.join(chars[x] for x in row))
+PY"

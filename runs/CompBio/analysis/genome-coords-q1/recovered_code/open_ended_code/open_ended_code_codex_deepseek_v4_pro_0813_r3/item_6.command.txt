@@ -1,0 +1,34 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np
+p='single_cell_dynamics_question.csv'
+df=pd.read_csv(p)
+D2=((df[['enh_x','enh_y','enh_z']].values - df[['prom_x','prom_y','prom_z']].values)**2).sum(axis=1)
+df['dist']=np.sqrt(D2); df['contact']=(df.dist<=260).astype(int)
+T=np.stack([s.values for _,s in df.groupby('cell_id')['transcription']])
+C=np.stack([s.values for _,s in df.groupby('cell_id')['contact']])
+def ac(x,maxlag):
+    # mean per lag across cells weighted? simple pooled
+    for k in range(maxlag+1):
+        a=x[:,:-k].ravel(); b=x[:,k:].ravel()
+        print(k, np.corrcoef(a,b)[0,1], 'P both', np.mean(a*b), 'P x_t=1|x_prev=1', b[a==1].mean(), 'base',b.mean())
+print('T autocorr')
+ac(T,5)
+print('C autocorr')
+ac(C,5)
+# partial: P(C_t|C_{t-1}, T_{t-1}); P(T_t|T_{t-1}, C_{t-1})
+# Flatten lag variables
+for v in ['T']:
+    x=T; y=C
+    X=x[:,1:].ravel(); Yprev=y[:,:-1].ravel(); Xprev=x[:,:-1].ravel()
+    print('P(T_t=1 | T_{t-1}, C_{t-1})')
+    import pandas as pd2
+    d=pd2.DataFrame({'T':X,'Tprev':Xprev,'Cprev':Yprev})
+    print(d.groupby(['Tprev','Cprev'])['T'].mean().unstack())
+    print('counts',d.groupby(['Tprev','Cprev']).size().unstack())
+    # P(C_t=1 | C_{t-1}, T_{t-1})
+    Y=y[:,1:].ravel(); Yprev2=y[:,:-1].ravel(); Tprev=x[:,:-1].ravel()
+    d2=pd2.DataFrame({'C':Y,'Cprev':Yprev2,'Tprev':Tprev})
+    print('P(C_t=1 | C_{t-1}, T_{t-1})')
+    print(d2.groupby(['Tprev','Cprev'])['C'].mean().unstack())
+    print(d2.groupby(['Tprev','Cprev']).size().unstack())
+PY"

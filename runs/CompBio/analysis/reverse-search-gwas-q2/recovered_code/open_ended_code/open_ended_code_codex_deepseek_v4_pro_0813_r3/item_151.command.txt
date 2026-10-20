@@ -1,0 +1,112 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, requests, pysam, os, tempfile, time, math, random, threading, queue, sys
+j=json.load(open('gwasinfo.json')); dc=j['datasets_compressed']
+cands=[]
+for id,v in dc.items():
+    if len(v)<2 or not isinstance(v[1],dict): continue
+    main=v[0]
+    if len(main)<=10: continue
+    try: n=int(main[10]); ns=int(v[1].get('nsnp') or 0)
+    except: continue
+    pmid=v[1].get('pmid')
+    if main[1]==0 and 40000<=n<=70000 and pmid:
+        cands.append((id,n,main[0],pmid))
+proxies=[line.strip() for line in open('[REDACTED LOCAL PATH]') if line.strip()]
+random.shuffle(proxies)
+proxy_q=queue.Queue()
+for p in proxies: proxy_q.put(p)
+proxy_lock=threading.Lock(); used_proxies=set(); recent=[]
+tmp=tempfile.mkdtemp(prefix='gwas_idx_')
+targets={
+ 'rs1150779':('6',34215919,39.3347,-0.0886096,0.00669,0.703),
+ 'rs6909732':('6',34219010,33.9083,0.0855989,0.00697,0.258),
+}
+def get_proxy():
+    with proxy_lock:
+        for _ in range(proxy_q.qsize()):
+            p=proxy_q.get()
+            if p not in used_proxies:
+                return p
+    return None
+def return_proxy(p):
+    with proxy_lock:
+        proxy_q.put(p)
+def fetch_with_proxy(url, method='get', payload=None, timeout=12, max_tries=20):
+    last=None
+    for i in range(max_tries):
+        p=get_proxy()
+        if p is None: p=random.choice(proxies)
+        try:
+            proxies={'https':'http://'+p,'http':'http://'+p}
+            if method=='post':
+                r=requests.post(url,json=payload,timeout=timeout,proxies=proxies)
+            else:
+                r=requests.get(url,timeout=timeout,proxies=proxies)
+            if r.status_code==200:
+                with proxy_lock: used_proxies.add(p)
+                return r,p
+        except Exception as e:
+            last=e
+        time.sleep(0.2)
+    return None,None
+def fnum(x):
+    try:return float(x)
+    except:return None
+def process(item):
+    idx,(id,n,trait,pmid)=item
+    r,p=fetch_with_proxy('https://api.opengwas.io/api/gwasinfo/files/trial', method='post', payload={'id':id,'type':'vcf'}, timeout=12, max_tries=30)
+    if r is None:
+        return (idx,id,n,trait,pmid,'NO_URL')
+    try: urls=r.json()
+    except: return (idx,id,n,trait,pmid,'BAD_JSON')
+    vcf,tbi=urls[0],urls[1]
+    local=os.path.join(tmp,id+'.tbi')
+    ok=False
+    try:
+        rr=requests.get(tbi,timeout=20)
+        if rr.status_code==200:
+            open(local,'wb').write(rr.content); ok=True
+    except Exception: pass
+    if not ok and p:
+        try:
+            rr=requests.get(tbi,timeout=20,proxies={'https':'http://'+p,'http':'http://'+p})
+            if rr.status_code==200:
+                open(local,'wb').write(rr.content); ok=True
+        except Exception: pass
+    if not ok: return (idx,id,n,trait,pmid,'TBI_FAIL')
+    try: tb=pysam.TabixFile(vcf,index=local)
+    except Exception as e: return (idx,id,n,trait,pmid,'OPEN_ERR '+str(e))
+    parts=[]
+    anyclose=False
+    for rs,(chrom,pos,tlp,tes,tse,taf) in targets.items():
+        try: recs=list(tb.fetch(chrom,pos-1,pos))
+        except Exception: recs=[]
+        if not recs:
+            parts.append(f\"{rs}=NO\"); continue
+        f=recs[0].split('\\t'); keys=f[8].split(':'); sample=f[9].split(':'); d=dict(zip(keys,sample))
+        es,se,lp,af=fnum(d.get('ES')),fnum(d.get('SE')),fnum(d.get('LP')),fnum(d.get('AF'))
+        close=''
+        if lp is not None:
+            if abs(lp-tlp)<0.5 and es is not None and abs(es-tes)<0.01:
+                close=' <<<CLOSE'; anyclose=True
+            elif abs(lp-tlp)<2: close=' ~'
+        parts.append(f\"{rs}:LP={lp},ES={es},SE={se},AF={af}{close}\")
+    return (idx,id,n,trait,pmid,' | '.join(parts),anyclose)
+results=[]
+from concurrent.futures import ThreadPoolExecutor, as_completed
+with ThreadPoolExecutor(max_workers=10) as ex:
+    futs=[ex.submit(process,(idx,c)) for idx,c in enumerate(cands)]
+    done=0
+    for fut in as_completed(futs):
+        res=fut.result(); done+=1
+        close=res[-1] if len(res)>6 else False
+        if close or res[5] not in ('NO_URL','TBI_FAIL') and (res[5].startswith('rs1150779:LP=') and '~' in res[5]):
+            print(res, flush=True)
+        elif done%10==0:
+            print('progress',done,'/',len(cands), flush=True)
+        results.append(res)
+print('DONE', flush=True)
+for res in results:
+    if len(res)>6 and res[-1]:
+        print('CLOSE',res, flush=True)
+PY"

@@ -1,0 +1,57 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, scipy.sparse as sp
+from scipy.stats import pearsonr, spearmanr
+
+def load(f):
+ with h5py.File(f,'r') as h:
+  X=sp.csr_matrix((h['X/data'][:],h['X/indices'][:],h['X/indptr'][:]),shape=(len(h['var/_index']),len(h['obs/_index']))).T.tocsr()
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+  targets=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/target_gene/categories'][:]]) if 'obs/target_gene/categories' in h else None
+  tcodes=h['obs/target_gene/codes'][:] if targets is not None else None
+ return X,guides,codes,genes,targets,tcodes
+Xr,gr,cr,gr_genes,tr,tcr=load('perturb.seq.align.q1.ref.h5ad')
+Xq,gq,cq,gq_genes,tq,tcq=load('perturb.seq.align.q1.query.h5ad')
+common,ri,qi=np.intersect1d(gr_genes,gq_genes,return_indices=True)
+Xr=Xr[:,ri]; Xq=Xq[:,qi]
+def norm_log(X):
+ s=np.asarray(X.sum(1)).ravel().astype(float); s[s==0]=1
+ return np.log1p(X.multiply(1/s[:,None]*1e6).tocsr()).toarray()
+Lr=norm_log(Xr); Lq=norm_log(Xq)
+ur=np.array([Lr[cr==i].mean(0) for i in range(len(gr))])
+uq=np.array([Lq[cq==i].mean(0) for i in range(len(gq))])
+ntr=[i for i,g in enumerate(gr) if g.startswith('NT-')]; ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]
+Er=ur-ur[ntr].mean(0); Eq=uq-uq[ntq].mean(0)
+guide2target={}
+for i,g in enumerate(gr):
+ if g.startswith('NT-'): continue
+ vals,counts=np.unique(tr[tcr[cr==i]],return_counts=True)
+ guide2target[g]=vals[np.argmax(counts)]
+pr=[i for i,g in enumerate(gr) if not g.startswith('NT-')]
+pq=[i for i,g in enumerate(gq) if not g.startswith('NT-')]
+# gene selection: common_hvg top 1000 by mean expression maybe; use mean expr and zscore
+mean_expr=(ur.mean(0)+uq.mean(0))/2
+top=np.argsort(mean_expr)[::-1][:1000]
+# also perturb variable: combine variance of Er/Eq rows
+var_effect=Er[pr].var(0)+Eq[pq].var(0)
+top2=np.argsort(var_effect)[::-1][:1000]
+for label,genes_idx in [('mean1000',top),('effectvar1000',top2),('all',np.arange(len(common)))]:
+ A=Eq[pq][:,genes_idx]; B=Er[pr][:,genes_idx]
+ # scale rows
+ A=(A-A.mean(1,keepdims=True))/(A.std(1,keepdims=True)+1e-8)
+ B=(B-B.mean(1,keepdims=True))/(B.std(1,keepdims=True)+1e-8)
+ C=A@B.T/len(genes_idx)
+ print('\\n',label)
+ for target in ['PABPC1','NUDT21','LEO1']:
+  refidx=[ri for ri in pr if guide2target[gr[ri]]==target][0]
+  j=pr.index(refidx); scores=C[:,j]; order=np.argsort(scores)[::-1]
+  print(target,gr[refidx],[(gq[pq[k]],round(scores[k],3)) for k in order[:10]])
+ # full mapping with mutual top
+ mapped=[]
+ for ii,q in enumerate(pq):
+  best_j=C[ii].argmax(); best_i=C[:,best_j].argmax()
+  if best_i==ii: mapped.append((gq[q],gr[pr[best_j]],guide2target[gr[pr[best_j]]],C[ii,best_j]))
+ print('mutual top matches count',len(mapped))
+ for m in mapped: print(m)
+PY"

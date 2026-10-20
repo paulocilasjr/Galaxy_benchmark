@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import urllib.request, struct, json, math
+url='https://huggingface.co/multimolecule/enformer/resolve/main/model.safetensors'
+req=urllib.request.Request(url, headers={'Range':'bytes=0-36511'})
+data=urllib.request.urlopen(req, timeout=60).read()
+n=struct.unpack('<Q', data[:8])[0]
+header=json.loads(data[8:8+n].decode())
+total=0
+trainable=0
+counts={}
+for k,v in header.items():
+    if k=='__metadata__': continue
+    shape=v['shape']
+    prod=1
+    for s in shape: prod*=s
+    total+=prod
+    if any(k.endswith(s) for s in ['running_mean','running_var','num_batches_tracked','gamma_position_basis']):
+        counts['non_trainable']=counts.get('non_trainable',0)+prod
+    else:
+        trainable+=prod
+        counts['trainable']=counts.get('trainable',0)+prod
+print('total elements', total, 'trainable', trainable, 'non_trainable', counts['non_trainable'])
+# by category
+cat={}
+for k,v in header.items():
+    if k=='__metadata__': continue
+    shape=v['shape']; prod=1
+    for s in shape: prod*=s
+    # categorize prefix
+    if k.endswith('running_mean') or k.endswith('running_var') or k.endswith('num_batches_tracked') or k.endswith('gamma_position_basis'):
+        catname='non_trainable'
+    elif 'stem' in k:
+        catname='stem'
+    elif 'conv_tower' in k:
+        catname='tower'
+    elif 'layers' in k:
+        catname='transformer'
+    elif 'head' in k:
+        catname='final'
+    elif 'token_head' in k:
+        catname='human_head'
+    else:
+        catname='other'
+    cat[catname]=cat.get(catname,0)+prod
+for c,v in cat.items(): print(c,v)
+PY"

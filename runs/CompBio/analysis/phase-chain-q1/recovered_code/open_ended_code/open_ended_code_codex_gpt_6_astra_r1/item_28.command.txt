@@ -1,0 +1,29 @@
+/bin/bash -lc "cat > work/inspect.py <<'PY'
+import pysam,collections
+bam=pysam.AlignmentFile('work/reads.bam');fa=pysam.FastaFile('work/region.fa');ref=fa.fetch(bam.references[0]);offset=int(bam.references[0].split(':')[1].split('-')[0])
+print('offset',offset)
+counts=collections.defaultdict(collections.Counter);events=collections.defaultdict(collections.Counter)
+lo=10000;hi=0
+for r in bam:
+ lo=min(lo,r.reference_start);hi=max(hi,r.reference_end)
+ q=0;p=r.reference_start
+ for op,n in r.cigartuples:
+  if op==0:
+   for k in range(n):counts[p+k][r.query_sequence[q+k]]+=1
+   p+=n;q+=n
+  elif op==1:events[p-1]['+'+r.query_sequence[q:q+n]]+=1;q+=n
+  elif op==2:
+   events[p-1]['-'+ref[p:p+n]]+=1
+   for k in range(n):counts[p+k]['D']+=1
+   p+=n
+  elif op==4:q+=n
+print('covered',lo+1,hi,'genomic',offset+lo+1,offset+hi)
+for p,c in sorted(counts.items()):
+ nonref=sum(n for a,n in c.items() if a"'!=ref[p]);d=sum(c.values())
+ if nonref>=10 and nonref/d>.08: print('"'BASE',p+1,offset+p+1,ref[p],dict(c))
+for p,c in sorted(events.items()):
+ if sum(c.values())>=5:print('INDEL',p+1,offset+p+1,ref[p-8:p+14],dict(c))
+for x in [2145,2205,2505,2665,2915,3115,3365]:
+ print('CONTEXT',x,ref[x-21:x+20])
+PY
+python3 work/inspect.py"

@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('phase.bam','rb')
+fasta=pysam.FastaFile('hg38.fa')
+events=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+H1={events[0]:'C',events[1]:'T',events[2]:'A',events[3]:'G',events[4]:'G',events[5]:'D',events[6]:'G',events[7]:'A'}
+H2={events[0]:'A',events[1]:'C',events[2]:'T',events[3]:'D',events[4]:'C',events[5]:'A',events[6]:'D',events[7]:'G'}
+def state_at(read,pos):
+    for q,r in read.get_aligned_pairs(matches_only=False):
+        if r is not None and r+1==pos:
+            return 'D' if q is None else read.query_sequence[q]
+    return None
+# collect pair vecs
+pairs=collections.defaultdict(lambda: collections.defaultdict(list))
+for read in bam.fetch('chr22', min(events)-300, max(events)+300):
+    if read.is_unmapped or read.is_secondary or read.is_supplementary: continue
+    name=read.query_name
+    for pos in events:
+        s=state_at(read,pos)
+        if s is not None: pairs[name][pos].append(s)
+PV={}
+for name,d in pairs.items():
+    PV[name]={p:collections.Counter(ss).most_common(1)[0][0] for p,ss in d.items()}
+# assign pair to H1 or H2 by nearest observed
+assigned={}
+for name,vec in PV.items():
+    m1=sum(vec[p]"'!=h for p,h in H1.items() if p in vec)
+    m2=sum(vec[p]!=h for p,h in H2.items() if p in vec)
+    if m1<m2: assigned[name]=1
+    elif m2<m1: assigned[name]=2
+    # ties ignore
+print('"'assigned',collections.Counter(assigned.values()))
+# For each position in interval, count bases per assigned hap from reads whose pair assigned
+start=27079100; end=27080650
+hap_counts={1:collections.defaultdict(collections.Counter),2:collections.defaultdict(collections.Counter)}
+for read in bam.fetch('chr22', start, end):
+    if read.is_unmapped or read.is_secondary or read.is_supplementary: continue
+    name=read.query_name
+    if name not in assigned: continue
+    h=assigned[name]
+    # count all aligned bases in read (ignore deletions as D only at event positions)
+    for q,r in read.get_aligned_pairs(matches_only=False):
+        if r is None or q is None: continue
+        pos=r+1
+        if start<=pos<=end:
+            hap_counts[h][pos][read.query_sequence[q]]+=1
+# consensus compare ref
+for h in (1,2):
+    diffs=[]
+    for pos in range(start,end+1):
+        c=hap_counts[h].get(pos)
+        if not c: continue
+        ref=fasta.fetch('chr22',pos-1,pos).upper()
+        top=c.most_common(1)[0][0]
+        if top"'!=ref and c[top]>=2:
+            diffs.append((pos,ref,c.most_common(3)))
+    print('"'hap',h,'diffs count',len(diffs))
+    for d in diffs[:30]: print(d)
+PY"

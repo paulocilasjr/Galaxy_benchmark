@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam
+from collections import defaultdict, Counter
+sites=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+si={s:i for i,s in enumerate(sites)}
+predA=['C','T','A','G','G','D','G','A']  # second alphabetical? call A
+predB=['A','C','T','D','C','A','D','G']  # first alphabetical
+b=pysam.AlignmentFile('mapped.sorted.bam','rb')
+def alleles(rec):
+ seq=rec.query_sequence; d={}
+ for qpos,rpos in rec.get_aligned_pairs(matches_only=False):
+  if rpos is None: continue
+  pos=rpos+1
+  if pos in si: d[pos]='D' if qpos is None else seq[qpos]
+ return d
+pairs=defaultdict(list)
+for rec in b.fetch('chr22',27079125,27080626):
+ if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+ pairs[rec.qname].append(rec)
+match_counts=Counter(); conflict=0; examples=[]
+for qname,recs in pairs.items():
+ counts=defaultdict(Counter)
+ for rec in recs:
+  for p,ch in alleles(rec).items(): counts[p][ch]+=1
+ covered=[]
+ for p,c in counts.items():
+  ch=c.most_common(1)[0][0]
+  if ch in predA or ch in predB: # all
+   covered.append((p,ch))
+ if not covered: continue
+ # count matches to predA and predB
+ mA=sum(1 for p,ch in covered if predA[si[p]]==ch)
+ mB=sum(1 for p,ch in covered if predB[si[p]]==ch)
+ if mA>mB: match_counts['A']+=1; haplo='A'
+ elif mB>mA: match_counts['B']+=1; haplo='B'
+ else: match_counts['tie']+=1; haplo='?'
+ # check no conflict: all covered should match assigned (allow errors <=1? exact)
+ badA=sum(1 for p,ch in covered if predA[si[p]]"'!=ch)
+ badB=sum(1 for p,ch in covered if predB[si[p]]!=ch)
+ if min(badA,badB)>0:
+  conflict+=1
+  if len(examples)<5: examples.append((qname,covered,haplo,badA,badB))
+print('"'fragment haplotype counts',match_counts)
+print('fragments with conflict (not exactly one haplotype)',conflict,'of',sum(match_counts.values()))
+for e in examples: print(e)
+PY"

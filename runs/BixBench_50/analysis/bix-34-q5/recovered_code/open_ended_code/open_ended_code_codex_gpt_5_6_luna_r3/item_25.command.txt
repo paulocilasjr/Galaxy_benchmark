@@ -1,0 +1,81 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from pathlib import Path
+from statistics import mean, median
+from itertools import combinations
+import math
+
+class Node:
+    __slots__=('label','edge','children')
+    def __init__(self,label=None,edge=0.0):
+        self.label=label; self.edge=edge; self.children=[]
+
+def parse_newick(text):
+    s=text.strip()
+    assert s.endswith(';')
+    s=s[:-1]
+    pos=0
+    def token(stops):
+        nonlocal pos
+        start=pos
+        while pos<len(s) and s[pos] not in stops: pos+=1
+        return s[start:pos].strip()
+    def node():
+        nonlocal pos
+        if s[pos]=='(':
+            pos+=1; x=Node()
+            while True:
+                x.children.append(node())
+                if s[pos]==',': pos+=1
+                elif s[pos]==')': pos+=1; break
+                else: raise AssertionError(s[pos:])
+            if pos<len(s) and s[pos] not in ',():': x.label=token(',():')
+            if pos<len(s) and s[pos]==':': pos+=1; x.edge=float(token(',()'))
+            return x
+        x=Node(label=token(',():'))
+        if pos<len(s) and s[pos]==':': pos+=1; x.edge=float(token(',()'))
+        return x
+    root=node()
+    assert pos==len(s),(pos,s[pos:])
+    return root
+
+def graph_distances(root):
+    graph={}; lookup={}; leaves=[]
+    def visit(x):
+        lookup[id(x)]=x; graph[id(x)]=[]
+        if not x.children: leaves.append(x)
+        for c in x.children:
+            visit(c)
+            graph[id(x)].append((id(c),c.edge))
+            graph[id(c)].append((id(x),c.edge))
+    visit(root)
+    assert all(x.label and math.isfinite(x.edge) and x.edge>=0 for x in leaves)
+    out=[]
+    for a,b in combinations(leaves,2):
+        seen={id(a):0.0}; stack=[a]
+        while stack:
+            cur=stack.pop()
+            for nxt,w in graph[id(cur)]:
+                if nxt not in seen:
+                    seen[nxt]=seen[id(cur)]+w
+                    stack.append(lookup[nxt])
+        assert id(b) in seen
+        out.append(seen[id(b)])
+    return leaves,out
+
+summaries={}
+for group,expected in (('animals',100),('fungi',249)):
+    per_tree=[]
+    with ZipFile(Path('inputs')/f'scogs_{group}.zip') as z:
+        names=[n for n in z.namelist() if n.endswith('.treefile')]
+        assert len(names)==expected
+        for name in names:
+            leaves,dist=graph_distances(parse_newick(z.read(name).decode()))
+            assert len(leaves)>=3 and all(math.isfinite(x) for x in dist)
+            per_tree.append(mean(dist))
+    summaries[group]=median(per_tree)
+    print(group,'n',len(per_tree),'median',format(summaries[group],'.17g'))
+ratio=summaries['fungi']/summaries['animals']
+print('ratio',format(ratio,'.17g'))
+assert abs(ratio-1.947482109191807)<1e-12
+PY"

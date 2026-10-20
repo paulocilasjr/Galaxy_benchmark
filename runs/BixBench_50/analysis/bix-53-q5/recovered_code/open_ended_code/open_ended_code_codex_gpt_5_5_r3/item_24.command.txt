@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts0 = pd.read_csv('inputs/count.csv')
+counts = counts0.set_index('geneID').T
+counts = counts.astype(int)
+metadata = pd.DataFrame({'condition': ['KL' if s.startswith('KL') else 'WL' for s in counts.index]}, index=counts.index)
+print(counts.shape)
+print(metadata.T.to_string())
+
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition', ref_level=['condition','KL'], n_cpus=1, quiet=False)
+dds.deseq2()
+print('varm keys', dds.varm.keys())
+print('obsm keys', dds.obsm.keys())
+print('uns keys', dds.uns.keys())
+print('var columns', dds.var.columns.tolist()[:30])
+print('LFC columns', dds.varm['LFC'].columns.tolist())
+stat = DeseqStats(dds, contrast=['condition','WL','KL'], alpha=0.05, n_cpus=1, quiet=False)
+stat.summary()
+print(stat.results_df.head().to_string())
+print(stat.results_df.columns)
+print(stat.results_df.shape)
+print('pvalue nonna', stat.results_df['pvalue'].notna().sum(), 'padj nonna', stat.results_df['padj'].notna().sum())
+print('coeffs', dds.varm['LFC'].columns.tolist())
+coeff = [c for c in dds.varm['LFC'].columns if 'condition' in c and 'WL' in c][0]
+print('shrinking', coeff)
+stat.lfc_shrink(coeff=coeff)
+res = stat.results_df.copy()
+print(res.head().to_string())
+mask = (res['pvalue'] < 0.05) & (res['log2FoldChange'].abs() > 1) & (res['baseMean'] > 10)
+print('sig p', mask.sum())
+print(res.loc[mask].head().to_string())
+# save temp DE list for next step? no audit? It's okay? User says do not create evidence/audit files. Avoid. Print maybe.
+print('genes_first_20', res.index[mask].tolist()[:20])
+PY"

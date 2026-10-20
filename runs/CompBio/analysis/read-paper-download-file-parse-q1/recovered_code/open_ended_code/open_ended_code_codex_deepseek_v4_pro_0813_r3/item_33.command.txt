@@ -1,0 +1,39 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c1f0451d847e54dabf9a57f3/workspace && python3 - <<'PY'
+import urllib.request, struct, io
+url='https://zenodo.org/api/records/8313962/files/scATAC.zip/content'
+size=1634356338
+# fetch last 65536+22 bytes
+start=size-(65536+22)
+req=urllib.request.Request(url, headers={'Range':f'bytes={start}-{size-1}'})
+data=urllib.request.urlopen(req).read()
+print(len(data), data[:4], data[-22:])
+# find EOCD signature backwards
+sig=b'PK\\x05\\x06'
+pos=data.rfind(sig)
+print('eocd offset in chunk',pos)
+eocd=data[pos:pos+22]
+print(struct.unpack('<4s4H2LH',eocd))
+# fields: disk, cd start disk, entries disk, total entries, cd size, cd offset
+sig2,disk,cddisk,n1,n2,cdsize,cdoff=struct.unpack('<4s4H2LH',eocd)
+print('cdsize',cdsize,'cdoff',cdoff)
+# fetch central directory
+req=urllib.request.Request(url, headers={'Range':f'bytes={cdoff}-{cdoff+cdsize-1}'})
+cd=urllib.request.urlopen(req).read()
+print('cd fetched',len(cd))
+# parse filenames
+names=[]
+p=0
+while p+46<=len(cd):
+    h=cd[p:p+46]
+    if h[:4]"'!=b'"'PK\\x01\\x02': break
+    comp,_,_,_,method,modtime,moddate,crc,cs,us,fnl,efl,cl,disk,iat,efa,off=struct.unpack('<4s6H3L5H2L',h)
+    # Actually format differs: need use
+    p+=46
+    name=cd[p:p+fnl]
+    p+=fnl+efl+cl
+    names.append((name.decode('utf8','replace'),us))
+print('entries',len(names))
+for name,us in names:
+    if any(k in name.lower() for k in ['bed','peak','cluster','readme','matrix','count','atac','fine','set','grid']):
+        print(name, us)
+PY"

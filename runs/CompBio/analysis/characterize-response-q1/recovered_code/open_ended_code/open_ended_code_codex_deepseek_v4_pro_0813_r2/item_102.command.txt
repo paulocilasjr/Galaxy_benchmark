@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, json, time, csv, re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+uid='135528001'
+libs=[l.strip() for l in open('enrichr_selected_libraries.txt') if l.strip()]
+genes=set(open('characterize.response.q1.txt').read().split())
+rows=[]
+def fetch(lib):
+    url=f'https://maayanlab.cloud/Enrichr/enrich?userListId={uid}&backgroundType={lib}'
+    try:
+        r=requests.get(url,timeout=120)
+        if r.status_code"'!=200:
+            return (lib, [('"'HTTP'+str(r.status_code),0)])
+        data=r.json()
+        terms=data.get(lib, [])
+        out=[]
+        for t in terms:
+            # t = [rank, term, p, z, combined, genes, adjp, oldp, oldadjp]
+            ov=t[5]
+            out.append((t[1],len(ov),float(t[2]),','.join(ov[:20])))
+        out.sort(key=lambda x:-x[1])
+        return (lib,out[:15])
+    except Exception as e:
+        return (lib, [('ERR '+str(e),0)])
+with ThreadPoolExecutor(max_workers=8) as ex:
+    futs=[ex.submit(fetch,l) for l in libs]
+    for f in as_completed(futs):
+        lib,terms=f.result()
+        for term,count,p,ov in terms:
+            if count>=15:
+                rows.append((lib,term,count,p,ov))
+rows.sort(key=lambda x:-x[2])
+with open('enrichr_top_by_count.csv','w') as f:
+    w=csv.writer(f); w.writerow(['library','term','overlap','pvalue','genes'])
+    for r in rows: w.writerow(r)
+print('rows',len(rows))
+for r in rows[:100]:
+    print(f'{r[0]}\\t{r[1]}\\t{r[2]}\\t{r[3]:.3g}\\t{r[4][:100]}')
+PY"

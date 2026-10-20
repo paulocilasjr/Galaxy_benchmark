@@ -1,0 +1,61 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+# use saved? recompute depth quickly via sequences and kmer index as before
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+A={}
+for name in ['exo','endo','mix']:
+ d=np.zeros(len(seq))
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline(); lab,i=bestpos(s)
+   if lab=='+': d[i:i+50]+=1
+   else:
+    st=len(seq)-50-i; d[st:st+50]+=1
+ A[name]=d
+X=A['exo']/A['exo'].sum(); Y=A['endo']/A['endo'].sum(); Z=A['mix']/A['mix'].sum()
+print('corr X,Y',np.corrcoef(X,Y)[0,1],'X,Z',np.corrcoef(X,Z)[0,1],'Y,Z',np.corrcoef(Y,Z)[0,1])
+# Solve min || (Y-Z) - pi*(Y-X) + delta*(Z-X) ||_2 (note sign)
+# equation Y-Z = pi(Y-X) - delta(Z-X)
+b=Y-Z
+M=np.column_stack([Y-X, -(Z-X)])
+coef,res,rank,sv=np.linalg.lstsq(M,b,rcond=None)
+pi,delta=coef
+print('LS pi,delta',pi,delta,'res',res,'rank',rank)
+# constrained nonnegative least squares on [pi, delta, maybe E?] via scipy
+from scipy.optimize import nnls
+# nnls for b = M coef with pi,delta nonneg
+coefnn=nnls(M,b)[0]
+print('NNLS pi,delta',coefnn)
+# grid search minimizing residual with constraints E>=0 maybe and pi,delta in [0,1]
+best=None
+for pi in np.linspace(0,1,201):
+ for delta in np.linspace(0,1,201):
+  E=(Y-delta*X)/(1-delta) if delta<1 else np.zeros_like(Y)
+  E2=(Z-pi*X)/(1-pi) if pi<1 else np.zeros_like(Z)
+  # residual between E estimates weighted? and nonneg
+  if np.any(E<0) or np.any(E2<0): continue
+  r=np.sum((E-E2)**2)
+  if best is None or r<best[0]: best=(r,pi,delta)
+print('grid best residual/pi/delta',best)
+# sample boundaries for nonnegative: delta <= min Y/X, pi <= min Z/X
+print('max delta',np.min(Y[X>0]/X[X>0]),'max pi',np.min(Z[X>0]/Z[X>0]))
+PY"

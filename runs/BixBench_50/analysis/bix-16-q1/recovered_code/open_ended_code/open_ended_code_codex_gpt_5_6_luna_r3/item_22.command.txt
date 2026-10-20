@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+import re, time
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata
+
+base=Path('inputs')
+t0=time.time()
+def read_numeric_matrix(path):
+    h=pd.read_csv(path,nrows=0).columns
+    d={c:np.float32 for c in h[1:]}
+    return pd.read_csv(path,index_col=0,dtype=d,low_memory=False)
+print('reading CRISPR', flush=True)
+crispr=read_numeric_matrix(base/'CRISPRGeneEffect.csv')
+print('read CRISPR', crispr.shape, 'sec', round(time.time()-t0,1), flush=True)
+t1=time.time()
+print('reading expression', flush=True)
+expr=read_numeric_matrix(base/'OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+print('read expression', expr.shape, 'sec', round(time.time()-t1,1), flush=True)
+
+model_ids=pd.read_csv(base/'Model.csv', usecols=['ModelID'], dtype='string')['ModelID'].astype(str)
+model_set=set(model_ids)
+expr_ids=set(expr.index.astype(str))
+common_ids=[idx for idx in crispr.index.astype(str) if idx in expr_ids and idx in model_set]
+print('paired models', len(common_ids), 'crispr_only', len(crispr)-len(common_ids), 'expr_only', len(expr)-len(common_ids), flush=True)
+crispr=crispr.loc[common_ids]
+expr=expr.loc[common_ids]
+
+pat=re.compile(r'"'^(.*) '"\\(["'^()]*)$'"')
+def gene_symbol(s):
+    m=pat.match(str(s))
+    return m.group(1) if m else str(s)
+cmap={gene_symbol(c):c for c in crispr.columns}
+emap={gene_symbol(c):c for c in expr.columns}
+common=sorted(set(cmap)&set(emap))
+print('matched gene symbols',len(common), flush=True)
+
+results=[]
+undefined=[]
+missing_stats=[]
+for k,sym in enumerate(common,1):
+    x=crispr[cmap[sym]].to_numpy(dtype=np.float64,copy=False)
+    y=expr[emap[sym]].to_numpy(dtype=np.float64,copy=False)
+    mask=np.isfinite(x)&np.isfinite(y)
+    n=int(mask.sum())
+    if n<2:
+        undefined.append((sym,n,'too_few'))
+        continue
+    xr=x[mask]; yr=y[mask]
+    if np.all(xr==xr[0]) or np.all(yr==yr[0]):
+        undefined.append((sym,n,'constant'))
+        continue
+    rx=rankdata(xr,method='average')
+    ry=rankdata(yr,method='average')
+    rx-=rx.mean(); ry-=ry.mean()
+    denom=np.sqrt(np.dot(rx,rx)*np.dot(ry,ry))
+    rho=float(np.dot(rx,ry)/denom) if denom else float('nan')
+    if np.isfinite(rho):
+        results.append((rho,sym,n,int((~mask).sum())))
+    else:
+        undefined.append((sym,n,'nan'))
+    missing_stats.append(int((~mask).sum()))
+    if k%4000==0: print('processed',k,flush=True)
+results.sort(key=lambda z:(z[0],z[1]))
+print('valid correlations',len(results),'undefined',len(undefined),'sec_total',round(time.time()-t0,1),flush=True)
+print('missing pair count min/max/median',min(missing_stats),max(missing_stats),float(np.median(missing_stats)),flush=True)
+print('most negative 30')
+for row in results[:30]: print(row)
+print('most positive 5')
+for row in results[-5:]: print(row)
+PY"

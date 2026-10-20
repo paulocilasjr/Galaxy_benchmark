@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.sparse import csr_matrix
+import scipy.sparse as sp
+
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+types=meta['cell_type'].astype('category')
+ctypes=types.cat.categories.tolist()
+print(ctypes)
+# mean signature by cell type
+sig=np.zeros((len(ctypes), sc.shape[1]))
+for i,t in enumerate(ctypes):
+    sig[i]=sc.values[types==t].mean(axis=0)
+# normalize? raw counts first
+S=sp.csc_matrix(sig.T)
+M=mmread('matrix.mtx.gz').tocsc() # spots x genes? MatrixMarket shape 1000x900 entries rows genes? Let's inspect orientation.
+print('M shape', M.shape)
+# read barcodes rows = spots, features rows = genes. MM header 1000 900 -> genes x spots? entry 2 1 2 means gene2 spot1 count2. yes M genes x spots. We want X spots x genes = M.T
+X=M.T.tocsr()
+# nnls for each spot: minimize ||S @ w - x|| subject w>=0. But S genes x celltypes, x genes. 
+W=np.zeros((X.shape[0], len(ctypes)))
+for i in range(X.shape[0]):
+    x=X[i].toarray().ravel()
+    w,res=nnls(sig.T, x, maxiter=10000)
+    W[i]=w
+# proportions within spot
+props=W/W.sum(axis=1, keepdims=True)
+df=pd.DataFrame(W, columns=ctypes)
+dfp=pd.DataFrame(props, columns=ctypes)
+print('W sum stats', df.sum(axis=1).describe())
+print('props mean', dfp.mean())
+print('spot predicted total vs actual corr')
+print(np.corrcoef(df.sum(axis=1), np.array(X.sum(axis=1)).ravel())[0,1])
+# spot tumor threshold
+print(dfp.describe())
+PY"

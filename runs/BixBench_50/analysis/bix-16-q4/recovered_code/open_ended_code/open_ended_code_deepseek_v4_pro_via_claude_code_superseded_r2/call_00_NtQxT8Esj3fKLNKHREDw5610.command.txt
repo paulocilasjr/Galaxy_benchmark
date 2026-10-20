@@ -1,0 +1,88 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv, numpy as np
+from scipy import stats
+
+# Read only headers
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    crispr_genes = next(csv.reader(f))[1:]
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    expr_genes = next(csv.reader(f))[1:]
+
+cg_map = {g: i for i, g in enumerate(crispr_genes)}
+eg_map = {g: i for i, g in enumerate(expr_genes)}
+common = sorted(set(cg_map) & set(eg_map))
+
+# Read cell line IDs
+cc_lines = []
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    r = csv.reader(f); next(r)
+    for row in r: cc_lines.append(row[0])
+ec_lines = []
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    r = csv.reader(f); next(r)
+    for row in r: ec_lines.append(row[0])
+common_lines = sorted(set(cc_lines) & set(ec_lines))
+print(f"Common lines: {len(common_lines)}")
+
+# Build filtered row indices
+expr_line_idx = {}
+with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+    r = csv.reader(f); next(r)
+    for i, row in enumerate(r):
+        if row[0] in set(common_lines):
+            expr_line_idx[row[0]] = i
+
+crispr_line_idx = {}
+with open('inputs/CRISPRGeneEffect.csv') as f:
+    r = csv.reader(f); next(r)
+    for i, row in enumerate(r):
+        if row[0] in set(common_lines):
+            crispr_line_idx[row[0]] = i
+
+# Test 5 genes by reading only their columns
+test_genes = ['TP53 (7157)', 'EGFR (1956)', 'BRCA1 (672)', 'MYC (4609)', 'KRAS (3845)']
+test_genes = [g for g in test_genes if g in cg_map and g in eg_map]
+print(f"Testing genes: {test_genes}")
+
+for gene in test_genes:
+    ci = cg_map[gene]
+    ei = eg_map[gene]
+    
+    # Read only this gene's data
+    expr_vals = []
+    with open('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv') as f:
+        r = csv.reader(f); next(r)
+        for i, row in enumerate(r):
+            if row[0] in set(common_lines):
+                expr_vals.append(float(row[ei+1]))
+    
+    effect_vals = []
+    with open('inputs/CRISPRGeneEffect.csv') as f:
+        r = csv.reader(f); next(r)
+        for i, row in enumerate(r):
+            if row[0] in set(common_lines):
+                v = row[ci+1].strip()
+                effect_vals.append(float(v) if v else np.nan)
+    
+    x = np.array(expr_vals)
+    y = np.array(effect_vals)
+    valid = ~np.isnan(x) & ~np.isnan(y)
+    xv = x[valid]; yv = y[valid]; n = len(xv)
+    
+    # My method (Pearson on ranks)
+    rx = stats.rankdata(xv); ry = stats.rankdata(yv)
+    rc = rx - np.mean(rx); rd = ry - np.mean(ry)
+    my_rho = np.dot(rc, rd) / np.sqrt(np.dot(rc, rc) * np.dot(rd, rd))
+    my_rho_c = np.clip(my_rho, -1+1e-15, 1-1e-15)
+    my_t = my_rho_c * np.sqrt((n-2)/(1-my_rho_c**2))
+    my_p = 2 * stats.t.sf(abs(my_t), n-2)
+    
+    # Scipy
+    sc_rho, sc_p = stats.spearmanr(xv, yv)
+    
+    print(f'{gene}: n={n}')
+    print(f'  My method:  rho={my_rho:.10f}, p={my_p:.6e}')
+    print(f'  Scipy:      rho={sc_rho:.10f}, p={sc_p:.6e}')
+    print(f'  Rho diff: {abs(my_rho-sc_rho):.2e}, p diff: {abs(my_p-sc_p):.2e}')
+PYEOF
+

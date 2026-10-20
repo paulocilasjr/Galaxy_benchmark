@@ -1,0 +1,49 @@
+/bin/bash -lc "cat > tf_score.py <<'PY'
+import os, sys, time, numpy as np
+os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+import tensorflow as tf
+
+def multinomial_nll(true_counts, logits):
+    return tf.constant(0.0)
+
+tf.compat.v1.disable_eager_execution()
+
+def load_models():
+    models=[]
+    for fold in range(5):
+        path=f'models_Rod_fold{fold}.h5'
+        print('loading',path,flush=True)
+        with tf.keras.utils.CustomObjectScope({'multinomial_nll':multinomial_nll, 'tf':tf}):
+            m=tf.keras.models.load_model(path)
+        models.append(m)
+    return models
+
+def pred_counts(model, x):
+    # x shape (N,2114,4)
+    out=model.predict(x, verbose=0, batch_size=256)
+    return out[1].ravel().astype(np.float64)
+
+def main():
+    d=np.load('rod_inputs.npz')
+    ref=d['ref'].astype('float32'); alt=d['alt'].astype('float32')
+    models=load_models()
+    ref_counts=[]; alt_counts=[]
+    for i,m in enumerate(models):
+        t=time.time()
+        rc=pred_counts(m,ref)
+        ac=pred_counts(m,alt)
+        ref_counts.append(rc); alt_counts.append(ac)
+        print('fold',i,'done',time.time()-t,flush=True)
+    ref_counts=np.array(ref_counts)
+    alt_counts=np.array(alt_counts)
+    lfc=alt_counts-ref_counts
+    np.save('rod_ref_counts_tf.npy',ref_counts)
+    np.save('rod_alt_counts_tf.npy',alt_counts)
+    np.save('rod_lfc_folds_tf.npy',lfc)
+    np.save('rod_lfc_avg_tf.npy',lfc.mean(axis=0))
+    print('saved',lfc.shape)
+    print('lfc range',lfc.min(),lfc.max())
+if __name__=='__main__':
+    main()
+PY
+TF_ENABLE_ONEDNN_OPTS=0 ./tf29env/bin/python tf_score.py"

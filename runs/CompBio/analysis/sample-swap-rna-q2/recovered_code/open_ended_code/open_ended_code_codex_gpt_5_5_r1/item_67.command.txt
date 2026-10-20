@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,csv,math,glob,statistics
+from collections import defaultdict
+# read local selected genes from fetched files
+site=defaultdict(dict) # cluster -> gene -> avg_exp
+for f in sorted(glob.glob('dotplot_batches20/batch_*.tsv')):
+    with open(f) as fh:
+        r=csv.DictReader(fh, delimiter='\\t')
+        for row in r:
+            if not row or row.get('gene')=='gene': continue
+            try: v=float(row['avg_exp'])
+            except Exception: continue
+            site[row['cluster']][row['gene']]=v
+site_genes=set()
+for d in site.values(): site_genes.update(d)
+print('site clusters', sorted(site), 'genes', len(site_genes))
+local={}
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t')
+    header=next(r)[1:]
+    for row in r:
+        if row[0] in site_genes:
+            local[row[0]]=[float(x) for x in row[1:]]
+print('local genes', len(local), 'header', header)
+# pearson and spearman-ish rank via simple ranks
+def pearson(x,y):
+    n=len(x)
+    mx=sum(x)/n; my=sum(y)/n
+    vx=sum((a-mx)**2 for a in x); vy=sum((b-my)**2 for b in y)
+    if vx==0 or vy==0: return float('nan')
+    return sum((a-mx)*(b-my) for a,b in zip(x,y))/math.sqrt(vx*vy)
+def ranks(xs):
+    order=sorted(range(len(xs)), key=lambda i: xs[i])
+    r=[0]*len(xs)
+    i=0
+    while i<len(xs):
+        j=i
+        while j+1<len(xs) and xs[order[j+1]]==xs[order[i]]: j+=1
+        val=(i+j)/2
+        for k in range(i,j+1): r[order[k]]=val
+        i=j+1
+    return r
+clusters=sorted(site)
+print('\\nPearson log1p local vs log1p site avg_exp')
+for j,h in enumerate(header):
+    vals=[]
+    for cl in clusters:
+        genes=sorted(set(local)&set(site[cl]))
+        x=[math.log1p(local[g][j]) for g in genes]
+        y=[math.log1p(site[cl][g]) for g in genes]
+        vals.append((cl,pearson(x,y),len(genes)))
+    vals.sort(key=lambda x:x[1], reverse=True)
+    print(f'{h:<12} ' + ' | '.join(f'{cl}:{r:.3f}' for cl,r,n in vals[:6]))
+print('\\nSource cluster best local')
+for cl in clusters:
+    vals=[]
+    genes=sorted(set(local)&set(site[cl]))
+    for j,h in enumerate(header):
+        x=[math.log1p(site[cl][g]) for g in genes]
+        y=[math.log1p(local[g][j]) for g in genes]
+        vals.append((h,pearson(x,y)))
+    vals.sort(key=lambda x:x[1], reverse=True)
+    print(f'{cl:<18} ' + ' | '.join(f'{h}:{r:.3f}' for h,r in vals[:5]))
+PY"

@@ -53,7 +53,7 @@ Point-by-point record of how `figure_review.md` was applied. Previous versions a
 - Title: "Galaxy records analyses as structured provenance and uses more input tokens on question-answering tasks".
 - a: Galaxy / custom-code ratios for each benchmark, for total input, uncached input and output tokens. Two estimators are shown, with the paired geometric mean as primary and the ratio of totals as aggregate. The IWC exception is visible (1.7×, 0.8–3.5; aggregate 0.90×). The sibling comparison is now a ratio plot headed "No clear input-token difference between correct and incorrect siblings".
 - b: action and tokens-per-action ratios by benchmark, and returned characters by request type and benchmark. Labels say "returned characters", "inspected but not executed" and "cached input" literally.
-- c (new, 2026-10-07): reducing Galaxy token use. Galaxy / custom-code tokens per complete 50-task BixBench-Verified-50 run before and after each round of interface changes, from run records: July, GPT-5.5, 5.48× to 2.81× (Galaxy tokens −55%); October, GPT-5.6 Sol, 3.45× to 1.53× (−56%), with the single intermediate replicate (2.42×) from the batch summary. Data in `token_improvment/`.
+- c (new, 2026-10-07): reducing Galaxy token use. Galaxy / custom-code tokens per complete 50-task BixBench-Verified-50 run before and after each round of interface changes, from run records: July, GPT-5.5, 5.48× to 2.81× (Galaxy tokens −55%); October, GPT-5.6 Sol, 3.45× to 1.53× (−56%), with the single intermediate replicate (2.42×) from the batch summary. Data in `runs/token_optimization/`.
 - d: the repaired inspectability comparison (item 3).
 - e: one matched analysis record, bix-45-q1.
 - Extended Data Fig. 5: the model trade-off by benchmark with intervals, sibling distributions, and tokens against actions.
@@ -98,7 +98,7 @@ The results are in Extended Data Fig. 6a,b. The Methods should disclose this, an
 
 ## Reviewed CompBioBench reruns (2026-10-06)
 
-All numbers above are recomputed after 53 CompBioBench Galaxy runs were replaced by their reviewed reruns (`CompBio/reruns_20261005/`). The rule was to keep every other run's result as it was and substitute only the rerun runs.
+All numbers above are recomputed after 53 CompBioBench Galaxy runs were replaced by their reviewed reruns (`runs/CompBio/reruns_20261005/`). The rule was to keep every other run's result as it was and substitute only the rerun runs.
 
 **What was swapped in:**
 - **Sources:** each rerun's trace and Galaxy history, collected with the repository's own collector, plus its answer and grade.
@@ -135,7 +135,7 @@ All numbers above are recomputed after 53 CompBioBench Galaxy runs were replaced
 The IWC and BixBench-Verified-50 results did not change.
 
 **Not yet updated:**
-- **Task-level failure-cause audit (`individual_error_analysis.md`):** its CompBioBench entries describe the replaced runs. Two tasks now have incorrect runs and no entry (reverse-encode-q1, perturb-seq-align-q1), and the per-task correct counts no longer match. `rigor_analysis.py` and the original-layout manuscript build stop on this; the figures in this folder do not use it.
+- **Task-level failure-cause audit (`docs/reports/individual_error_analysis.md`):** its CompBioBench entries describe the replaced runs. Two tasks now have incorrect runs and no entry (reverse-encode-q1, perturb-seq-align-q1), and the per-task correct counts no longer match. `rigor_analysis.py` and the original-layout manuscript build stop on this; the figures in this folder do not use it.
 - **Verification sample (Extended Data Fig. 7a):** one coded run, D075 (conservation-lookup-q1, DeepSeek r3), was replaced. Its codes describe the original run. Both the original and the rerun were incorrect, so the run's outcome stratum is unchanged.
 
 **What the reruns differ in:**
@@ -169,7 +169,7 @@ The previous figures are kept in `archive/2026-10-07_before_site_scores/`.
   - `make_wf003_errors.py` extracts the 24 runs' execution errors with `fig_on_demand.py`'s own rules. The on-demand workbook omits the task.
 - **Failure causes (Fig. 2d, Extended Data Fig. 2a):**
   - Audited runs that the site grades correct leave the census.
-  - The 4 bix-43-q2 runs graded incorrect only by the site have no audit entry. They take the task-level audit's cause, benchmark specification or scoring (`individual_error_analysis.md`).
+  - The 4 bix-43-q2 runs graded incorrect only by the site have no audit entry. They take the task-level audit's cause, benchmark specification or scoring (`docs/reports/individual_error_analysis.md`).
 - **Population sensitivities (Extended Data Fig. 2b):** recomputed on these scores with the primary estimator, instead of read from `accuracy_sensitivities.csv`.
 - **Verification sample (Fig. 4d, Extended Data Fig. 7a):** outcomes use the current grade. D079 (bix-53-q2) is now correct, so the groups hold 41 correct and 39 incorrect runs.
 - **Fig. 5c:** "Galaxy correct" uses the site's grades: the primary grades for the archived runs, and the site's 6 July page for the round-1 batch.
@@ -200,7 +200,7 @@ No conclusion changed direction and no test crossed *P* = 0.05.
 Every changed Source Data value is listed in `source_data_changes/` (`compare_source_data.py`).
 
 **Not yet updated:**
-- **`individual_error_analysis.md`:** it still describes bix-53-q2 and bix-43-q2 under the original evaluator's grades.
+- **`docs/reports/individual_error_analysis.md`:** it still describes bix-53-q2 and bix-43-q2 under the original evaluator's grades.
 - **Second rater (Extended Data Fig. 6c):** 7 of its 45 sampled runs are now graded correct. The check measures agreement on the cause at audit time; both raters attributed all 7 to the benchmark.
 
 ## Still not possible with the retained material

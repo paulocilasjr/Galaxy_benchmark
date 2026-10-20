@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import time, numpy as np
+start=time.time()
+n=205; m=500000
+G=np.empty((n,m), dtype=np.int8)
+with open('q1_raw.raw') as f:
+    header=f.readline().split()
+    print('header',len(header), header[6:8])
+    for i,line in enumerate(f):
+        p=line.split()
+        vals=p[6:6+m]
+        G[i]=np.fromiter(map(int, vals), dtype=np.int8, count=m)
+print('read sec', time.time()-start, G.shape, G.dtype, G.nbytes/1e6)
+# compute per individual het count: sum G==1
+het=G==1
+het_count=het.sum(axis=1)
+print('het range',het_count.min(),het_count.max(),'sum',het_count.sum())
+# Compute pair counts chunked
+chunk=20000
+both_het=np.zeros((n,n),dtype=np.float32)
+opp=np.zeros((n,n),dtype=np.float32)
+for s in range(0,m,chunk):
+    B=G[:,s:s+chunk].astype(np.float32)
+    both_het += (B==1).astype(np.float32) @ (B==1).astype(np.float32).T
+    # opp: one 0 one 2
+    d0=(B==0).astype(np.float32); d2=(B==2).astype(np.float32)
+    opp += d0 @ d2.T + d2 @ d0.T
+    if s%100000==0: print('chunk',s)
+print('matrix sec', time.time()-start)
+den = het_count[:,None]+het_count[None,:]
+kinship = np.divide(both_het - 2*opp, den, out=np.zeros_like(both_het), where=den"'!=0)
+np.fill_diagonal(kinship,0)
+# top pairs
+iu=np.triu_indices(n,k=1)
+vals=kinship[iu]
+print('"'kinship max', vals.max(), 'min', vals.min())
+top=np.argsort(vals)[::-1][:30]
+for idx in top:
+    i,j=iu[0][idx],iu[1][idx]
+    print(i,j,vals[idx], 'counts', both_het[i,j], opp[i,j], den[i,j])
+# how many > .2 .25
+for t in [0.35,0.3,0.25,0.2,0.15,0.1]:
+    print('>',t,(vals>t).sum())
+PY"

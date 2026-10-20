@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import collections, gzip
+markers = {
+'liver':'ALB TTR APOA1 APOA2 FGA FGB FGG APOB HP KNG1 SERPINA1 ASGR1 CYP2E1 CYP2D6',
+'heart':'MYH6 MYH7 TNNT2 TNNI3 ACTC1 MYL2 MYL3 TPM1 NPPA NPPB PLN',
+'testis':'PRM1 PRM2 PRM3 TNP1 TNP2 DDX4 DAZL SYCP3 ACRV1 ZPBP ODF1 ODF2 TEX101',
+'kidney':'UMOD SLC12A1 SLC34A1 SLC5A2 LRP2 CUBN AQP1 AQP2 NPHS1 NPHS2 PODXL KCNJ1',
+'bone_marrow':'HBB HBA1 HBA2 HBD HBM AHSP ALAS2 GYPA SLC25A37 CA1 BLVRB HBG1 HBG2 HBE1',
+'spleen':'PTPRC CD74 MS4A1 CD79A CD79B LYZ LST1 C1QA C1QB C1QC NKG7 GNLY',
+'cortex':'SNAP25 RBFOX3 SLC17A7 GAD1 GAD2 MBP PLP1 SLC1A2 GFAP AQP4 TUBB3',
+'retina':'RHO GNAT1 PDE6B SAG RCVRN CRX OPN1SW OPN1MW ARR3 GNGT1',
+'lung':'SCGB1A1 SFTPA1 SFTPA2 SFTPB SFTPC SFTPD AGER FOXJ1 EPCAM WFDC2',
+'skin':'KRT14 KRT5 KRT1 KRT10 KRT15 COL17A1 FLG LOR IVL DSP'
+}
+# build read_to_bc and gene counts from PAF as in summary
+read_to_bc={}
+with gzip.open('three.way.barnyard.q2.R1.fq.gz','rt') as f:
+  while True:
+    h=f.readline()
+    if not h: break
+    s=f.readline().strip(); f.readline(); f.readline()
+    read_to_bc[h[1:].split()[0].rsplit('/',1)[0]]=s[:16]
+best={}
+with open('r2_vs_cdna.paf') as f:
+  for line in f:
+    p=line.rstrip('\\n').split('\\t')
+    q=p[0].rsplit('/',1)[0]; aln=int(p[10]); mapq=int(p[11]); matches=int(p[9]); qspan=int(p[3])-int(p[2])
+    if aln<45 or qspan<45: continue
+    score=(mapq,matches,aln)
+    if q not in best or score>best[q][0]:
+      sp,gene,*_=p[5].split('|',2); best[q]=(score,sp,gene)
+sg=collections.defaultdict(collections.Counter)
+for q,(_,sp,gene) in best.items(): sg[sp][gene.upper()]+=1
+for sp in ['human','mouse','pig']:
+  print('##',sp)
+  for tissue, genes in markers.items():
+    total=sum(sg[sp][g] for g in genes.split())
+    hits=[(g,sg[sp][g]) for g in genes.split() if sg[sp][g]]
+    print(tissue,total,hits[:20])
+PY"

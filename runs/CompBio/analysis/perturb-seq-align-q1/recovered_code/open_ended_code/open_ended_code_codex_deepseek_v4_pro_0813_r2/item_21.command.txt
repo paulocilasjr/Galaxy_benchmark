@@ -1,0 +1,42 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np
+from sklearn.decomposition import TruncatedSVD
+from sklearn.neighbors import NearestNeighbors
+from scipy.stats import spearmanr
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']
+Ds=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']
+  X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+  gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc])
+  var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  Ds.append((X,g,var))
+(X1,g1,v1),(X2,g2,v2)=Ds
+common=[x for x in v1 if x in set(v2)]
+X1c=X1[:,[v1.index(x) for x in common]].astype(float)
+X2c=X2[:,[v2.index(x) for x in common]].astype(float)
+for X in [X1c,X2c]:
+ lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+ X=X.multiply(1.0/lib[:,None]).tocsr(); X.data=np.log1p(X.data*1e4)
+# sample NT
+nt1=np.isin(g1,[f'NT-I{i}' for i in range(1,11)]); nt2=np.isin(g2,[f'NT-I{i}' for i in range(1,11)])
+print('nt cells',nt1.sum(),nt2.sum())
+A=X1c[nt1]; B=X2c[nt2]
+# svd on concatenated or each? compute PCA
+from sklearn.decomposition import PCA
+Xall=sp.vstack([A,B]).tocsr()
+pca=PCA(n_components=20, random_state=0).fit(Xall.toarray() if Xall.shape[0]*Xall.shape[1]<1e8 else Xall)
+# too large toarray maybe 1400x11858=16m ok
+A_p=pca.transform(A.toarray()); B_p=pca.transform(B.toarray())
+# distance distribution
+from scipy.spatial.distance import cdist
+D=cdist(A_p,B_p)
+for k in [1,5,20]:
+ print('cross NT min k',k, np.quantile(D.min(axis=1),0.5), np.mean(D.min(axis=1)))
+# within ref NT
+Daa=cdist(A_p,A_p); np.fill_diagonal(Daa,np.inf); print('within ref 1nn',np.median(Daa.min(axis=1)))
+PY
+python [REDACTED LOCAL PATH]"

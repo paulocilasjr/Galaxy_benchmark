@@ -1,0 +1,117 @@
+/usr/bin/bash -c "cat > /workspace/filter_and_de.py <<'PY'
+#"'!/usr/bin/env python3
+import json
+import math
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+warnings.filterwarnings('"'ignore')
+
+ROOT = Path('/workspace')
+RAW = ROOT / 'pseudobulk_counts_raw_all.tsv'
+META = ROOT / 'pseudobulk_metadata.tsv'
+OUT_DIR = ROOT / 'final_answer'
+OUT_DIR.mkdir(exist_ok=True)
+
+meta = pd.read_csv(META, sep='\\t')
+raw = pd.read_csv(RAW, sep='\\t', index_col=0)
+samples = meta['sample'].astype(str).tolist()
+N = len(samples)
+M = float(np.median(meta['total_counts']))
+S = int(math.ceil(10 + 0.7 * (N - 10)))
+cpm_threshold = 10.0 / M * 1_000_000.0
+
+counts_gene_x_sample = raw[samples].astype(float)
+totals = meta['total_counts'].astype(float).values
+cpm = counts_gene_x_sample.values / totals[None, :] * 1_000_000.0
+n_samples_over_threshold = (cpm >= cpm_threshold).sum(axis=1)
+summed_counts = counts_gene_x_sample.values.sum(axis=1)
+keep = (n_samples_over_threshold >= S) & (summed_counts >= 1000)
+
+# "'`gene_symbol` values from the all-gene index (<symbol>_ENSG...).
+gene_symbols = pd.Series([x.split('"'_ENSG')[0] for x in raw.index], index=raw.index)
+filtered_gene_x_sample = counts_gene_x_sample.loc[keep].copy()
+filtered_gene_x_sample.index = gene_symbols.loc[filtered_gene_x_sample.index].values
+filtered_gene_x_sample.index.name = 'gene'
+filtered_gene_x_sample.columns = samples
+filtered_gene_x_sample = filtered_gene_x_sample.astype(int)
+
+# Write required pseudobulk matrix.
+filtered_gene_x_sample.to_csv(OUT_DIR / 'pseudobulk_counts.tsv', sep='\\t', index=True)
+
+# Build sample metadata for DESeq2. Categorical order makes COVID-19 the
+# reference level, so disease[T.normal] is the normal-minus-COVID-19 effect.
+sample_meta = meta.set_index('sample').loc[samples].copy()
+sample_meta['disease'] = pd.Categorical(sample_meta['disease'], categories=['COVID-19', 'normal'])
+sample_meta['cell_type'] = pd.Categorical(sample_meta['cell_type'])
+
+# PyDESeq2 expects samples x genes.
+counts_sample_x_gene = filtered_gene_x_sample.T.copy()
+counts_sample_x_gene.index.name = 'sample'
+counts_sample_x_gene = counts_sample_x_gene.astype(int)
+
+dds = DeseqDataSet(
+    counts=counts_sample_x_gene,
+    metadata=sample_meta,
+    design='~ disease + cell_type',
+    quiet=False,
+    n_cpus=1,
+)
+dds.deseq2()
+
+stat = DeseqStats(
+    dds,
+    contrast=['disease', 'normal', 'COVID-19'],
+    cooks_filter=False,
+    independent_filter=False,
+    n_cpus=1,
+)
+stat.summary()
+res = stat.results_df.copy()
+res.index.name = 'gene'
+
+# Ensure one row per filtered gene and no NA/outlier omissions.
+if not res.index.equals(filtered_gene_x_sample.index):
+    res = res.reindex(filtered_gene_x_sample.index)
+
+lfc = pd.to_numeric(res['log2FoldChange'], errors='coerce').astype(float)
+pval = pd.to_numeric(res['pvalue'], errors='coerce').astype(float)
+
+# Keep finite log2 fold changes. Where a value is missing/non-finite from
+# the estimator, use 0 as a finite neutral value.
+lfc = np.where(np.isfinite(lfc), lfc, 0.0)
+# Keep p-values valid. Where missing/non-finite, use 1 before BH adjustment.
+pval = np.where(np.isfinite(pval) & (pval >= 0) & (pval <= 1), pval, 1.0)
+
+# Benjamini-Hochberg adjustment over all genes in this table.
+rank = np.argsort(np.argsort(pval)) + 1
+fdr = pval * len(pval) / rank
+# BH is monotone in sorted order; enforce monotonicity by cumulative max in sorted order.
+order = np.argsort(pval)
+fdr_sorted = np.minimum(1, pval[order] * len(pval) / np.arange(1, len(pval) + 1))
+fdr_sorted = np.maximum.accumulate(fdr_sorted)
+fdr_final = np.empty_like(fdr_sorted)
+fdr_final[order] = fdr_sorted
+
+out = pd.DataFrame({
+    'gene': filtered_gene_x_sample.index.values,
+    'log2_fold_change': lfc,
+    'p_value': pval,
+    'fdr': fdr_final,
+})
+out.to_csv(OUT_DIR / 'differential_expression.tsv', sep='\\t', index=False)
+
+(OUT_DIR / 'method.json').write_text(json.dumps({'method': 'DESeq2'}) + '\\n')
+
+print('N', N, 'M', M, 'S', S, 'cpm_threshold', cpm_threshold, 'genes_retained', len(out), flush=True)
+print('p_value range', pval.min(), pval.max(), 'fdr range', out['fdr'].min(), out['fdr'].max(), flush=True)
+print('log2FC nonfinite original', int((~np.isfinite(pd.to_numeric(res['log2FoldChange'], errors='coerce').astype(float))).sum()), flush=True)
+print('pvalue NA/invalid original', int((~np.isfinite(pd.to_numeric(res['pvalue'], errors='coerce').astype(float)) | (pd.to_numeric(res['pvalue'], errors='coerce').astype(float) < 0) | (pd.to_numeric(res['pvalue'], errors='coerce').astype(float) > 1)).sum()), flush=True)
+print('done', flush=True)
+PY
+python /workspace/filter_and_de.py"

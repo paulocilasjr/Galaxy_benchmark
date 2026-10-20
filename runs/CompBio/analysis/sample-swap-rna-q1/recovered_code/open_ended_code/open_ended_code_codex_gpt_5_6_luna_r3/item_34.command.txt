@@ -1,0 +1,23 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np, pandas as pd, time
+D=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+target={g.encode():i for i,g in enumerate(D.index)}; nG=len(target)
+a=pd.read_csv('GSE255742_Amphioxus_21hpf_sc_annotations.tsv.gz',sep='\\t')
+labmap=dict(zip(x.encode() if isinstance(x,str) else x for x in a.cell, a.cell_type))
+with gzip.open('GSE255742_Amphioxus_21hpf_sc_UMI_counts.tsv.gz','rb') as f: header=f.readline().rstrip(b'\\n').split(b'\\t')
+labels=np.array([labmap[x] for x in header]); types=sorted(set(labels)); code=np.array([types.index(x) for x in labels]); k=len(types)
+S=np.zeros((nG,k)); found=0;t0=time.time()
+with gzip.open('GSE255742_Amphioxus_21hpf_sc_UMI_counts.tsv.gz','rb') as f:
+ f.readline()
+ for line in f:
+  p=line.split(b'\\t',1); j=target.get(p[0])
+  if j is None: continue
+  v=np.fromstring(p[1].decode(),sep='\\t'); S[j]=np.bincount(code,weights=v,minlength=k); found+=1
+print('found',found,'sec',round(time.time()-t0,1),flush=True)
+A=pd.DataFrame(S,index=D.index,columns=types)
+for d in D:
+ out=[]
+ for t in A:
+  out.append((t,np.corrcoef(D[d],A[t])[0,1],np.corrcoef(np.log1p(D[d]),np.log1p(A[t]))[0,1]))
+ print(d,sorted(out,key=lambda z:z[1],reverse=True)[:5],flush=True)
+PY"

@@ -1,0 +1,77 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse, numpy as np, pandas as pd, re
+from collections import defaultdict
+
+def load_table(gse):
+    g=GEOparse.get_GEO(geo=gse,destdir='./geo',silent=True)
+    # build expression DataFrame and gene symbols from gse.gpls
+    mats=[]
+    names=[]
+    for gsm_name,gsm in g.gsms.items():
+        t=gsm.table
+        t=t.copy()
+        t['sample']=gsm_name
+        mats.append(t)
+    df=pd.concat(mats, ignore_index=True)
+    # pivot; table columns ID_REF and VALUE likely
+    valcol='VALUE' if 'VALUE' in df.columns else [c for c in df.columns if c not in ['ID_REF','sample']][0]
+    expr=df.pivot(index='ID_REF', columns='sample', values=valcol).astype(float)
+    # gene symbol annotation
+    for gpl in g.gpls.values():
+        ann=gpl.table
+        print(gse,'gpl columns', list(ann.columns)[:15])
+        # find gene symbol col
+        symcol=next((c for c in ann.columns if c.lower() in ['gene symbol','genesymbol','symbol','gene_symbol']),None)
+        if symcol:
+            sym=ann.set_index('ID')[symcol] if 'ID' in ann.columns else None
+            break
+    return g,expr,sym
+
+def top_compare(gse, expr, sym, cond_pat, ctrl_pat, label):
+    qlist=open('../characterize.response.q1.txt').read().split()
+    q=set(qlist)
+    # identify samples
+    names=list(expr.columns)
+    # map sample metadata
+    g=GEOparse.get_GEO(geo=gse,destdir='./geo',silent=True)
+    cond=[]; ctrl=[]
+    for name in names:
+        title=g.gsms[name].metadata.get('title')
+        source=g.gsms[name].metadata.get('source_name_ch1')
+        # title is list
+        if isinstance(title,list): title=title[0]
+        s=(title or '')+' '+(source or '')
+        if re.search(cond_pat,s,re.I): cond.append(name)
+        elif re.search(ctrl_pat,s,re.I): ctrl.append(name)
+    print('\\n',gse,label,'cond',len(cond),cond,'ctrl',len(ctrl),ctrl)
+    if not cond or not ctrl: return None
+    # map probes to symbols, collapse max abs
+    m0=expr[cond].mean(axis=1); m1=expr[ctrl].mean(axis=1)
+    logfc=np.log2((m0+1)/(m1+1))
+    # t stat approximate
+    import scipy.stats as st
+    genes=[]
+    for probe in expr.index:
+        if sym is not None and probe in sym.index:
+            gene=str(sym.loc[probe]).split('///')[0].strip()
+        else:
+            continue
+        genes.append((abs(logfc[probe]), logfc[probe], gene, probe))
+    # collapse per gene max abs logfc
+    best=defaultdict(lambda:(0,0,''))
+    for a,l,g,p in genes:
+        if g and a>best[g][0]: best[g]=(a,l,p)
+    ranked=sorted(best.items(),key=lambda kv:-kv[1][0])
+    top=[g for g,v in ranked[:112]]
+    inter=set(top)&q
+    print('top112 overlap',len(inter))
+    print('query in top112:', ', '.join([g for g in qlist if g in set(top)]))
+    # rank of query genes in ranked
+    rank={g:i+1 for i,(g,v) in enumerate(ranked)}
+    rr=[(g,rank[g]) for g in qlist if g in rank]
+    print('query ranks first 30:',rr[:30])
+    return ranked
+
+gse='GSE17721'; g,expr,sym=load_table(gse)
+# Wait function has side effects; do separately simpler maybe
+PY"

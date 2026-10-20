@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from math import exp, log, isfinite
+
+ws=load_workbook('/workspace/inputs/data.xlsx',data_only=True,read_only=True).active
+rows=list(ws.iter_rows(min_row=2, max_row=81, max_col=4, values_only=True))
+# Rows 2:81 are the 80 records. Group 1 is PR and group 2 is SD/PD.
+x=[float(r[3]) for r in rows]
+y=[1.0 if r[1]==1 else 0.0 for r in rows]
+print('n',len(x),'events',sum(y),'age range',min(x),max(x),'mean',sum(x)/len(x))
+print('event mean age',sum(a*b for a,b in zip(x,y))/sum(y),'non-event mean age',sum(a*(1-b) for a,b in zip(x,y))/(len(x)-sum(y)))
+
+def sigmoid(z):
+    if z>=0:
+        e=exp(-z); return 1/(1+e)
+    e=exp(z); return e/(1+e)
+
+def fit(x,y):
+    b0=b1=0.0
+    for it in range(100):
+        s0=s1=0.0
+        a00=a01=a11=0.0
+        ll=0.0
+        for xi,yi in zip(x,y):
+            eta=b0+b1*xi
+            p=sigmoid(eta)
+            r=yi-p
+            s0+=r; s1+=r*xi
+            w=p*(1-p)
+            a00+=w; a01+=w*xi; a11+=w*xi*xi
+            # stable loglik
+            ll += yi*eta - (eta if eta>0 else 0) - log(1+exp(-abs(eta)))
+        det=a00*a11-a01*a01
+        d0=(a11*s0-a01*s1)/det
+        d1=(-a01*s0+a00*s1)/det
+        b0+=d0; b1+=d1
+        print(it, 'beta',repr(b0),repr(b1),'score',repr(s0),repr(s1),'step',repr(d0),repr(d1),'ll',repr(ll)) if it<5 or max(abs(d0),abs(d1))<1e-12 else None
+        if max(abs(d0),abs(d1))<1e-13: break
+    return b0,b1
+b=fit(x,y)
+print('coef',repr(b[1]),'intercept',repr(b[0]))
+# Repeat with y=PR exactly, and using group indicator vs efficacy.
+y2=[1.0 if r[2]=='PR' else 0.0 for r in rows]
+print('same y?', y==y2)
+print('coef efficacy binary',repr(fit(x,y2)[1]))
+PY"

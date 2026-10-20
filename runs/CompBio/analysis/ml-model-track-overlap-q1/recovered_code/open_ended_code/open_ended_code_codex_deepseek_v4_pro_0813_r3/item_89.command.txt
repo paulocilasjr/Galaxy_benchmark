@@ -1,0 +1,62 @@
+/bin/bash -lc "cat > fetch_borzoi_encff.py <<'PY'
+import csv,re,json,requests,time,sys
+rows=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+accs=[]
+for r in rows:
+ ident=r['identifier'].strip()
+ m=re.match(r'(ENCFF\\d{3}[A-Z]{3})[+-]?"'$'"', ident)
+ if m:
+  accs.append(m.group(1))
+ else:
+  # Some RNA identifiers maybe ENCFF without +/-? already.
+  m2=re.match(r'(ENCFF\\d{3}[A-Z]{3})',ident)
+  if m2 and '/encode/' in r['file']:
+   accs.append(m2.group(1))
+accs=list(dict.fromkeys(accs))
+print('unique encff',len(accs), 'rows with encff?', sum(1 for r in rows if re.match(r'(ENCFF\\d{3}[A-Z]{3})',r['identifier'])))
+
+def chunk_list(lst,n):
+ for i in range(0,len(lst),n): yield lst[i:i+n]
+
+chunks=list(chunk_list(accs,150))
+print('chunks',len(chunks))
+
+def fetch(chunk):
+ params=[('type','File'),('format','json'),('field','accession'),('field','dataset'),('field','biological_replicates')]
+ for a in chunk: params.append(('accession',a))
+ last=None
+ for attempt in range(8):
+  try:
+   r=requests.get('https://www.encodeproject.org/search/',params=params,timeout=120)
+   if r.status_code==200:
+    return r.json().get('@graph',[])
+   last=(r.status_code,r.text[:200])
+   if r.status_code in (429,500,502,503,504):
+    time.sleep(3*(attempt+1))
+   else:
+    time.sleep(1)
+  except Exception as e:
+   last=repr(e); time.sleep(2)
+ print('FAILED chunk first',chunk[0],last,file=sys.stderr,flush=True)
+ return []
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+results=[None]*len(chunks)
+with ThreadPoolExecutor(max_workers=5) as ex:
+ futs={ex.submit(fetch,c):i for i,c in enumerate(chunks)}
+ for fut in as_completed(futs):
+  i=futs[fut]
+  try: results[i]=fut.result()
+  except Exception as e:
+   print('future',i,e,file=sys.stderr); results[i]=[]
+
+meta={}
+for chunk,res in zip(chunks,results):
+ for g in res:
+  if 'accession' in g:
+   meta[g['accession']]={'dataset':g.get('dataset',''),'biological_replicates':g.get('biological_replicates',[])}
+json.dump(meta,open('borzoi_encff_meta.json','w'))
+print('saved',len(meta),'missing',len([a for a in accs if a not in meta]))
+print('missing examples',[a for a in accs if a not in meta][:20])
+PY
+python3 fetch_borzoi_encff.py"

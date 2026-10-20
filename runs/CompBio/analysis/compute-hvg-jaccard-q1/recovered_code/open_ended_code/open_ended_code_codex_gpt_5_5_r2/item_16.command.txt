@@ -1,0 +1,40 @@
+/bin/bash -lc 'PYTHONPATH="$PWD/pydeps" python - <<'"'PY'
+import numpy as np
+import scanpy as sc
+
+paths=['pbmc3k.h5ad','10x_pbmc68k_reduced.h5ad']
+adatas=[]
+for path in paths:
+    ad=sc.read_h5ad(path)
+    # Exclude rows with missing gene_symbols only if that var column exists.
+    if 'gene_symbols' in ad.var.columns:
+        ad=ad[:, ~ad.var['gene_symbols'].isna()].copy()
+    adatas.append(ad)
+
+common=set(map(str, adatas[0].var_names))
+for ad in adatas[1:]:
+    common &= set(map(str, ad.var_names))
+print('common_count', len(common))
+print('unique?', [ad.var_names.is_unique for ad in adatas])
+
+hvg_sets=[]
+truth={'True','1','TRUE'}
+for path, ad in zip(paths, adatas):
+    mask=[str(v) in common for v in ad.var_names]
+    sub=ad[:, mask].copy()
+    print(path, 'sub shape', sub.shape)
+    sc.pp.highly_variable_genes(sub, flavor='seurat')
+    hv = sub.var['highly_variable'].astype(str).isin(truth)
+    genes=set(map(str, sub.var_names[hv]))
+    print(path, 'hvg_count', len(genes))
+    print('first_hvg', sorted(genes)[:10])
+    hvg_sets.append(genes)
+
+union=hvg_sets[0] | hvg_sets[1]
+inter=hvg_sets[0] & hvg_sets[1]
+if len(common)==0 or len(union)==0:
+    ans=float('nan')
+else:
+    ans=len(inter)/len(union)
+print('inter', len(inter), 'union', len(union), 'jaccard', ans, 'rounded', 'NaN' if np.isnan(ans) else f'{ans:.2f}')
+PY"

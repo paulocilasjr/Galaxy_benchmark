@@ -1,0 +1,77 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, itertools, sys
+m=pd.read_csv('seurat_meta.csv',index_col=0,low_memory=False)
+our_codes=np.load('donor_codes.npy')
+
+def canon(seq):
+    mp={}; out=np.empty(len(seq),dtype=np.int32); nxt=0
+    for i,v in enumerate(seq):
+        if v not in mp:
+            mp[v]=nxt; nxt+=1
+        out[i]=mp[v]
+    return out
+our_canon=canon(our_codes)
+print('our first occurrence order', np.unique(our_codes, return_index=True))
+
+# sample_label is object with NaN for HC; get codes as integers via category? Use pd.factorize
+sl=m['sample_label']
+sl_codes,_=pd.factorize(sl) # NaN gets -1
+# For masks, sl_codes subset; factorize NaN -1 issue but mask non-null likely.
+base_nonnull=sl.notna()
+
+# define candidate masks as named functions
+mask_fns={
+ 'Class_COVID': m['Class']=='COVID',
+ 'Class_HC': m['Class']=='HC',
+ 'specific_ungated': m['specific_gating']=='ungated',
+ 'celltypeQC_true': m['celltypeQC'].astype(str)=='True',
+ 'Sorted_N': m['Sorted']=='N',
+ 'Sorted_Y': m['Sorted']=='Y',
+ 'HTO_Singlet': m['HTO_classification.global']=='Singlet',
+ 'not_Doublet': m['HTO_classification.global']"'!='"'Doublet',
+ 'gate_not_ungated': m['gate_group']"'!='"'ungated',
+ 'sample_label_nonnull': base_nonnull,
+ 'specific_gating_not_ungated': m['specific_gating']"'!='"'ungated',
+}
+# Try each mask and combinations with sample_label_nonnull
+for name,mask in mask_fns.items():
+    if name=='sample_label_nonnull': continue
+    for base_name,base in [('nonnull',base_nonnull),('all',pd.Series(True,index=m.index))]:
+        comb=mask & base
+        # ensure sample_label not nan in comb? base covers nonnull; for all, sample_label may nan
+        if base_name=='all':
+            comb=comb & base_nonnull
+        seq=sl_codes[comb.values]
+        seq=seq[seq>=0]
+        if len(seq)==len(our_codes):
+            can=canon(seq)
+            eq=np.mean(can==our_canon)
+            print('EXACTLEN', name, base_name, 'eq', eq)
+        else:
+            # maybe first len or last len match not
+            pass
+    # also single nonnull
+    seq=sl_codes[base_nonnull.values]; seq=seq[seq>=0]
+    if len(seq)==len(our_codes): print('base exact')
+# Search all combinations of a few masks to get length exact
+base_mask=base_nonnull
+keys=['specific_ungated','celltypeQC_true','Sorted_N','Sorted_Y','HTO_Singlet','gate_not_ungated']
+for r in range(1,len(keys)+1):
+    for combo in itertools.combinations(keys,r):
+        mask=base_mask.copy()
+        for k in combo:
+            mask &= mask_fns[k]
+        seq=sl_codes[mask.values]; seq=seq[seq>=0]
+        if len(seq)==len(our_codes):
+            can=canon(seq)
+            print('EXACT COMBO',combo,'eq',np.mean(can==our_canon))
+# Print lengths for combinations near target
+print('\\nNear lengths:')
+for r in range(1,len(keys)+1):
+    for combo in itertools.combinations(keys,r):
+        mask=base_mask.copy()
+        for k in combo: mask &= mask_fns[k]
+        cnt=mask.sum()
+        if abs(cnt-len(our_codes))<3000:
+            print(combo,cnt)
+PY"

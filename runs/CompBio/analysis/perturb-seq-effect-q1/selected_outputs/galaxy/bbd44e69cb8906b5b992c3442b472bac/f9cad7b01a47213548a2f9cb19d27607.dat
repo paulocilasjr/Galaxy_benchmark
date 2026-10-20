@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""Diagnostic summary for a Cell Ranger perturb-seq archive.
+
+This is intentionally read-only with respect to the archive.  It parses the
+feature / barcode / matrix / protospacer-call / feature-reference inputs and
+emits small tabular summaries that are used to choose the downstream analysis.
+"""
+
+from __future__ import annotations
+
+import csv
+import gzip
+import io
+import sys
+import tarfile
+from collections import Counter
+
+
+def _text(archive: tarfile.TarFile, name: str) -> str:
+    member = archive.getmember(name)
+    raw = archive.extractfile(member)
+    if raw is None:
+        raise RuntimeError(f"missing archive member: {name}")
+    if name.endswith(".gz"):
+        raw = gzip.GzipFile(fileobj=raw, mode="rb")
+    return raw.read().decode("utf-8")
+
+
+def main(archive_path: str, summary_path: str, feature_list_path: str,
+         diagnostic_path: str) -> None:
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        # Feature order from features.tsv.gz.
+        features_text = _text(archive, "filtered_feature_bc_matrix/features.tsv.gz")
+        features = []
+        for line in features_text.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            features.append(parts[0])
+
+        # Barcode order from barcodes.tsv.gz.
+        barcodes_text = _text(archive, "filtered_feature_bc_matrix/barcodes.tsv.gz")
+        barcodes = [line.strip() for line in barcodes_text.splitlines() if line.strip()]
+
+        # MatrixMarket shape and a compact pass over nonzeros.
+        matrix_text = _text(archive, "filtered_feature_bc_matrix/matrix.mtx.gz")
+        n_rows = n_cols = nnz = None
+        total_umis = 0
+        nonzero_per_feature = Counter()
+        nonzero_per_barcode = Counter()
+        n_parse = 0
+        for line in matrix_text.splitlines():
+            if not line:
+                continue
+            if line.startswith("%"):
+                continue
+            if n_rows is None:
+                parts = line.split()
+                if len(parts) == 3:
+                    n_rows, n_cols, nnz = (int(x) for x in parts)
+                continue
+            parts = line.split()
+            if len(parts) != 3:
+                continue
+            fi, bi, value = (int(parts[0]) - 1, int(parts[1]) - 1, float(parts[2]))
+            n_parse += 1
+            total_umis += value
+            nonzero_per_feature[fi] += 1
+            nonzero_per_barcode[bi] += 1
+
+        # Protospacer calls: one row per cell.
+        calls_text = _text(archive, "protospacer_calls_per_cell.csv")
+        calls = []
+        for row in csv.DictReader(io.StringIO(calls_text)):
+            calls.append(row)
+
+        # Guide reference.
+        ref_text = _text(archive, "feature_reference.csv")
+        guide_to_target = {}
+        guide_to_name = {}
+        for row in csv.DictReader(io.StringIO(ref_text)):
+            guide_to_target[row["id"]] = row["target_gene_name"]
+            guide_to_name[row["id"]] = row["name"]
+
+        call_barcodes = {r["cell_barcode"] for r in calls}
+        barcode_set = set(barcodes)
+        overlap = len(call_barcodes & barcode_set)
+        only_calls = len(call_barcodes - barcode_set)
+        only_matrix = len(barcode_set - call_barcodes)
+
+        target_cells = Counter()
+        guide_cells = Counter()
+        target_umis = Counter()
+        guide_umis = Counter()
+        for row in calls:
+            guide = row["feature_call"]
+            target = guide_to_target.get(guide, guide)
+            umis = float(row.get("num_umis") or 0)
+            target_cells[target] += 1
+            guide_cells[guide] += 1
+            target_umis[target] += umis
+            guide_umis[guide] += umis
+
+        with open(summary_path, "w", newline="") as fh:
+            writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+            writer.writerow(["target", "guide", "cells", "total_guide_umis",
+                             "mean_guide_umis"])
+            for target in sorted(target_cells):
+                guides = [g for g in sorted(guide_to_target)
+                          if guide_to_target[g] == target]
+                for g in guides:
+                    n = guide_cells.get(g, 0)
+                    t = guide_umis.get(g, 0.0)
+                    writer.writerow([target, g, n, f"{t:g}", f"{t / n:g}" if n else "NA"])
+
+        with open(feature_list_path, "w", newline="") as fh:
+            writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+            writer.writerow(["index_1_based", "feature_id"])
+            for i, feature in enumerate(features, 1):
+                writer.writerow([i, feature])
+
+        with open(diagnostic_path, "w", newline="") as fh:
+            fh.write("key\tvalue\n")
+            fh.write(f"matrix_rows_features\t{n_rows}\n")
+            fh.write(f"matrix_cols_barcodes\t{n_cols}\n")
+            fh.write(f"matrix_nnz_header\t{nnz}\n")
+            fh.write(f"matrix_nnz_parsed\t{n_parse}\n")
+            fh.write(f"total_umis\t{total_umis:g}\n")
+            fh.write(f"features_parsed\t{len(features)}\n")
+            fh.write(f"barcodes_parsed\t{len(barcodes)}\n")
+            fh.write(f"call_rows\t{len(calls)}\n")
+            fh.write(f"overlap_barcodes\t{overlap}\n")
+            fh.write(f"only_calls\t{only_calls}\n")
+            fh.write(f"only_matrix\t{only_matrix}\n")
+            fh.write(f"targets_in_reference\t{len(set(guide_to_target.values()))}\n")
+            fh.write(f"guides_in_reference\t{len(guide_to_target)}\n")
+            fh.write("nonzero_features_with_any_reads\t"
+                     f"{len(nonzero_per_feature)}\n")
+            fh.write("nonzero_barcodes_with_any_reads\t"
+                     f"{len(nonzero_per_barcode)}\n")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5:
+        raise SystemExit(
+            "usage: diagnose.py ARCHIVE.TAR.GZ summary.tsv features.tsv diagnostics.tsv"
+        )
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+#!/usr/bin/env python3
+"""Diagnostic summary for a Cell Ranger perturb-seq archive.
+
+This is intentionally read-only with respect to the archive.  It parses the
+feature / barcode / matrix / protospacer-call / feature-reference inputs and
+emits small tabular summaries that are used to choose the downstream analysis.
+"""
+
+from __future__ import annotations
+
+import csv
+import gzip
+import io
+import sys
+import tarfile
+from collections import Counter
+
+
+def _text(archive: tarfile.TarFile, name: str) -> str:
+    member = archive.getmember(name)
+    raw = archive.extractfile(member)
+    if raw is None:
+        raise RuntimeError(f"missing archive member: {name}")
+    if name.endswith(".gz"):
+        raw = gzip.GzipFile(fileobj=raw, mode="rb")
+    return raw.read().decode("utf-8")
+
+
+def main(archive_path: str, summary_path: str, feature_list_path: str,
+         diagnostic_path: str) -> None:
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        # Feature order from features.tsv.gz.
+        features_text = _text(archive, "filtered_feature_bc_matrix/features.tsv.gz")
+        features = []
+        for line in features_text.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            features.append(parts[0])
+
+        # Barcode order from barcodes.tsv.gz.
+        barcodes_text = _text(archive, "filtered_feature_bc_matrix/barcodes.tsv.gz")
+        barcodes = [line.strip() for line in barcodes_text.splitlines() if line.strip()]
+
+        # MatrixMarket shape and a compact pass over nonzeros.
+        matrix_text = _text(archive, "filtered_feature_bc_matrix/matrix.mtx.gz")
+        n_rows = n_cols = nnz = None
+        total_umis = 0
+        nonzero_per_feature = Counter()
+        nonzero_per_barcode = Counter()
+        n_parse = 0
+        for line in matrix_text.splitlines():
+            if not line:
+                continue
+            if line.startswith("%"):
+                continue
+            if n_rows is None:
+                parts = line.split()
+                if len(parts) == 3:
+                    n_rows, n_cols, nnz = (int(x) for x in parts)
+                continue
+            parts = line.split()
+            if len(parts) != 3:
+                continue
+            fi, bi, value = (int(parts[0]) - 1, int(parts[1]) - 1, float(parts[2]))
+            n_parse += 1
+            total_umis += value
+            nonzero_per_feature[fi] += 1
+            nonzero_per_barcode[bi] += 1
+
+        # Protospacer calls: one row per cell.
+        calls_text = _text(archive, "protospacer_calls_per_cell.csv")
+        calls = []
+        for row in csv.DictReader(io.StringIO(calls_text)):
+            calls.append(row)
+
+        # Guide reference.
+        ref_text = _text(archive, "feature_reference.csv")
+        guide_to_target = {}
+        guide_to_name = {}
+        for row in csv.DictReader(io.StringIO(ref_text)):
+            guide_to_target[row["id"]] = row["target_gene_name"]
+            guide_to_name[row["id"]] = row["name"]
+
+        call_barcodes = {r["cell_barcode"] for r in calls}
+        barcode_set = set(barcodes)
+        overlap = len(call_barcodes & barcode_set)
+        only_calls = len(call_barcodes - barcode_set)
+        only_matrix = len(barcode_set - call_barcodes)
+
+        target_cells = Counter()
+        guide_cells = Counter()
+        target_umis = Counter()
+        guide_umis = Counter()
+        for row in calls:
+            guide = row["feature_call"]
+            target = guide_to_target.get(guide, guide)
+            umis = float(row.get("num_umis") or 0)
+            target_cells[target] += 1
+            guide_cells[guide] += 1
+            target_umis[target] += umis
+            guide_umis[guide] += umis
+
+        with open(summary_path, "w", newline="") as fh:
+            writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+            writer.writerow(["target", "guide", "cells", "total_guide_umis",
+                             "mean_guide_umis"])
+            for target in sorted(target_cells):
+                guides = [g for g in sorted(guide_to_target)
+                          if guide_to_target[g] == target]
+                for g in guides:
+                    n = guide_cells.get(g, 0)
+                    t = guide_umis.get(g, 0.0)
+                    writer.writerow([target, g, n, f"{t:g}", f"{t / n:g}" if n else "NA"])
+
+        with open(feature_list_path, "w", newline="") as fh:
+            writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+            writer.writerow(["index_1_based", "feature_id"])
+            for i, feature in enumerate(features, 1):
+                writer.writerow([i, feature])
+
+        with open(diagnostic_path, "w", newline="") as fh:
+            fh.write("key\tvalue\n")
+            fh.write(f"matrix_rows_features\t{n_rows}\n")
+            fh.write(f"matrix_cols_barcodes\t{n_cols}\n")
+            fh.write(f"matrix_nnz_header\t{nnz}\n")
+            fh.write(f"matrix_nnz_parsed\t{n_parse}\n")
+            fh.write(f"total_umis\t{total_umis:g}\n")
+            fh.write(f"features_parsed\t{len(features)}\n")
+            fh.write(f"barcodes_parsed\t{len(barcodes)}\n")
+            fh.write(f"call_rows\t{len(calls)}\n")
+            fh.write(f"overlap_barcodes\t{overlap}\n")
+            fh.write(f"only_calls\t{only_calls}\n")
+            fh.write(f"only_matrix\t{only_matrix}\n")
+            fh.write(f"targets_in_reference\t{len(set(guide_to_target.values()))}\n")
+            fh.write(f"guides_in_reference\t{len(guide_to_target)}\n")
+            fh.write("nonzero_features_with_any_reads\t"
+                     f"{len(nonzero_per_feature)}\n")
+            fh.write("nonzero_barcodes_with_any_reads\t"
+                     f"{len(nonzero_per_barcode)}\n")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5:
+        raise SystemExit(
+            "usage: diagnose.py ARCHIVE.TAR.GZ summary.tsv features.tsv diagnostics.tsv"
+        )
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])

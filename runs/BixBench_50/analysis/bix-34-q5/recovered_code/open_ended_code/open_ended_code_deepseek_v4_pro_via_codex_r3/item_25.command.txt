@@ -1,0 +1,93 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from statistics import median, mean
+
+class Node:
+    __slots__=('children','label','length')
+    def __init__(self,children=None,label='',length=None):
+        self.children=children or []; self.label=label; self.length=length
+    def is_leaf(self): return not self.children
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    pos=0
+    def parse_node():
+        nonlocal pos
+        if pos < len(s) and s[pos]=='(':
+            pos+=1; children=[]
+            while True:
+                children.append(parse_node())
+                if pos < len(s) and s[pos]==',':
+                    pos+=1; continue
+                break
+            assert pos < len(s) and s[pos]==')', (s,pos)
+            pos+=1
+            label=''
+            if pos < len(s) and s[pos] not in ',();:':
+                start=pos
+                while pos<len(s) and s[pos] not in ',();:': pos+=1
+                label=s[start:pos]
+            length=None
+            if pos < len(s) and s[pos]==':':
+                pos+=1; start=pos
+                while pos<len(s) and s[pos] not in ',();:': pos+=1
+                length=float(s[start:pos])
+            return Node(children,label,length)
+        else:
+            start=pos
+            while pos<len(s) and s[pos] not in ',();:': pos+=1
+            label=s[start:pos]
+            length=None
+            if pos < len(s) and s[pos]==':':
+                pos+=1; start=pos
+                while pos<len(s) and s[pos] not in ',();:': pos+=1
+                length=float(s[start:pos])
+            return Node(label=label,length=length,children=[])
+    tree=parse_node()
+    return tree
+
+def collect_leaf_dists(tree):
+    paths=[]; leaves=[]
+    def dfs(node, path):
+        # path root->current, includes current cumulative dist from root
+        if node.is_leaf():
+            leaves.append(node.label); paths.append(path)
+        else:
+            for ch in node.children:
+                dfs(ch, path+[(ch, (path[-1][1] if path else 0.0)+(ch.length or 0.0))])
+    dfs(tree, [(tree,0.0)])
+    ds=[]
+    for i in range(len(leaves)):
+        for j in range(i+1,len(leaves)):
+            pi=paths[i]; pj=paths[j]
+            k=0
+            while k<min(len(pi),len(pj)) and pi[k][0] is pj[k][0]: k+=1
+            common_idx=k-1
+            di=pi[-1][1]-pi[common_idx][1]
+            dj=pj[-1][1]-pj[common_idx][1]
+            ds.append(di+dj)
+    return ds,leaves
+
+def parse_mldist(f):
+    lines=f.read_text().strip().splitlines(); n=int(lines[0].strip()); names=[]; vals=[]
+    for line in lines[1:]:
+        parts=line.strip().split(); names.append(parts[0]); vals.append([float(x) for x in parts[1:]])
+    ds=[]
+    for i in range(n):
+        for j in range(i+1,n): ds.append(vals[i][j])
+    return ds,names
+
+for group in ['scogs_animals','scogs_fungi']:
+    p=Path('/workspace/tmp')/group
+    tree_means=[]; ml_means=[]
+    for f in sorted(p.glob('*.treefile')):
+        tree=parse_newick(f.read_text()); ds,leaves=collect_leaf_dists(tree); tree_means.append(mean(ds))
+        base=f.name[:-len('.mafft.clipkit.treefile')]
+        mlfile=p/(base+'.mafft.clipkit.mldist')
+        if mlfile.exists():
+            ds,_=parse_mldist(mlfile); ml_means.append(mean(ds))
+    print(group,'tree n',len(tree_means),'median',median(tree_means),'mean',mean(tree_means),'minmax',min(tree_means),max(tree_means))
+    print(group,'mldist n',len(ml_means),'median',median(ml_means),'mean',mean(ml_means),'minmax',min(ml_means),max(ml_means))
+    print('first 5',tree_means[:5])
+PY"

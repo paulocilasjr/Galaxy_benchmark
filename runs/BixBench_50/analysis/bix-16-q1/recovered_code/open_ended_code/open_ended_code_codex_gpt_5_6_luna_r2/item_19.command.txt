@@ -1,0 +1,33 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import csv, time
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+cris_path='inputs/CRISPRGeneEffect.csv'
+expr_path='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def header(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))[1:]
+
+def symbol(label):
+    return label.rsplit(' (',1)[0]
+
+cr_h=header(cris_path); ex_h=header(expr_path)
+cr_by_sym={symbol(x):x for x in cr_h}; ex_by_sym={symbol(x):x for x in ex_h}
+syms=[symbol(x) for x in cr_h if symbol(x) in ex_by_sym]
+cr_cols=[cr_by_sym[s] for s in syms]; ex_cols=[ex_by_sym[s] for s in syms]
+print('genes',len(syms),'cr cols',len(cr_cols),'expr cols',len(ex_cols),flush=True)
+t=time.time()
+cr=pd.read_csv(cris_path,index_col=0,usecols=[0]+cr_cols,dtype=np.float32)
+print('read cris',cr.shape,'seconds',round(time.time()-t,1),'nan',int(cr.isna().sum().sum()),'inf',int(np.isinf(cr.to_numpy()).sum()),flush=True)
+t=time.time()
+ex=pd.read_csv(expr_path,index_col=0,usecols=[0]+ex_cols,dtype=np.float32)
+print('read expr',ex.shape,'seconds',round(time.time()-t,1),'nan',int(ex.isna().sum().sum()),'inf',int(np.isinf(ex.to_numpy()).sum()),flush=True)
+common=cr.index.intersection(ex.index)
+print('models',len(common),'cr-only',len(cr.index.difference(ex.index)),'expr-only',len(ex.index.difference(cr.index)),flush=True)
+cr=cr.loc[common]; ex=ex.loc[common]
+print('paired nan',int(cr.isna().sum().sum()),int(ex.isna().sum().sum()),'per-row nan expr models',int(ex.isna().any(axis=1).sum()),'per-gene nan max',int(ex.isna().sum(axis=0).max()),flush=True)
+print('cr range',float(np.nanmin(cr.to_numpy())),float(np.nanmax(cr.to_numpy())),'expr range',float(np.nanmin(ex.to_numpy())),float(np.nanmax(ex.to_numpy())),flush=True)
+PY"

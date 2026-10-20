@@ -1,0 +1,62 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+import gc
+import os
+
+os.makedirs('codex_output', exist_ok=True)
+
+# Load data
+counts_df = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+annot = pd.read_csv('inputs/Sample_annotated_Zenodo.csv')
+annot = annot.set_index('sample')
+annot = annot.loc[counts_df.columns]
+annot['batch'] = annot['batch'].astype(str)
+annot['sex'] = annot['sex'].astype(str)
+
+row_sums = counts_df.sum(axis=1)
+keep = row_sums >= 50
+keep = keep | (counts_df.index == 'FAM138A')
+counts_filtered = counts_df.loc[keep]
+del counts_df, row_sums
+gc.collect()
+
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_int = counts_filtered.T.round().astype(int)
+del counts_filtered
+gc.collect()
+
+dds = DeseqDataSet(
+    counts=counts_int,
+    metadata=annot,
+    design_factors="batch + sex",
+    refit_cooks=False,
+    n_cpus=1,
+)
+del counts_int
+gc.collect()
+
+print("Starting deseq2 fitting...")
+dds.deseq2()
+print("DESeq2 fitting done!")
+
+# Check what's in varm for coefficient names
+print("\nChecking varm keys:")
+print(dds.varm_keys())
+
+# Check LFC-related info
+if 'LFC' in dds.varm_keys():
+    lfc_df = dds.varm['LFC']
+    print(f"\nLFC columns: {lfc_df.columns.tolist()}")
+    
+# Check variables
+print(f"\nVariables: {dds.variables}")
+
+# Also show obs design
+print(f"\nObs columns: {dds.obs.columns.tolist()}")
+PYEOF
+

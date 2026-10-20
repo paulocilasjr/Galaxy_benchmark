@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+import pysam,collections
+fa=pysam.FastaFile('hg38.fa'); bam=pysam.AlignmentFile('reads.sorted.bam')
+sites=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+haps=[['C','T','A','G','G','D','G','A'],['A','C','T','D','C','A','D','G']]
+def obs(rec,p):
+ t=p-1;r=rec.reference_start;q=0
+ for op,n in rec.cigartuples:
+  if op in (0,7,8):
+   if r<=t<r+n:return rec.query_sequence[q+t-r]
+   r+=n;q+=n
+  elif op==1:q+=n
+  elif op==2:
+   if r<=t<r+n:return 'D'
+   r+=n
+  elif op==3:r+=n
+  elif op==4:q+=n
+ return '.'
+pairs=collections.defaultdict(list)
+for rec in bam.fetch('chr22',27079000,27081000):
+ if not(rec.is_secondary or rec.is_supplementary):pairs[rec.query_name].append(rec)
+assign={}
+for name,recs in pairs.items():
+ ss=[]
+ for h in haps:
+  allx=[obs(rec,p) for p in sites for rec in recs]; allx=[x for x in allx if x"'!='"'.']
+  ss.append(sum(x==e for x,e in zip(allx,[])) if False else sum(obs(rec,p)==e for p,e in zip(sites,h) for rec in recs if obs(rec,p)"'!='"'.'))
+ n=[sum(obs(rec,p)"'!='"'.' for p in sites for rec in recs) for _ in (0,1)]
+ if ss[0]>ss[1] and ss[0]>=1:assign[name]=0
+ elif ss[1]>ss[0] and ss[1]>=1:assign[name]=1
+# base consensus each hap
+for hi in (0,1):
+ cts=collections.defaultdict(collections.Counter); dels=collections.defaultdict(collections.Counter)
+ for rec in bam.fetch('chr22',27079000,27081000):
+  if rec.query_name not in assign or assign[rec.query_name]"'!=hi or rec.is_secondary or rec.is_supplementary:continue
+  r=rec.reference_start;q=0
+  for op,n in rec.cigartuples:
+   if op in (0,7,8):
+    for i in range(n):cts[r+i][rec.query_sequence[q+i]]+=1
+    r+=n;q+=n
+   elif op==1:q+=n
+   elif op==2:
+    seq=fa.fetch('"'chr22',r,r+n).upper();dels[r][seq]+=1;r+=n
+   elif op==3:r+=n
+   elif op==4:q+=n
+ print('HAP',hi+1)
+ for p in sorted(cts):
+  ref=fa.fetch('chr22',p,p+1).upper();c=cts[p];tot=sum(c.values()); maj,n=c.most_common(1)[0]
+  if maj"'!=ref and n/tot>=0.2:print('"'base',p+1,ref,dict(c),'major',maj,round(n/tot,2))
+ for p,c in sorted(dels.items()):
+  tot=sum(c.values()); print('del',p+1,dict(c),'frac',round(tot/(tot+sum(cts[p].values())),2) if p in cts else 1)
+PY"

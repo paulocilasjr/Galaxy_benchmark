@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+# Recompute old 2.0.3 rcv and test raw vs command-rounded, all aligned members.
+import zipfile,tempfile
+from pathlib import Path
+from Bio import AlignIO
+from scipy.stats import mannwhitneyu
+
+def rcv_old(b):
+    lines=b.decode().splitlines(); seqs=[]; s=''
+    for ln in lines:
+      if ln.startswith('>'):
+       if s: seqs.append(s)
+       s=''
+      else: s+=ln.strip()
+    if s: seqs.append(s)
+    n=len(seqs); L=len(seqs[0]) if seqs else 0
+    from collections import Counter
+    total=Counter(''.join(seqs))
+    avg={c:total[c]/n for c in total}
+    return sum(sum(abs(Counter(s)[c]-avg[c]) for c in total)/(n*L) for s in seqs) if n and L else 0
+vals={}
+for lab,zp in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+  with zipfile.ZipFile(zp) as z:
+   vals[lab]=[rcv_old(z.read(n)) for n in sorted(z.namelist()) if n.endswith('.faa.mafft')]
+for rounded in (False,True):
+ a=vals['animals'];f=vals['fungi']
+ if rounded: a=[round(x,4) for x in a]; f=[round(x,4) for x in f]
+ r=mannwhitneyu(a,f,alternative='two-sided',method='auto')
+ print('rounded',rounded,'U',r.statistic,'p',repr(r.pvalue),'unique',len(set(a)),len(set(f)),'ties',len(a)+len(f)-len(set(a+f)))
+ print('first',a[:10],f[:10])
+PY"

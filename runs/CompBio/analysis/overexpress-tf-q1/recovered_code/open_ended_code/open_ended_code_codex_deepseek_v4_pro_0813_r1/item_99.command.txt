@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+mot=pd.read_csv('macs/union_motif_scan.tsv',sep='\\t')
+ref=pd.read_csv('macs/union_ref.counts',sep='\\t',header=None,names=['chr','start','end','ref'])
+pert=pd.read_csv('macs/union_pert.counts',sep='\\t',header=None,names=['chr','start','end','pert'])
+assert len(ref)==len(pert)==len(mot)
+df=pd.concat([ref[['ref']],pert[['pert']],mot],axis=1)
+total_ref=10141848; total_pert=11257343
+# CPM with pseudocount 0.5? use raw normalized cpm + pseudocount 1
+df['ref_cpm']=df['ref']/total_ref*1e6
+df['pert_cpm']=df['pert']/total_pert*1e6
+ps=1.0
+df['log2fc']=np.log2((df['pert_cpm']+ps)/(df['ref_cpm']+ps))
+df['diff_cpm']=df['pert_cpm']-df['ref_cpm']
+# also raw log2 ratio with pseudocount fragment
+print('overall mean log2fc',df.log2fc.mean(),'median',df.log2fc.median())
+# For each motif, compare motif-positive vs negative peaks
+cols=[c for c in mot.columns if c not in ['idx','length']]
+rows=[]
+for col in cols:
+ pos=df[col]>0
+ # mean log2fc positive and negative, diff, Wilcoxon p, effect size
+ mean_pos=df.loc[pos,'log2fc'].mean(); mean_neg=df.loc[~pos,'log2fc'].mean()
+ median_pos=df.loc[pos,'log2fc'].median(); median_neg=df.loc[~pos,'log2fc'].median()
+ diff=mean_pos-mean_neg
+ from scipy.stats import mannwhitneyu
+ try:
+  u,p=mannwhitneyu(df.loc[pos,'log2fc'],df.loc[~pos,'log2fc'],alternative='greater')
+ except: p=np.nan
+ # also correlation of motif count with log2fc
+ corr=df[col].corr(df['log2fc'])
+ rows.append({'motif':col,'n_pos':pos.sum(),'frac_pos':pos.mean(),'mean_pos':mean_pos,'mean_neg':mean_neg,'diff':diff,'median_pos':median_pos,'median_neg':median_neg,'corr_count':corr,'p_mw':p})
+res=pd.DataFrame(rows).sort_values('diff',ascending=False)
+pd.set_option('display.width',250); pd.set_option('display.max_rows',100)
+print(res.to_string(index=False, float_format=lambda x:f'{x:,.4g}'))
+PY"

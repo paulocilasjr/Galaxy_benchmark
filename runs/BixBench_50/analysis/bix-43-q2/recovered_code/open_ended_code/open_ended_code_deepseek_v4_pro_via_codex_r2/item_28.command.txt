@@ -1,0 +1,83 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy
+
+# Inputs
+counts = pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('/workspace/inputs/sample_layout.csv')
+ann = pd.read_csv('/workspace/inputs/ensg_to_gene_name.tsv', sep='\\t')
+
+layout['sample_col'] = layout['SampleID'].str.replace('-', '_', regex=False)
+groups = [
+    'DMSO',
+    'DMSO_Serum_starvation',
+    'Cisplatin_IC50_CBD_IC50',
+    'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h',
+]
+layout_sub = layout[layout['Group'].isin(groups)].copy()
+
+# Pre-filter across all 30 samples: keep genes with counts > 10 in at least one sample
+keep = (counts > 10).any(axis=1)
+counts_sub = counts.loc[keep, layout_sub['sample_col']].copy()
+cts = counts_sub.T  # pydeseq2 expects samples x genes
+metadata = (
+    layout_sub[['sample_col', 'Group']]
+    .rename(columns={'sample_col': 'sample'})
+    .set_index('sample')
+    .copy()
+)
+metadata['Group'] = metadata['Group'].astype(str)
+
+dds = DeseqDataSet(counts=cts, metadata=metadata, design='~Group', quiet=True)
+dds.deseq2()
+stat = DeseqStats(
+    dds,
+    contrast=['Group', 'Cisplatin_IC50_CBD_IC50', 'DMSO'],
+    alpha=0.05,
+    cooks_filter=True,
+    independent_filter=True,
+    quiet=True,
+)
+stat.summary()
+res = stat.results_df.copy()
+
+sig = res[
+    (res['padj'] <= 0.05)
+    & (res['log2FoldChange'].abs() >= 0.5)
+    & (res['baseMean'] >= 10)
+].copy()
+print('prefiltered genes in model:', cts.shape[1])
+print('significant DE genes:', sig.shape[0])
+print('up/down:', (sig['log2FoldChange'] > 0).sum(), (sig['log2FoldChange'] < 0).sum())
+
+# Map ENSG -> gene symbol using provided file; use unique mapped symbols.
+ens2sym = ann.set_index('ENSG')['gene_name']
+mapped_symbols = sig.index.map(ens2sym)
+symbols = sorted(mapped_symbols.dropna().unique().tolist())
+print('mapped unique foreground symbols:', len(symbols), 'unmapped DE:', mapped_symbols.isna().sum())
+
+# gseapy Enrichr against Reactome_2022
+enr = gseapy.enrichr(
+    gene_list=symbols,
+    gene_sets='Reactome_2022',
+    organism='human',
+    outdir=None,
+    no_plot=True,
+    verbose=False,
+)
+res2 = enr.res2d.copy()
+# p53-mediated cell cycle gene regulation = Reactome stable ID R-HSA-6791312
+term_id = 'R-HSA-6791312'
+mask = res2['Term'].str.contains(term_id, regex=False)
+print('matches for', term_id, ':', mask.sum())
+if mask.sum() == 1:
+    row = res2[mask].iloc[0]
+    print('Term:', row['Term'])
+    print('Overlap:', row['Overlap'])
+    print('Odds Ratio:', repr(float(row['Odds Ratio'])))
+else:
+    print(res2[mask][['Term','Overlap','Odds Ratio']].to_string())
+PY"

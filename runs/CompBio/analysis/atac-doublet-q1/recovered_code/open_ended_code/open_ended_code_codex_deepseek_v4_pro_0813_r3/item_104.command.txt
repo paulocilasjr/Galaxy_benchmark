@@ -1,0 +1,29 @@
+/bin/bash -c "python3 - <<'PY'
+import numpy as np, snapatac2 as snap
+adata=snap.read('atac.snap.h5ad')
+names=np.array(adata.obs_names); leiden_raw=np.array(adata.obs['leiden'])
+uniq,leiden=np.unique(leiden_raw,return_inverse=True)
+D=adata.obsp['distances'].tocsr()
+n=len(names); entropy=np.zeros(n); purity=np.zeros(n)
+for i in range(n):
+    inds=D.indices[D.indptr[i]:D.indptr[i+1]]
+    labs=leiden[inds]
+    counts=np.bincount(labs,minlength=len(uniq))
+    p=counts/counts.sum()
+    entropy[i]=-(p[p>0]*np.log(p[p>0])).sum()
+    purity[i]=p.max()
+idx=np.argsort(-entropy)
+print('top entropy 40:')
+for i in idx[:40]: print(names[i], entropy[i], purity[i], leiden_raw[i])
+for tag,file in [('peaks','scrublet_peaks_scores.txt'),('tile','scrublet_tile_scores.txt')]:
+ d=np.loadtxt(file,dtype=str); b=d[:,0]; pred=d[:,2].astype(int)
+ pred_b=set(b[pred==1])
+ top_ent=set(names[idx[:20]])
+ print('\\n',tag, 'pred n',len(pred_b),'top20 ent overlap',len(pred_b & top_ent), list(pred_b & top_ent)[:20])
+ pred_ent=[]
+ for x in pred_b:
+  j=np.where(names==x)[0][0]; pred_ent.append((x,entropy[j],purity[j]))
+ pred_ent_sorted=sorted(pred_ent,key=lambda z:-z[1])
+ print('predicted high entropy top20:')
+ for x,e,p in pred_ent_sorted[:20]: print(' ',x,e,p)
+PY"

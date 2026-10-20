@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, pathlib, time
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.ops.selective_scan_interface as sci
+orig=sci.selective_scan_ref
+
+def wrap(u,delta,A,B,C,D=None,z=None,delta_bias=None,delta_softplus=False,return_last_state=False):
+    for name,t in [('u',u),('delta',delta),('A',A),('B',B),('C',C),('z',z),('db',delta_bias)]:
+        if t is not None:
+            fin=torch.isfinite(t).all().item()
+            if not fin:
+                print('INPUT NONFINITE',name,t.shape,torch.isnan(t).sum().item(),torch.isinf(t).sum().item())
+    out=orig(u,delta,A,B,C,D,z,delta_bias,delta_softplus,return_last_state)
+    o=out[0] if isinstance(out,tuple) else out
+    fin=torch.isfinite(o).all().item()
+    if not fin:
+        print('OUTPUT NONFINITE',u.shape,'nan',torch.isnan(o).sum().item(),'inf',torch.isinf(o).sum().item())
+    return out
+sci.selective_scan_fn=wrap
+# but mamba_simple imported selective_scan_fn already; patch its module
+import mamba_ssm.modules.mamba_simple as ms
+ms.selective_scan_fn=wrap
+
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+B=2; batch=[]
+for i in range(B): x=ids[0].clone(); x[i]=3; batch.append(x)
+inp=torch.stack(batch)
+with torch.no_grad(): out=model(input_ids=inp)
+print('final finite',torch.isfinite(out.logits).all().item(),'nan',torch.isnan(out.logits).sum().item())
+print(out.logits[0,0].cpu()[:8])
+PY"

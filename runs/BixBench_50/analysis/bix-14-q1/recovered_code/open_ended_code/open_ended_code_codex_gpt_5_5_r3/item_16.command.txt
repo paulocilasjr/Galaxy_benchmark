@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+import re, math
+
+def norm_sample(x):
+    if x is None: return None
+    if isinstance(x, (int,float)) and float(x).is_integer(): return str(int(x))
+    return str(x).strip()
+
+# cohort
+wb=load_workbook('inputs/230215_Trio_Status.xlsx', read_only=True, data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True)); header=rows[0]; idx={h:i for i,h in enumerate(header) if h}
+carrier_ids=[norm_sample(r[idx['Sample ID']]) for r in rows[1:] if norm_sample(r[idx['Sample ID']]) and r[idx['BLM Mutation Status']]=='Carrier']
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+file_by_id={re.search(r'CHIP_(.+)\\.xlsx"'$'"', p.name).group(1).split('-')[0]:p for p in files}
+
+records=[]
+for sid in carrier_ids:
+    p=file_by_id.get(sid)
+    if not p: continue
+    wb=load_workbook(p, read_only=True, data_only=True)
+    ws=wb.active; ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True); next(it); hdr=next(it)
+    col={h:i for i,h in enumerate(hdr) if h}
+    for r in it:
+        if not r or r[0] is None: continue
+        v=r[col['Variant Allele Freq']]
+        if v is None: continue
+        try: vf=float(v)
+        except: continue
+        records.append({
+            'sid':sid,'file':p.name,'chrpos':r[col['Chr:Pos']],'refalt':r[col['Ref/Alt']],
+            'vaf':vf,'so':r[col['Sequence Ontology (Combined)']], 'effect':r[col['Effect (Combined)']],
+            'hgvsp':r[col['HGVS p. (Clinically Relevant)']], 'hgvsc':r[col['HGVS c. (Clinically Relevant)']],
+            'gene':r[col['Gene Names']]
+        })
+lt=[x for x in records if x['vaf']<0.3]
+print('carrier ids', carrier_ids)
+print('used carrier files', sorted(set(x['sid'] for x in records)), 'n', len(set(x['sid'] for x in records)))
+print('vaf records', len(records), 'vaf<0.3', len(lt))
+print('VAF<0.3 SO counts')
+for k,v in Counter(x['so'] for x in lt).most_common(): print(v, k)
+print('VAF<0.3 effect counts')
+for k,v in Counter(x['effect'] for x in lt).most_common(): print(v, k)
+print('\\nVAF<0.3 hgvsp present by SO')
+for k,v in Counter((x['so'], bool(x['hgvsp'])) for x in lt).most_common(): print(v, k)
+
+coding_so_exact={'synonymous_variant','missense_variant','frameshift_variant','inframe_insertion','inframe_deletion','stop_gained','stop_lost','start_lost','protein_altering_variant'}
+# maybe include splice_region? no, often non-coding/intronic; show fractions
+for name, pred in [
+    ('exact coding SO', lambda x: x['so'] in coding_so_exact),
+    ('has HGVS p', lambda x: bool(x['hgvsp'])),
+    ('effect Missense/LoF', lambda x: x['effect'] in {'Missense','LoF'} or x['so']=='synonymous_variant'),
+    ('SO coding incl splice_region', lambda x: x['so'] in coding_so_exact or x['so']=='splice_region_variant'),
+    ('all VAF<0.3', lambda x: True),
+]:
+    den=[x for x in lt if pred(x)]
+    num=[x for x in den if x['so']=='synonymous_variant']
+    print('\\n', name, 'den', len(den), 'num syn', len(num), 'frac', (len(num)/len(den) if den else None))
+    print(' counts', Counter(x['so'] for x in den))
+
+print('\\nlow coding records exact:')
+for x in lt:
+    if x['so'] in coding_so_exact:
+        print(x['sid'], x['chrpos'], x['refalt'], x['vaf'], x['gene'], x['so'], x['effect'], x['hgvsp'])
+PY"

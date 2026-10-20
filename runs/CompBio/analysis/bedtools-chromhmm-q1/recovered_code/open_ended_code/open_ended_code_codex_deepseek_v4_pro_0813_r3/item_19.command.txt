@@ -1,0 +1,48 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import Counter
+f='ENCFF333TAT.bed.gz'
+counter=Counter()
+with gzip.open(f,'rt') as fh:
+    for line in fh:
+        parts=line.rstrip('\\n').split('\\t')
+        key=(parts[0], int(parts[1]), int(parts[2]))
+        counter[key]+=1
+print('lines', sum(counter.values()), 'unique intervals', len(counter))
+print('duplicate lines by exact coords', sum(v-1 for v in counter.values()))
+# number of intervals overlapping any other (coverage multiplicities)
+from collections import defaultdict
+events=[]
+for (chrom,s,e),n in counter.items():
+    events.append((chrom,s,e,n))
+# sort natural
+import re
+def natkey(chrom):
+    m=re.match(r'chr(\\d+|X|Y)', chrom)
+    return (m.group(1) if m.group(1).isdigit() else int(1e9), chrom)
+events.sort(key=lambda x:(natkey(x[0]), x[1], x[2]))
+# count base coverage using sweep per chrom
+chrom_events=defaultdict(list)
+for chrom,s,e,n in events:
+    chrom_events[chrom].append((s,e,n))
+total_bases_unique=0
+bases_covered_multi=0
+for chrom, evs in chrom_events.items():
+    evs.sort()
+    sweep=[]
+    for s,e,n in evs:
+        sweep.append((s,n)); sweep.append((e,-n))
+    sweep.sort()
+    cov=0; prev=None
+    for pos,delta in sweep:
+        if prev is not None and pos>prev:
+            length=pos-prev
+            total_bases_unique+=length
+            if cov>1:
+                bases_covered_multi+=length
+        cov+=delta; prev=pos
+print('unique covered bases', total_bases_unique)
+print('bases covered by >1 record', bases_covered_multi)
+print('top duplicate coords:')
+for key,v in counter.most_common(10): print(key,v)
+PY"

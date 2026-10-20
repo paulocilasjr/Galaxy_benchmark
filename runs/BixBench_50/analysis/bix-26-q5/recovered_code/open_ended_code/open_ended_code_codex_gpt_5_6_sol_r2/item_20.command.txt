@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+from urllib.request import urlopen
+from collections import defaultdict
+import rdata,warnings,numpy as np
+from scipy.stats import hypergeom
+warnings.filterwarnings('ignore')
+links=urlopen('https://rest.kegg.jp/link/pathway/pau').read().decode().strip().splitlines()
+names={line.split('\\t')[0]:line.split('\\t')[1] for line in urlopen('https://rest.kegg.jp/list/pathway/pau').read().decode().strip().splitlines()}
+p2g=defaultdict(set)
+for line in links:
+ g,p=line.split('\\t'); p2g[p.split(':',1)[1]].add(g.split(':',1)[1])
+
+def bh(p):
+ p=np.asarray(p,float); n=len(p); out=np.empty(n); order=np.argsort(p); ranked=p[order]
+ vals=ranked*n/np.arange(1,n+1); vals=np.minimum.accumulate(vals[::-1])[::-1]; vals=np.minimum(vals,1)
+ out[order]=vals; return out
+
+def load(f):
+ x=rdata.conversion.convert(rdata.parser.parse_file(f)); l=x.listData['log2FoldChange']; q=x.listData['padj'];
+ return set(map(str,x.rownames)), set(map(str,x.rownames[np.isfinite(l)&np.isfinite(q)&(np.abs(l)>1.5)&(q<.05)]))
+files=['inputs/res_GluFevsGluFePlus.rds','inputs/res_SuccvsGluFePlus.rds']
+for mode in ['kegg','tested']:
+ print('\\nMODE',mode)
+ sigs=[]
+ for f in files:
+  tested,fg=load(f); kegggenes=set().union(*p2g.values()); universe=kegggenes if mode=='kegg' else (tested&kegggenes)
+  fg=fg&universe; rows=[]
+  for p,gs0 in p2g.items():
+   gs=gs0&universe; M=len(gs)
+   if M<10 or M>500: continue
+   k=len(fg&gs)
+   if k<1: continue
+   pv=hypergeom.sf(k-1,len(universe),M,len(fg))
+   rows.append([p,k,M,pv,None])
+  qs=bh([r[3] for r in rows])
+  for r,qv in zip(rows,qs):r[4]=qv
+  sr={r[0] for r in rows if r[4]<.05}
+  sigs.append(sr)
+  print(f,'universe',len(universe),'foreground mapped',len(fg),'tested terms',len(rows),'sig',len(sr))
+  for r in sorted([z for z in rows if z[4]<.05],key=lambda z:z[4]):
+   print(r[0],names.get(r[0],''),'k/M',f'{r[1]}/{r[2]}','p',f'{r[3]:.3g}','padj',f'{r[4]:.3g}')
+ print('iron-only count',len(sigs[0]-sigs[1]))
+ print('iron-only',[(p,names.get(p,'')) for p in sorted(sigs[0]-sigs[1])])
+ print('common',[(p,names.get(p,'')) for p in sorted(sigs[0]&sigs[1])])
+PY"

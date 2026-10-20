@@ -1,0 +1,130 @@
+python3 << 'PYEOF'
+import zipfile
+
+def parse_mafft_alignment(text):
+    sequences = []
+    current_header = None
+    current_seq_parts = []
+    for line in text.strip().split('\n'):
+        line = line.rstrip('\r')
+        if line.startswith('>'):
+            if current_header is not None:
+                sequences.append((current_header, ''.join(current_seq_parts)))
+            current_header = line[1:].strip()
+            current_seq_parts = []
+        elif line.strip():
+            current_seq_parts.append(line.strip())
+    if current_header is not None:
+        sequences.append((current_header, ''.join(current_seq_parts)))
+    return sequences
+
+def count_pis(sequences):
+    """Count parsimony-informative sites. 
+    A site is PIS if >=2 character states each appear in >=2 sequences.
+    Gaps ('-') are treated as a character state (standard parsimony practice)."""
+    if len(sequences) < 4:
+        return 0  # Mathematically impossible: need >=4 sequences for 2 states x 2 occurrences
+    seqs = [s for _, s in sequences]
+    aln_len = len(seqs[0])
+    pis = 0
+    for col in range(aln_len):
+        char_counts = {}
+        for s in seqs:
+            c = s[col]
+            char_counts[c] = char_counts.get(c, 0) + 1
+        states_ge2 = sum(1 for cnt in char_counts.values() if cnt >= 2)
+        if states_ge2 >= 2:
+            pis += 1
+    return pis
+
+def read_all_mafft(zip_path):
+    results = {}
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        for name in zf.namelist():
+            if name.endswith('.faa.mafft'):
+                ortho_id = name.replace('.faa.mafft', '').split('/')[-1]
+                content = zf.read(name).decode('utf-8')
+                sequences = parse_mafft_alignment(content)
+                results[ortho_id] = sequences
+    return results
+
+# Read all data
+animals = read_all_mafft('/workspace/inputs/scogs_animals.zip')
+fungi = read_all_mafft('/workspace/inputs/scogs_fungi.zip')
+
+# Compute PIS counts
+animal_pis = {k: count_pis(v) for k, v in animals.items()}
+fungi_pis = {k: count_pis(v) for k, v in fungi.items()}
+
+x = list(animal_pis.values())  # Animals (group 1)
+y = list(fungi_pis.values())   # Fungi (group 2)
+
+n1, n2 = len(x), len(y)
+
+# Mann-Whitney U: U1 = count of pairs where x_i < y_j (modern convention: scipy, Wikipedia)
+# With ties counting as 0.5
+U1 = 0.0
+for a in x:
+    for b in y:
+        if a < b:
+            U1 += 1.0
+        elif a == b:
+            U1 += 0.5
+
+U2 = n1 * n2 - U1
+U_min = min(U1, U2)
+
+print(f"Animals: n={n1}, mean PIS={sum(x)/n1:.2f}, median={sorted(x)[n1//2]}")
+print(f"Fungi:   n={n2}, mean PIS={sum(y)/n2:.2f}, median={sorted(y)[n2//2]}")
+print(f"\nMann-Whitney U (all orthologs):")
+print(f"  U1 (animals < fungi) = {U1}")
+print(f"  U2 (animals > fungi) = {U2}")
+print(f"  min(U1, U2)          = {U_min}")
+print(f"  n1*n2                = {n1*n2}")
+print(f"  Expected U under H0  = {n1*n2/2}")
+
+# Also verify with rank-sum formula
+combined = [(v, 0) for v in x] + [(v, 1) for v in y]
+combined.sort(key=lambda t: t[0])
+ranks = [0.0] * len(combined)
+i = 0
+while i < len(combined):
+    j = i
+    while j < len(combined) and combined[j][0] == combined[i][0]:
+        j += 1
+    mid_rank = (i + 1 + j) / 2.0
+    for k in range(i, j):
+        ranks[k] = mid_rank
+    i = j
+
+R1 = sum(ranks[k] for k in range(len(combined)) if combined[k][1] == 0)
+U1_alt = n1 * n2 + n1 * (n1 + 1) / 2.0 - R1
+print(f"\nVerification via rank-sum:")
+print(f"  R1 (sum of ranks, animals) = {R1}")
+print(f"  U1 = n1*n2 + n1*(n1+1)/2 - R1 = {U1_alt}")
+
+# Also with common orthologs only
+common = set(animals.keys()) & set(fungi.keys())
+print(f"\nCommon orthologs: {len(common)}")
+
+x_common = [animal_pis[o] for o in sorted(common)]
+y_common = [fungi_pis[o] for o in sorted(common)]
+
+nc = len(x_common)  # = len(y_common)
+U1_common = 0.0
+for a in x_common:
+    for b in y_common:
+        if a < b:
+            U1_common += 1.0
+        elif a == b:
+            U1_common += 0.5
+
+U2_common = nc * nc - U1_common
+print(f"  U1 (animals < fungi, common only) = {U1_common}")
+print(f"  U2 (animals > fungi, common only) = {U2_common}")
+print(f"  min(U1, U2)                       = {min(U1_common, U2_common)}")
+
+# Final answer
+print(f"\n===== FINAL ANSWER =====")
+print(f"Mann-Whitney U (all orthologs) = {U1}")
+PYEOF

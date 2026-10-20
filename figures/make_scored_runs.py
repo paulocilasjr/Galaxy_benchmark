@@ -12,7 +12,7 @@ displays (https://goeckslab.github.io/galaxy-agent-benchmark/):
 - IWC: the value shown for each run on the site's item pages. The host-read removal task (wf_003), excluded from the
   archive's primary comparison, is included with its run_record.json value (the site's value). The VGP mitogenome
   assembly task (wf_007) takes the runs the site published on 2026-10-12 in place of the archive's (new runs on read set
-  ERR12833637; IWC/replacement_wf007_20261012/runs.csv, see figures/replaced_runs.py): their run_id names the new run,
+  ERR12833637; runs/IWC/replacement_wf007_20261012/runs.csv, see figures/replaced_runs.py): their run_id names the new run,
   archive_score keeps the superseded run's value, and the archive holds no trace of them. The other eight tasks keep the
   archive's value, which the site displays.
 
@@ -41,8 +41,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..'))
 SITE = 'https://goeckslab.github.io/galaxy-agent-benchmark'
 SNAP = os.path.join(HERE, 'site_snapshot')
-ARCHIVE = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis', 'accuracy_primary_runs.csv')
-DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
+ARCHIVE = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis', 'accuracy_primary_runs.csv')
+DESIGN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
 WF003 = 'wf_003_host_contamination_removal'
 BIX_MODEL = {'Codex GPT-5.5': 'GPT-5.5', 'Sol': 'GPT-5.6 Sol', 'Luna': 'GPT-5.6 Luna', 'DeepSeek V4 Pro': 'DeepSeek V4 Pro',
              'DeepSeek preview': None}                       # superseded harness: not a primary configuration
@@ -142,7 +142,7 @@ def shown(value, displayed):
 def wf003_runs():
     """run_record.json acc of every host-read removal run (the value the site shows)."""
     rows = []
-    for p in glob.glob(os.path.join(ROOT, 'IWC', 'analysis', WF003, 'source_snapshots', 'huggingface_traces', 'files', '*',
+    for p in glob.glob(os.path.join(ROOT, 'runs/IWC', 'analysis', WF003, 'source_snapshots', 'huggingface_traces', 'files', '*',
                                     'run_record.json')):
         rec = json.load(open(p))
         rows.append(dict(benchmark='IWC', task=WF003, cfg=RR_MODEL[rec['model']],

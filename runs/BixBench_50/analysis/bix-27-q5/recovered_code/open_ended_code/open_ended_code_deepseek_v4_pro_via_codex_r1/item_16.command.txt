@@ -1,0 +1,49 @@
+/bin/bash -c "python3 - <<'PY'
+import csv, collections, numpy as np, pandas as pd
+from sklearn.decomposition import PCA
+# raw header names
+with open('/workspace/inputs/ROSMAP_genexp_ad.csv') as f:
+    h=f.readline().rstrip('\\n').split(',')
+ids=h[1:]
+expr=pd.read_csv('/workspace/inputs/ROSMAP_genexp_ad.csv', index_col=0)
+# map raw names manually to columns; expr columns mangled but order same as ids
+# Count raw IDs
+cnt=collections.Counter(ids)
+dups={k for k,v in cnt.items() if v>1}
+keep=[i for i,name in enumerate(ids) if name not in dups]
+print('n keep', len(keep), 'n excluded', len(ids)-len(keep))
+X=expr.T.astype(float).values[keep,:]
+Xlog=np.log10(X+1.0)
+print('Xlog shape', Xlog.shape)
+Y=Xlog - Xlog.mean(axis=0)
+U,S,Vt=np.linalg.svd(Y, full_matrices=False)
+eig=S**2/(Y.shape[0]-1)
+total=eig.sum()
+print('PC1 resolved %', eig[0]/total*100)
+print('sum100', eig[:100].sum()/total*100)
+# average duplicates variant (though not skill)
+# build groups positions
+by=collections.defaultdict(list)
+for i,name in enumerate(ids): by[name].append(i)
+agg=[]
+for name, pos in by.items():
+    if len(pos)==1: agg.append(expr.iloc[:,pos[0]].values.astype(float))
+    else:
+        # average raw values across duplicate columns
+        agg.append(expr.iloc[:,pos].values.astype(float).mean(axis=1))
+A=np.array(agg).T
+Alog=np.log10(A+1.0)
+Y=Alog-Alog.mean(axis=0)
+U,S,Vt=np.linalg.svd(Y, full_matrices=False)
+eig=S**2/(Y.shape[0]-1)
+print('agg by ID unique n=', A.shape[0], 'PC1 %', eig[0]/eig.sum()*100, 'sum100', eig[:100].sum()/eig.sum()*100)
+# dedup keep first
+first_by={}
+for i,name in enumerate(ids):
+    if name not in first_by: first_by[name]=i
+idx=sorted(first_by.values())
+X=expr.T.astype(float).values[idx,:]
+Xlog=np.log10(X+1.0); Y=Xlog-Xlog.mean(axis=0)
+U,S,Vt=np.linalg.svd(Y, full_matrices=False); eig=S**2/(Y.shape[0]-1)
+print('first occurrence n=', len(idx), 'PC1 %', eig[0]/eig.sum()*100, 'sum100', eig[:100].sum()/eig.sum()*100)
+PY"

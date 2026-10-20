@@ -1,0 +1,20 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad,numpy as np
+from scipy import sparse
+r=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad');q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+g=r.var_names.intersection(q.var_names);R=r.X[:,r.var_names.get_indexer(g)].tocsr().astype(float);Q=q.X[:,q.var_names.get_indexer(g)].tocsr().astype(float)
+def norm(X):
+ s=np.asarray(X.sum(1)).ravel();X=sparse.diags(1e4/np.maximum(s,1))@X;X.data=np.log1p(X.data);return X
+R=norm(R);Q=norm(Q);expr=(np.asarray(R.mean(0)).ravel()>.02)&(np.asarray(Q.mean(0)).ravel()>.02)
+req=['PABPC1-I1','NUDT21-I3','LEO1-I2']; cand=['guide18','guide13','guide14'];qg=[x for x in q.obs.guide.cat.categories if x.startswith('guide')]
+ri=[np.flatnonzero((r.obs.guide==x).to_numpy()) for x in req];rc=np.flatnonzero(r.obs.guide.astype(str).str.startswith('NT').to_numpy());qi=[np.flatnonzero((q.obs.guide==x).to_numpy()) for x in qg];qc=np.flatnonzero(q.obs.guide.astype(str).str.startswith('NT').to_numpy())
+rng=np.random.default_rng(20260805);wins=[{} for _ in req];ranks=[[] for _ in req];margins=[[] for _ in req]
+def sm(M,ids):
+ n=max(1,int(len(ids)*.7));take=rng.choice(ids,size=n,replace=False);return np.asarray(M[take].mean(0)).ravel()
+for z in range(50):
+ rs=np.vstack([sm(R,x) for x in ri])-sm(R,rc);qs=np.vstack([sm(Q,x) for x in qi])-sm(Q,qc)
+ A=rs[:,expr];B=qs[:,expr];A-=A.mean(1)[:,None];B-=B.mean(1)[:,None];A/=np.maximum(np.linalg.norm(A,axis=1)[:,None],1e-9);B/=np.maximum(np.linalg.norm(B,axis=1)[:,None],1e-9);C=A@B.T
+ for i in range(3):
+  o=np.argsort(-C[i]);w=qg[o[0]];wins[i][w]=wins[i].get(w,0)+1;j=qg.index(cand[i]);ranks[i].append(int(np.where(o==j)[0][0])+1);margins[i].append(float(C[i,j]-np.max(np.delete(C[i],j))))
+for i,x in enumerate(req):print(x,'wins',sorted(wins[i].items(),key=lambda x:-x[1])[:6],'candidate mean rank',round(float(np.mean(ranks[i])),2),'median rank',np.median(ranks[i]),'top1%',np.mean(np.array(ranks[i])==1),'margin',round(float(np.mean(margins[i])),3))
+PY"

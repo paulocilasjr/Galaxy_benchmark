@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import make_pipeline
+
+D=np.load('cell_scores.npz',allow_pickle=True); cats=D['cats']; df={}
+for k in D.keys():
+ if k"'!='"'cats': df[k]=D[k]
+df=pd.DataFrame(df,index=cats)
+for k in ['type_CD14_Mono','type_CD16_Mono','type_T','type_NK','type_B','type_Plasma','type_cDC','type_pDC','type_Platelet','type_RBC']:
+ df[k+'_prop']=df[k]/df['total_cells']
+our=pd.DataFrame(index=cats)
+our['T']=df['type_T_prop'].values; our['NK']=df['type_NK_prop'].values; our['B']=(df['type_B_prop']+df['type_Plasma_prop']).values; our['Mono']=(df['type_CD14_Mono_prop']+df['type_CD16_Mono_prop']).values; our['DC']=(df['type_cDC_prop']+df['type_pDC_prop']).values; our['Plasma']=df['type_Plasma_prop'].values; our['Platelet']=df['type_Platelet_prop'].values; our['RBC']=df['type_RBC_prop'].values
+feats=['T','NK','B','Mono','DC','Plasma','Platelet','RBC']
+meta=pd.read_csv('stephenson_donor_celltypes.csv')
+# aggregate
+meta['T']=meta[['T-helper 1 cell','T-helper 2 cell','CD4-positive, alpha-beta T cell','CD8-positive, alpha-beta T cell','gamma-delta T cell','mature NK T cell','regulatory T cell','naive thymus-derived CD4-positive, alpha-beta T cell','T-helper 17 cell','naive thymus-derived CD8-positive, alpha-beta T cell','central memory CD4-positive, alpha-beta T cell','effector memory CD4-positive, alpha-beta T cell','effector memory CD8-positive, alpha-beta T cell','mucosal invariant T cell','T-helper 22 cell','effector CD8-positive, alpha-beta T cell','T follicular helper cell']].sum(axis=1)
+meta['NK']=meta[['natural killer cell','CD16-negative, CD56-bright natural killer cell, human','CD16-positive, CD56-dim natural killer cell, human','ILC1, human','group 2 innate lymphoid cell, human']].sum(axis=1)
+meta['B']=meta[['B cell','naive B cell','immature B cell','unswitched memory B cell','class switched memory B cell']].sum(axis=1)
+meta['Mono']=meta[['monocyte','CD14-positive monocyte','CD14-low, CD16-positive monocyte']].sum(axis=1)
+meta['DC']=meta[['dendritic cell','myeloid dendritic cell','plasmacytoid dendritic cell','dendritic cell, human']].sum(axis=1)
+meta['Plasma']=meta[['plasmablast','IgG plasma cell','IgM plasma cell','IgA plasma cell']].sum(axis=1)
+meta['Platelet']=meta['platelet'].values
+meta['RBC']=meta[['erythrocyte','megakaryocyte','erythroid progenitor cell, mammalian']].sum(axis=1)
+# normal vs covid
+a=meta[meta.disease.isin(['normal','COVID-19'])].copy(); a['y']=(a.disease=='normal').astype(int)
+known=a[feats].sum(axis=1); Xa=a[feats].div(known,axis=0).values; ya=a.y.values
+known_our=our[feats].sum(axis=1); Xo=(our[feats].div(known_our,axis=0)).values
+for name,model in [('lr',make_pipeline(StandardScaler(),LogisticRegression(class_weight='balanced',max_iter=1000))),('rf',RandomForestClassifier(n_estimators=500,class_weight='balanced',random_state=0))]:
+ model.fit(Xa,ya); pred=model.predict(Xo); proba=model.predict_proba(Xo)[:,1]
+ print(name,'CV',cross_val_score(model,Xa,ya,cv=5,scoring='roc_auc').mean())
+ print('pred healthy',[int(cats[i][5:]) for i in np.where(pred==1)[0]])
+ print(pd.Series(proba,index=[int(c[5:]) for c in cats]).sort_values(ascending=False).round(3).to_string())
+PY"

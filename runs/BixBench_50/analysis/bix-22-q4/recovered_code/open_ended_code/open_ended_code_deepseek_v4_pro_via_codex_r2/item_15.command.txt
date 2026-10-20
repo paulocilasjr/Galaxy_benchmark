@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+base='/workspace/inputs'
+# parse annotation
+with open(base+'/Sample_annotated_Zenodo.csv', newline='') as fh:
+    ann=list(csv.DictReader(fh))
+cd14=[r['sample'] for r in ann if r['celltype']=='CD14']
+cd14set=set(cd14)
+# meta
+meta={}; pc=set()
+with open(base+'/GeneMetaInfo_Zenodo.csv', newline='') as fh:
+    r=csv.reader(fh); h=next(r)
+    gi=h.index('Geneid'); li=h.index('Length'); bi=h.index('gene_biotype')
+    for row in r:
+        if len(row)<=max(gi,li,bi): continue
+        gid=row[gi]
+        if row[bi]=='protein_coding':
+            pc.add(gid); meta[gid]=float(row[li])
+# counts
+xs=[]; ys=[]
+with open(base+'/BatchCorrectedReadCounts_Zenodo.csv', newline='') as fh:
+    r=csv.reader(fh); header=next(r)
+    header=[h.strip() for h in header]
+    idx=[j for j,h in enumerate(header) if h in cd14set]
+    assert len(idx)==132
+    for row in r:
+        if not row: continue
+        gid=row[0].strip()
+        if gid not in pc: continue
+        total=math.fsum(float(row[j]) for j in idx)
+        if total >= 10:
+            xs.append(meta[gid]); ys.append(total/132)
+n=len(xs)
+mx=math.fsum(xs)/n; my=math.fsum(ys)/n
+# centered
+cov=math.fsum((x-mx)*(y-my) for x,y in zip(xs,ys))
+vx=math.fsum((x-mx)**2 for x in xs)
+vy=math.fsum((y-my)**2 for y in ys)
+r=cov/math.sqrt(vx*vy)
+print('n',n)
+print('r fsum',repr(r))
+print('r statistics',statistics.correlation(xs,ys) if hasattr(statistics,'correlation') else 'no')
+# two-pass explicit formula
+sx=math.fsum(xs); sy=math.fsum(ys); sxx=math.fsum(x*x for x in xs); syy=math.fsum(y*y for y in ys); sxy=math.fsum(x*y for x,y in zip(xs,ys))
+r2=(n*sxy-sx*sy)/math.sqrt((n*sxx-sx*sx)*(n*syy-sy*sy))
+print('r formula',repr(r2))
+# maybe numpy via pip? skip
+print('range x',min(xs),max(xs),'range y',min(ys),max(ys), 'mean y',my)
+PY"

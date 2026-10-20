@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import requests, struct, io, zipfile
+url='https://zenodo.org/api/records/6330053/files/retina_models.zip/content'
+# fetch last 1MB
+N=1_000_000
+headers={'Range':f'bytes={4172833344-N}-{4172833344-1}'}
+r=requests.get(url,headers=headers,timeout=60)
+print(r.status_code,len(r.content))
+# locate EOCD signature in bytes
+b=r.content
+sig=b'\\x50\\x4b\\x05\\x06'
+idx=b.rfind(sig)
+print('eocd idx',idx)
+eocd=b[idx:idx+22]
+print(struct.unpack('<4s4H2LH', eocd))
+# central dir size and offset
+_,_,_,_,_,cd_size,cd_offset,_=struct.unpack('<4s4H2LH', eocd)
+print(cd_size, cd_offset)
+# central dir in fetched tail if within N
+start=cd_offset-(len(b)-N) # actually last N starts at filelen-N; position in b = cd_offset - (filelen-N)
+print('cd start within tail', start)
+cd=b[start:start+cd_size]
+print(len(cd))
+open('central_dir.bin','wb').write(cd)
+# use io.BytesIO central dir + fake EOCD? zipfile requires local? could parse with zipfile.ZipFile(BytesIO(central_dir+EOCD)) maybe sees no local but namelist from central? test.
+PY"

@@ -1,0 +1,51 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, random, math, pyBigWig
+random.seed(1)
+# Candidate bigWigs
+bws={
+ 'ENCSR000EPK':'https://encode-public.s3.amazonaws.com/2020/11/12/31cec132-6555-4b4e-a906-18ba1b587b94/ENCFF389PZY.bigWig',
+ 'ENCSR420HOT':'https://encode-public.s3.amazonaws.com/2020/11/06/562262a3-99c3-46c3-838a-8250bd9287a3/ENCFF907ITJ.bigWig'
+}
+# gather bins: top 200 + 300 deterministic every nth positive + 300 random all bins
+allbins=[]; pos=[]
+with gzip.open('reverse.encode.q1.tsv.gz','rt') as fh:
+ for line in fh:
+  c,s,e,v=line.split(); v=float(v); rec=(v,c,int(s),int(e))
+  allbins.append(rec)
+  if v>0: pos.append(rec)
+sample=sorted(pos, reverse=True)[:200]
+step=max(1,len(pos)//300)
+sample += pos[::step][:300]
+sample += random.sample(allbins,300)
+# unique interval
+seen=set(); uniq=[]
+for rec in sample:
+ key=rec[1:]
+ if key not in seen:
+  seen.add(key); uniq.append(rec)
+sample=uniq
+print('sample_n',len(sample))
+y=[math.log1p(v) for v,_,_,_ in sample]
+def pear(a,b):
+ ma=sum(a)/len(a); mb=sum(b)/len(b)
+ va=sum((x-ma)**2 for x in a); vb=sum((x-mb)**2 for x in b)
+ return sum((x-ma)*(z-mb) for x,z in zip(a,b))/math.sqrt(va*vb)
+def rankdata(a):
+ order=sorted(range(len(a)), key=lambda i:a[i])
+ r=[0]*len(a); i=0
+ while i<len(order):
+  j=i
+  while j+1<len(order) and a[order[j+1]]==a[order[i]]: j+=1
+  avg=(i+j)/2
+  for k in range(i,j+1): r[order[k]]=avg
+  i=j+1
+ return r
+for name,url in bws.items():
+ bw=pyBigWig.open(url)
+ xs=[]
+ for v,c,s,e in sample:
+  z=bw.stats(c,s,e,type='sum')[0]
+  xs.append(math.log1p(z or 0.0))
+ bw.close()
+ print(name,'pearson_log',pear(y,xs),'spearman_log',pear(rankdata(y),rankdata(xs)))
+PY"

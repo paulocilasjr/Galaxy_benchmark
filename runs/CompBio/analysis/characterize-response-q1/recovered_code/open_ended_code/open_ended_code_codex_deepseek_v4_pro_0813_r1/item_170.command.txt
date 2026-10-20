@@ -1,0 +1,86 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse,pandas as pd,re,os
+qset=set(g.upper() for g in open('characterize.response.q1.txt').read().split())
+
+def get_symbol(gpl):
+ cols=list(gpl.table.columns)
+ for c in cols:
+  if c.upper() in ['GENE_SYMBOL','SYMBOL','GENE SYMBOL'] or c.upper().startswith('GENE_SYMBOL'):
+   return gpl.table.set_index('ID')[c].to_dict()
+ for c in cols:
+  if c.upper()=='GENE':
+   return gpl.table.set_index('ID')[c].to_dict()
+ # gene_assignment parse
+ if 'gene_assignment' in gpl.table.columns:
+  d=gpl.table.set_index('ID')['gene_assignment']; sym={}
+  for pid,v in d.items():
+   if isinstance(v,str):
+    parts=v.split('//')
+    if len(parts)>1 and parts[1].strip(): sym[pid]=parts[1].strip()
+  return sym
+ return None
+
+def parse(f):
+ g=GEOparse.get_GEO(filepath=f,silent=True)
+ sym=None
+ for gn,gpl in g.gpls.items():
+  s=get_symbol(gpl)
+  if s: sym=s;break
+ mats={}
+ for n,gsm in g.gsms.items():
+  t=gsm.table; idcol='ID_REF' if 'ID_REF' in t.columns else 'ID'
+  if idcol in t.columns and 'VALUE' in t.columns:
+   mats[n]=t.set_index(idcol)['VALUE']
+ mat=pd.DataFrame(mats)
+ titles={n:gsm.metadata.get('title',[''])[0] for n,gsm in g.gsms.items()}
+ chars={n:' | '.join(gsm.metadata.get('characteristics_ch1',[])) for n,gsm in g.gsms.items()}
+ return g,sym,mat,titles,chars
+
+def comp(f,a,b,name):
+ try:
+  g,sym,mat,titles,chars=parse(f)
+ except Exception as e:
+  print('ERR',f,e);return
+ if sym is None or mat.empty: print('no data',f);return
+ a=[x for x in a if x in mat.columns];b=[x for x in b if x in mat.columns]
+ if not a or not b: print('missing',f,name);return
+ lfc=mat[b].mean(axis=1)-mat[a].mean(axis=1)
+ rows=[];seen=set()
+ for pid,x in lfc.items():
+  s=sym.get(pid)
+  if not isinstance(s,str): continue
+  s=re.split(r'///|\\|',s)[0].strip()
+  if not s or s.lower()=='nan': continue
+  su=s.upper()
+  if su in seen: continue
+  seen.add(su);rows.append((s,x))
+ df=pd.DataFrame(rows,columns=['g','x']).drop_duplicates('g').sort_values('x',ascending=False)
+ up=df.head(112).g.str.upper().tolist();dn=df.tail(112).g.str.upper().tolist()
+ dfp=df[df.x>0].assign(al=df[df.x>0].x.abs()).sort_values('al',ascending=False).head(112)
+ dfn=df[df.x<0].assign(al=df[df.x<0].x.abs()).sort_values('al',ascending=False).head(112)
+ print(f'{os.path.basename(f):30s} {name:24s} up={len(set(up)&qset):3d} down={len(set(dn)&qset):3d} abs_pos={len(set(dfp.g.str.upper())&qset):3d} abs_neg={len(set(dfn.g.str.upper())&qset):3d}')
+ print('  common up:',[x for x in up if x in qset][:30])
+
+files=[
+('geo2/GSE163975_family.soft.gz','MediumCtrl','LPS'),
+('geo2/GSE55068_family.soft.gz','WT','WT_LPS'),
+('geo2/GSE56929_family.soft.gz','control','LPS'),
+('geo2/GSE62746_family.soft.gz','unstimulated_dendritic','LPS_dendritic'),
+('geo2/GSE62746_family.soft.gz','unstimulated_macrophage','LPS_macrophage'),
+('geo2/GSE66178_family.soft.gz','WT_unstim','WT_6hrLPS'),
+('geo2/GSE96628_family.soft.gz','WT DCs at 0h','WT DCs at 4h'),
+]
+for f,ctr,tr in files:
+ try:
+  g,sym,mat,titles,chars=parse(f)
+ except Exception as e: print('ERR parse',f,e);continue
+ # select by title and chars using keywords
+ ctrl=[n for n,t in titles.items() if re.search(re.escape(ctr),t,re.I) or re.search(re.escape(ctr),chars[n],re.I)]
+ trt=[n for n,t in titles.items() if re.search(re.escape(tr),t,re.I) or re.search(re.escape(tr),chars[n],re.I)]
+ if not ctrl:
+  # more flexible
+  ctrl=[n for n in mat.columns if re.search(r'unstim|control|0h|PBS|Medium', titles[n]+' '+chars[n],re.I)]
+  trt=[n for n in mat.columns if re.search(r'LPS', titles[n]+' '+chars[n],re.I)]
+ print('\\n',f,ctr,'->',tr)
+ comp(f,ctrl,trt,tr)
+PY"

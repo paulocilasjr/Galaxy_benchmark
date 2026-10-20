@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+comp=str.maketrans('ACGTNacgtn','TGCANtgcan')
+# fasta
+with gzip.open('chr9.hg38.fa.gz','rt') as f:
+    f.readline(); seq=''.join(x.strip() for x in f)
+# candidates as before
+cands=[]
+with gzip.open('q1.hg38.variants.vcf.gz','rt') as f:
+  for line in f:
+    if line.startswith('#'): continue
+    a=line.rstrip().split('\\t'); pos=int(a[1]); ref=a[3]; alt=a[4]
+    if a[0]"'!='"'chr9' or len(ref)"'!=1 or len(alt)!=1: continue
+    d=dict(zip(a[8].split('"':'),a[9].split(':'))); dp=int(d.get('DP','0') or 0)
+    ad=[int(x) for x in d.get('AD','0,0').split(',') if x"'!='"'.']
+    if dp>=20 and len(ad)>1 and ad[1]/dp>=0.9: cands.append((pos,ref.upper(),alt.upper(),dp,ad))
+# standard code
+code={}
+for aa,cods in {
+'F':'TTT TTC','L':'TTA TTG CTT CTC CTA CTG','I':'ATT ATC ATA','M':'ATG','V':'GTT GTC GTA GTG','S':'TCT TCC TCA TCG AGT AGC','P':'CCT CCC CCA CCG','T':'ACT ACC ACA ACG','A':'GCT GCC GCA GCG','Y':'TAT TAC','*':'TAA TAG TGA','H':'CAT CAC','Q':'CAA CAG','N':'AAT AAC','K':'AAA AAG','D':'GAT GAC','E':'GAA GAG','C':'TGT TGC','W':'TGG','R':'CGT CGC CGA CGG AGA AGG','G':'GGT GGC GGA GGG'}.items():
+  for c in cods.split(): code[c]=aa
+trs=[]
+with gzip.open('ncbiRefSeq.hg38.txt.gz','rt') as f:
+  for line in f:
+    a=line.rstrip('\\n').split('\\t')
+    if len(a)<16 or a[2]"'!='"'chr9' or int(a[6])==int(a[7]): continue
+    trs.append({'name':a[1],'strand':a[3],'tx0':int(a[4]),'tx1':int(a[5]),'cds0':int(a[6]),'cds1':int(a[7]),'starts':[int(x) for x in a[9].rstrip(',').split(',') if x],'ends':[int(x) for x in a[10].rstrip(',').split(',') if x],'gene':a[12]})
+# calculate ref/alt consequence per transcript
+for pos,ref,alt,dp,ad in cands:
+  p=pos-1; out=[]
+  for t in trs:
+    # locate exon and coding
+    if not any(s<=p<e and t['cds0']<=p<t['cds1'] for s,e in zip(t['starts'],t['ends'])): continue
+    pieces=[]
+    inds=[]
+    exons=list(zip(t['starts'],t['ends']))
+    if t['strand']=='+': exons=exons
+    else: exons=exons[::-1]
+    for s,e in exons:
+      lo=max(s,t['cds0']); hi=min(e,t['cds1])
+      if lo>=hi: continue
+      vals=list(range(lo,hi))
+      if t['strand']=='-': vals=vals[::-1]
+      inds.extend(vals)
+    try: i=inds.index(p)
+    except ValueError: continue
+    cds=''.join(seq[g] if t['strand']=='+' else seq[g].translate(comp) for g in inds)
+    # oriented alternate
+    oa=alt if t['strand']=='+' else alt.translate(comp)
+    rr=cds[i]
+    c0=(i//3)*3; cod=cds[c0:c0+3]; acod=cod[:i%3]+oa+cod[i%3+1:]
+    aa=code.get(cod,'?'); aaa=code.get(acod,'?')
+    out.append((t['gene'],t['name'],t['strand'],i+1,len(cds),cod+'>'+acod,aa+('>'+aaa), 'STOP' if aaa=='*' and aa"'!='"'*' else ''))
+  print(f'{pos}\\t{ref}>{alt}\\tDP={dp}\\t' + ('; '.join(':'.join(map(str,x)) for x in out) if out else '-'))
+PY"

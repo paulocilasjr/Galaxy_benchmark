@@ -1,0 +1,70 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+sites=[('s1',181),('s2',241),('s3',541),('s4',701),('s5',951),('s6',1150),('s7',1154),('s8',1401)]
+sitepos={name:pos for name,pos in sites}
+# desired ref local positions; local bam is 0-based offset
+def read_alleles(r):
+    obs={}
+    qpos=0; refpos=r.reference_start+1 # local 1-based next
+    seq=r.query_sequence
+    for op,l in r.cigartuples:
+        if op in (0,7,8):
+            for j in range(l):
+                p=refpos+j
+                for name,pos in sites:
+                    if p==pos:
+                        obs[name]=seq[qpos+j]
+            qpos+=l; refpos+=l
+        elif op==1:
+            # insertion after refpos-1 if any future site wanted; none seen
+            qpos+=l
+        elif op==2:
+            for j in range(l):
+                p=refpos+j
+                for name,pos in sites:
+                    if p==pos: obs[name]='D'
+            refpos+=l
+        elif op==4: qpos+=l
+        elif op==3: refpos+=l
+    return obs
+pair_obs=collections.defaultdict(dict)
+read_obs=[]
+bam=pysam.AlignmentFile('local.sorted.bam')
+for r in bam.fetch('local'):
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    obs=read_alleles(r)
+    if obs:
+        read_obs.append((r.query_name, r.flag, r.reference_start+1, r.cigarstring, obs))
+        po=pair_obs[r.query_name]
+        for k,v in obs.items():
+            if k in po and po[k]"'!=v:
+                po[k]+='"'?'+v
+            else:
+                po[k]=v
+print('Pair allele pattern counts')
+pat_counts=collections.Counter()
+for q,obs in pair_obs.items():
+    pat=tuple(obs.get(name,'.') for name,pos in sites)
+    pat_counts[pat]+=1
+for pat,n in pat_counts.most_common(50):
+    if sum(x"'!='"'.' for x in pat)>=2:
+        print(n, pat)
+print('\\nRead pattern counts')
+pc=collections.Counter()
+for _,_,_,_,obs in read_obs:
+    pc[tuple(obs.get(name,'.') for name,pos in sites)]+=1
+for pat,n in pc.most_common(50):
+    if sum(x"'!='"'.' for x in pat)>=2: print(n,pat)
+# adjacency allele co-occurrence between consecutive sites at pair level
+print('\\nAdjacency pair cooccurrence')
+for (n1,_),(n2,__) in zip(sites,sites[1:]):
+    c=collections.Counter()
+    for obs in pair_obs.values():
+        if n1 in obs and n2 in obs: c[(obs[n1],obs[n2])]+=1
+    print(n1,n2,c)
+# all site marginal counts pair-level once
+print('\\nMarginals')
+for name,pos in sites:
+    c=collections.Counter(obs[name] for obs in pair_obs.values() if name in obs)
+    print(name,pos,c)
+PY"

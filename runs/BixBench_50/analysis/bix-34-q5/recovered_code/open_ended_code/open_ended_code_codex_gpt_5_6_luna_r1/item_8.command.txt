@@ -1,0 +1,104 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from statistics import median, mean
+from collections import Counter, defaultdict
+from pathlib import PurePosixPath
+
+class Node:
+    __slots__=('children','name','length','parent')
+    def __init__(self, name=None, length=0.0):
+        self.children=[]; self.name=name; self.length=length; self.parent=None
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    i=0
+    def skip_ws():
+        nonlocal i
+        while i<len(s) and s[i].isspace(): i+=1
+    def parse_label():
+        nonlocal i
+        skip_ws(); st=i
+        while i<len(s) and s[i] not in ',():;': i+=1
+        return s[st:i].strip()
+    def parse_len():
+        nonlocal i
+        skip_ws()
+        if i<len(s) and s[i]==':':
+            i+=1; skip_ws(); st=i
+            while i<len(s) and s[i] not in ',():;': i+=1
+            return float(s[st:i].strip())
+        return 0.0
+    def rec():
+        nonlocal i
+        skip_ws()
+        if i<len(s) and s[i]=='(':
+            i+=1; n=Node()
+            while True:
+                c=rec(); c.parent=n; n.children.append(c)
+                skip_ws()
+                if i<len(s) and s[i]==',': i+=1; continue
+                if i<len(s) and s[i]==')': i+=1; break
+                raise ValueError((i,s[i:i+20]))
+            # optional internal label/support, then branch length
+            lab=parse_label()
+            if lab: n.name=lab
+            n.length=parse_len()
+            return n
+        lab=parse_label()
+        n=Node(lab)
+        n.length=parse_len()
+        return n
+    root=rec(); skip_ws()
+    if i "'!= len(s): raise ValueError((i,s[i:]))
+    return root
+
+def leaves(root):
+    out=[]
+    def go(n, d):
+        if not n.children: out.append((n.name,d,n))
+        else:
+            for c in n.children: go(c,d+c.length)
+    go(root,0.0); return out
+
+def pair_dist(a,b):
+    # path sum via ancestors; node lengths are edge to parent
+    anc={}
+    x=a; d=0.0
+    while x is not None:
+        anc[x]=d; d += x.length; x=x.parent
+    y=b; d2=0.0
+    while y not in anc:
+        d2 += y.length; y=y.parent
+    return anc[y]+d2
+
+def summarize(fn):
+    with ZipFile(fn) as z:
+        paths=[p for p in z.namelist() if p.endswith('"'.treefile')]
+        rows=[]; bad=[]
+        for p in paths:
+            s=z.read(p).decode()
+            try:
+                root=parse_newick(s)
+                ls=leaves(root)
+                ds=[pair_dist(ls[i][2],ls[j][2]) for i in range(len(ls)) for j in range(i+1,len(ls))]
+                m=mean(ds) if ds else float('nan')
+                rows.append((p,m,len(ls),tuple(sorted(x[0] for x in ls)),min(ds) if ds else None,max(ds) if ds else None))
+            except Exception as e: bad.append((p,repr(e),s))
+        print('\\n',fn)
+        print('treefiles',len(paths),'parsed',len(rows),'bad',len(bad))
+        print('leaf counts',Counter(x[2] for x in rows))
+        print('means: median',repr(median(x[1] for x in rows)),'mean',repr(mean(x[1] for x in rows)))
+        print('mean range',min(x[1] for x in rows),max(x[1] for x in rows))
+        print('taxa combinations')
+        for k,v in Counter(x[3] for x in rows).most_common(): print(' ',v,k)
+        print('first rows')
+        for x in sorted(rows)[:5]: print(' ',x[:4])
+        if bad: print('BAD',bad[:2])
+        return rows
+
+A=summarize('inputs/scogs_animals.zip')
+F=summarize('inputs/scogs_fungi.zip')
+print('\\nratios')
+for name,fn in [('F/A',lambda:median(x[1] for x in F)/median(x[1] for x in A)),('A/F',lambda:median(x[1] for x in A)/median(x[1] for x in F))]: print(name,repr(fn()))
+PY"

@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > compute_promoter.py <<'PY'
+import urllib.request, json, sys
+
+HOST='https://sep2025.rest.ensembl.org'
+TRANSCRIPT='ENST00000269305'
+
+def get_json(path):
+    url=HOST+path
+    req=urllib.request.Request(url, headers={'Content-Type':'application/json'})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+t=get_json(f'/lookup/id/{TRANSCRIPT}?expand=1')
+chrom=t['seq_region_name']
+strand=t['strand']
+tx_start=t['start']
+tx_end=t['end']
+tss = tx_start if strand==1 else tx_end
+upstream, downstream=500,100
+# strand-aware genomic interval
+if strand==1:
+    start=tss-upstream
+    end=tss+downstream-1
+else:
+    # transcript-strand coords x=-upstream..(downstream-1); genomic=TSS-x
+    left=tss-(downstream-1)
+    right=tss+upstream
+    start=min(left,right)
+    end=max(left,right)
+prom_len=end-start+1
+seq=get_json(f'/sequence/region/human/{chrom}:{start}..{end}:1?')['seq'].upper()
+gc=sum(1 for c in seq if c in 'GC')
+frac=round(gc/prom_len,2)
+print('transcript', TRANSCRIPT, 'chr', chrom, 'strand', strand, 'tx', tx_start, tx_end, 'tss', tss)
+print('promoter', chrom, start, end, strand, prom_len)
+print('sequence length', len(seq), 'gc', gc, 'fraction_raw', gc/prom_len, 'rounded', frac)
+print('OUTPUT', f'{chrom};{start};{end};{\"+\" if strand==1 else \"-\"};{prom_len};{gc};{frac:.2f}')
+print('first60', seq[:60])
+print('last60', seq[-60:])
+PY
+python3 compute_promoter.py"

@@ -1,0 +1,48 @@
+/bin/bash -lc "cat > build_rna2.py <<'PY'
+import glob,gzip,os,re,collections
+# mapping from filename tissue to desired label
+def parse_tissue(fn):
+    base=os.path.basename(fn)
+    # remove GSM..._B1_neotenic_ and _featurecounts.txt.gz
+    m=re.search(r'neotenic_(.+)\\.txt\\.gz"'$'"', base)
+    if not m:
+        m=re.search(r'neotenic_(.+)_featurecounts\\.txt\\.gz"'$'"', base)
+    raw=m.group(1).replace('_featurecounts.txt.gz','')
+    # raw like 'Bladder' or 'Cloacal_chamber'
+    raw=raw.replace('_featurecounts.txt.gz','')
+    return raw
+files=glob.glob('geo_bulk/*neotenic*.gz')
+# check
+for fn in files[:5]: print(parse_tissue(fn))
+# group by raw tissue
+tissues=collections.defaultdict(list)
+for fn in files:
+    t=parse_tissue(fn)
+    d={}
+    with gzip.open(fn,'rt') as f:
+        next(f); next(f)
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            if len(p)<7: continue
+            gid=p[0]; count=int(p[6])
+            # use last underscore segment
+            sym=gid.rsplit('_',1)[-1]
+            d[sym]=d.get(sym,0)+count
+    tissues[t].append(d)
+print(sorted(tissues))
+# raw order all
+all_order=sorted(tissues)
+all_syms=set()
+for t in all_order:
+    for d in tissues[t]: all_syms.add(d)
+all_syms=sorted(all_syms)
+with open('bulk_rna_counts_clean.tsv','w') as out:
+    out.write('symbol\\t'+'\\t'.join(all_order)+'\\n')
+    for sym in all_syms:
+        vals=[sum(d.get(sym,0) for d in tissues[t])/len(tissues[t]) for t in all_order]
+        if sum(vals)>0:
+            out.write(sym+'\\t'+'\\t'.join(map(str,vals))+'\\n')
+print(len(all_syms))
+PY
+python3 build_rna2.py
+head -3 bulk_rna_counts_clean.tsv"

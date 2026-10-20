@@ -1,0 +1,84 @@
+/bin/bash -lc "cat > optimize.py <<'PY'
+import os, json, time, numpy as np, torch
+torch.set_num_threads(1)
+from saluki_torch import Saluki, load_weights
+
+MODEL_PATHS = [f'models/train_gru/f{fi}_c0/train/model0_best.h5' for fi in range(10)]
+UPSTREAM = 'GCCGCCACCATGGTGAGCAAGGGCGAGTAG'
+UTR0 = 'TGTACATAATAAGGACT'
+BASES = 'ACGT'
+MAXLEN = 12288
+
+def encode_sequence(full_dna):
+    # full_dna length 47
+    L = len(full_dna)
+    seq = np.frombuffer(full_dna.encode(), dtype=np.uint8)
+    # map A,C,G,T to 0,1,2,3
+    code = np.full(L, -1, dtype=np.int64)
+    for i,ch in enumerate(full_dna):
+        code[i] = BASES.index(ch)
+    one = np.eye(4, dtype=np.float32)[code]
+    x = np.zeros((MAXLEN,6), dtype=np.float32)
+    x[:L,:4] = one
+    # coding frame marks first base of each codon in CDS including stop.
+    # 5'UTR length 9; coding starts at 9 and length 21.
+    cds_start = 9
+    cds_len = 21
+    for pos in range(cds_start, cds_start+cds_len, 3):
+        x[pos,4] = 1.0
+    # no splice sites (single-exon synthetic mRNA)
+    return x
+
+def build_batch(seqs):
+    arr = np.stack([encode_sequence(s) for s in seqs], axis=0)
+    return torch.from_numpy(arr).permute(0,2,1).contiguous()
+
+def predict_all_models(seqs):
+    \"\"\"Average prediction across 10 fold models (human output head0).\"\"\"
+    X = build_batch(seqs)
+    total = np.zeros(len(seqs), dtype=np.float32)
+    for mp in MODEL_PATHS:
+        model = Saluki()
+        load_weights(model, mp)
+        model.eval()
+        with torch.no_grad():
+            pred = model(X).numpy().ravel()
+        total += pred
+    return total / len(MODEL_PATHS)
+
+def variants(current_utr):
+    \"\"\"Return list of (utr, mutation_description). Include current first.\"\"\"
+    out = [(current_utr, 'current')]
+    for i, ref in enumerate(current_utr):
+        for b in BASES:
+            if b "'!= ref:
+                mut = current_utr[:i] + b + current_utr[i+1:]
+                out.append((mut, f'"'{i}{ref}>{b}'))
+    return out
+
+def main():
+    utr = UTR0
+    full = UPSTREAM + utr
+    for rnd in range(1, 4):
+        cands = variants(utr)
+        seqs = [UPSTREAM + u for u,_ in cands]
+        t0 = time.time()
+        scores = predict_all_models(seqs)
+        dt = time.time()-t0
+        # exclude current at index 0; choose max among substitutions
+        best_idx = int(np.argmax(scores[1:])) + 1
+        print(f'Round {rnd}: {len(cands)-1} variants evaluated in {dt:.1f}s')
+        print('  current', utr, 'score', scores[0])
+        for rank in range(min(5, len(cands)-1)):
+            idx = int(np.argsort(-scores[1:])[rank]) + 1
+            print('  rank',rank+1, cands[idx][1], cands[idx][0], scores[idx])
+        utr, desc = cands[best_idx]
+        print('  BEST', desc, utr, 'score', scores[best_idx])
+        full = UPSTREAM + utr
+    print('FINAL UTR', utr)
+    print('FINAL FULL', full)
+
+if __name__=='__main__':
+    main()
+PY
+python optimize.py"

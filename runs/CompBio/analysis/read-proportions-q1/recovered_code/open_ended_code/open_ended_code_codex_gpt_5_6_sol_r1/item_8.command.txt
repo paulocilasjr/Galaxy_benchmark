@@ -1,0 +1,41 @@
+/bin/bash -lc "python - <<'PY'
+import subprocess,re,math
+from collections import Counter
+seqs={}
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'):
+        h=line[1:].split()[0]; seqs[h]=''
+    else: seqs[h]+=line.upper()
+chroms=list(seqs)
+p=subprocess.Popen(['bwa','samse','-n','20','read.proportions.q1.fa','read.proportions.q1.sai','read.proportions.q1.fq.gz'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+ds=[]; patterns=Counter(); skipped=Counter()
+for line in p.stdout:
+    if line.startswith('@'): continue
+    f=line.rstrip().split('\\t')
+    flag=int(f[1]); cigar=f[5]
+    if flag&4: skipped['unmapped']+=1; continue
+    if cigar"'!='"'36M': skipped[cigar]+=1; continue
+    pos=int(f[3])-1; read=f[9].upper()
+    if pos<0 or pos+36>3000: skipped['edge']+=1; continue
+    d=tuple(sum(a"'!=b for a,b in zip(read,seqs[c][pos:pos+36])) for c in chroms)
+    ds.append(d); patterns[d]+=1
+p.wait()
+print('"'used',len(ds),'skipped',dict(skipped))
+print('top mismatch patterns')
+for pat,n in patterns.most_common(20): print(pat,n)
+# EM fixed substitution error rates
+for e in [0.002,0.005,0.008,0.01,0.02,0.03,0.05]:
+    pi=[.25]*4
+    ratio=(e/3)/(1-e)
+    for it in range(1000):
+        sums=[0.0]*4
+        for d in ds:
+            ws=[pi[k]*(ratio**d[k]) for k in range(4)]
+            z=sum(ws)
+            for k in range(4): sums[k]+=ws[k]/z
+        new=[x/len(ds) for x in sums]
+        if max(abs(new[k]-pi[k]) for k in range(4))<1e-12: break
+        pi=new
+    print('e',e,'pi',*[round(100*x,4) for x in pi], 'iters',it)
+PY"

@@ -1,0 +1,50 @@
+/bin/bash -lc "cat > analysis/analyze.py <<'PY'
+import sys,os
+sys.path.insert(0,os.path.abspath('packages'))
+os.environ['MPLCONFIGDIR']=os.path.abspath('.cache/matplotlib')
+import numpy as np,pandas as pd
+from scipy import sparse
+from sklearn.decomposition import PCA
+from sklearn.neighbors import NearestNeighbors
+import igraph as ig,leidenalg
+G=pd.read_csv('subtype.inflammation.q1.genes.txt.gz',sep='\\t').gene_symbols.values
+X=sparse.vstack([sparse.load_npz(f'analysis/eye{i}.npz') for i in [1,2]],format='csr').astype(np.float32)
+tot=np.asarray(X.sum(axis=1)).ravel()
+N=X.multiply((1e4/tot)[:,None]).tocsr()
+mean=np.asarray(N.mean(axis=0)).ravel()
+var=np.asarray(N.power(2).mean(axis=0)).ravel()-mean**2
+disp=np.log(np.maximum(var/np.maximum(mean,1e-10),1e-10))
+bin=pd.cut(np.log1p(mean),20)
+df=pd.DataFrame({'mean':mean,'disp':disp,'bin':bin})
+df['z'] = df.groupby('bin',observed=True).disp.transform(lambda v:(v-v.mean())/v.std())
+hvg=df[df['mean']>.01].nlargest(3000,'z').index.values
+N.data=np.log1p(N.data)
+sparse.save_npz('analysis/lognorm.npz',N)
+P=PCA(n_components=40,svd_solver='arpack',random_state=42).fit_transform(N[:,hvg])
+np.save('analysis/pca.npy',P)
+print('PCA complete',flush=True)
+kn=NearestNeighbors(n_neighbors=21,n_jobs=6).fit(P)
+dist,nei=kn.kneighbors(P)
+sources=np.repeat(np.arange(len(P)),20)
+targets=nei[:,1:].ravel()
+weights=np.exp(-dist[:,1:]/dist[:,-1:]).ravel()
+g=ig.Graph(n=len(P),edges=list(zip(sources,targets)),directed=False)
+g.es['weight']=weights
+g.simplify(combine_edges='max')
+part=leidenalg.find_partition(g,leidenalg.RBConfigurationVertexPartition,weights='weight',resolution_parameter=.7,seed=42)
+c=np.array(part.membership)
+obs=pd.DataFrame({'eye':['1']*8646+['2']*9355,'cluster':c,'counts':tot})
+obs.to_csv('analysis/obs.csv',index=False)
+print(pd.crosstab(obs.cluster,obs.eye).to_string(),flush=True)
+rows=[]
+for cl in sorted(set(c)):
+ a=N[c==cl]; b=N[c"'!=cl]
+ m1=np.asarray(a.mean(axis=0)).ravel();m2=np.asarray(b.mean(axis=0)).ravel()
+ v1=np.asarray(a.power(2).mean(axis=0)).ravel()-m1**2;v2=np.asarray(b.power(2).mean(axis=0)).ravel()-m2**2
+ score=(m1-m2)/np.sqrt(v1/a.shape[0]+v2/b.shape[0]+1e-9)
+ order=np.argsort(score)[::-1][:60]
+ print(cl,'"', '.join(G[order[:35]]),flush=True)
+ for j in order: rows.append([cl,G[j],score[j],m1[j],m2[j]])
+pd.DataFrame(rows,columns=['cluster','gene','score','mean','rest']).to_csv('analysis/markers.csv',index=False)
+PY
+OPENBLAS_NUM_THREADS=6 OMP_NUM_THREADS=6 python analysis/analyze.py > analysis/clustering.log 2>&1"

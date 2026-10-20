@@ -1,0 +1,48 @@
+/bin/bash -c "python - <<'PY'
+# Compute final exact counts with detailed rows
+import openpyxl, glob, os, re, collections, json
+meta={}
+wb=openpyxl.load_workbook('/workspace/inputs/230215_Trio_Status.xlsx', data_only=True); ws=wb.active
+for r in list(ws.iter_rows(values_only=True))[1:]:
+    meta[str(r[0]).strip()]=(r[2],r[3])
+carrier={k for k,v in meta.items() if v[1]=='Carrier'}
+rows=[]
+for f in glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx'):
+    full=re.search(r'CHIP_(.+?)\\.xlsx"'$'"',os.path.basename(f)).group(1); mm=re.match(r'(\\d+)',full); sid=mm.group(1) if mm else full
+    if sid not in carrier: continue
+    wb=openpyxl.load_workbook(f, data_only=True); ws=wb.active; rs=list(ws.iter_rows(values_only=True)); hdr=rs[1]
+    for r in rs[2:]:
+        d={hdr[i]:r[i] for i in range(min(len(hdr),len(r))) if hdr[i] is not None}; d['sample']=sid; d['file']=full
+        rows.append(d)
+# exact helper
+def is_excluded(so):
+    s=str(so).lower()
+    return ('intron' in s or 'intergenic' in s or '_utr' in s or 'untranslated' in s)
+def vaf_num(d):
+    try: return float(d.get('Variant Allele Freq'))
+    except: return None
+# pipeline order (reference -> region -> vaf -> clinvar)
+pipeline=[]
+for d in rows:
+    if d.get('Zygosity')=='Reference': continue
+    so=d.get('Sequence Ontology (Combined)')
+    if is_excluded(so): continue
+    fv=vaf_num(d)
+    if fv is None or not fv<0.3: continue
+    cl=d.get('Classification')
+    if cl is None: continue
+    pipeline.append(d)
+print('pipeline N',len(pipeline),'benign/likely',sum(d.get('Classification') in ('Benign','Likely Benign') for d in pipeline))
+print('by classification',collections.Counter(d.get('Classification') for d in pipeline))
+print('by SO',collections.Counter(d.get('Sequence Ontology (Combined)') for d in pipeline))
+print('by effect',collections.Counter(d.get('Effect (Combined)') for d in pipeline))
+print('samples',collections.Counter(d['sample'] for d in pipeline))
+# Also order clinvar then region
+order2=[d for d in rows if d.get('Zygosity')"'!='"'Reference' and (vaf_num(d) is not None and vaf_num(d)<.3) and d.get('Classification') is not None and not is_excluded(d.get('Sequence Ontology (Combined)'))]
+print('order2 N',len(order2),'B/LB',sum(d.get('Classification') in ('Benign','Likely Benign') for d in order2))
+# all VAF<.3 nonref after region incl missing clinvar
+allreg=[d for d in rows if d.get('Zygosity')"'!='"'Reference' and not is_excluded(d.get('Sequence Ontology (Combined)')) and vaf_num(d) is not None and vaf_num(d)<.3]
+print('allreg N',len(allreg),'with clinvar',sum(d.get('Classification') is not None for d in allreg),'B/LB among clinvar',sum(d.get('Classification') in ('Benign','Likely Benign') for d in allreg if d.get('Classification') is not None))
+# list allreg classifications
+print('allreg class',collections.Counter(d.get('Classification') for d in allreg))
+PY"

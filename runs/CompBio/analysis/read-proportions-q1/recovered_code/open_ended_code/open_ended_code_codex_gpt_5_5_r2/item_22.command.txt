@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+import gzip, collections, math
+trans=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(trans)[::-1]
+seqs=[]; name=None; chunks=[]
+for line in Path('read.proportions.q1.fa').read_text().splitlines():
+    if line.startswith('>'):
+        if name: seqs.append((name,''.join(chunks)))
+        name=line[1:].split()[0]; chunks=[]
+    else: chunks.append(line.strip())
+if name: seqs.append((name,''.join(chunks)))
+L=36; starts=[0,9,18,27]; sl=9; maxm=8
+windows=[]; idx=[collections.defaultdict(list) for _ in starts]
+for ci,(n,s) in enumerate(seqs):
+    for ss in (s,rc(s)):
+        for pos in range(len(ss)-L+1):
+            w=ss[pos:pos+L]; wid=len(windows); windows.append((ci,w))
+            for j,st in enumerate(starts): idx[j][w[st:st+sl]].append(wid)
+reads=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        r=f.readline().strip(); f.readline(); f.readline(); reads.append(r)
+features=[]; bestset_counts=collections.Counter(); frac=[0]*4; unique=[0]*4; allbest=[0]*4; minhist=collections.Counter()
+for r in reads:
+    cands=set()
+    for j,st in enumerate(starts): cands.update(idx[j].get(r[st:st+sl],()))
+    nby=[[0]*(maxm+1) for _ in range(4)]
+    best=[99]*4
+    for wid in cands:
+        ci,w=windows[wid]
+        m=sum(a"'!=b for a,b in zip(r,w))
+        if m<=maxm: nby[ci][m]+=1
+        if m<best[ci]: best[ci]=m
+    bm=min(best); bs=tuple(i for i,b in enumerate(best) if b==bm)
+    bestset_counts[bs]+=1; minhist[bm]+=1
+    if len(bs)==1: unique[bs[0]]+=1
+    for i in bs:
+        frac[i]+=1/len(bs); allbest[i]+=1
+    features.append(nby)
+print('"'minhist', minhist)
+print('unique best', unique, [100*x/sum(unique) for x in unique], 'sum', sum(unique))
+print('fractional best', [round(x,2) for x in frac], [100*x/len(reads) for x in frac])
+print('top best sets')
+for k,v in bestset_counts.most_common(16): print(tuple(i+1 for i in k),v)
+# fast EM fixed e values with maxm=8
+def em(e):
+    a=e/(3*(1-e)); pows=[a**m for m in range(maxm+1)]; pi=[.25]*4
+    for it in range(500):
+        sums=[0.0]*4
+        for nby in features:
+            lik=[sum(nby[i][m]*pows[m] for m in range(maxm+1)) for i in range(4)]
+            den=sum(pi[i]*lik[i] for i in range(4))
+            if den==0:
+                for i in range(4): sums[i]+=pi[i]
+            else:
+                for i in range(4): sums[i]+=pi[i]*lik[i]/den
+        new=[s/len(features) for s in sums]
+        if max(abs(new[i]-pi[i]) for i in range(4))<1e-13: break
+        pi=new
+    return pi,it
+for e in [.005,.008,.009,.01,.015,.02,.03,.05]:
+    pi,it=em(e)
+    print('em',e,it,[round(100*x,3) for x in pi])
+PY"

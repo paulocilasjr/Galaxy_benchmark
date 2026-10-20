@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('reads.sorted.bam'); fa=pysam.FastaFile('hg38.fa')
+base=collections.defaultdict(collections.Counter); cov=collections.Counter(); inds=collections.defaultdict(collections.Counter)
+for rec in bam.fetch('chr22',27079000,27081000):
+ if rec.is_secondary or rec.is_supplementary:continue
+ q=rec.query_sequence;r=rec.reference_start;qi=0
+ for op,n in rec.cigartuples:
+  if op in (0,7,8):
+   for i in range(n):base[r+i][q[qi+i]]+=1;cov[r+i]+=1
+   r+=n;qi+=n
+  elif op==1:inds[r][q[qi:qi+n]]+=1;qi+=n
+  elif op==2:
+   ref=fa.fetch('chr22',r,r+n).upper(); inds[r][ref]+=1; r+=n
+  elif op==3:r+=n
+  elif op==4:qi+=n
+# all positions with >=3 nonref and alt fraction > .03, sorted pos
+print('positions with alt >=3 and fraction > 0.03')
+for p in sorted(base):
+ ref=fa.fetch('chr22',p,p+1).upper(); c=base[p]; n=sum(c.values()); alt=sum(v for k,v in c.items() if k"'!=ref)
+ if alt>=3 and alt/n>.03: print(p+1,ref,n,dict(c),round(alt/n,3))
+print('"'coverage edges',[(p+1,cov[p]) for p in sorted(cov)[::100]])
+print('max alternate fraction excluding true candidate sites')
+true={27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526}
+a=[]
+for p in sorted(base):
+ if p+1 in true:continue
+ ref=fa.fetch('chr22',p,p+1).upper();c=base[p];n=sum(c.values()); alt=sum(v for k,v in c.items() if k"'!=ref)
+ if n>=10 and alt: a.append((alt/n,alt,p+1,ref,n,dict(c)))
+for x in sorted(a,reverse=True)[:30]:print(x)
+print('"'indel boundaries >=2')
+for p,c in sorted(inds.items()):
+ n=sum(c.values())
+ if n>=2:print(p,p+1,n,c)
+PY"

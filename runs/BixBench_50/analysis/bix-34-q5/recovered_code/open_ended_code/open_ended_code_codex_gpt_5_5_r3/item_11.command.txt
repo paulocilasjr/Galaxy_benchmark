@@ -1,0 +1,122 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, re, statistics, itertools, math
+from dataclasses import dataclass, field
+
+@dataclass
+class Node:
+    name: str|None = None
+    length: float = 0.0
+    children: list = field(default_factory=list)
+    parent: object|None = None
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    i=0
+    n=len(s)
+    def skip_ws(i):
+        while i<n and s[i].isspace(): i+=1
+        return i
+    def parse_name_len(i):
+        i=skip_ws(i)
+        name_chars=[]
+        # unquoted simple names only expected; support quoted rudimentarily
+        if i<n and s[i] == \"'\":
+            i += 1
+            while i<n and s[i] "'!= "'"'\":
+                name_chars.append(s[i]); i += 1
+            if i<n and s[i] == \"'\": i += 1
+        else:
+            while i<n and s[i] not in ':,()':
+                name_chars.append(s[i]); i += 1
+        name=''.join(name_chars).strip() or None
+        i=skip_ws(i)
+        length=0.0
+        if i<n and s[i]==':':
+            i+=1
+            start=i
+            while i<n and s[i] not in ',()':
+                i+=1
+            raw=s[start:i].strip()
+            length=float(raw) if raw else 0.0
+        return name,length,i
+    def parse_sub(i):
+        i=skip_ws(i)
+        if i<n and s[i]=='(':
+            i+=1
+            node=Node()
+            while True:
+                child,i=parse_sub(i)
+                child.parent=node
+                node.children.append(child)
+                i=skip_ws(i)
+                if i<n and s[i]==',':
+                    i+=1; continue
+                if i<n and s[i]==')':
+                    i+=1; break
+                raise ValueError(f'expected , or ) at {i}: {s[i:i+20]}')
+            name,length,i=parse_name_len(i)
+            node.name=name; node.length=length
+            return node,i
+        name,length,i=parse_name_len(i)
+        if name is None:
+            raise ValueError(f'missing leaf name at {i}')
+        return Node(name=name,length=length),i
+    root,i=parse_sub(0)
+    i=skip_ws(i)
+    if i"'!=n:
+        raise ValueError(f'"'unparsed at {i}: {s[i:]}')
+    root.length=0.0
+    root.parent=None
+    return root
+
+def leaves(root):
+    out=[]
+    def rec(x):
+        if not x.children:
+            out.append(x)
+        else:
+            for c in x.children: rec(c)
+    rec(root)
+    return out
+
+def dist(a,b):
+    da={}
+    x=a; d=0.0
+    while x is not None:
+        da[id(x)]=d
+        d += x.length
+        x=x.parent
+    x=b; e=0.0
+    while x is not None:
+        if id(x) in da:
+            return e + da[id(x)]
+        e += x.length
+        x=x.parent
+    raise RuntimeError('no common ancestor')
+
+def mean_patristic(newick):
+    root=parse_newick(newick)
+    tips=leaves(root)
+    ds=[]
+    for a,b in itertools.combinations(tips,2):
+        ds.append(dist(a,b))
+    return sum(ds)/len(ds), len(tips), [t.name for t in tips]
+
+for zname in ['inputs/scogs_animals.zip','inputs/scogs_fungi.zip']:
+    vals=[]; ntips={}; failed=[]
+    with zipfile.ZipFile(zname) as z:
+        for name in sorted(n for n in z.namelist() if n.endswith('.treefile')):
+            try:
+                m,k,t=mean_patristic(z.read(name).decode().strip())
+                vals.append(m); ntips[k]=ntips.get(k,0)+1
+            except Exception as e:
+                failed.append((name,str(e)))
+    print(zname)
+    print('n',len(vals),'failed',len(failed),'ntips',ntips)
+    print('median',statistics.median(vals),'mean_of_means',statistics.mean(vals),'min',min(vals),'max',max(vals))
+    print('first5 sorted vals', [round(x,6) for x in sorted(vals)[:5]], 'last5', [round(x,6) for x in sorted(vals)[-5:]])
+    globals()[zname]=statistics.median(vals)
+print('fungi/animals', globals()['inputs/scogs_fungi.zip']/globals()['inputs/scogs_animals.zip'])
+print('animals/fungi', globals()['inputs/scogs_animals.zip']/globals()['inputs/scogs_fungi.zip'])
+PY"

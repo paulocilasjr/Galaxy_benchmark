@@ -1,0 +1,26 @@
+/bin/bash -c "python3 - <<'PY'
+# clusterProfiler exact universe = measured annotated, q>0, size filter (on full term? clusterProfiler with universe intersects term then size)
+import pandas as pd, numpy as np
+from scipy.stats import hypergeom
+
+def bh(p):
+ p=np.asarray(p,float); o=np.argsort(p); n=len(p); scaled=p[o]*n/np.arange(1,n+1); adj_sorted=np.minimum.accumulate(scaled[::-1])[::-1]; out=np.empty(n); out[o]=adj_sorted; return np.minimum(1,out)
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path']); link['gene']=link['gene'].str.split(':',expand=True)[1]; link['path']=link['path'].str.split(':',expand=True)[1]
+files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}; res={}
+for st,fn in files.items():
+ df=pd.read_csv('/workspace/tmp/'+fn); U=set(df.gene)&set(link.gene)
+ for dir,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+  gene=set(df.loc[expr,'gene']); n=len([g for g in gene if g in U]); rows=[]
+  for p,gdf in link.groupby('path'):
+   term=set(gdf.gene)&U; m=len(term)
+   if m<10 or m>500: continue
+   q=len(term&gene)
+   if q==0: continue
+   pv=hypergeom.sf(q-1,len(U),m,n); rows.append((p,pv,q,m))
+  d=pd.DataFrame(rows,columns=['path','pval','q','m']); d['padj']=bh(d.pval.values); res[(st,dir)]=d
+  print(st,dir,'U',len(U),'tested',len(d),'sig',int((d.padj<=.05).sum()))
+for dir in ['up','down']:
+ sets=[set(res[(st,dir)].loc[res[(st,dir)].padj<=.05,'path']) for st in ['97','98','99']]
+ common=set.intersection(*sets)
+ print('common',dir,len(common),sorted(common))
+PY"

@@ -1,0 +1,127 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import GEOparse, pandas as pd, numpy as np, os, re, glob, sys
+q=[g.upper() for g in open('characterize.response.q1.txt').read().split()]
+qset=set(q)
+
+def parse(f):
+ gse=GEOparse.get_GEO(filepath=f, silent=True)
+ gpl=list(gse.gpls.values())[0]
+ sym=gpl.table.set_index('ID')['GENE_SYMBOL'].to_dict()
+ mats={n:gsm.table.set_index('ID_REF')['VALUE'] for n,gsm in gse.gsms.items()}
+ mat=pd.DataFrame(mats)
+ titles={n:gsm.metadata.get('title',[''])[0] for n,gsm in gse.gsms.items()}
+ return gse,sym,mat,titles
+
+def compute(f, a, b, direction_name=''):
+ try:
+  gse,sym,mat,titles=parse(f)
+ except Exception as e:
+  print('ERR parse',os.path.basename(f),e); return
+ a=[x for x in a if x in mat.columns]
+ b=[x for x in b if x in mat.columns]
+ if not a or not b:
+  print('missing groups',os.path.basename(f)); return
+ A=mat[a].mean(axis=1); B=mat[b].mean(axis=1); lfc=B-A
+ # drop nan
+ valid=lfc.dropna()
+ # map genes
+ rows=[]
+ seen=set()
+ for pid in valid.index:
+  s=sym.get(pid)
+  if not isinstance(s,str) or s.lower() in ['nan',''] or s.startswith('---'): continue
+  # sometimes lists separated ///; take first
+  s=re.split(r'///|\\|',s)[0].strip()
+  su=s.upper()
+  if su in seen: continue
+  seen.add(su); rows.append((s,lfc[pid]))
+ df=pd.DataFrame(rows,columns=['gene','lfc'])
+ df=df.sort_values('lfc',ascending=False)
+ up=df.head(112)['gene'].str.upper().tolist()
+ down=df.tail(112)['gene'].str.upper().tolist()
+ ov_up=len(set(up)&qset)
+ ov_down=len(set(down)&qset)
+ # also if query might be descending abs but same sign = top by abs among one sign; compute top by abs within positive and within negative
+ dfp=df[df.lfc>0].reindex(df[df.lfc>0].lfc.abs().sort_values(ascending=False).index).head(112)
+ dfn=df[df.lfc<0].reindex(df[df.lfc<0].lfc.abs().sort_values(ascending=False).index).head(112)
+ ov_abs_pos=len(set(dfp.gene.str.upper())&qset)
+ ov_abs_neg=len(set(dfn.gene.str.upper())&qset)
+ print(f'{os.path.basename(f):30s} {direction_name:20s} up={ov_up} down={ov_down} abs_pos={ov_abs_pos} abs_neg={ov_abs_neg}')
+
+# define groups manually
+files=glob.glob('geo/*_family.soft.gz')
+for f in files:
+ base=os.path.basename(f)
+ if 'GSE108289' in base:
+  gse,sym,mat,titles=parse(f)
+  imm=[n for n,t in titles.items() if 'immature' in t.lower()]
+  matu=[n for n,t in titles.items() if 'maturation' in t.lower()]
+  compute(f,imm,matu,'immature->mature')
+ elif 'GSE69076' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if 'unstimulated' in t.lower()]
+  for tp in ['1hr','6hr','24hr']:
+   tr=[n for n,t in titles.items() if re.search(r'LPS\\s+'+tp,t,re.I)]
+   compute(f,ctrl,tr,'ctrl->LPS'+tp)
+ elif 'GSE17721' in base:
+  gse,sym,mat,titles=parse(f)
+  # samples titles 'Lps, 0.5_hours' etc maybe unstim? all LPS? use 0h as control? inspect
+  allc=list(titles.keys())
+  ctrl=[n for n,t in titles.items() if re.search(r'0_hours|0h|control|unstim',t,re.I)]
+  for tp in ['1_hours','2_hours','4_hours','6_hours','8_hours','12_hours','16_hours','24_hours']:
+   tr=[n for n,t in titles.items() if re.search(tp,t,re.I)]
+   if ctrl and tr: compute(f,ctrl,tr,'ctrl?->LPS'+tp)
+ elif 'GSE15718' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if re.search(r'unstimulated"'$'"',t,re.I) and 'EGTA' not in t]
+  for tp in ['2 hours','4 hours','6 hours','12 hours','24 hours']:
+   tr=[n for n,t in titles.items() if re.search(r'stimulated with LPS for '+tp+'"'$'"',t,re.I)]
+   if ctrl and tr: compute(f,ctrl,tr,'ctrl->LPS'+tp)
+ elif 'GSE15720' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if re.search(r'unstimulated',t,re.I)]
+  tr=[n for n,t in titles.items() if re.search(r'stimulated with LPS for 48 hours"'$'"',t,re.I)]
+  compute(f,ctrl,tr,'ctrl->LPS48h')
+ elif 'GSE15721' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if re.search(r'unstimulated',t,re.I)]
+  tr=[n for n,t in titles.items() if re.search(r'stimulated with LPS for 6 hours"'$'"',t,re.I)]
+  compute(f,ctrl,tr,'ctrl->LPS6h')
+ elif 'GSE167853' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if 'control' in t.lower()]
+  tr=[n for n,t in titles.items() if 'lps' in t.lower()]
+  compute(f,ctrl,tr,'ctrl->LPS')
+ elif 'GSE63739' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if re.search(r'WT_LPS 0h',t)]
+  tr=[n for n,t in titles.items() if re.search(r'WT_LPS 3h',t)]
+  compute(f,ctrl,tr,'WT LPS0->3')
+ elif 'GSE64666' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if re.search(r'no treatment',t,re.I)]
+  tr=[n for n,t in titles.items() if re.search(r'LPS and CpG',t,re.I)]
+  compute(f,ctrl,tr,'ctrl->LPS+CpG')
+ elif 'GSE73484' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if 'WT BMDMs-UT' in t]
+  tr=[n for n,t in titles.items() if 'WT BMDMs-LPS 3h' in t]
+  compute(f,ctrl,tr,'WT UT->LPS')
+ elif 'GSE14769' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if re.search(r'LPS\\d-0"'$'"',t)]
+  tr=[n for n,t in titles.items() if re.search(r'LPS\\d-120"'$'"',t)]
+  compute(f,ctrl,tr,'BMDM LPS0->120')
+ elif 'GSE185150' in base:
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if 'control' in t.lower()]
+  tr=[n for n,t in titles.items() if 'LPS 1h' in t]
+  compute(f,ctrl,tr,'peritoneal LPS1h')
+ elif 'GSE242816' in base:
+  # sepsis monocyte BMMC LPS vs PBS maybe many; choose all LPS vs PBS
+  gse,sym,mat,titles=parse(f)
+  ctrl=[n for n,t in titles.items() if 'PBS' in t]
+  tr=[n for n,t in titles.items() if 'LPS' in t]
+  compute(f,ctrl,tr,'BMMC PBS->LPS')
+PY
+python3 [REDACTED LOCAL PATH]"

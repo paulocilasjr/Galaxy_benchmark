@@ -1,0 +1,112 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from collections import Counter, defaultdict
+import glob, os, re, statistics, math
+
+def read_rows(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    try: ws.reset_dimensions()
+    except Exception: pass
+    return list(ws.iter_rows(values_only=True))
+
+# status
+rows=read_rows('inputs/230215_Trio_Status.xlsx')
+header=rows[0]
+idx={h:i for i,h in enumerate(header) if h is not None}
+status_by_sample={str(r[idx['Sample ID']]): {'role': r[idx['Status']], 'blm': r[idx['BLM Mutation Status']], 'age': r[idx['Age']], 'sex': r[idx['Sex']]} for r in rows[1:]}
+print('Total status rows', len(status_by_sample))
+print('BLM counts', Counter(v['blm'] for v in status_by_sample.values()))
+print('Rows by BLM')
+for blm in sorted(set(v['blm'] for v in status_by_sample.values())):
+    print(blm, [k for k,v in status_by_sample.items() if v['blm']==blm])
+
+# filenames sample id parse
+paths=sorted(glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'))
+def file_sample(path):
+    base=os.path.basename(path).replace('.xlsx','')
+    return base.split('230209_Exome_GRCh38_CHIP_')[-1].split('-')[0]
+file_by_sample={file_sample(p): p for p in paths}
+print('\\nTotal variant files', len(paths))
+print('files without status', sorted(set(file_by_sample)-set(status_by_sample))[:20], 'n=', len(set(file_by_sample)-set(status_by_sample)))
+print('status without file', sorted(set(status_by_sample)-set(file_by_sample), key=lambda x: (not x.isdigit(), x))[:50], 'n=', len(set(status_by_sample)-set(file_by_sample)))
+
+# count function
+exclude_terms=('intron','intergenic','utr')
+# Use lower-case Sequence Ontology; UTR labels include UTR uppercase but lower handles.
+def is_excluded_so(x):
+    s='' if x is None else str(x).lower()
+    return any(t in s for t in exclude_terms)
+
+def to_float(x):
+    if x is None: return None
+    try: return float(x)
+    except Exception: return None
+
+def count_file(path, debug=False):
+    rows=read_rows(path)
+    header=rows[1]
+    col={h:i for i,h in enumerate(header) if h is not None}
+    total=0; stages=Counter(); examples=[]
+    for r in rows[2:]:
+        # skip entirely blank or malformed
+        if not any(x is not None for x in r):
+            continue
+        stages['rows'] += 1
+        z = r[col['Zygosity']] if col['Zygosity'] < len(r) else None
+        so = r[col['Sequence Ontology (Combined)']] if col['Sequence Ontology (Combined)'] < len(r) else None
+        vaf = to_float(r[col['Variant Allele Freq']] if col['Variant Allele Freq'] < len(r) else None)
+        if str(z).strip().lower() == 'reference':
+            stages['exclude_reference'] += 1
+            continue
+        stages['non_reference'] += 1
+        if is_excluded_so(so):
+            stages['exclude_so'] += 1
+            continue
+        stages['functional_nonref'] += 1
+        if vaf is None:
+            stages['missing_vaf'] += 1
+            continue
+        if vaf < 0.3:
+            stages['vaf_lt_0.3'] += 1
+            total += 1
+            if len(examples) < 5:
+                examples.append((r[col['Chr:Pos']], r[col['Gene Names']], so, z, vaf))
+        else:
+            stages['vaf_ge_0.3'] += 1
+    return total, stages, examples
+
+counts={}
+stages_by_sample={}
+for sid,p in file_by_sample.items():
+    c,st,ex=count_file(p)
+    counts[sid]=c; stages_by_sample[sid]=st
+
+print('\\nCounts by BLM status for samples with status+file')
+by=defaultdict(list)
+for sid,c in counts.items():
+    if sid in status_by_sample:
+        by[status_by_sample[sid]['blm']].append((sid,c,status_by_sample[sid]['role']))
+for blm, vals in by.items():
+    nums=[c for _,c,_ in vals]
+    print(blm, 'n', len(nums), 'median', statistics.median(nums), 'vals', sorted(vals, key=lambda x: (x[1], x[0])))
+
+# Carrier specifics
+carrier_ids=[sid for sid,v in status_by_sample.items() if v['blm']=='Carrier']
+carrier_with_files=[sid for sid in carrier_ids if sid in counts]
+print('\\nCarrier IDs', carrier_ids)
+print('Carrier with files', carrier_with_files, 'n', len(carrier_with_files))
+print('Carrier missing files', [sid for sid in carrier_ids if sid not in counts])
+carrier_counts=[counts[sid] for sid in carrier_with_files]
+print('Carrier counts in status order')
+for sid in carrier_with_files:
+    print(sid, status_by_sample[sid], counts[sid], stages_by_sample[sid])
+print('median', statistics.median(carrier_counts))
+
+# inspect examples for carriers with nonzero
+print('\\nExamples nonzero carrier')
+for sid in carrier_with_files:
+    c,st,ex=count_file(file_by_sample[sid])
+    if c:
+        print(sid, 'count', c, 'examples', ex[:5])
+PY"

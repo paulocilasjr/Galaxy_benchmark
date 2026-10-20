@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy import sparse, stats
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[l.strip() for l in gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt')]
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc().astype(float)
+lib=np.asarray(X.sum(axis=0)).ravel()
+scale=np.divide(1e4,lib,out=np.zeros_like(lib),where=lib"'!=0)
+Xn=X @ sparse.diags(scale); Xlog=Xn.copy(); Xlog.data=np.log1p(Xlog.data)
+fr=pd.read_csv('"'feature_reference.csv'); calls=pd.read_csv('protospacer_calls_per_cell.csv').set_index('cell_barcode').loc[barcodes].reset_index()
+meta=calls.merge(fr[['id','name','target_gene_name']],left_on='feature_call',right_on='id',how='left')
+meta['lib']=lib
+feat_index={g:i for i,g in enumerate(features)}
+sig=features[:20]
+idx=[feat_index[g] for g in sig]
+score=np.asarray(Xlog[idx,:].mean(axis=0)).ravel(); meta['score']=score
+# non-sig pseudo-control genes: next 100 excluding targets? random/fake expression mean
+ctrl_idx=list(range(20,120))
+meta['ctrl100']=np.asarray(Xlog[ctrl_idx,:].mean(axis=0)).ravel()
+print('Guide cell counts sorted:')
+print(meta.groupby(['feature_call','target_gene_name']).size().reset_index(name='n').sort_values('n').head(15).to_string(index=False))
+print('\\nGroup QC/effects selected:')
+for target in ['Non-Targeting','STAT1','ISG15','MAPK1','CD39']:
+    g=meta[meta.target_gene_name.eq(target)]
+    print(target, 'n',len(g),'lib_mean',g.lib.mean(),'lib_med',g.lib.median(),'score_mean',g.score.mean(),'score_med',g.score.median(),'ctrl100_mean',g.ctrl100.mean())
+print('\\nFirst 20 gene mean log expr for NT, STAT1, ISG15:')
+for target in ['Non-Targeting','STAT1','ISG15']:
+    cols=meta.index[meta.target_gene_name.eq(target)].to_numpy()
+    vals=np.asarray(Xlog[idx[:,None] if False else idx,:][:,cols].mean(axis=1)).ravel()
+    print('\\n',target)
+    for gene,val in zip(sig,vals): print(f'{gene}\\t{val:.3f}')
+print('\\nTop negative by all feature z-score? target means for first20 and ctrl100')
+rows=[]
+nt=meta.target_gene_name.eq('Non-Targeting').values
+for target,g in meta.groupby('target_gene_name'):
+    if target=='Non-Targeting': continue
+    rows.append((target,len(g),g.score.mean()-meta.loc[nt,'score'].mean(),g.ctrl100.mean()-meta.loc[nt,'ctrl100'].mean(),g.lib.mean()-meta.loc[nt,'lib'].mean()))
+print(pd.DataFrame(rows,columns=['target','n','sig_diff','ctrl100_diff','lib_diff']).sort_values('sig_diff').head(20).to_string(index=False,float_format=lambda x:f'{x:.4g}'))
+PY"

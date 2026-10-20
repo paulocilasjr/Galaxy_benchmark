@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from gprofiler import GProfiler
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+meta = pd.read_csv('inputs/sample_layout.csv')
+meta['col'] = meta['SampleID'].str.replace('-', '_', regex=False)
+m = meta[meta.Group.isin(['DMSO','CBD_IC50'])].copy()
+m['condition'] = pd.Categorical(m.Group, categories=['DMSO','CBD_IC50'], ordered=True)
+c = counts[m['col']].T.copy(); c.index=m['col'].values; c.columns=counts.index.astype(str)
+print('fit start', flush=True)
+dds=DeseqDataSet(counts=c, metadata=m.set_index('col')[['condition']], design='~condition', quiet=True, n_cpus=1)
+dds.deseq2()
+stat=DeseqStats(dds, contrast=['condition','CBD_IC50','DMSO'], alpha=.05, quiet=True, n_cpus=1)
+stat.summary()
+r=stat.results_df.copy(); r['gene']=r.index
+print('result cols', list(r.columns), flush=True)
+print('n rows',len(r),'baseMean>0',sum(r.baseMean>0),'pvalue nonNA',r.pvalue.notna().sum(),'padj nonNA',r.padj.notna().sum(), flush=True)
+valid=r.dropna(subset=['padj','log2FoldChange'])
+sig=valid[(valid.padj<.05)&(valid.log2FoldChange.abs()>.5)]
+up=sig.loc[sig.log2FoldChange>.5,'gene'].tolist(); down=sig.loc[sig.log2FoldChange<-.5,'gene'].tolist()
+# Use all genes with nonzero observed counts as DE-eligible universe; filter to mapping via gProfiler internally.
+universe=counts.index[counts.sum(axis=1)>0].astype(str).tolist()
+print('sets',len(up),len(down),'universe',len(universe), flush=True)
+gp=GProfiler(return_dataframe=True)
+for name, genes in [('UP',up),('DOWN',down)]:
+    print('query',name, flush=True)
+    df=gp.profile(query=genes, organism='hsapiens', sources=['GO:BP'], user_threshold=.05, all_results=True, significance_threshold_method='fdr', background=universe)
+    print('rows',len(df), flush=True)
+    if len(df):
+      # df columns from gProfiler; display significant first + selected metabolism terms
+      d=df[df.p_value<.05].sort_values('p_value')
+      print(name,'sig',len(d),'top:\\n',d[['native','name','p_value','term_size','intersection_size','effective_domain_size']].head(30).to_string(index=False),flush=True)
+      mask=df.name.str.contains('metabol|lipid|fatty|glucose|glycol|oxidative|respirat|mitochond|biosynth|catabol|amino acid|organic acid|carbon|energy',case=False,regex=True,na=False)
+      print(name,'metabolic-like:\\n',df[mask & (df.p_value<.05)][['native','name','p_value','term_size','intersection_size','effective_domain_size']].sort_values('p_value').head(80).to_string(index=False),flush=True)
+PY"

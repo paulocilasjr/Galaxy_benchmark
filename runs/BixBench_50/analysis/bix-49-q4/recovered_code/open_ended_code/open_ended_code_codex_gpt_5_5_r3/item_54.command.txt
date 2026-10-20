@@ -1,0 +1,31 @@
+/bin/bash -lc "/workspace/micromamba_extract/bin/micromamba run -p /workspace/renv Rscript - <<'RS'
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(readxl)
+})
+counts <- read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, check.names=FALSE, row.names=1)
+coldata <- as.data.frame(read_excel('inputs/Issy_ASXL1_blood_coldata_gender.xlsx'))
+coldata <- coldata["'!is.na(coldata$sample), c('"'sample','condition','sex')]
+rownames(coldata) <- coldata"'$sample
+samples <- intersect(coldata$sample, colnames(counts))
+# Preserve metadata order, excluding count columns without metadata
+samples <- coldata$sample[coldata$sample %in% colnames(counts)]
+coldata <- coldata[samples, , drop=FALSE]
+counts <- counts[, samples, drop=FALSE]
+coldata$condition <- factor(coldata$condition, levels=c('"'Control','ASXL1'))
+coldata"'$sex <- factor(coldata$sex, levels=c('"'F','M'))
+cat('matched_samples', length(samples), '\\n')
+cat('extra_count_cols', paste(setdiff(colnames(read.table('inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt', header=TRUE, check.names=FALSE, nrows=1)[-1]), rownames(coldata)), collapse=','), '\\n')
+print(table(coldata"'$condition, coldata$sex))
+dds <- DESeqDataSetFromMatrix(countData=round(as.matrix(counts)), colData=coldata, design=~ sex + condition)
+dds <- DESeq(dds)
+print(resultsNames(dds))
+res <- results(dds, name='"'condition_ASXL1_vs_Control', alpha=0.05)
+shr <- lfcShrink(dds, coef='condition_ASXL1_vs_Control', res=res, type='apeglm')
+count <- sum(shr"'$padj < 0.05, na.rm=TRUE)
+cat('"'SIGNIF_COUNT', count, '\\n')
+cat('padj_non_na', sum("'!is.na(shr$padj)), '"'\\n')
+dir.create('codex_output', showWarnings=FALSE)
+writeLines(as.character(count), 'codex_output/answer.txt')
+RS"

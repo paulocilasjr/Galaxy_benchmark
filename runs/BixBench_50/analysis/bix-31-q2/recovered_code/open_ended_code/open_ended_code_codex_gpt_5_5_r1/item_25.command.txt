@@ -1,0 +1,49 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+meta_path='inputs/Sample_annotated_Zenodo.csv'
+
+counts = pd.read_csv(counts_path, index_col=0)
+if counts.index.has_duplicates:
+    raise RuntimeError('Duplicate gene IDs in count matrix')
+counts = counts.T
+meta = pd.read_csv(meta_path).set_index('sample')
+missing = counts.index.difference(meta.index)
+extra = meta.index.difference(counts.index)
+if len(missing) or len(extra):
+    raise RuntimeError(f'Sample mismatch: missing_meta={len(missing)} extra_meta={len(extra)}')
+meta = meta.loc[counts.index].copy()
+meta['batch'] = pd.Categorical(meta['batch'].astype(str))
+meta['sex'] = pd.Categorical(meta['sex'], categories=['F','M'])
+if meta['sex'].isna().any():
+    raise RuntimeError('Unexpected sex level')
+
+print('counts', counts.shape, 'metadata', meta.shape, flush=True)
+print('sex counts', meta['sex'].value_counts().to_dict(), 'batch counts', meta['batch'].value_counts().sort_index().to_dict(), flush=True)
+
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=meta,
+    design='~ batch + sex',
+    quiet=False,
+    n_cpus=8,
+    low_memory=True,
+)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['sex','M','F'], quiet=False, n_cpus=8)
+stat.summary()
+print('LFC columns', list(stat.LFC.columns), flush=True)
+stat.lfc_shrink(coeff='sex[T.M]')
+res = stat.results_df
+row = res.loc['FAM138A']
+print('FAM138A_ROW')
+print(row.to_string())
+print('FILTER_PASS', bool((abs(row['log2FoldChange']) > 0.5) and (row['baseMean'] > 10)))
+os.makedirs('codex_output', exist_ok=True)
+with open('codex_output/answer.txt', 'w') as f:
+    f.write(f\"{row['log2FoldChange']:.15g}\\n\")
+PY"

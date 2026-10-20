@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, itertools
+import numpy as np
+from collections import defaultdict
+
+rna_path='multiome.match.atac.rna.q1.rna.tsv.gz'; atac_path='multiome.match.atac.rna.q1.atac.tsv.gz'; gtf_path='gencode.v44.annotation.gtf.gz'
+genes=[]; vals=[]
+with gzip.open(rna_path,'rt') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t'); genes.append(p[0]); vals.append([float(x) for x in p[1:]])
+rna=np.array(vals,float); gene_to_idx={g:i for i,g in enumerate(genes)}
+attr_re=re.compile(r'(\\S+) \"(["'^"]+)";'"')
+ann=[]
+with gzip.open(gtf_path,'rt') as f:
+    for line in f:
+        if not line or line[0]=='#': continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2] "'!= '"'gene': continue
+        attrs=dict(attr_re.findall(p[8])); name=attrs.get('gene_name')
+        if name in gene_to_idx and '_' not in p[0] and p[0] "'!= '"'chrM':
+            tss=int(p[3]) if p[6]=='+' else int(p[4])
+            ann.append((gene_to_idx[name],p[0],tss))
+
+def activity(window):
+    bmap=defaultdict(list)
+    for i,chrom,tss in ann:
+        lo=max(1,tss-window); hi=tss+window
+        for b in range(((lo-1)//10000)*10000, ((hi-1)//10000)*10000+1, 10000):
+            bmap[f'{chrom}_{b}_{b+10000}'].append(i)
+    A=np.zeros((len(genes),8),float)
+    with gzip.open(atac_path,'rt') as f:
+        next(f)
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            inds=bmap.get(p[0])
+            if inds:
+                x=np.array([float(v) for v in p[1:]],float)
+                for i in inds: A[i]+=x
+    return A
+
+def rowz(X):
+    X=np.log1p(X)
+    m=X.mean(axis=1,keepdims=True); s=X.std(axis=1,keepdims=True)
+    return (X-m)/np.where(s>0,s,1)
+
+def score_perm(R,A,mask,perm):
+    x=R[mask].ravel(); y=A[mask][:,perm].ravel()
+    x=x-x.mean(); y=y-y.mean()
+    return float(x@y/np.sqrt((x*x).sum()*(y*y).sum()))
+for w in [0,10000,50000]:
+    A=activity(w)
+    mask=(A.sum(axis=1)>0) & (rna.sum(axis=1)>0) & (rna.std(axis=1)>0) & (A.std(axis=1)>0)
+    R=rowz(rna); Z=rowz(A)
+    best=(-9,None); runner=(-9,None)
+    for perm in itertools.permutations(range(8)):
+        s=score_perm(R,Z,mask,perm)
+        if s>best[0]: runner=best; best=(s,perm)
+        elif s>runner[0]: runner=(s,perm)
+    print('window',w,'n',mask.sum(),'best',';'.join(map(str,best[1])),best[0],'runner',';'.join(map(str,runner[1])),runner[0],'margin',best[0]-runner[0])
+PY"

@@ -19,10 +19,10 @@ The repository supports Nature Methods-tier evaluation claims, so changes should
 
 ## Where To Go Next
 
-- Use [README.md](/Users/4475918/Projects/Galaxy_benchmark/README.md) to understand the benchmark definition, aims, task design, and evaluation model.
-- Use [SKILL.md](/Users/4475918/Projects/Galaxy_benchmark/SKILL.md) when executing any benchmark task. It contains the rules, run layout, artifact contract, tool boundaries, credential gate, scoring details, and BixBench-specific procedure.
-- Use task files under `experiments/` to find the prompt and allowed inputs for a run.
-- Use files under `ground_truth/` only when the evaluation procedure permits it. BixBench ground truth is hidden until the submitted answer is fixed, as specified in `SKILL.md`.
+- Use [README.md](README.md) to understand the benchmark definition, aims, task design, and evaluation model.
+- Use [SKILL.md](SKILL.md) when executing any benchmark task. It contains the rules, run layout, artifact contract, tool boundaries, credential gate, scoring details, and BixBench-specific procedure.
+- Use task files under `benchmark/experiments/` to find the prompt and allowed inputs for a run.
+- Use files under `benchmark/ground_truth/` only when the evaluation procedure permits it. BixBench ground truth is hidden until the submitted answer is fixed, as specified in `SKILL.md`.
 - Use `outputs/` only for benchmark execution artifacts.
 
 If the user asks you to execute a benchmark task, read `SKILL.md` before taking any Galaxy or local execution action.
@@ -31,33 +31,37 @@ If the user asks you to execute a benchmark task, read `SKILL.md` before taking 
 
 ```text
 .
-|-- AGENTS.md
-|-- README.md
-|-- SKILL.md
-|-- dataset/
-|-- experiments/
-|   |-- low_context/
-|   |-- medium_context/
-|   |-- high_context/
-|   |-- BioAgent/
-|   `-- BixBench/
-|-- ground_truth/
-|   |-- GalaxyBench/
-|   |-- BioAgent/
-|   `-- BixBench/
-|-- outputs/
-`-- scripts/
+|-- AGENTS.md, README.md, SKILL.md   orientation, benchmark definition, execution contract
+|-- benchmark/                       what an agent is given
+|   |-- experiments/                 task prompts (low/medium/high_context, BioAgent, BixBench, CompBioBench)
+|   |-- ground_truth/                evaluator references (controlled access)
+|   `-- dataset/                     local task inputs
+|-- runs/                            archived evidence of completed runs, one folder per benchmark
+|   |-- BixBench_50/  CompBio/  IWC/
+|   `-- token_optimization/          October 2026 token-use experiment
+|-- analysis/                        code and outputs that read the run archives
+|   |-- analysis_execution/          read-only evidence collector and package validator
+|   |-- scripts/                     audits and result tables
+|   |-- site_verification/           comparison of the archive with the public results site
+|   |-- integrity_audit/             rule-break and answer-integrity audit of every run
+|   |-- BixBench50_CompBio_analysis/ cross-benchmark analysis (frozen 2026-09-23)
+|   `-- galaxy_improvement_20260924/ Galaxy failure analysis (frozen)
+|-- figures/                         current manuscript figures; figures/scored_runs.csv is read by the manuscript repository
+|-- manuscript/                      manuscript builds, figure evaluation and presentations
+|-- docs/                            notes and long-form reports
+`-- outputs/                         new benchmark runs (not tracked)
 ```
 
-Key directories:
+Each top-level folder has a README that lists its contents and whether they are current or frozen. [docs/REPOSITORY_LAYOUT.md](docs/REPOSITORY_LAYOUT.md) maps the paths used before 2026-10-14, which still appear in archived records, to the current ones.
 
-- `dataset/`: local datasets used by GalaxyBench-style tasks.
-- `experiments/low_context`, `experiments/medium_context`, `experiments/high_context`: prompt variants for the same underlying GalaxyBench tasks.
-- `experiments/BioAgent`: BioAgent-derived benchmark tasks and metadata.
-- `experiments/BixBench`: BixBench task prompts and allowed input references.
-- `ground_truth/`: evaluator/reference material. Treat it as controlled access, not general context.
+Key directories for benchmark execution:
+
+- `benchmark/dataset/`: local datasets used by GalaxyBench-style tasks.
+- `benchmark/experiments/low_context`, `benchmark/experiments/medium_context`, `benchmark/experiments/high_context`: prompt variants for the same underlying GalaxyBench tasks.
+- `benchmark/experiments/BioAgent`: BioAgent-derived benchmark tasks and metadata.
+- `benchmark/experiments/BixBench`: BixBench task prompts and allowed input references.
+- `benchmark/ground_truth/`: evaluator/reference material. Treat it as controlled access, not general context.
 - `outputs/`: immutable run directories created during benchmark execution.
-- `scripts/`: helper scripts for repository maintenance or evaluation support.
 
 ## Task Families
 
@@ -72,7 +76,7 @@ BixBench tasks are final-answer benchmarks. They still require Galaxy execution 
 For benchmark execution:
 
 1. Read this file for orientation.
-2. Read the relevant experiment file under `experiments/`.
+2. Read the relevant experiment file under `benchmark/experiments/`.
 3. Read `SKILL.md` completely enough to follow the execution contract.
 4. Create all execution artifacts only under a new `outputs/<timestamp>_<level>_<experiment>/` directory.
 

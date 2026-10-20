@@ -1,0 +1,31 @@
+/bin/bash -lc "cat > extract_group_sums.R <<'RS'
+library(Seurat)
+library(Matrix)
+args <- commandArgs(trailingOnly=TRUE)
+infile <- if(length(args)>=1) args[1] else 'GSE161918_AllBatches_SeuratObj.rds'
+outfile <- if(length(args)>=2) args[2] else 'group_sums.rds'
+cat('reading\\n')
+t0 <- Sys.time()
+obj <- readRDS(infile)
+cat('read', format(difftime(Sys.time(),t0,units='mins')), '\\n')
+counts <- GetAssayData(obj, assay='RNA', slot='counts')
+cat('counts dim', dim(counts), 'class', class(counts), '\\n')
+meta <- obj@meta.data
+for(groupname in c('Donor','sample_id','sample_name','Subject','sample')) {
+  cat('group', groupname, '\\n')
+  gr <- factor(meta[[groupname]])
+  D <- sparse.model.matrix(~0+gr)
+  colnames(D) <- levels(gr)
+  cat('D dim', dim(D), '\\n')
+  t1 <- Sys.time()
+  sums <- counts %*% D
+  cat('sums dim', dim(sums), 'time', format(difftime(Sys.time(),t1,units='secs')), '\\n')
+  assign(paste0('sums_', groupname), sums)
+  rm(D, sums); gc()
+}
+# Save all group sums; also meta columns subset
+meta_small <- meta[, c('Donor','Subject','Class','Timepoint','sample_id','sample_name','sample','Gender','Age','Batch'), drop=FALSE]
+saveRDS(list(sums_Donor=sums_Donor, sums_sample_id=sums_sample_id, sums_sample_name=sums_sample_name, sums_Subject=sums_Subject, sums_sample=sums_sample, meta=meta_small), outfile)
+cat('saved', outfile, '\\n')
+RS
+Rscript extract_group_sums.R GSE161918_AllBatches_SeuratObj.rds group_sums.rds"

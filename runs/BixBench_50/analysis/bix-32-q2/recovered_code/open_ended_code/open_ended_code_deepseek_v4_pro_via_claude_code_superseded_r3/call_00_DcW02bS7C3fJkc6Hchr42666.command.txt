@@ -1,0 +1,150 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+import pickle
+
+# Load data
+res_97 = pd.read_csv("/tmp/analysis/res_97.csv")
+res_98 = pd.read_csv("/tmp/analysis/res_98.csv")
+res_99 = pd.read_csv("/tmp/analysis/res_99.csv")
+
+# Load KEGG data
+with open("/tmp/analysis/kegg_data.pkl", "rb") as f:
+    kegg_data = pickle.load(f)
+
+pathway_genes_raw = {k: set(v) for k, v in kegg_data["pathway_genes"].items()}
+pathways = kegg_data["pathways"]
+
+def run_kegg_ora(res_df, pathway_genes, lfc_threshold=1.5, pval_threshold=0.05):
+    """
+    Run KEGG ORA for a single strain comparison.
+    
+    Returns dict with pathway -> {direction, pvalue, odds_ratio, gene_count, ...}
+    """
+    # Define universe: all genes in our data that have KEGG annotations
+    all_genes = set(res_df["gene"])
+    all_pathway_genes = set()
+    for genes in pathway_genes.values():
+        all_pathway_genes.update(genes)
+    universe = all_genes & all_pathway_genes
+    
+    # Define DE genes: |lfc| > threshold and padj < threshold
+    de_up = set(res_df[(res_df["log2FoldChange"] > lfc_threshold) & 
+                         (res_df["padj"] < pval_threshold)]["gene"])
+    de_down = set(res_df[(res_df["log2FoldChange"] < -lfc_threshold) & 
+                           (res_df["padj"] < pval_threshold)]["gene"])
+    
+    # Intersect with universe
+    de_up = de_up & universe
+    de_down = de_down & universe
+    
+    n_universe = len(universe)
+    n_de_up = len(de_up)
+    n_de_down = len(de_down)
+    
+    print(f"  Universe: {n_universe}, DE up: {n_de_up}, DE down: {n_de_down}")
+    
+    results = {}
+    
+    # ORA for each pathway and direction
+    for pid, pw_genes in pathway_genes.items():
+        pw_genes_in_universe = pw_genes & universe
+        
+        if len(pw_genes_in_universe) < 2:  # skip very small pathways
+            continue
+        
+        # Up-regulated
+        overlap_up = pw_genes_in_universe & de_up
+        a = len(overlap_up)
+        b = n_de_up - a
+        c = len(pw_genes_in_universe) - a
+        d = n_universe - n_de_up - c
+        
+        if a > 0:
+            table = [[a, b], [c, d]]
+            odds_ratio, pval = fisher_exact(table, alternative='greater')
+            results[(pid, 'up')] = {
+                'pvalue': pval,
+                'odds_ratio': odds_ratio,
+                'overlap': a,
+                'pathway_size': len(pw_genes_in_universe),
+                'de_size': n_de_up,
+                'genes': overlap_up
+            }
+        
+        # Down-regulated
+        overlap_down = pw_genes_in_universe & de_down
+        a = len(overlap_down)
+        b = n_de_down - a
+        c = len(pw_genes_in_universe) - a
+        d = n_universe - n_de_down - c
+        
+        if a > 0:
+            table = [[a, b], [c, d]]
+            odds_ratio, pval = fisher_exact(table, alternative='greater')
+            results[(pid, 'down')] = {
+                'pvalue': pval,
+                'odds_ratio': odds_ratio,
+                'overlap': a,
+                'pathway_size': len(pw_genes_in_universe),
+                'de_size': n_de_down,
+                'genes': overlap_down
+            }
+    
+    # Adjust p-values across all tests (both directions)
+    if len(results) > 0:
+        pvals = [r['pvalue'] for r in results.values()]
+        keys = list(results.keys())
+        _, padjs, _, _ = multipletests(pvals, method='fdr_bh')
+        for key, padj in zip(keys, padjs):
+            results[key]['padj'] = padj
+    
+    return results, universe, de_up, de_down
+
+print("=== Strain 97 vs WT ===")
+ora_97, u97, up97, down97 = run_kegg_ora(res_97, pathway_genes_raw)
+print("=== Strain 98 vs WT ===")
+ora_98, u98, up98, down98 = run_kegg_ora(res_98, pathway_genes_raw)
+print("=== Strain 99 vs WT ===")
+ora_99, u99, up99, down99 = run_kegg_ora(res_99, pathway_genes_raw)
+
+# Find pathways significant in same direction across all three
+sig_threshold = 0.05
+
+# Collect significant pathways per strain per direction
+sig_paths = {}
+for label, ora_res in [('97', ora_97), ('98', ora_98), ('99', ora_99)]:
+    sig_paths[label] = {'up': set(), 'down': set()}
+    for (pid, direction), res in ora_res.items():
+        if res.get('padj', 1.0) < sig_threshold:
+            sig_paths[label][direction].add(pid)
+
+print("\n=== Significant pathways ===")
+for strain in ['97', '98', '99']:
+    print(f"Strain {strain}: up={len(sig_paths[strain]['up'])}, down={len(sig_paths[strain]['down'])}")
+
+# Intersection: enriched in same direction across all three
+consist_up = sig_paths['97']['up'] & sig_paths['98']['up'] & sig_paths['99']['up']
+consist_down = sig_paths['97']['down'] & sig_paths['98']['down'] & sig_paths['99']['down']
+
+print(f"\nConsistently enriched UP across all 3 strains: {len(consist_up)}")
+for pid in sorted(consist_up):
+    print(f"  {pid}: {pathways.get(pid, 'N/A')[:80]}")
+    
+print(f"\nConsistently enriched DOWN across all 3 strains: {len(consist_down)}")
+for pid in sorted(consist_down):
+    print(f"  {pid}: {pathways.get(pid, 'N/A')[:80]}")
+
+print(f"\nTotal consistently enriched (same direction): {len(consist_up) + len(consist_down)}")
+
+# Save for later
+with open("/tmp/analysis/ora_results.pkl", "wb") as f:
+    pickle.dump({
+        'ora_97': ora_97, 'ora_98': ora_98, 'ora_99': ora_99,
+        'consist_up': consist_up, 'consist_down': consist_down,
+        'sig_paths': sig_paths
+    }, f)
+PYEOF

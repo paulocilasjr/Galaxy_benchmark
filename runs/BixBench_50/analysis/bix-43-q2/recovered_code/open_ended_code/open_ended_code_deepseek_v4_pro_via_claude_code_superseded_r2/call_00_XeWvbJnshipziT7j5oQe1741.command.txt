@@ -1,0 +1,78 @@
+source /workspace/venv/bin/activate && python -c "
+import pandas as pd
+# Re-run just the enrichment query more carefully
+import gseapy as gp
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+
+# Load what we need
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+ensg_map = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\t')
+
+layout_clean = layout.dropna(subset=['SampleID', 'Group'])
+layout_clean['sample_col'] = layout_clean['SampleID'].str.replace('-', '_')
+sample_cols = [c for c in counts.columns if c in layout_clean['sample_col'].values]
+meta = layout_clean.set_index('sample_col').loc[sample_cols]
+counts = counts[sample_cols]
+
+keep = (counts > 10).sum(axis=1) >= 1
+counts_filt = counts.loc[keep]
+
+groups_of_interest = ['DMSO', 'DMSO_Serum_starvation', 'Cisplatin_IC50_CBD_IC50', 'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+sub_meta = meta[meta['Group'].isin(groups_of_interest)].copy()
+sub_counts = counts_filt[sub_meta.index.tolist()]
+sub_counts = sub_counts.round().astype(int)
+
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_for_dds = sub_counts.T
+dds = DeseqDataSet(counts=counts_for_dds, metadata=sub_meta, design_factors='Group', refit_cooks=True)
+dds.deseq2()
+
+stat_res = DeseqStats(dds, contrast=['Group', 'Cisplatin_IC50_CBD_IC50', 'DMSO'], n_cpus=1)
+stat_res.summary()
+res = stat_res.results_df.copy()
+res = res.dropna(subset=['padj'])
+
+degs = res[(res['padj'] <= 0.05) & (res['log2FoldChange'].abs() >= 0.5) & (res['baseMean'] >= 10)]
+
+ensg_map = ensg_map.set_index('ENSG')
+deg_genes = degs.index.tolist()
+deg_symbols = []
+for g in deg_genes:
+    if g in ensg_map.index:
+        sym = ensg_map.loc[g, 'gene_name']
+        if isinstance(sym, pd.Series):
+            sym = sym.iloc[0]
+        deg_symbols.append(sym)
+    else:
+        deg_symbols.append(g)
+
+deg_symbols = [s for s in deg_symbols if isinstance(s, str)]
+deg_symbols_unique = list(set(deg_symbols))
+print(f'DEG gene symbols (unique): {len(deg_symbols_unique)}')
+
+enr = gp.enrichr(gene_list=deg_symbols_unique, gene_sets='Reactome_2022', outdir=None, no_plot=True, verbose=False)
+enr_res = enr.results
+
+# Search for p53 terms
+print('\n=== All p53 terms ===')
+p53_terms = enr_res[enr_res['Term'].str.lower().str.contains('p53')]
+for _, row in p53_terms.iterrows():
+    print(f\"  {row['Term']} | OR={row['Odds Ratio']}\")
+
+# Search for cell cycle + p53
+print('\n=== p53 + cell cycle terms ===')
+cc_terms = enr_res[enr_res['Term'].str.lower().str.contains('p53') & enr_res['Term'].str.lower().str.contains('cell cycle')]
+for _, row in cc_terms.iterrows():
+    print(f\"  {row['Term']} | OR={row['Odds Ratio']}\")
+
+# Search for exact term
+exact = enr_res[enr_res['Term'].str.lower() == 'p53-mediated cell cycle gene regulation']
+print(f'\nExact match \"p53-mediated cell cycle gene regulation\": {len(exact)} rows')
+if len(exact) > 0:
+    print(f\"  OR = {exact['Odds Ratio'].values[0]}\")
+" 2>&1

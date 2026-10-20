@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+from html.parser import HTMLParser
+import glob, gzip, csv, collections, math
+class TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__(); self.in_td=False; self.cell=''; self.row=[]; self.rows=[]
+    def handle_starttag(self, tag, attrs):
+        if tag=='td': self.in_td=True; self.cell=''
+    def handle_data(self, data):
+        if self.in_td: self.cell+=data
+    def handle_endtag(self, tag):
+        if tag=='td':
+            self.in_td=False; self.row.append(self.cell.strip())
+        elif tag=='tr':
+            if self.row: self.rows.append(self.row)
+            self.row=[]
+markers=[]
+for fn in sorted(glob.glob('wheatomics_page_*.html')):
+    p=TableParser(); p.feed(open(fn).read())
+    for row in p.rows:
+        if len(row)>=7 and row[0]=='Chinese Spring' and row[1]=='root' and row[4].startswith('TraesCS'):
+            markers.append((row[4], row[5]))
+print('markers', len(markers), 'unique genes', len(set(g for g,c in markers)))
+print(collections.Counter(c for g,c in markers))
+# load matrix
+with gzip.open('sample.swap.rna.q2.tsv.gz','rt') as f:
+    r=csv.reader(f, delimiter='\\t'); cols=next(r)[1:]
+    data={row[0]: [float(x) for x in row[1:]] for row in r}
+# print per marker its max col
+by_cluster=collections.defaultdict(list)
+for g,cl in markers:
+    if g in data:
+        vals=data[g]
+        maxj=max(range(len(cols)), key=lambda j: vals[j])
+        second=sorted(vals, reverse=True)[1]
+        by_cluster[cl].append((g, cols[maxj], vals[maxj], second, vals))
+    else:
+        by_cluster[cl].append((g, 'MISSING', None, None, None))
+for cl in sorted(by_cluster):
+    lst=by_cluster[cl]
+    print('\\nExpected', cl, 'n', len(lst), 'present', sum(1 for x in lst if x[1]"'!='"'MISSING'))
+    print('max cols', collections.Counter(x[1] for x in lst))
+    # mean expression over markers, duplicate included, by col
+    sums=[0.0]*len(cols); n=0
+    for g,_,_,_,_ in lst:
+        if g in data:
+            n+=1
+            for j,v in enumerate(data[g]): sums[j]+=math.log1p(v) # or raw
+    means=[s/n if n else float('nan') for s in sums]
+    ordj=sorted(range(len(cols)), key=lambda j: means[j], reverse=True)
+    print('mean log1p rank', [(cols[j], round(means[j],3)) for j in ordj[:5]])
+    for g,maxc,maxv,second,vals in lst:
+        print(g, '->', maxc, '' if vals is None else ' '.join(f'{c}:{vals[j]:.2f}' for j,c in enumerate(cols)))
+PY"

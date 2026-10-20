@@ -1,0 +1,45 @@
+/bin/bash -c "cat > celltype_prop.py <<'PY'
+import h5py, numpy as np, scipy.sparse as sp, time
+p='covid.patients.q1.h5ad'
+with h5py.File(p,'r') as f:
+    data=f['X/data'][:]; indices=f['X/indices'][:]; indptr=f['X/indptr'][:]
+    codes=f['obs/donor_id/codes'][:]; cats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/donor_id/categories'][:]]
+    var_codes=f['var/feature_name/codes'][:]
+    var_cats=[x.decode() if isinstance(x,bytes) else x for x in f['var/feature_name/categories'][:]]
+genes=np.array([var_cats[c] for c in var_codes])
+X=sp.csr_matrix((data,indices,indptr),shape=(len(codes),len(genes)))
+print('X built',X.shape)
+markers={
+'T':['CD3D','CD3E','CD3G','CD8A','CD4'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1'],
+'B':['CD79A','MS4A1','CD19','BANK1'],
+'Mono':['CD14','LYZ','FCN1','S100A8','S100A9'],
+'DC':['FCER1A','CLEC10A','CD1C','CLEC4C','LILRA4'],
+'Plasma':['MZB1','IGHG1','XBP1'],
+'Cycling':['MKI67','TOP2A'],
+}
+scores=np.zeros((X.shape[0],len(markers)),dtype=np.float32)
+for k,(ct,gs) in enumerate(markers.items()):
+    idx=[np.where(genes==g)[0][0] for g in gs if g in genes]
+    sub=X[:,idx]
+    scores[:,k]=np.asarray(sub.mean(axis=1)).ravel()
+    print(ct,len(idx),flush=True)
+# assign max (exclude cycling?) use first 6
+cell_type_idx=scores[:,:6].argmax(axis=1)
+ct_names=list(markers.keys())[:6]
+# per donor proportions
+props=np.zeros((len(cats),len(ct_names)))
+for j in range(len(cats)):
+    m=codes==j
+    counts=np.bincount(cell_type_idx[m],minlength=len(ct_names))
+    props[j]=counts/counts.sum()
+print('donor proportions:')
+for j,d in enumerate(cats):
+    print(f'{d:8s} ' + ' '.join(f'{ct_names[k]}:{props[j,k]:.2f}' for k in range(len(ct_names))))
+# print mean by inferred healthy set vs covid set
+healthy=[1,5,11,12,17,21,24,27,29,32]
+for label,ids in [('pred_healthy',healthy),('pred_covid',[i for i in range(1,34) if i not in healthy])]:
+    js=[np.where(cats==f'donor{i}')[0][0] for i in ids]
+    print(label, props[js].mean(axis=0))
+PY
+python celltype_prop.py"

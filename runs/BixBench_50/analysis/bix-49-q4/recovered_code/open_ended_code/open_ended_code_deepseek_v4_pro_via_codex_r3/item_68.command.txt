@@ -1,0 +1,19 @@
+/bin/bash -lc "cat > /workspace/tmp/run_protein_coding_check.R <<'RS'
+suppressPackageStartupMessages({library(DESeq2); library(apeglm); library(readxl)})
+counts <- read.table(\"/workspace/inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt\", header=TRUE, sep=\"\", check.names=FALSE, row.names=1, stringsAsFactors=FALSE)
+g <- read.csv(\"/workspace/inputs/gencode.v31.primary_assembly.genes.csv\", stringsAsFactors=FALSE)
+stopifnot(identical(rownames(counts), g"'$gene_id))
+coldata_raw <- as.data.frame(read_excel("/workspace/inputs/Issy_ASXL1_blood_coldata_gender.xlsx"))
+coldata_raw$sample <- as.character(coldata_raw$sample); rownames(coldata_raw)<-coldata_raw$sample
+common <- intersect(coldata_raw$sample, colnames(counts)); counts<-counts[,common]; coldata<-coldata_raw[common,]
+coldata$condition<-factor(coldata$condition, levels=c("Control","ASXL1")); coldata$sex<-factor(coldata$sex, levels=c("F","M"))
+for (gt in c("protein_coding","all")) {
+  if (gt=="all") {idx<-rep(TRUE,nrow(counts)); label<-"all"} else {idx<-g$gene_type==gt; label<-gt}
+  dds <- DESeqDataSetFromMatrix(countData=counts[idx,,drop=FALSE], colData=coldata, design=~sex+condition)
+  dds <- DESeq(dds, quiet=TRUE)
+  res <- results(dds, alpha=0.05, contrast=c("condition","ASXL1","Control"))
+  shrink <- lfcShrink(dds, res=res, coef="condition_ASXL1_vs_Control", type="apeglm")
+  cat(label, "features", sum(idx), "sig", sum(shrink$padj<0.05, na.rm=TRUE), "p<", sum(shrink$pvalue<0.05, na.rm=TRUE), "notNA", sum(!is.na(shrink$padj)), "'"\\n\")
+}
+RS
+/workspace/tmp/mamba/bin/micromamba run -p /workspace/tmp/r42-env Rscript /workspace/tmp/run_protein_coding_check.R"

@@ -1,0 +1,62 @@
+/usr/bin/bash -lc "gzip -t /workspace/final_answer/filtered_forward.fastqsanger.gz; gzip -t /workspace/final_answer/filtered_reverse.fastqsanger.gz; env PATH=/workspace/run_work/bowtie2_env/bin:/usr/bin:/bin python3 - <<'PY'
+import gzip, json
+from pathlib import Path
+
+p = {
+    'in1': Path('/workspace/data/inputs/short_reads/pair/forward/forward.fastqsanger.gz'),
+    'in2': Path('/workspace/data/inputs/short_reads/pair/reverse/reverse.fastqsanger.gz'),
+    'out1': Path('/workspace/final_answer/filtered_forward.fastqsanger.gz'),
+    'out2': Path('/workspace/final_answer/filtered_reverse.fastqsanger.gz'),
+}
+
+def records(path):
+    with gzip.open(path, 'rt', newline='') as fh:
+        while True:
+            rec = tuple(fh.readline() for _ in range(4))
+            if rec == ('', '', '', ''):
+                return
+            if any(x == '' for x in rec):
+                raise AssertionError(f'truncated FASTQ record in {path}')
+            h, s, plus, q = (x.rstrip('\\r\\n') for x in rec)
+            if not h.startswith('@') or not plus.startswith('+') or len(s) "'!= len(q):
+                raise AssertionError(f'"'malformed FASTQ record in {path}: {h}')
+            yield (h, s, plus, q)
+
+def rid(rec):
+    return rec[0][1:].split()[0]
+
+src1 = {}
+src2 = {}
+for rec in records(p['in1']):
+    k = rid(rec)
+    if k in src1: raise AssertionError(f'duplicate forward input ID: {k}')
+    src1[k] = rec
+for rec in records(p['in2']):
+    k = rid(rec)
+    if k in src2: raise AssertionError(f'duplicate reverse input ID: {k}')
+    src2[k] = rec
+assert src1.keys() == src2.keys(), 'input mate ID sets differ'
+
+n = 0
+seen = set()
+for a, b in zip(records(p['out1']), records(p['out2']), strict=True):
+    ka, kb = rid(a), rid(b)
+    assert ka == kb, f'output mates desynchronized at pair {n+1}: {ka} "'!= {kb}'"'
+    assert ka not in seen, f'duplicate output pair ID: {ka}'
+    assert ka in src1, f'output pair absent from input: {ka}'
+    assert a == src1[ka], f'forward record modified: {ka}'
+    assert b == src2[ka], f'reverse record modified: {ka}'
+    seen.add(ka)
+    n += 1
+
+assert n == 72867, f'unexpected retained pair count: {n}'
+method = json.loads(Path('/workspace/final_answer/method.json').read_text())
+assert method == {'aligner': 'Bowtie 2'}
+print(f'input_pairs={len(src1)}')
+print(f'retained_pairs={n}')
+print(f'removed_concordant_pairs={len(src1)-n}')
+print('output_id_mismatches=0')
+print('modified_retained_records=0')
+print('method_json_valid=true')
+PY
+sha256sum /workspace/final_answer/filtered_forward.fastqsanger.gz /workspace/final_answer/filtered_reverse.fastqsanger.gz /workspace/final_answer/method.json; find /workspace/final_answer -maxdepth 1 -type f -printf '%f\\n' | sort"

@@ -5,7 +5,7 @@ A1 second rater for the failure-class codebook (coder blind to the rule-based cl
 A2 second rater for the BixBench-Verified-50 failure-cause audit (coder blind to the audit labels).
 Seed 20261002. Writes the keys and items into this folder and the transcripts into ./transcripts (regenerable; not
 kept, because they contain the agents' full outputs). A2 transcripts show the BixBench-Verified-50 reference answer
-(ground_truth/BixBench, opened only after every answer was fixed).
+(benchmark/ground_truth/BixBench, opened only after every answer was fixed).
 """
 import glob
 import gzip
@@ -19,7 +19,7 @@ import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 HERE = os.path.dirname(os.path.abspath(__file__))   # keys and items are written here; transcripts to ./transcripts (not kept)
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_narrative'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_narrative'))
 PRIMARY = {'codex_gpt_5_5': 'GPT-5.5', 'codex_gpt_5_6_sol': 'GPT-5.6 Sol', 'codex_gpt_5_6_luna': 'GPT-5.6 Luna',
            'deepseek_v4_pro_via_codex': 'DeepSeek V4 Pro', 'codex_deepseek_v4_pro_0813': 'DeepSeek V4 Pro',
            'codex_deepseek_v4_pro': 'DeepSeek V4 Pro'}
@@ -76,7 +76,7 @@ def condense(trace, max_cmd=900, max_out=500, max_msg=900):
 
 def load_summaries():
     rows = []
-    for raw in gzip.open(os.path.join(ROOT, 'manuscript_material/source_data/derived/run_summaries.jsonl.gz'), 'rt'):
+    for raw in gzip.open(os.path.join(ROOT, 'manuscript/manuscript_material/source_data/derived/run_summaries.jsonl.gz'), 'rt'):
         s = json.loads(raw)
         if s['model'] in PRIMARY:
             s['cfg'] = PRIMARY[s['model']]
@@ -86,7 +86,7 @@ def load_summaries():
 
 def main():
     summ = load_summaries()
-    runs = pd.read_csv(os.path.join(ROOT, 'manuscript_narrative/original_layout/analysis/accuracy_primary_runs.csv'))
+    runs = pd.read_csv(os.path.join(ROOT, 'manuscript/manuscript_narrative/original_layout/analysis/accuracy_primary_runs.csv'))
     runs['ok'] = (runs.score >= runs.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     key = {(s['benchmark'], s['task'], s['cfg'], s['condition'], int(s['replicate'])): s for s in summ}
     runs['trace'] = [key.get((b, t, c, e, r), {}).get('trace') for b, t, c, e, r in
@@ -116,7 +116,7 @@ def main():
     print('D sample', d.groupby(['benchmark', 'env', 'ok']).size().to_dict())
 
     # ---- A2: second rater for BixBench failure causes, stratified by audit cause and condition
-    led = pd.DataFrame(json.load(open(os.path.join(ROOT, 'analysis_reports/galaxy_improvement_20260924/'
+    led = pd.DataFrame(json.load(open(os.path.join(ROOT, 'analysis/galaxy_improvement_20260924/'
                                                          'v2_trace_friction/ledger.json'))))
     led = led[(led.b == 'BixBench') & ~led.run.str.contains('ClaudeCode')].copy()
     cfgmap = {'GPT-5.5': 'GPT-5.5', 'Sol': 'GPT-5.6 Sol', 'Luna': 'GPT-5.6 Luna', 'DS-Codex': 'DeepSeek V4 Pro'}
@@ -131,7 +131,7 @@ def main():
         picks.append(x.sample(n=min(k, len(x)), random_state=int(rng.integers(1e9))))
     a2 = pd.concat(picks).reset_index(drop=True)
     reference = {}
-    for path in glob.glob(os.path.join(ROOT, 'ground_truth', 'BixBench', 'task_*.json')):
+    for path in glob.glob(os.path.join(ROOT, 'benchmark/ground_truth', 'BixBench', 'task_*.json')):
         g = json.load(open(path))
         reference[g['question_id']] = (g.get('ideal'), g.get('eval_mode'))
     a2['code'] = [f'C{i:03d}' for i in rng.permutation(len(a2)) + 1]

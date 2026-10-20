@@ -1,0 +1,212 @@
+export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:$PYTHONPATH"
+python3 << 'PYEOF'
+import subprocess
+import json
+import re
+import requests
+import time
+import numpy as np
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# ============================================================
+# Step 1: Extract DE genes from RDS files using R
+# ============================================================
+
+r_script = '''
+obj1 <- suppressWarnings(readRDS("inputs/res_GluFevsGluFePlus.rds"))
+obj2 <- suppressWarnings(readRDS("inputs/res_SuccvsGluFePlus.rds"))
+
+a1 <- attributes(obj1)
+a2 <- attributes(obj2)
+
+lfc1 <- a1$listData$log2FoldChange
+padj1 <- a1$listData$padj
+names1 <- a1$rownames
+
+lfc2 <- a2$listData$log2FoldChange
+padj2 <- a2$listData$padj
+names2 <- a2$rownames
+
+# Filter: |log2FoldChange| > 1.5, padj < 0.05
+keep1 <- !is.na(padj1) & padj1 < 0.05 & abs(lfc1) > 1.5
+keep2 <- !is.na(padj2) & padj2 < 0.05 & abs(lfc2) > 1.5
+
+# Output results as JSON
+res <- list(
+  iron_depleted_genes = as.character(names1[keep1]),
+  innate_media_genes = as.character(names2[keep2]),
+  all_genes = as.character(names1),
+  n_total = length(names1),
+  n_iron_de = sum(keep1),
+  n_innate_de = sum(keep2)
+)
+
+cat(jsonlite::toJSON(res))
+'''
+
+result = subprocess.run(
+    ['Rscript', '-e', r_script],
+    capture_output=True, text=True, timeout=60
+)
+
+# Parse JSON output (may have loading messages mixed in)
+output = result.stdout + result.stderr
+# Find the JSON part
+json_start = output.find('{')
+json_end = output.rfind('}') + 1
+if json_start >= 0 and json_end > json_start:
+    json_str = output[json_start:json_end]
+    de_data = json.loads(json_str)
+    print(f"Total genes: {de_data['n_total']}")
+    print(f"Iron-depleted DE genes: {de_data['n_iron_de']}")
+    print(f"Innate media DE genes: {de_data['n_innate_de']}")
+else:
+    print("Failed to parse JSON from R output")
+    print("R output:", output)
+    exit(1)
+
+iron_de = de_data['iron_depleted_genes']
+innate_de = de_data['innate_media_genes']
+all_genes = de_data['all_genes']
+
+# ============================================================
+# Step 2: Get KEGG pathway-gene mapping
+# ============================================================
+
+def fetch_kegg(url, desc="", retries=3):
+    for i in range(retries):
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200:
+                return r.text
+            time.sleep(2)
+        except:
+            time.sleep(2)
+    return None
+
+# Get pathway-gene links
+link_text = fetch_kegg("https://rest.kegg.jp/link/pau/pathway", "pathway-gene links")
+lines = [l for l in link_text.strip().split('\n') if l]
+
+# Path format: path:pau01100\tpau:PA14_00010
+pw2genes = {}
+for line in lines:
+    parts = line.strip().split('\t')
+    if len(parts) >= 2:
+        pw = parts[0].strip()  # path:pauXXXXX
+        gene = parts[1].strip()  # pau:PA14_XXXXX
+        if pw not in pw2genes:
+            pw2genes[pw] = set()
+        pw2genes[pw].add(gene)
+
+# Get pathway names
+pw_text = fetch_kegg("https://rest.kegg.jp/list/pathway/pau", "pathway names")
+pw_name = {}
+for line in pw_text.strip().split('\n'):
+    if not line: continue
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pid = parts[0].strip()
+        name = re.sub(r'\s+-\s+Pseudomonas aeruginosa.*', '', parts[1].strip())
+        pw_name['path:' + pid] = name
+
+# Convert gene IDs to KEGG format
+def to_kegg(gene):
+    return f"pau:{gene}"
+
+universe = set(to_kegg(g) for g in all_genes)
+iron_fg = set(to_kegg(g) for g in iron_de)
+innate_fg = set(to_kegg(g) for g in innate_de)
+
+print(f"Universe size: {len(universe)}")
+print(f"Iron FG mapped: {len(iron_fg)} / {len(iron_de)}")
+print(f"Innate FG mapped: {len(innate_fg)} / {len(innate_de)}")
+
+# Filter pathways to those in the universe
+pathways_in_universe = {}
+for pw, genes in pw2genes.items():
+    genes_in_universe = genes & universe
+    if len(genes_in_universe) >= 3:  # at least 3 genes for meaningful enrichment
+        pathways_in_universe[pw] = genes_in_universe
+
+print(f"Pathways with >= 3 genes in universe: {len(pathways_in_universe)}")
+
+# ============================================================
+# Step 3: ORA with Fisher's exact test
+# ============================================================
+
+def ora(fg, universe, pw2genes):
+    """Perform ORA using Fisher's exact test"""
+    results = {}
+    universe_size = len(universe)
+    fg_size = len(fg)
+    
+    for pw, pw_genes in pw2genes.items():
+        a = len(pw_genes & fg)  # DE genes in pathway
+        b = len(pw_genes) - a   # Non-DE genes in pathway
+        c = fg_size - a         # DE genes not in pathway
+        d = universe_size - a - b - c  # Non-DE genes not in pathway
+        
+        if a == 0:
+            continue
+        
+        table = [[a, b], [c, d]]
+        odds_ratio, p_value = fisher_exact(table, alternative='two-sided')
+        
+        results[pw] = {
+            'pathway': pw,
+            'name': pw_name.get(pw, pw),
+            'a': a, 'b': b, 'c': c, 'd': d,
+            'pvalue': p_value,
+            'odds_ratio': odds_ratio,
+            'gene_ratio': f"{a}/{len(pw_genes)}"
+        }
+    
+    return results
+
+iron_results = ora(iron_fg, universe, pathways_in_universe)
+innate_results = ora(innate_fg, universe, pathways_in_universe)
+
+# Adjust p-values
+iron_pvals = [r['pvalue'] for r in iron_results.values()]
+iron_pw_list = list(iron_results.keys())
+if len(iron_pvals) > 0:
+    _, iron_padj, _, _ = multipletests(iron_pvals, method='fdr_bh')
+    for i, pw in enumerate(iron_pw_list):
+        iron_results[pw]['padj'] = iron_padj[i]
+
+innate_pvals = [r['pvalue'] for r in innate_results.values()]
+innate_pw_list = list(innate_results.keys())
+if len(innate_pvals) > 0:
+    _, innate_padj, _, _ = multipletests(innate_pvals, method='fdr_bh')
+    for i, pw in enumerate(innate_pw_list):
+        innate_results[pw]['padj'] = innate_padj[i]
+
+# Significant pathways (padj < 0.05)
+iron_sig = {pw: r for pw, r in iron_results.items() if r['padj'] < 0.05}
+innate_sig = {pw: r for pw, r in innate_results.items() if r['padj'] < 0.05}
+
+print(f"\n=== RESULTS ===")
+print(f"Iron-depleted significant pathways: {len(iron_sig)}")
+print(f"Innate media significant pathways: {len(innate_sig)}")
+
+# Pathways significant in iron-depleted but NOT in innate media
+iron_only = set(iron_sig.keys()) - set(innate_sig.keys())
+print(f"\nSignificant in iron-depleted ONLY: {len(iron_only)}")
+
+for pw in sorted(iron_only):
+    r = iron_sig[pw]
+    print(f"  {pw}: {r['name']} (padj={r['padj']:.4e}, genes={r['a']}/{r['b']+r['a']})")
+
+# Also show overlaps
+iron_and_innate = set(iron_sig.keys()) & set(innate_sig.keys())
+print(f"\nSignificant in BOTH: {len(iron_and_innate)}")
+
+innate_only = set(innate_sig.keys()) - set(iron_sig.keys())
+print(f"Significant in innate ONLY: {len(innate_only)}")
+
+print(f"\n=== ANSWER ===")
+print(f"Number of pathways significantly enriched under iron-depleted but NOT under innate media: {len(iron_only)}")
+PYEOF
+

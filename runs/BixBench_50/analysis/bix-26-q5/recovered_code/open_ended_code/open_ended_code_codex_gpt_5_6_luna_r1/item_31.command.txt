@@ -1,0 +1,47 @@
+/bin/bash -lc "Rscript - <<'RS'
+options(timeout=120)
+read_kegg <- function(u) {
+  con <- url(u, open='rb'); on.exit(close(con), add=TRUE)
+  z <- readLines(con, warn=FALSE)
+  z <- z[nzchar(z)]
+  do.call(rbind, strsplit(z, '\\\\t', fixed=FALSE))
+}
+links <- read_kegg('https://rest.kegg.jp/link/pathway/pau')
+pathway_names <- read_kegg('https://rest.kegg.jp/list/pathway/pau')
+pathway_genes <- split(sub('"'^pau:'"', '', links[,1]), sub('"'^path:'"', '', links[,2]))
+pathway_genes <- lapply(pathway_genes, unique)
+universe <- unique(unlist(pathway_genes))
+pathway_names <- setNames(pathway_names[,2], pathway_names[,1])
+
+enrich <- function(file) {
+  obj <- readRDS(file)
+  at <- attributes(obj)
+  tab <- at"'$listData
+  ids <- at$rownames
+  keep <- is.finite(tab$log2FoldChange) & is.finite(tab$padj) &
+          abs(tab$log2FoldChange) > 1.5 & tab$padj < 0.05
+  query <- intersect(ids[keep], universe)
+  sets <- lapply(pathway_genes, intersect, universe)
+  sizes <- lengths(sets)
+  overlaps <- vapply(sets, function(s) sum(s %in% query), integer(1))
+  tested <- overlaps > 0 & sizes >= 10 & sizes <= 500
+  p <- phyper(overlaps[tested] - 1, sizes[tested],
+              length(universe) - sizes[tested], length(query), lower.tail=FALSE)
+  padj <- p.adjust(p, method='"'BH')
+  sig <- names(sets)[tested][padj < 0.05]
+  list(ids=ids, nfilter=sum(keep), nquery=length(query), sig=sig,
+       result=data.frame(id=names(sets)[tested], size=sizes[tested],
+                         overlap=overlaps[tested], p=p, padj=padj,
+                         row.names=NULL))
+}
+iron <- enrich('/workspace/inputs/res_GluFevsGluFePlus.rds')
+innate <- enrich('/workspace/inputs/res_SuccvsGluFePlus.rds')
+cat('iron-filtered=', iron"'$nfilter, '"'iron-KEGG=', iron"'$nquery, '"'\\n', sep='')
+cat('innate-filtered=', innate"'$nfilter, '"'innate-KEGG=', innate"'$nquery, '"'\\n', sep='')
+cat('iron significant:\\n')
+print(data.frame(id=iron"'$sig, description=unname(pathway_names[iron$sig])))
+cat('"'innate significant:\\n')
+print(data.frame(id=innate"'$sig, description=unname(pathway_names[innate$sig])))
+diff <- setdiff(iron$sig, innate$sig)
+cat('"'difference:', paste(diff, collapse=','), 'count=', length(diff), '\\n', sep='')
+RS"

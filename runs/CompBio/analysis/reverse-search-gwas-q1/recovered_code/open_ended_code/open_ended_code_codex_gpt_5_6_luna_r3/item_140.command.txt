@@ -1,0 +1,74 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,struct,zlib,gzip,math
+
+def get(u,a,b):
+ req=urllib.request.Request(u,headers={'User-Agent':'curl/8.0','Range':f'bytes={a}-{b}'})
+ return urllib.request.urlopen(req,timeout=300).read()
+
+def entries(u,size):
+ tail=get(u,max(0,size-300000),size-1)
+ e=tail.rfind(b'PK\\x05\\x06')
+ if e<0: raise ValueError('no EOCD')
+ vals=struct.unpack_from('<4s4H2IH',tail,e); _,_,_,n1,n2,cdsize,cdoff,_=vals
+ if cdsize==0xffffffff or cdoff==0xffffffff or n1==0xffff:
+  z=tail.rfind(b'PK\\x06\\x06'); valsz=struct.unpack_from('<4sQ2H2I4Q',tail,z);cdsize,cdoff=valsz[-2:]
+ b=get(u,cdoff,cdoff+cdsize-1);p=0;out={}
+ while p<len(b):
+  if b[p:p+4]"'!=b'"'PK\\x01\\x02':raise ValueError(('bad central',p,b[p:p+10]))
+  vals=struct.unpack_from('<4s6H3I5H2I',b,p); _,_,_,flag,comp,_,_,_,csize,usize,nlen,xlen,clen,_,_,_,loff=vals
+  name=b[p+46:p+46+nlen].decode();extra=b[p+46+nlen:p+46+nlen+xlen]
+  q=0
+  while q+4<=len(extra):
+   eid,elen=struct.unpack_from('<HH',extra,q);d=extra[q+4:q+4+elen]
+   if eid==1:
+    z=0
+    if usize==0xffffffff:usize=struct.unpack_from('<Q',d,z)[0];z+=8
+    if csize==0xffffffff:csize=struct.unpack_from('<Q',d,z)[0];z+=8
+    if loff==0xffffffff:loff=struct.unpack_from('<Q',d,z)[0];z+=8
+   q+=4+elen
+  out[name]=(loff,csize,usize,flag,comp);p+=46+nlen+xlen+clen
+ return out
+
+def first(u,size,prefix):
+ es=entries(u,size); names=[x for x in es if x.endswith('.tsv') and not x.startswith('__')];print('names first',names[:3])
+ name=next(x for x in names if x.endswith('_1.tsv'));loff,csize,usize,flag,comp=es[name]
+ lfh=get(u,loff,loff+29);_,_,_,_,_,_,_,_,_,nlen,xlen=struct.unpack('<4s5H3I2H',lfh);ds=loff+30+nlen+xlen
+ data=get(u,ds,ds+2000000-1);out=zlib.decompressobj(-15).decompress(data);lines=out.decode('utf8','replace').splitlines();h=lines[0].split('\\t');rows=[dict(zip(h,x.split('\\t'))) for x in lines[1:] if len(x.split('\\t'))==len(h)]
+ return h,rows
+archives=[('afr47','https://zenodo.org/api/records/11111186/files/afr47041.zip/content',6011347563),('eur47','https://zenodo.org/api/records/11111186/files/eur47041.zip/content',3699436929),('eur94','https://zenodo.org/api/records/11111186/files/eur94082.zip/content',4078857688)]
+all={}
+for lab,u,s in archives:
+ try:all[lab]=first(u,s,lab);print(lab,'ok',len(all[lab][0]),len(all[lab][1]))
+ except Exception as e:print(lab,type(e).__name__,e)
+# local
+local=[]
+with gzip.open('reverse.search.gwas.q1.tsv.gz','rt') as f:
+ lh=f.readline().strip().split('\\t')
+ for i in range(1000):local.append(dict(zip(lh,f.readline().strip().split('\\t'))))
+idx={lab:{r['ID']:r for r in data[1]} for lab,data in all.items()}
+traits=[x[:-2] for x in all['afr47'][0] if x.endswith('_P')]
+print('traits',traits)
+for l in local[:10]:
+ print('\\nID',l['ID'],'local',l['P'])
+ for t in traits:
+  vals=[]
+  for lab in idx:
+   a=idx[lab].get(l['ID'])
+   if a: vals.append((lab,float(a[t+'_P']),float(a[t+'_BETA']),float(a[t+'_SE'])))
+  if len(vals)==3:
+   z=sum(b/se**2 for _,p,b,se in vals)/math.sqrt(sum(1/se**2 for _,p,b,se in vals));mp=math.erfc(abs(z)/math.sqrt(2))
+   if t=='protein_density' or abs(math.log10(max(mp,1e-300))-math.log10(float(l['P'])))<.2:print(t,'p',[round(x[1],6) for x in vals],'meta',mp)
+print('\\nfit')
+for t in traits:
+ xs=[];ys=[]
+ for l in local[:1000]:
+  vals=[]
+  for lab in idx:
+   a=idx[lab].get(l['ID'])
+   if a:vals.append((float(a[t+'_BETA']),float(a[t+'_SE'])))
+  if len(vals)==3:
+   z=sum(b/se**2 for b,se in vals)/math.sqrt(sum(1/se**2 for b,se in vals));mp=math.erfc(abs(z)/math.sqrt(2));xs.append(math.log10(max(mp,1e-300)));ys.append(math.log10(max(float(l['P']),1e-300)))
+ if xs:
+  mx=sum(xs)/len(xs);my=sum(ys)/len(ys);cor=sum((x-mx)*(y-my) for x,y in zip(xs,ys))/(sum((x-mx)**2 for x in xs)*sum((y-my)**2 for y in ys))**.5
+  er=sorted(abs(x-y) for x,y in zip(xs,ys)); print(t,len(xs),'med',er[len(er)//2],'mean',sum(er)/len(er),'corr',cor)
+PY"

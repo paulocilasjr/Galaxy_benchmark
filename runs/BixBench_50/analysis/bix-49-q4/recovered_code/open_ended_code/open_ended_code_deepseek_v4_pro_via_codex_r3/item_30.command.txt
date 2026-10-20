@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, warnings
+warnings.filterwarnings('ignore')
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_path='inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt'
+meta_path='inputs/Issy_ASXL1_blood_coldata_gender.xlsx'
+counts_genes=pd.read_csv(counts_path, sep=r'\\s+', index_col=0)
+meta=pd.read_excel(meta_path).set_index('sample')
+# subset to metadata samples
+counts_genes=counts_genes[meta.index]
+meta=meta.copy()
+meta['condition']=pd.Categorical(meta['condition'], categories=['Control','ASXL1'], ordered=False)
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'], ordered=False)
+counts=counts_genes.T.astype(int)
+print('counts', counts.shape, 'meta', meta.shape)
+print('index alignment', counts.index.equals(meta.index))
+dds=DeseqDataSet(counts=counts, metadata=meta[['condition','sex']], design='~ sex + condition', design_factors=['sex','condition'], ref_level=['F','Control'], quiet=False)
+dds.deseq2()
+print('dds done')
+st=DeseqStats(dds, contrast=['condition','ASXL1','Control'], alpha=0.05, independent_filter=True, cooks_filter=True)
+st.summary()
+res=st.results_df
+print('res shape', res.shape)
+print(res.columns.tolist())
+print('padj notna', res['padj'].notna().sum())
+print('padj<.05', (res['padj'] < 0.05).sum())
+print('padj<=.05', (res['padj'] <= 0.05).sum())
+print('pvalue<.05', (res['pvalue'] < 0.05).sum())
+print(res['padj'].describe())
+print('filter_threshold', getattr(st,'independent_filter',None), getattr(st,'filter_threshold',None))
+sig=res[res['padj']<0.05].sort_values('padj')
+print(sig[['baseMean','log2FoldChange','stat','pvalue','padj']].head(20).to_string())
+print('n sig',len(sig))
+PY"

@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,numpy as np
+z=np.load('allele_counts.npz');keys=z['keys'];dp=z['dp'].astype(int);ad=z['ad'].astype(int);rows=keys>>16;cells=keys&65535;nc=len(z['barcodes'])
+cs=np.load('cv_cell_sets.npz');keep=cs['keep'];test=set(cs['test'].tolist());testmask=np.array([int(c) in test for c in cells]) & np.isin(rows,keep); rr=rows[testmask];cc=cells[testmask];dd=dp[testmask];aa=ad[testmask]
+# row original -> local variant index
+rmap={int(r):i for i,r in enumerate(keep)}; vr=np.array([rmap[int(r)] for r in rr]); testarr=np.array(sorted(test)); cmap={int(c):i for i,c in enumerate(testarr)}; vc=np.array([cmap[int(c)] for c in cc]);
+# aggregate by cell,row into dense sparse dict via arrays
+# matrices local row x test cell
+from scipy import sparse
+AD=sparse.coo_matrix((aa,(vr,vc)),shape=(len(keep),len(testarr))).tocsr();DP=sparse.coo_matrix((dd,(vr,vc)),shape=(len(keep),len(testarr))).tocsr()
+print('test cells',len(testarr),'reads',DP.sum(),'pairs',DP.nnz)
+def gt_matrix(n):
+ G=[]
+ with gzip.open(f'cv_cells_train_N{n}/GT_donors.vireo.vcf.gz','rt') as fh:
+  for line in fh:
+   if line.startswith('#'): continue
+   vals=[]
+   for x in line.rstrip().split('\\t')[9:]:
+    gt=x.split(':')[0]
+    vals.append(0 if gt in ('0/0','0|0') else 1 if gt in ('1/1','1|1') else .5)
+   G.append(vals)
+ return np.array(G)
+for n in range(2,9):
+ G=gt_matrix(n); print('\\nN',n,'G',G.shape)
+ for e in [.005,.01,.03,.05,.1]:
+  cell_ll=np.zeros((len(testarr),n))
+  for j in range(len(testarr)):
+   a=AD[:,j].toarray().ravel();d=DP[:,j].toarray().ravel();q=d>0
+   for g in range(n):
+    p=e+(1-2*e)*G[:,g]; cell_ll[j,g]=np.sum(a[q]*np.log(p[q])+(d[q]-a[q])*np.log1p(-p[q]))
+  best=cell_ll.max(axis=1); labels=cell_ll.argmax(axis=1); reads=np.asarray(DP.sum(axis=0)).ravel(); ok=reads>=20
+  print('e',e,'usable',ok.sum(),'reads',reads[ok].sum(),'ll',round(best[ok].sum(),1),'per',round(best[ok].sum()/reads[ok].sum(),5),'sizes',np.bincount(labels[ok],minlength=n).tolist(),'medianmargin',round(np.median(np.sort(cell_ll[ok],axis=1)[:,-1]-np.sort(cell_ll[ok],axis=1)[:,-2]),3))
+PY"

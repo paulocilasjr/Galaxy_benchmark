@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+# We'll re-run model to save and inspect intermediate MPS operations individually, but avoid huge output.
+import sys, torch, pathlib, torch.nn.functional as F
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.modules.mamba_simple as ms
+saved={}; orig=ms.selective_scan_fn
+def wrap(u,delta,A,B,C,D=None,z=None,delta_bias=None,delta_softplus=False,return_last_state=False):
+    if not saved:
+        saved.update(u=u.detach().clone(),delta=delta.detach().clone(),A=A.detach().clone(),B=B.detach().clone(),C=C.detach().clone(),D=D.detach().clone(),z=z.detach().clone(),delta_bias=delta_bias.detach().clone())
+    return orig(u,delta,A,B,C,D,z,delta_bias,delta_softplus,return_last_state)
+ms.selective_scan_fn=wrap
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+B=2; batch=[]
+for i in range(B): x=ids[0].clone(); x[i]=3; batch.append(x)
+with torch.no_grad(): out=model(input_ids=torch.stack(batch))
+u=saved['u']; delta=saved['delta']; A=saved['A']; B=saved['B']; C=saved['C']; z=saved['z']; db=saved['delta_bias']; D=saved['D']
+print('dtypes',u.dtype,delta.dtype,A.dtype)
+# compute each step, checking finite
+delta2=delta + db[...,None]
+print('delta2 finite',torch.isfinite(delta2).all().item())
+delta3=F.softplus(delta2)
+print('softplus finite',torch.isfinite(delta3).all().item(), delta3.min().item(), delta3.max().item())
+dA=torch.exp(torch.einsum('bdl,dn->bdln',delta3,A))
+print('dA finite',torch.isfinite(dA).all().item(),'nan',torch.isnan(dA).sum().item(),'inf',torch.isinf(dA).sum().item())
+dBu=torch.einsum('bdl,bnl,bdl->bdln',delta3,B,u)
+print('dBu finite',torch.isfinite(dBu).all().item(),'nan',torch.isnan(dBu).sum().item(),'inf',torch.isinf(dBu).sum().item())
+x=torch.zeros_like(dA[:, :, 0])
+ys=[]
+for i in range(u.shape[2]):
+ x=dA[:,:,i]*x+dBu[:,:,i]
+ y=torch.einsum('bdn,bn->bd',x,C[:,:,i])
+ ys.append(y)
+ if i<5 or not torch.isfinite(x).all() or not torch.isfinite(y).all():
+  if not torch.isfinite(x).all():
+   print('x nonfinite at',i,torch.isnan(x).sum().item(),torch.isinf(x).sum().item()); break
+  if not torch.isfinite(y).all():
+   print('y nonfinite at',i,torch.isnan(y).sum().item(),torch.isinf(y).sum().item()); break
+PY"

@@ -1,0 +1,62 @@
+/bin/bash -lc "cat > compare_original.py <<'PY'
+import gzip,csv,numpy as np, time, os, sys
+path='sample.swap.atac.q2.tsv.gz'
+# load our matrix as arrays in original key order (dict)
+cols=None; our_dict={}
+with gzip.open(path,'rt') as f:
+    r=csv.reader(f,delimiter='\\t'); header=next(r); cols=header[3:]
+    for row in r:
+        if len(row)<12: continue
+        our_dict[(row[0],int(row[1]))]=np.array([float(x) for x in row[3:]],dtype=np.float64)
+keys=list(our_dict.keys())
+n=len(keys)
+print('our bins',n,'cols',cols,flush=True)
+# our matrix columns as 2d array
+X=np.empty((n,len(cols)),dtype=np.float64)
+for i,k in enumerate(keys):
+    X[i]=our_dict[k]
+# means and std over all bins
+means=X.mean(axis=0)
+stds=X.std(axis=0)
+# precompute centered? for each column Xc = X - mean
+Xc=X-means
+
+celltypes=['AIIamacrine','Astrocyte','Cone','GABAamacrine','Horizontal','Microglia','Mullerglia','Retinalganglioncell']
+for ct in celltypes:
+    file=f'original_frags/{ct}_frags.tsv.gz'
+    counts={}
+    t0=time.time()
+    with gzip.open(file,'rt') as f:
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            if len(p)<5: continue
+            chrom=p[0]; s=int(p[1]); e=int(p[2]); c=int(p[4])
+            b1=s//10000; b2=(e-1)//10000
+            for b in range(b1,b2+1):
+                key=(chrom,b*10000)
+                counts[key]=counts.get(key,0)+1
+    # build original vector for our keys
+    orig=np.zeros(n,dtype=np.float64)
+    missing=0
+    for i,k in enumerate(keys):
+        val=counts.get(k)
+        if val is not None:
+            orig[i]=val
+        else:
+            missing+=1
+    print(f'{ct}: nbins {len(counts)} total {orig.sum():.0f} time {time.time()-t0:.1f}s missing {missing}',flush=True)
+    # correlations with each our column
+    # use all bins, including zeros. Means of orig over all bins.
+    om=orig.mean(); oc=orig-om; denom=np.sqrt(np.dot(oc,oc))*stds
+    cors=np.dot(oc,Xc)/denom
+    order=np.argsort(-cors)
+    print('  correlations:')
+    for idx in order:
+        print(f'    {cols[idx]:20s} {cors[idx]:.8f}')
+    # exact max diff relative to best col
+    best=order[0]
+    diff=np.abs(orig-X[:,best])
+    print('  best exact max diff',diff.max(),'nz equal',np.sum(diff==0), 'nz',np.count_nonzero(orig))
+    sys.stdout.flush()
+PY
+python3 compare_original.py"
