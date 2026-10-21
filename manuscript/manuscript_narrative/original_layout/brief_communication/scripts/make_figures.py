@@ -59,6 +59,7 @@ def arrow(ax, x1, y1, x2, y2, color=INK2):
 def save(fig, name):
     for ext in ('pdf', 'svg', 'png'):
         fig.savefig(os.path.join(OUT, f'{name}.{ext}'), dpi=600, facecolor='white')
+    fig.savefig(os.path.join(OUT, f'{name}_300dpi.png'), dpi=300, facecolor='white')   # embedded in the .docx
     plt.close(fig)
     print('wrote', name)
 
@@ -94,7 +95,7 @@ def design(ax):
             transform=ax.transAxes, va='top')
     chips = ['Tool search', 'Parameter\ndescriptions', 'History\ninspection', 'Job submission\nand monitoring',
              'User-defined\ntools (UDTs)']
-    ax.text(0.412, 0.80, 'Galaxy MCP server', fontsize=5.5, color=INK2, transform=ax.transAxes, va='top')
+    ax.text(0.412, 0.80, 'Galaxy MCP servers', fontsize=5.5, color=INK2, transform=ax.transAxes, va='top')
     w = 0.077
     for i, c in enumerate(chips):
         x = 0.412 + i * (w + 0.006)

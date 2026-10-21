@@ -33,9 +33,10 @@ The text is in `scripts/content.js` (manuscript) and `scripts/si_notes.js` (Supp
 ## Format checks (2026-10-20)
 
 - Abstract: 69 words, no references (limit 70).
-- Counted text: abstract, main text (965), figure legends (300) and main-text references (224), 1,558 words in total. The limit is 1,200 words, extendable to 1,600 at the editors' discretion.
-- Two display items; 11 main-text references and 4 Methods-only references.
-- Methods: about 2,200 words with subheadings, a Statistics and reproducibility section and a Reporting summary statement.
+- Counted text: abstract, main text (1,005), figure legends (298) and main-text references (224), 1,596 words in total. The limit is 1,200 words, extendable to 1,600 at the editors' discretion.
+- Voice: the text follows the PI's style (GLEAM, mlsurv and ITCR samples): gap, "To address this gap, we…", results with intervals, grouped limitations "First… Second… Third…", "Future work will…".
+- Two display items; 11 main-text references and 5 Methods-only references.
+- Methods: about 2,400 words with subheadings, a Statistics and reproducibility section and a Reporting summary statement.
 
 ## Run links (2026-10-20)
 
@@ -48,8 +49,8 @@ The text is in `scripts/content.js` (manuscript) and `scripts/si_notes.js` (Supp
 
 They are highlighted in yellow in the documents:
 - authors, affiliations and the corresponding author;
-- the Galaxy MCP server and agent skills: URL, version and licence;
-- the Codex version of the main runs, and why GPT-5.6 Luna ran at maximum effort;
+- the Galaxy MCP servers and agent skills: repository URL, version and licence;
+- the Codex CLI version of the BixBench-Verified-50 GPT-5.5 runs (the other main runs used 0.146.0), and why GPT-5.6 Luna ran at maximum effort;
 - the language-model verifier of BixBench-Verified-50;
 - the human review of the failure-cause audit;
 - the use of AI tools;

@@ -11,80 +11,84 @@ const front = {
 };
 
 const abstract =
-  'Benchmarks of artificial intelligence (AI) agents in computational biology test agents that write their own code. ' +
-  'We connected agents to the Galaxy workbench through a Model Context Protocol server and compared them with agents ' +
-  'writing custom code on 160 tasks from three benchmarks with four models. Accuracy was similar, ' +
-  'Galaxy recorded every tool, parameter and dataset, and agent traces guided interface changes that more than halved ' +
-  "Galaxy's token use.";
+  'Artificial intelligence (AI) agents can perform bioinformatics analyses, but benchmarks test only agents that ' +
+  'write their own code. To address this gap, we connected agents to the Galaxy workbench and compared them with ' +
+  'agents writing custom code on 160 tasks from three benchmarks with four models. Accuracy was similar, Galaxy ' +
+  'recorded every tool, parameter and dataset, and agent traces guided interface improvements that more than halved' +
+  ' Galaxy\'s token use.';
 
 const main = [
   // P1 - the gap
   'Artificial intelligence (AI) agents that plan and run analyses are increasingly used in biomedical ' +
   'research{cite:gao2024,biomni2026,cellvoyager2026,paper2agent2026}, and benchmarks now test whether they can ' +
   'complete whole bioinformatics analyses{cite:bixbench2025,compbiobench}. These benchmarks evaluate agents as ' +
-  'programmers: each agent writes and runs its own code. Scientific workbenches such as ' +
-  'Galaxy{cite:goecks2010,galaxy2024} are a widely used alternative for people. They provide versioned tools, ' +
-  'managed compute and histories that record the parameters, inputs and outputs of every step and can be shared, ' +
-  'turned into workflows and rerun{cite:sandve2013,gruning2018cs,wratten2021}. Whether agents can work through a ' +
-  'workbench to complete bioinformatics tasks as accurately as they write code has not been tested.',
+  'programmers: each agent writes and runs its own code. However, custom code often lacks a structured record of ' +
+  'the software versions and parameters used, which makes analyses difficult to review and ' +
+  'reproduce{cite:sandve2013,gruning2018cs}. Scientific workbenches such as Galaxy{cite:goecks2010,galaxy2024} ' +
+  'address this problem for scientists by providing versioned tools, managed compute and histories that record the ' +
+  'inputs, parameters and outputs of every step and can be shared, turned into workflows and ' +
+  'rerun{cite:wratten2021}. Whether agents can use a workbench to complete bioinformatics tasks as accurately as ' +
+  'they write code has not been tested.',
   // P2 - the tool and the study
-  'Here we connect agents to Galaxy through a Model Context Protocol (MCP) server and compare them with agents ' +
-  'writing custom code (Fig. 1a). The server gives agents tool search, parameter descriptions, history inspection, ' +
-  'job submission and monitoring, and user-defined tools (UDTs) for operations that no installed tool covers. In ' +
-  'the Galaxy condition, the prompt required all scientific computation to run as Galaxy jobs on usegalaxy.org; in ' +
-  'the custom-code condition, which served as the baseline, the agent installed software and wrote its own code. ' +
-  'Four model configurations in the Codex agent harness attempted each of 160 tasks three times per condition ' +
-  '(3,840 runs): 50 from BixBench-Verified-50{cite:bixbench2025}, 100 from CompBioBench{cite:compbiobench} and 10 ' +
-  'derived from workflows of the Intergalactic Workflow Commission (IWC; https://github.com/galaxyproject/iwc). ' +
-  'Because the IWC-derived tasks are native to Galaxy and could favour it, we report them separately.',
+  'To address this gap, we connected AI agents to Galaxy through Model Context Protocol (MCP) servers and compared ' +
+  'them with agents writing custom code (Fig. 1a). The MCP servers give agents access to Galaxy\'s main ' +
+  'capabilities: tool search, parameter descriptions, history inspection, job submission and monitoring, and ' +
+  'user-defined tools (UDTs) for operations that no installed tool covers. In the Galaxy condition, all scientific ' +
+  'computation had to run as Galaxy jobs on usegalaxy.org; in the custom-code condition, which served as the ' +
+  'baseline, the agent installed software and wrote its own code. Four model configurations in the Codex agent ' +
+  'harness attempted each of 160 tasks three times per condition, for 3,840 runs: 50 tasks from ' +
+  'BixBench-Verified-50{cite:bixbench2025}, 100 from CompBioBench{cite:compbiobench} and 10 derived from workflows ' +
+  'of the Intergalactic Workflow Commission (IWC; https://github.com/galaxyproject/iwc). Because the IWC-derived ' +
+  'tasks come from Galaxy workflows and could favour Galaxy, we report them separately.',
   // P3 - accuracy
-  'Accuracy was similar in the two conditions on the platform-neutral benchmarks (Fig. 1b,c). On ' +
-  'BixBench-Verified-50, 87.2% of custom-code runs and 87.7% of Galaxy runs were accepted (difference +0.5 ' +
-  'percentage points; 95% confidence interval (CI) −3.9 to 4.8). On CompBioBench, 86.7% and 87.0% of runs agreed ' +
-  'with the answer key (+0.3; 95% CI −1.8 to 2.5). The 90% CIs of both differences (−3.1 to 4.1 and −1.5 to 2.2) ' +
-  'lay within ±5 percentage points, a margin set after the analysis (Methods). No per-model difference was ' +
-  'significant after Holm adjustment (smallest adjusted *P* = 0.19), but per-model estimates were imprecise: 4 of ' +
-  'the 8 per-model intervals on these benchmarks extended beyond ±5 points (Supplementary Fig. 1). The pooled ' +
-  'estimates stayed within one point of zero after removing BixBench-Verified-50 tasks with audited benchmark-side ' +
-  'problems, questionable CompBioBench campaigns, runs that reached a source of benchmark answers or Galaxy runs ' +
-  'that computed their answer outside Galaxy (Supplementary Figs. 2 and 3 and Methods). On the IWC-derived tasks, ' +
-  'mean output agreement was 0.95 with custom code and 0.99 with Galaxy (+0.036; 95% CI 0.006 to 0.073; exact ' +
-  'paired *P* = 0.055), mostly because of three tasks with a zero-scored run (Fig. 1d).',
+  'Agents were similarly accurate in the two conditions on the two platform-neutral benchmarks. On ' +
+  'BixBench-Verified-50, 87.2% of custom-code runs and 87.7% of Galaxy runs were accepted (Fig. 1b), a difference ' +
+  'of +0.5 percentage points (95% confidence interval (CI) −3.9 to 4.8). On CompBioBench, 86.7% and 87.0% of runs ' +
+  'agreed with the answer key (Fig. 1c; +0.3; 95% CI −1.8 to 2.5). For both benchmarks, the 90% CI of the ' +
+  'difference lay within ±5 percentage points, a margin set after the analysis (Methods). No per-model difference ' +
+  'was significant after Holm adjustment (smallest adjusted *P* = 0.19), although 4 of the 8 per-model intervals ' +
+  'extended beyond ±5 points (Supplementary Fig. 1). The pooled differences stayed within one point of zero after ' +
+  'we removed tasks with audited benchmark-side problems, questionable CompBioBench campaigns, runs exposed to ' +
+  'benchmark answers or Galaxy runs that computed outside Galaxy (Supplementary Figs. 2 and 3). On the IWC-derived ' +
+  'tasks, mean output agreement was 0.95 with custom code and 0.99 with Galaxy (+0.036; 95% CI 0.006 to 0.073; ' +
+  'exact paired *P* = 0.055), and three tasks with a zero-scored run accounted for most of this difference (Fig. ' +
+  '1d).',
   // P4 - why runs failed
-  'Incorrect answers rarely came from Galaxy itself. An audit of the execution traces of all 151 incorrect ' +
-  'BixBench-Verified-50 runs in both conditions attributed 3 to Galaxy, 107 (71%) to an under-specified task or ' +
-  'reference answer or to the scorer, and 37 to the agent; 4 runs submitted no answer (Fig. 2a). The two main ' +
-  'causes were linked: in 74 of the 94 runs with an under-specified task or reference answer, the agent also did ' +
-  'not validate its answer. Under-specification was systematic: 85 of the 94 runs were in replicate groups in which' +
-  ' all three runs were wrong. Missing validation, the main agent-side cause, was more random: 16 of its 32 cases ' +
-  'occurred in groups whose other two replicates were correct. At least one replicate was correct in 85–94% of ' +
-  'replicate groups, yet a majority vote added at most 2.3 points (Supplementary Fig. 4 and Supplementary Table 1),' +
-  ' so a validation step that selects a correct replicate could recover more than voting.',
+  'Next, we asked why runs failed. An audit of the execution traces of all 151 incorrect BixBench-Verified-50 runs ' +
+  'found that Galaxy itself caused 3 failures (Fig. 2a). Most failures, 107 (71%), came from the benchmark: an ' +
+  'under-specified task or reference answer (94) or a scorer that rejected a valid answer (13). The agent caused ' +
+  '37, and 4 runs submitted no answer. The two main causes were linked, because in 74 of the 94 under-specified ' +
+  'runs the agent also did not validate its answer. Under-specification was systematic: 85 of the 94 runs were in ' +
+  'replicate groups in which all three runs were wrong. In contrast, missing validation, the main agent-side cause,' +
+  ' was largely random: 16 of its 32 cases occurred in groups whose other two replicates were correct. Notably, at ' +
+  'least one replicate was correct in 85–94% of replicate groups, yet a majority vote added at most 2.3 points ' +
+  '(Supplementary Fig. 4 and Supplementary Table 1). Thus, a validation step that selects a correct replicate could' +
+  ' recover more errors than voting.',
   // P5 - what Galaxy records and what it costs
-  'Galaxy runs also left a structured record of each analysis (Fig. 2b and Supplementary Fig. 5). All 37,498 ' +
-  'analysis steps in Galaxy runs recorded the tool and its version, parameters and output datasets, and the Galaxy ' +
-  'history was retrieved for 1,871 of 1,908 runs. Custom-code runs retained the 55,380 commands that they ran but ' +
-  'no structured record of software versions, parameters or outputs. Working through Galaxy had a cost: Galaxy used' +
-  ' 4.2, 2.7 and 0.92 times the tokens of custom code on BixBench-Verified-50, CompBioBench and the IWC-derived ' +
-  'tasks (Supplementary Table 2 and Supplementary Fig. 6). In the first-round GPT-5.5 batch, Galaxy runs took 2.66 ' +
-  'times as many steps as custom-code runs, each rereading 2.2 times as much context (Methods). Treating the agents' +
-  ' as virtual users, we changed the interface to reduce these overheads and reran BixBench-Verified-50 (Fig. 2c). ' +
-  'Combining job submission, waiting and checking in one MCP call, among other changes, reduced Galaxy tokens by ' +
-  '55.2% (95% CI 44.9–62.8%) with GPT-5.5. Compact replies and longer waits between checks reduced them by a ' +
-  'further 55.6% (46.4–63.0%) with GPT-5.6 Sol, to 1.53 times custom code, with 137 of 150 runs correct (136 ' +
-  'before). Each round changed several features at once, so this was not a controlled ablation; the main runs used ' +
-  'the second-round interface.',
-  // P6 - implications and limitations
-  'These results show that, with the models and benchmarks tested, agents working through a computational workbench' +
-  ' were about as accurate as agents writing their own code, and their analyses were recorded in a form that can be' +
-  ' inspected and rerun. A workbench could also make it inexpensive to run several methods for one step or to ' +
-  'validate results before reporting them, which could address the missing validation seen here; we did not test ' +
-  'this. This study has limitations. First, it covers four model configurations and three benchmarks, and models ' +
-  'change quickly. Second, prompts, time limits and runtime environments differed between conditions, so the ' +
-  'conditions were compared as deployed (Supplementary Table 3). Third, the IWC comparison rests on ten ' +
-  'Galaxy-derived tasks, and the cause audit covers BixBench-Verified-50 only. Beyond Galaxy, running agents on ' +
-  'representative tasks, tracing their cost and failures to interface features, fixing those features and measuring' +
-  ' again could become a routine way to find where scientific software is hard to use.',
+  'Galaxy also recorded each analysis in a structured form that can be audited (Fig. 2b and Supplementary Fig. 5). ' +
+  'All 37,498 analysis steps in Galaxy runs recorded the tool and its version, the parameters and the output ' +
+  'datasets, and the Galaxy history was retrieved for 1,871 of 1,908 runs. In contrast, custom-code runs retained ' +
+  'the 55,380 commands that they ran but no structured record of software versions, parameters or outputs. This ' +
+  'record came at a cost: across the main runs, Galaxy used 4.2, 2.7 and 0.92 times the tokens of custom code on ' +
+  'BixBench-Verified-50, CompBioBench and the IWC-derived tasks (Supplementary Table 2 and Supplementary Fig. 6). ' +
+  'Agent traces showed that, in the first-round GPT-5.5 batch, Galaxy runs took 2.66 times as many steps as ' +
+  'custom-code runs, and each step reread 2.2 times as much context (Methods). Treating the agents as virtual ' +
+  'users, we changed the interface to reduce these overheads and reran BixBench-Verified-50 (Fig. 2c). Combining ' +
+  'job submission, waiting and checking into one MCP call, among other changes, reduced Galaxy tokens by 55.2% (95%' +
+  ' CI 44.9–62.8%) with GPT-5.5. Compact replies and longer waits between checks reduced them by a further 55.6% ' +
+  '(46.4–63.0%) with GPT-5.6 Sol, to 1.53 times custom code, while 137 of 150 runs remained correct (136 before). ' +
+  'Thus, much of Galaxy\'s token cost came from its interface, and agent traces showed how to reduce it.',
+  // P6 - implications, limitations and future work
+  'Together, these results show that AI agents can perform bioinformatics analyses through a computational ' +
+  'workbench with accuracy similar to that of custom code, while leaving a record that people can inspect and ' +
+  'rerun. Galaxy could also make rigor-improving practices inexpensive for agents, such as comparing several ' +
+  'methods for one step or validating results before reporting them, but we did not test this here. This study has ' +
+  'several limitations. First, it covers four model configurations and three benchmarks, and models change quickly.' +
+  ' Second, prompts, time limits and runtime environments differed between conditions, so we compared the ' +
+  'conditions as deployed (Supplementary Table 3). Third, the IWC comparison rests on ten Galaxy-derived tasks, the' +
+  ' cause audit covers BixBench-Verified-50 only, and the interface rounds were not a controlled ablation. Future ' +
+  'work will add a validation layer to the agent interface and test whether it improves accuracy. More broadly, ' +
+  'agent traces could become a routine source of usability evidence for scientific software.',
 ];
 
 const legends = [
@@ -92,8 +96,8 @@ const legends = [
     file: 'Fig1_300dpi.png',
     title: 'Fig. 1 | Agents performed with similar accuracy in Galaxy and with custom code.',
     body:
-      '**a**, Study design: four model configurations in the Codex agent harness attempted each of 160 tasks three times ' +
-      'with Galaxy (Galaxy jobs through the Galaxy MCP server) and with custom code. **b**–**d**, Galaxy minus custom ' +
+      '**a**, Study design: each of four model configurations attempted each of 160 tasks three times with Galaxy and ' +
+      'with custom code. **b**–**d**, Galaxy minus custom ' +
       'code for each model (open circles) and for the four models pooled (filled diamonds) on BixBench-Verified-50 ' +
       '(**b**; accepted runs), CompBioBench (**c**; runs agreeing with the answer key) and the IWC-derived tasks (**d**; ' +
       'mean output agreement); condition means are given above each panel. Grey bands in **b** and **c** mark ±5 ' +
@@ -103,7 +107,8 @@ const legends = [
   },
   {
     file: 'Fig2_300dpi.png',
-    title: 'Fig. 2 | Why runs failed, what Galaxy recorded and what it cost.',
+    title: 'Fig. 2 | Most failures came from the benchmark, Galaxy recorded every analysis step, and interface changes ' +
+      'reduced Galaxy\'s token use.',
     body:
       '**a**, Primary causes of the 151 incorrect BixBench-Verified-50 runs (both conditions), assigned from execution ' +
       'traces, by the number of correct sibling replicates (the other two runs of the same task, model and condition). ' +
@@ -120,7 +125,8 @@ const legends = [
 // Online Methods: [heading, paragraphs]
 const methods = [
   ['Benchmarks', [
-    'We evaluated agents on 160 tasks from three benchmarks (Supplementary Table 3). BixBench-Verified-50 is a curated ' +
+    'We evaluated agents on 160 tasks from three benchmarks that each require a complete bioinformatics analysis ' +
+    '(Supplementary Table 3). BixBench-Verified-50 is a curated ' +
     'subset of 50 questions from 33 data capsules of BixBench{cite:bixbench2025}, reviewed with domain experts for the ' +
     'correctness of the ground truth, the sufficiency of the supplied context and the clarity of the expected answer; ' +
     '17 of the 50 questions were revised relative to the original release. Each question comes with a data capsule and ' +
@@ -134,25 +140,34 @@ const methods = [
     'not the workflow.',
   ]],
   ['Galaxy interface', [
-    'In the Galaxy condition, agents worked through an MCP server (https://modelcontextprotocol.io) that exposes Galaxy ' +
-    'operations as agent tools: searching installed tools, retrieving a tool\'s parameter descriptions, inspecting ' +
-    'histories and datasets, submitting jobs and waiting for them, and defining and running UDTs, which run ' +
-    'agent-written code as Galaxy jobs in a declared container. Analyses ran on usegalaxy.org (Galaxy 26.1.2.dev0) with ' +
-    'tools from the Galaxy ToolShed{cite:toolshed2014}. Task inputs were preloaded into seed histories, and each run ' +
+    'In the Galaxy condition, agents worked through MCP servers (https://modelcontextprotocol.io) that we wrote as ' +
+    'Python wrappers around the Galaxy application programming interface (API). For each run, the servers were ' +
+    'launched locally inside the run\'s Docker container, communicated with the agent over standard input and output ' +
+    '(stdio) and were configured through the run\'s Codex configuration file (config.toml). They called the API of ' +
+    'usegalaxy.org (Galaxy 26.1.2.dev0) with an API key, through BioBlend{cite:bioblend2013} and REST requests, and ' +
+    'exposed Galaxy operations as agent tools: searching installed tools, retrieving a tool\'s parameter descriptions, ' +
+    'inspecting histories and datasets, submitting jobs and waiting for them, and defining and running UDTs, which run ' +
+    'agent-written code as Galaxy jobs in a declared container. Some runs also called the Galaxy API directly through ' +
+    'BioBlend or REST instead of the MCP tools (Supplementary Note 1). Analyses used tools from the Galaxy ' +
+    'ToolShed{cite:toolshed2014}. Task inputs were preloaded into seed histories, and each run ' +
     'copied its seed history into a new history before it started, so independent runs began from identical datasets. ' +
     'The main runs used the second-round interface, in which one call submits a job, waits for it, checks the resolved ' +
     'inputs and parameters against the request and returns a compact result. UDTs were not offered on the IWC-derived ' +
-    'tasks. [[Authors: repository URL, version and licence of the Galaxy MCP server and agent skills]].',
+    'tasks. [[Authors: repository URL, version and licence of the Galaxy MCP servers and agent skills]].',
   ]],
   ['Models and agent harness', [
-    'Four model configurations ran in the Codex agent harness: GPT-5.5, GPT-5.6 Sol and DeepSeek V4 Pro at high ' +
+    'We ran four model configurations in the Codex agent harness: GPT-5.5, GPT-5.6 Sol and DeepSeek V4 Pro at high ' +
     'reasoning effort, and GPT-5.6 Luna at maximum reasoning effort. The GPT models used the fast service tier, and ' +
     'DeepSeek V4 Pro was served through the DeepSeek API as a Codex model provider. Settings were identical in the two ' +
-    'conditions for each model. [[Authors: Codex version(s) of the main runs and the reason for maximum effort on GPT-5.6 ' +
+    'conditions for each model. The main runs used the Codex command-line interface (CLI) version 0.146.0: the ' +
+    'BixBench-Verified-50 runs of GPT-5.6 Sol, GPT-5.6 Luna and DeepSeek V4 Pro, and all CompBioBench and IWC-derived ' +
+    'runs [[Authors: Codex CLI version of the BixBench-Verified-50 GPT-5.5 runs]]. The third-round interface runs used ' +
+    'version 0.156.0 (Token accounting and interface rounds). [[Authors: reason for maximum reasoning effort on GPT-5.6 ' +
     'Luna]].',
   ]],
   ['Execution conditions', [
-    'In the custom-code condition, the agent could write and run code, use command-line programs, install software and ' +
+    'We ran every task in two execution conditions. In the custom-code condition, the agent could write and run code, ' +
+    'use command-line programs, install software and ' +
     'retrieve external resources. In the Galaxy condition, the prompt added an execution policy: scientific computation ' +
     'had to run in Galaxy, local code was limited to orchestrating Galaxy, staging inputs and extracting the answer from ' +
     'Galaxy outputs, and the prompt specified history use, permitted tools, UDT rules and interface timeouts. Galaxy ' +
@@ -173,9 +188,10 @@ const methods = [
     'conditions share. Runs that ended without a scoreable answer were scored as incorrect.',
   ]],
   ['Answer evaluation', [
-    'Each benchmark kept its own endpoint, and scores were not pooled across benchmarks. Per-run scores are those ' +
-    'displayed on the project\'s public results site (https://goeckslab.github.io/galaxy-agent-benchmark/); on 14 ' +
-    'October 2026 every score and answer used here matched the site. Accuracy per benchmark, model and condition is in ' +
+    'We kept each benchmark\'s own endpoint and did not pool scores across benchmarks. We used the per-run scores ' +
+    'displayed on the project\'s public results site (https://goeckslab.github.io/galaxy-agent-benchmark/) and ' +
+    'confirmed on 14 October 2026 that every score and answer used here matched the site. Accuracy per benchmark, ' +
+    'model and condition is in ' +
     'Supplementary Table 4. BixBench-Verified-50 runs were scored by the benchmark\'s verifiers [[Authors: model, version ' +
     'and provider of the language-model verifier]]. The results site corrected the scoring of two questions after the ' +
     'original evaluation (bix-53-q2, accepting equivalent statements of an increase, and bix-43-q2, with ' +
@@ -193,10 +209,11 @@ const methods = [
     'traces of the reruns.',
   ]],
   ['Failure-cause audit', [
-    'Every incorrect BixBench-Verified-50 run (151) was assigned one primary and, where present, one secondary cause from ' +
-    'its execution trace, outputs and Galaxy history: an under-specified task or reference answer; a scorer that ' +
+    'We assigned each of the 151 incorrect BixBench-Verified-50 runs one primary cause and, where present, one ' +
+    'secondary cause from its execution trace, outputs and Galaxy history: an under-specified task or reference ' +
+    'answer; a scorer that ' +
     'rejected a valid answer; no validation of the answer; wrong biological or statistical knowledge; a fault of Galaxy ' +
-    'itself; or no answer submitted. Causes were assigned with AI assistance. An independent AI-assisted second rater ' +
+    'itself; or no answer submitted. We assigned causes with AI assistance. An independent AI-assisted second rater ' +
     'agreed with the primary cause for 35 of 45 sampled runs (κ = 0.56). [[Authors: describe the human review of the ' +
     'audit: who reviewed which cases and how disagreements were resolved]]. Four bix-43-q2 runs regraded as incorrect by ' +
     'the results site after the audit take the cause of the task-level audit. CompBioBench and the IWC-derived tasks have ' +
@@ -252,7 +269,7 @@ const methods = [
     'differences to −0.04 (95% CI −4.7 to 4.4) and +0.4 (−1.8 to 2.6) points.',
   ]],
   ['Statistics and reproducibility', [
-    'Differences are Galaxy minus custom code, computed per benchmark. Intervals are 95% percentile cluster-bootstrap ' +
+    'We computed differences as Galaxy minus custom code for each benchmark. Intervals are 95% percentile cluster-bootstrap ' +
     'intervals (20,000 resamples; seed 20261002){cite:davison1997} that resample BixBench source capsules, whose ' +
     'questions share data, or tasks, with all their models, replicates and conditions. *P* values come from paired ' +
     'cluster sign-flip tests on each cluster\'s summed difference (200,000 random sign vectors, or exact enumeration for ' +
@@ -265,10 +282,12 @@ const methods = [
     'scripts record every value they draw, so each figure can be regenerated from the archive.',
   ]],
   ['Use of AI tools', [
-    'AI coding assistants were used to write analysis and figure code and to draft and edit the text; every number was ' +
-    'computed by archived scripts and checked against the source tables. [[Authors: name the assistants, versions and ' +
-    'dates, and describe the human verification]]. The agents evaluated in this study are its subject and did not ' +
-    'contribute to the analysis or the writing.',
+    'AI coding assistants were used during this study to assist with analysis and figure code and with drafting and ' +
+    'editing the text [[Authors: name the assistants, models and versions]]. Every number in the paper was computed by ' +
+    'archived scripts and checked against the source tables. [[Authors: confirm or edit: The authors determined the ' +
+    'study design, performed and validated the reported analyses, interpreted the results, and reviewed and verified ' +
+    'all AI-assisted outputs.]] The agents evaluated in this study are its subject and did not contribute to the ' +
+    'analysis or the writing.',
   ]],
 ];
 
@@ -289,7 +308,7 @@ const dataAvailability = 'Supplementary Data 2 lists every run with links to its
 
 const codeAvailability = 'Analysis and figure code are at https://github.com/paulocilasjr/Galaxy_benchmark and ' +
   'https://github.com/goeckslab/agent-galaxy-benchmark-manuscript [[Authors: tagged release, DOI and licence]]. The ' +
-  'Galaxy MCP server and agent skills are at [[Authors: repository URL, version and licence]].';
+  'Galaxy MCP servers and agent skills are at [[Authors: repository URL, version and licence]].';
 
 const endMatter = [
   ['Acknowledgements', '[[Authors: funding and acknowledgements]]'],
