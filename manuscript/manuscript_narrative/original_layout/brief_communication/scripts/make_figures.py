@@ -207,16 +207,25 @@ def panel_causes(ax):
     t = c.groupby(['primary_cause', 'correct_replicates_in_group']).incorrect_runs.sum().unstack(fill_value=0)
     rows = []
     for i, (code, label, group) in enumerate(CAUSES):
-        left = 0
+        left, above = 0, []
         for k in (0, 1, 2):
             v = int(t.loc[code, k]) if code in t.index and k in t.columns else 0
             rows.append(dict(cause=label.replace('\n', ' '), group=group, other_replicates_correct=k, incorrect_runs=v))
             if v:
                 ax.barh(i, v, left=left, height=0.62, color=SHADE[k], edgecolor='white', linewidth=0.5, zorder=2)
-                if v >= 6:
+                if v >= (5 if v < 10 else 7):                     # the number fits inside the segment
                     ax.text(left + v / 2, i, str(v), ha='center', va='center', fontsize=5.5,
                             color='white' if k < 2 else INK, zorder=3)
+                else:
+                    above.append((left + v / 2, v))
             left += v
+        x_prev = 1.8 - 3.6                                        # keep the first label clear of the axis line
+        for xc, v in above:                                       # small segments: number above the bar,
+            x = max(xc, x_prev + 3.6)                             # spread so neighbours do not overlap
+            ax.plot([xc, xc, x], [i - 0.31, i - 0.38, i - 0.42], color=INK2, lw=0.4, zorder=3,
+                    solid_capstyle='butt')
+            ax.text(x, i - 0.4, str(v), ha='center', va='bottom', fontsize=5, color=INK, zorder=3)
+            x_prev = x
         ax.text(left + 1.5, i, str(left), va='center', fontsize=5.5, color=INK, fontweight='bold')
     ax.set_yticks(range(len(CAUSES)), [lab for _, lab, _ in CAUSES], fontsize=5.5, linespacing=1.05)
     ax.tick_params(axis='y', length=0)
@@ -230,95 +239,187 @@ def panel_causes(ax):
     return rows
 
 
-def panel_record(ax):
-    ins = pd.read_csv(os.path.join(DATA, 'inspectability_counts.csv'))
-    els = [('command', 'Command'), ('tool_version', 'Tool and version'), ('parameters', 'Parameters'),
-           ('outputs', 'Output datasets')]
-    rows = []
-    for i, (el, lab) in enumerate(els):
-        for k, (tr, col) in enumerate((('custom code', CODE), ('Galaxy', GAL))):
-            x = ins[(ins.track == tr) & (ins.element == el)].iloc[0]
-            pct = 100 * x.with_record / x.total
-            y = i + (0.19 if k else -0.19)
-            ax.barh(y, pct, height=0.34, color=col, zorder=2)
-            ax.text(pct + 2 if pct < 80 else pct - 2, y, f'{pct:.0f}%', va='center', fontsize=5.5,
-                    ha='left' if pct < 80 else 'right', color=INK if pct < 80 else 'white')
-            rows.append(dict(element=lab, condition=tr, steps_with_record=int(x.with_record), steps=int(x.total),
-                             percent=pct))
-    ax.set_yticks(range(len(els)), [lab for _, lab in els], fontsize=5.5)
+def panel_consensus(ax):
+    """Accuracy of a single run, majority of 3, majority of 12 and at least 1 of 3 correct, per benchmark and
+    condition (four models pooled; data/replicate_consensus.csv)."""
+    q = pd.read_csv(os.path.join(DATA, 'replicate_consensus.csv'))
+    names = {'BixBench-Verified-50': 'BixBench-Verified-50', 'CompBioBench': 'CompBioBench', 'IWC': 'IWC-derived'}
+    marks = [('single_run_accuracy', 'Single run', 'o', True), ('majority_of_3_accuracy', 'Majority of 3', '^', False),
+             ('majority_of_12_accuracy', 'Majority of 12', 'D', False),
+             ('any_of_3_accuracy', 'At least 1 of 3 correct', 's', False)]
+    rows, ticks, labels, y = [], [], [], 0.0
+    for bm in ('BixBench-Verified-50', 'CompBioBench', 'IWC'):
+        ax.text(-0.03, y - 0.62, names[bm], fontsize=5.8, fontweight='bold', va='center', ha='right', color=INK,
+                transform=ax.get_yaxis_transform(), clip_on=False)
+        for track, col, lab in (('Galaxy', GAL, 'Galaxy'), ('custom code', CODE, 'Custom code')):
+            x = q[(q.benchmark == bm) & (q.track == track)].iloc[0]
+            v = [100 * x[k] for k, *_ in marks]
+            ax.plot([min(v), max(v)], [y, y], color=col, lw=0.7, alpha=0.45, zorder=1)
+            for (k, _, m, filled), val in zip(marks, v):          # single run last and smaller, so ties stay visible
+                ax.scatter(val, y, marker=m, s=7 if filled else (17 if m != 'D' else 13),
+                           facecolor=col if filled else 'white', edgecolor=col, linewidth=0.7, zorder=4 if filled else 3)
+            rows.append(dict(benchmark=bm, condition=track, **{lab_: 100 * x[k] for k, lab_, *_ in marks},
+                             answer_vote_of_3=100 * x.answer_majority_of_3_accuracy, replicate_groups=x.replicate_groups))
+            ticks.append(y)
+            labels.append(lab)
+            y += 1.0
+        y += 0.75
+    ax.set_yticks(ticks, labels, fontsize=5.5)
     ax.tick_params(axis='y', length=0)
-    ax.set_ylim(len(els) - 0.45, -0.55)
-    ax.set_xlim(0, 100)
-    ax.set_xticks([0, 50, 100])
+    ax.set_ylim(y - 0.6, -1.15)
+    ax.set_xlim(66, 100)
+    ax.set_xticks([70, 80, 90, 100])
     clean(ax)
-    ax.set_xlabel('Analysis steps with a record (%)', fontsize=6)
-    ax.legend(handles=[Patch(facecolor=CODE, label='Custom code'), Patch(facecolor=GAL, label='Galaxy')],
-              fontsize=5.5, loc='lower left', bbox_to_anchor=(-0.02, 1.01), ncol=2, handlelength=0.9,
-              columnspacing=0.8, handletextpad=0.4)
+    ax.set_xlabel('Accuracy (%)', fontsize=6)
+    from matplotlib.lines import Line2D
+    ax.legend(handles=[Line2D([], [], marker=m, ls='', ms=3.6, mfc=INK2 if f else 'white', mec=INK2, mew=0.7,
+                              label=lab) for _, lab, m, f in marks],
+              fontsize=5.3, loc='lower left', bbox_to_anchor=(-0.02, 1.0), ncol=2, handletextpad=0.2,
+              columnspacing=1.0, borderaxespad=0.2)
     return rows
 
 
-def panel_tokens(ax):
-    f5 = pd.read_csv(os.path.join(FIG, 'fig5_source_data.csv'))
-    c5 = f5[f5.panel == 'c'].copy()
-    c5['value'] = pd.to_numeric(c5.value, errors='coerce')
-    stages = [('July: Round 1 in place: shorter skills, prompt guidance', 'Round 1'),
-              ('July: Round 2: submit, wait and check in one MCP call', 'Round 2'),
-              ('October: Archived runs (round 2 in place)', 'Round 2'),
-              ('October: Round 3: compact replies, templates (1 replicate)', 'Round 3\n(1 replicate)'),
-              ('October: Round 3 plus longer waits between requests', 'Round 3 +\nlonger waits')]
-    xs = [0, 1.1, 2.7, 3.85, 5.0]
-    rows, top = [], 185
-    for x, (grp, lab) in zip(xs, stages):
-        g = c5[c5.group == grp].set_index(c5[c5.group == grp].measure.str.split(' \\(').str[0])
-        gal, code = g.value['galaxy_tokens_m'], g.value['code_tokens_m']
-        ratio = g.value['ratio_of_tokens_per_50_task_run']
-        acc = g.value.get('galaxy_correct', np.nan)
-        ax.bar(x - 0.19, code, width=0.36, color=CODE, zorder=2)
-        ax.bar(x + 0.19, gal, width=0.36, color=GAL, zorder=2)
-        ax.text(x, max(gal, code) + 4, f'{ratio:.2f}×', ha='center', va='bottom', fontsize=5.5, color=INK,
-                fontweight='bold')
-        if not np.isnan(acc):
-            ax.text(x + 0.19, 3, f'{acc:.1f}% correct', ha='center', va='bottom', fontsize=4.8, color='white',
-                    rotation=90)
-        rows.append(dict(stage=grp, galaxy_tokens_millions=gal, custom_code_tokens_millions=code,
-                         galaxy_over_custom_code=ratio, galaxy_runs_correct_pct=acc))
-    ax.set_xticks(xs, [lab for _, lab in stages], fontsize=5.5, linespacing=1.05)
-    ax.tick_params(axis='x', length=0, pad=3)
-    ax.set_xlim(-0.55, 5.55)
-    ax.set_ylim(0, top)
+EXAMPLE_TASK, EXAMPLE_RUNS = 'bix-16-q1', ('galaxy_codex_gpt_5_6_luna_r1', 'open_ended_code_codex_gpt_5_6_luna_r1')
+
+
+def example_record():
+    """One analysis step as each condition retains it: bix-16-q1, GPT-5.6 Luna, replicate 1 (both runs correct).
+    Every field shown is read from the run evidence (runs/BixBench_50/analysis/<task>/history_analysis_evidence.json)."""
+    d = json.load(open(os.path.join(ARCHIVE, 'runs', 'BixBench_50', 'analysis', EXAMPLE_TASK,
+                                    'history_analysis_evidence.json')))
+    runs = {x['run_id']: x for x in d['runs']}
+
+    def job(run_id):
+        e = [e for e in runs[run_id]['events'] if 'featurewise_correlation' in str(e.get('tool'))]
+        return e[-1] if e else None
+
+    def params(e):
+        p = e['parameters'] if isinstance(e['parameters'], dict) else json.loads(e['parameters'])
+        return {k: str(v).strip('"') for k, v in p.items()}
+
+    g = job(EXAMPLE_RUNS[0])
+    p = params(g)
+    ids = lambda v: len(v) if isinstance(v, list) else str(v).count("'") // 2       # noqa: E731
+    code = [e for e in runs[EXAMPLE_RUNS[1]]['events'] if e['event_type'] == 'analysis']
+    cmds = ' '.join(str(e.get('command')) for e in code)
+    rec = dict(tool=g['tool'].split('/repos/')[-1].split('/')[1], version=g['tool'].rsplit('/', 1)[-1],
+               method=p['method'], transform_b=p['transform_b'], min_pairs=p['min_pairs'],
+               n_in=ids(g['input_artifact_ids']), n_out=ids(g['output_artifact_ids']), state=g['status'],
+               exit=g['exit_code'], code_steps=len(code), code_failed=sum(e['status'] == 'failed' for e in code))
+    assert rec['transform_b'] == 'negate' and rec['method'] == 'spearman', rec
+    assert 'pip install --disable-pip-version-check --no-input numpy scipy pandas' in cmds
+    assert not any(f'{m}==' in cmds for m in ('numpy', 'scipy', 'pandas')), 'packages were not pinned'
+    assert "'ess',format(-x[0]" in cmds, 'custom code takes essentiality as -rho'
+    ds = params(job('galaxy_deepseek_v4_pro_via_codex_r3'))
+    assert ds['transform_b'] == 'none', ds
+    r = pd.read_csv(os.path.join(FIG, 'scored_runs.csv'))
+    t = r[(r.task == EXAMPLE_TASK)].set_index(['cfg', 'env', 'replicate']).score
+    assert t[('GPT-5.6 Luna', 'galaxy', 1)] == 1 and t[('GPT-5.6 Luna', 'open_ended_code', 1)] == 1
+    assert t[('DeepSeek V4 Pro', 'galaxy', 3)] == 0
+    return rec
+
+
+def panel_provenance(ax):
+    rec = example_record()
+    ax.set_axis_off()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(1, 0)
+    c0, c1, c2 = 0.0, 0.215, 0.61
+    ax.add_patch(plt.Rectangle((c1 - 0.012, 0.0), 0.385, 0.86, fc='#e3eff7', ec='none', zorder=0))
+    ax.add_patch(plt.Rectangle((c2 - 0.012, 0.0), 0.402, 0.86, fc='#fbebe0', ec='none', zorder=0))
+    ax.text(c1, 0.035, 'Galaxy job record', fontsize=5.8, fontweight='bold', color=GAL, va='top')
+    ax.text(c2, 0.035, 'Custom-code trace', fontsize=5.8, fontweight='bold', color=CODE, va='top')
+    rows = [('Tool and version', f'{rec["tool"]}\n{rec["version"]} (Tool Shed identifier)',
+             'Inline Python script; pandas, NumPy\nand SciPy installed with unpinned pip'),
+            ('Parameters', f'Fields: method = {rec["method"]};\ntransform_b = {rec["transform_b"]}; '
+                           f'min_pairs = {rec["min_pairs"]}',
+             'Written in the code; essentiality\ntaken as −ρ when ranking'),
+            ('Inputs and\noutputs', f'{rec["n_in"]} input and {rec["n_out"]} output datasets,\nlinked by identifier '
+                                   f'in the history', 'Inputs named in the code; results\nprinted to the log only'),
+            ('Status', f'Job state "{rec["state"]}", exit code {rec["exit"]}',
+             f'Exit code per command ({rec["code_failed"]} of\n{rec["code_steps"]} analysis commands failed)'),
+            ('Answer', 'CDKN1A (accepted)', 'CDKN1A (accepted)')]
+    y = 0.135
+    for name, a, b in rows:
+        n = max(a.count('\n'), b.count('\n')) + 1
+        ax.text(c0, y, name, fontsize=5.3, fontweight='bold', va='top', color=INK)
+        ax.text(c1, y, a, fontsize=5.0, va='top', color=INK, linespacing=1.2)
+        ax.text(c2, y, b, fontsize=5.0, va='top', color=INK, linespacing=1.2)
+        y += 0.062 * n + 0.045
+        ax.plot([0, 1.0], [y - 0.028, y - 0.028], color=GRID, lw=0.5)
+    ax.text(c0, 0.9, 'The decisive choice is a stored field: DeepSeek V4 Pro r3 left transform_b = none and answered '
+                     'CCND1.', fontsize=5.3, color=INK2, va='top')
+    return [dict(element=n_, galaxy=a.replace('\n', ' '), custom_code=b.replace('\n', ' ')) for n_, a, b in rows]
+
+
+def panel_token_steps(ax):
+    """Galaxy / custom-code tokens per 50-task BixBench-Verified-50 run at each interface stage (numbers.json)."""
+    st = json.load(open(os.path.join(BC, 'numbers.json')))['token_stages']['value']
+    labels = ['Round 1', 'Round 2', 'Round 2\n(main runs)', 'Round 3\n(1 replicate)', 'Round 3 +\nlonger waits']
+    xs = [0, 1, 2.45, 3.45, 4.45]
+    rows = []
+    for seg, col in (((0, 1), INK), ((2, 3, 4), INK)):
+        x = [xs[i] for i in seg]
+        y = [float(st[i]['ratio_of_tokens_per_50_task_run']) for i in seg]
+        ax.step(x, y, where='mid', color=GAL, lw=1.0, zorder=2)
+    for i, (x, s_) in enumerate(zip(xs, st)):
+        r = float(s_['ratio_of_tokens_per_50_task_run'])
+        lo, hi = s_.get('ratio_lo'), s_.get('ratio_hi')
+        has_ci = lo is not None and not (isinstance(lo, float) and np.isnan(lo))
+        if has_ci:
+            ax.plot([x, x], [lo, hi], color=GAL, lw=0.8, zorder=3)
+        ax.scatter(x, r, s=16, marker='o', facecolor=GAL if has_ci else 'white', edgecolor=GAL, lw=0.8, zorder=4)
+        ax.text(x + 0.12, r, f'{r:.2f}×', fontsize=5.5, va='bottom', ha='left', color=INK, fontweight='bold')
+        acc = s_.get('galaxy_correct')
+        ax.text(x, 13.2, f'{float(acc):.1f}' if acc is not None else 'n.a.', ha='center', va='center', fontsize=5.3,
+                color=INK if acc is not None else INK2)
+        rows.append(dict(stage=labels[i].replace('\n', ' '), galaxy_over_custom_code=r,
+                         ci95_low=lo if has_ci else None, ci95_high=hi if has_ci else None,
+                         galaxy_runs_correct_pct=float(acc) if acc is not None else None,
+                         galaxy_tokens_millions=float(s_['galaxy_tokens_m']),
+                         custom_code_tokens_millions=float(s_['code_tokens_m'])))
+    ax.text(-0.55, 13.2, 'Galaxy\ncorrect (%)', ha='right', va='center', fontsize=5.3, color=INK2, linespacing=1.0)
+    ax.axhline(1, color=INK2, lw=0.6, ls=(0, (3, 2)), zorder=1)
+    ax.text(-0.4, 1.04, 'parity', fontsize=5, color=INK2, ha='left', va='bottom')
+    ax.axvline(1.72, color=GRID, lw=0.6)
+    ax.text(0.5, 9.4, 'GPT-5.5, July 2026', ha='center', fontsize=5.5, color=INK2)
+    ax.text(3.45, 9.4, 'GPT-5.6 Sol, October 2026', ha='center', fontsize=5.5, color=INK2)
+    ax.set_yscale('log')
+    ax.set_ylim(0.7, 16)
+    ax.set_yticks([1, 2, 4, 8], ['1×', '2×', '4×', '8×'])
+    ax.minorticks_off()
+    ax.set_xticks(xs, labels, fontsize=5.3, linespacing=1.0)
+    ax.tick_params(axis='x', length=0, pad=2.5)
+    ax.set_xlim(-0.45, 5.0)
     clean(ax, grid='y')
-    ax.set_ylabel('Tokens per 50-task run (millions)', fontsize=6)
-    ax.text(0.55, top * 1.01, 'GPT-5.5 (July)', ha='center', va='bottom', fontsize=5.5, color=INK2)
-    ax.text(3.85, top * 1.01, 'GPT-5.6 Sol (October)', ha='center', va='bottom', fontsize=5.5, color=INK2)
-    ax.axvline(1.9, color=GRID, lw=0.6)
-    ch = c5[c5.measure.str.contains('pct_change')].set_index('group')
-    for (a, b_), key, yb in (((0, 1.1), 'July', 168), ((2.7, 5.0), 'October', 143)):
-        ax.plot([a + 0.19, a + 0.19, b_ + 0.19, b_ + 0.19], [yb - 4, yb, yb, yb - 4], color=INK2, lw=0.5)
-        r = ch.loc[key]
-        ax.text((a + b_) / 2 + 0.19, yb + 1.5, f'{float(r.value):.1f}% ({r.ci95_low:.1f} to {r.ci95_high:.1f})'
-                .replace('-', '−'), ha='center', va='bottom', fontsize=5, color=INK)
+    ax.spines['top'].set_visible(False)
+    ax.set_ylabel('Galaxy ÷ custom-code tokens', fontsize=6)
     return rows
 
 
 def fig2():
-    fig = plt.figure(figsize=(180 * MM, 72 * MM))
-    a = fig.add_axes([0.118, 0.17, 0.20, 0.70])
-    b = fig.add_axes([0.425, 0.17, 0.145, 0.62])
-    c = fig.add_axes([0.655, 0.20, 0.335, 0.60])
-    ra, rb, rc = panel_causes(a), panel_record(b), panel_tokens(c)
-    fig.text(0.03, 0.965, 'Causes of incorrect BixBench-Verified-50 runs', fontsize=6.5, fontweight='bold', va='top')
-    fig.text(0.355, 0.965, 'What each analysis step records', fontsize=6.5, fontweight='bold', va='top')
-    fig.text(0.60, 0.965, 'Galaxy token use before and after interface changes', fontsize=6.5, fontweight='bold',
+    fig = plt.figure(figsize=(180 * MM, 128 * MM))
+    a = fig.add_axes([0.135, 0.585, 0.30, 0.355])
+    b = fig.add_axes([0.665, 0.585, 0.25, 0.30])
+    c = fig.add_axes([0.03, 0.035, 0.44, 0.40])
+    d = fig.add_axes([0.62, 0.11, 0.355, 0.33])
+    ra, rb, rc, rd = panel_causes(a), panel_consensus(b), panel_provenance(c), panel_token_steps(d)
+    fig.text(0.03, 0.975, 'Causes of incorrect BixBench-Verified-50 runs', fontsize=6.5, fontweight='bold', va='top')
+    fig.text(0.52, 0.975, 'Accuracy of one run and of consensus across replicates', fontsize=6.5, fontweight='bold',
              va='top')
-    letter(fig, 0.005, 0.985, 'a')
-    letter(fig, 0.33, 0.985, 'b')
-    letter(fig, 0.575, 0.985, 'c')
+    fig.text(0.03, 0.485, 'One analysis step as each condition records it', fontsize=6.5, fontweight='bold', va='top')
+    fig.text(0.03, 0.458, 'bix-16-q1, GPT-5.6 Luna, replicate 1', fontsize=5.5, color=INK2, va='top')
+    fig.text(0.52, 0.485, 'Galaxy token use relative to custom code', fontsize=6.5, fontweight='bold', va='top')
+    letter(fig, 0.005, 0.99, 'a')
+    letter(fig, 0.497, 0.99, 'b')
+    letter(fig, 0.005, 0.50, 'c')
+    letter(fig, 0.497, 0.50, 'd')
     save(fig, 'Fig2')
     with pd.ExcelWriter(os.path.join(OUT, 'Source_Data_Fig2.xlsx')) as w:
         pd.DataFrame(ra).to_excel(w, sheet_name='Fig2a', index=False)
         pd.DataFrame(rb).to_excel(w, sheet_name='Fig2b', index=False)
         pd.DataFrame(rc).to_excel(w, sheet_name='Fig2c', index=False)
+        pd.DataFrame(rd).to_excel(w, sheet_name='Fig2d', index=False)
 
 
 if __name__ == '__main__':

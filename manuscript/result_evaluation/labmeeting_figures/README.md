@@ -610,6 +610,9 @@ Caveats:
 - `make_labmeeting_figures.py`: computes everything and draws the eight Fig. 2 figures.
 - `make_trajectory_figures.py` and `trajectory_steps.py`: Fig. 3, from the frame, the job ledgers and the archived answers.
 - `make_case_figures.py`: the five Fig. 3 case studies (case 5 is retired); `fig3_cases.csv` lists the runs they show.
+- `make_failure_cards.py`: failure cards, one task with its accepted answer and each wrong Galaxy run's answer and reason (`card_bix-16-q1`: 3 of 12 Galaxy runs wrong, DeepSeek V4 Pro r1 and r3 and GPT-5.6 Luna r2). Each reason is traced to the run's agent trace; `failure_cards.csv` lists the runs with their trace line numbers.
+- `make_systematic_errors.py`: `systematic_errors`, the three BixBench-Verified-50 tasks solved by the fewest of their 24 runs (bix-61-q5 0/24, bix-26-q5 1/24, bix-54-q7 2/24), each run's answer in a model × condition grid with the reason from the task-level trace audit (`docs/reports/individual_error_analysis.md`); `systematic_errors.csv` lists every run shown.
+- `make_galaxy_failures.py`: `galaxy_failures`, the tasks custom code solved in 11 or 12 of 12 runs where the trace audit attributes the Galaxy misses to Galaxy itself (bix-31-q2, spatial-sim-q2, gtf-5-utr-median-len-q1: execution failed and the agent switched route; bix-28-q3, bix-52-q7: a tool returned a misleading value), with every task's runs correct per condition for context. `galaxy_failures.csv` lists the runs shown and `galaxy_failures_tasks.csv` every task's counts.
 - `make_token_figures.py` and `token_phases.py`: the four Fig. 4 token figures; `token_phases.py` splits a run's model requests into phases from its agent trace.
   - Cases 1–3, where custom code solved and Galaxy did not: `fig3_case1_bix-52-q7`, `fig3_case2_ml-model-track-overlap-q1`, `fig3_case3_overexpress-tf-q1`.
   - Cases 4 and 6, where Galaxy solved and custom code did not: `fig3_case4_contaminated-rna-q3`, `fig3_case6_contaminated-rna-q2`.
@@ -654,6 +657,9 @@ python manuscript/result_evaluation/labmeeting_figures/make_labmeeting_figures.p
 python manuscript/result_evaluation/labmeeting_figures/make_trajectory_figures.py   # reads fig2_task_similarity.csv
 python manuscript/result_evaluation/labmeeting_figures/make_case_figures.py         # reads fig3_frame_runs.csv
 python manuscript/result_evaluation/labmeeting_figures/make_token_figures.py        # reads the traces; about 20 s
+python manuscript/result_evaluation/labmeeting_figures/make_failure_cards.py        # checks grades against figures/scored_runs.csv
+python manuscript/result_evaluation/labmeeting_figures/make_systematic_errors.py    # reads the archived answers; about 1 min
+python manuscript/result_evaluation/labmeeting_figures/make_galaxy_failures.py
 ```
 
 The bootstrap and permutation draws use the fixed seed of `figures/make_fig2.py`, so a rebuild reproduces every number.

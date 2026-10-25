@@ -11,7 +11,7 @@ This folder rebuilds `../Galaxy_agents_original_layout_manuscript.docx` as a Nat
 | `supplementary/Supplementary_Tables.xlsx` | Supplementary Tables 1–6, one sheet each |
 | `supplementary/Supplementary_Data_1.xlsx` | Source data of Supplementary Figs. 1–11, one sheet each |
 | `supplementary/Supplementary_Data_2.xlsx` | Run index: every run with its agent trace, results-site page and Galaxy history, and the history access check (sheets: Primary runs 3,840; Replaced runs 77; Interface rounds 450). The primary sheet is also `Supplementary_Data_2_primary_runs.csv` |
-| `figures/Fig1.*`, `figures/Fig2.*` | Main figures: 180 mm wide, Arial 5–7 pt, PDF, SVG and 600-dpi PNG |
+| `figures/Fig1.*`, `figures/Fig2.*` | Main figures: 180 mm wide, Arial 5–7 pt, PDF, SVG and 600-dpi PNG (300-dpi copies embedded in the .docx). Fig. 1: a, design; b–d, Galaxy − custom code by model and pooled. Fig. 2: a, failure causes by sibling replicates correct; b, single run, majority of 3, majority of 12 and at least 1 of 3 correct; c, one analysis step as each condition records it (bix-16-q1, GPT-5.6 Luna r1; every field checked against the run evidence); d, Galaxy ÷ custom-code tokens by interface round |
 | `figures/Source_Data_Fig1.xlsx`, `figures/Source_Data_Fig2.xlsx` | Source Data for the main figures |
 
 ## Build
@@ -33,7 +33,7 @@ The text is in `scripts/content.js` (manuscript) and `scripts/si_notes.js` (Supp
 ## Format checks (2026-10-20)
 
 - Abstract: 69 words, no references (limit 70).
-- Counted text: abstract, main text (1,005), figure legends (298) and main-text references (224), 1,596 words in total. The limit is 1,200 words, extendable to 1,600 at the editors' discretion.
+- Counted text: abstract, main text (1,007), figure legends (271) and main-text references (224), 1,571 words in total. The limit is 1,200 words, extendable to 1,600 at the editors' discretion.
 - Voice: the text follows the PI's style (GLEAM, mlsurv and ITCR samples): gap, "To address this gap, we…", results with intervals, grouped limitations "First… Second… Third…", "Future work will…".
 - Two display items; 11 main-text references and 5 Methods-only references.
 - Methods: about 2,400 words with subheadings, a Statistics and reproducibility section and a Reporting summary statement.

@@ -8,7 +8,7 @@ Sheets:
   runs published on 2026-10-12, whose links come from data/site_links_wf007_replacement.csv (fetch_site_links.py).
 - Replaced runs: the 53 CompBioBench originals replaced by the reviewed reruns of 2026-10-05 and the 24 superseded
   IWC wf_007 runs, with their links.
-- Interface rounds: the BixBench-Verified-50 runs of Fig. 2c that are not primary runs, namely the 6 July 2026 GPT-5.5
+- Interface rounds: the BixBench-Verified-50 runs of Fig. 2d that are not primary runs, namely the 6 July 2026 GPT-5.5
   round-1 runs (data/site_links_july6_round1.csv) and the October 2026 GPT-5.6 Sol round-3 runs with longer waits
   (runs/token_optimization/). The round-2 GPT-5.5 runs and the archived GPT-5.6 Sol runs are primary runs.
 If data/galaxy_history_check.csv exists (check_galaxy_histories.py), each history link carries its check result.
@@ -174,7 +174,7 @@ def readme(n_shared, check):
          'agreeing with the answer key (CompBioBench) or output agreement ≥ 0.99 (IWC-derived tasks).'),
         ('Replaced runs', '53 CompBioBench Galaxy runs replaced by the reviewed reruns of 5 October 2026 and 24 IWC '
          'wf_007 runs replaced by the results site on 12 October 2026. They are not part of the comparison.'),
-        ('Interface rounds', 'BixBench-Verified-50 runs of Fig. 2c that are not primary runs: the 6 July 2026 GPT-5.5 '
+        ('Interface rounds', 'BixBench-Verified-50 runs of Fig. 2d that are not primary runs: the 6 July 2026 GPT-5.5 '
          'round-1 runs (both conditions) and the October 2026 GPT-5.6 Sol round-3 runs with longer waits (Galaxy). '
          'The round-2 GPT-5.5 runs and the archived GPT-5.6 Sol runs are primary runs. The single round-3 batch '
          'without longer waits has statistics only and no run links.'),

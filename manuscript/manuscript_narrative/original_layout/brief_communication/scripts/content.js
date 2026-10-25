@@ -62,10 +62,10 @@ const main = [
   'replicate groups in which all three runs were wrong. In contrast, missing validation, the main agent-side cause,' +
   ' was largely random: 16 of its 32 cases occurred in groups whose other two replicates were correct. Notably, at ' +
   'least one replicate was correct in 85–94% of replicate groups, yet a majority vote added at most 2.3 points ' +
-  '(Supplementary Fig. 4 and Supplementary Table 1). Thus, a validation step that selects a correct replicate could' +
+  '(Fig. 2b, Supplementary Fig. 4 and Supplementary Table 1). Thus, a validation step that selects a correct replicate could' +
   ' recover more errors than voting.',
   // P5 - what Galaxy records and what it costs
-  'Galaxy also recorded each analysis in a structured form that can be audited (Fig. 2b and Supplementary Fig. 5). ' +
+  'Galaxy also recorded each analysis in a structured form that can be audited (Fig. 2c and Supplementary Fig. 5). ' +
   'All 37,498 analysis steps in Galaxy runs recorded the tool and its version, the parameters and the output ' +
   'datasets, and the Galaxy history was retrieved for 1,871 of 1,908 runs. In contrast, custom-code runs retained ' +
   'the 55,380 commands that they ran but no structured record of software versions, parameters or outputs. This ' +
@@ -73,7 +73,7 @@ const main = [
   'BixBench-Verified-50, CompBioBench and the IWC-derived tasks (Supplementary Table 2 and Supplementary Fig. 6). ' +
   'Agent traces showed that, in the first-round GPT-5.5 batch, Galaxy runs took 2.66 times as many steps as ' +
   'custom-code runs, and each step reread 2.2 times as much context (Methods). Treating the agents as virtual ' +
-  'users, we changed the interface to reduce these overheads and reran BixBench-Verified-50 (Fig. 2c). Combining ' +
+  'users, we changed the interface to reduce these overheads and reran BixBench-Verified-50 (Fig. 2d). Combining ' +
   'job submission, waiting and checking into one MCP call, among other changes, reduced Galaxy tokens by 55.2% (95%' +
   ' CI 44.9–62.8%) with GPT-5.5. Compact replies and longer waits between checks reduced them by a further 55.6% ' +
   '(46.4–63.0%) with GPT-5.6 Sol, to 1.53 times custom code, while 137 of 150 runs remained correct (136 before). ' +
@@ -96,29 +96,27 @@ const legends = [
     file: 'Fig1_300dpi.png',
     title: 'Fig. 1 | Agents performed with similar accuracy in Galaxy and with custom code.',
     body:
-      '**a**, Study design: each of four model configurations attempted each of 160 tasks three times with Galaxy and ' +
-      'with custom code. **b**–**d**, Galaxy minus custom ' +
-      'code for each model (open circles) and for the four models pooled (filled diamonds) on BixBench-Verified-50 ' +
-      '(**b**; accepted runs), CompBioBench (**c**; runs agreeing with the answer key) and the IWC-derived tasks (**d**; ' +
-      'mean output agreement); condition means are given above each panel. Grey bands in **b** and **c** mark ±5 ' +
-      'percentage points. Error bars, 95% cluster-bootstrap CIs (20,000 resamples; clusters are BixBench source capsules ' +
-      'or tasks); *n* = 150 (**b**), 300 (**c**) and 30 (**d**) runs per model and condition. With ten IWC-derived tasks ' +
-      'the bootstrap interval is too narrow; the exact paired *P* for the pooled difference is 0.055.',
+      '**a**, Study design: four model configurations attempted each of 160 tasks three times in each condition. ' +
+      '**b**–**d**, Galaxy minus custom code for each model (open circles) and pooled (filled diamonds) on ' +
+      'BixBench-Verified-50 (**b**; accepted runs), CompBioBench (**c**; agreement with the answer key) and the ' +
+      'IWC-derived tasks (**d**; mean output agreement); condition values above each panel. Grey bands, ±5 percentage ' +
+      'points. Error bars, 95% cluster-bootstrap CIs (clusters: BixBench source capsules or tasks); *n* = 150 (**b**), ' +
+      '300 (**c**) and 30 (**d**) runs per model and condition. With ten IWC-derived tasks the interval is too narrow; ' +
+      'the exact paired *P* of the pooled difference is 0.055.',
   },
   {
     file: 'Fig2_300dpi.png',
-    title: 'Fig. 2 | Most failures came from the benchmark, Galaxy recorded every analysis step, and interface changes ' +
-      'reduced Galaxy\'s token use.',
+    title: 'Fig. 2 | Most errors came from the benchmark, voting recovered few of them, and interface changes reduced ' +
+      'Galaxy\'s token use.',
     body:
-      '**a**, Primary causes of the 151 incorrect BixBench-Verified-50 runs (both conditions), assigned from execution ' +
-      'traces, by the number of correct sibling replicates (the other two runs of the same task, model and condition). ' +
-      '**b**, Percentage of analysis steps for which the archive retains each element: Galaxy jobs (*n* = 37,498 steps) ' +
-      'and custom-code analysis commands (*n* = 55,380 steps). **c**, Tokens (input including cached context, plus ' +
-      'output) per complete 50-task BixBench-Verified-50 run for custom code (vermillion) and Galaxy (blue), across rounds ' +
-      'of interface changes with GPT-5.5 (July 2026) and GPT-5.6 Sol (October 2026). Numbers above bars, Galaxy ÷ custom ' +
-      'code; numbers in bars, Galaxy runs correct. Brackets, change in Galaxy tokens from the first to the last stage ' +
-      '(paired by task; 95% cluster-bootstrap CIs). Round 3 without longer waits was run once over the 50 tasks; the ' +
-      'other stages have three runs per task.',
+      '**a**, Primary causes of the 151 incorrect BixBench-Verified-50 runs (both conditions), from execution traces, by ' +
+      'the number of correct sibling replicates (the other two runs of the same task, model and condition). **b**, ' +
+      'Accuracy of a single run, a majority of 3 replicates, a majority of all 12 runs of a task and at least 1 of 3 ' +
+      'correct (the ceiling for selecting a correct replicate), four models pooled; IWC-derived runs are correct at ' +
+      'output agreement ≥ 0.99. A vote on the submitted answers is in Supplementary Table 1. **c**, One analysis step ' +
+      'as recorded by the Galaxy job and by the custom-code trace; both runs answered correctly. **d**, Galaxy ÷ ' +
+      'custom-code tokens per 50-task BixBench-Verified-50 run across interface rounds, with the percentage of Galaxy ' +
+      'runs correct. Error bars, 95% cluster-bootstrap CIs; open circle, a single replicate.',
   },
 ];
 
@@ -296,7 +294,7 @@ const reporting = 'Further information on research design is available in the Na
 
 const dataAvailability = 'Supplementary Data 2 lists every run with links to its agent trace, its page on the results ' +
   'site (https://goeckslab.github.io/galaxy-agent-benchmark/) and, for Galaxy runs, its usegalaxy.org history: the ' +
-  '3,840 primary runs, the 77 runs replaced by reruns and the 450 interface-round runs of Fig. 2c. The agent traces of ' +
+  '3,840 primary runs, the 77 runs replaced by reruns and the 450 interface-round runs of Fig. 2d. The agent traces of ' +
   'both conditions, with prompts, submitted answers, token usage and evaluation records, are in the Hugging Face ' +
   'dataset goeckslab/galaxy-agent-benchmark-run-traces [[Authors: the dataset currently requires authorization; make ' +
   'it public or state how readers obtain access, and deposit a snapshot with a DOI]]. On 20 October 2026, 2,281 of the ' +
