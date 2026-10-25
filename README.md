@@ -8,6 +8,8 @@ Galaxy-Bench evaluates biomedical AI agents as iterative scientific problem-solv
 
 ## Repository map
 
+For cloning onto another computer, follow [the migration and archive restoration instructions](docs/migration/README.md).
+
 | Folder | What it holds | Start with |
 |---|---|---|
 | [benchmark/](benchmark/) | What an agent is given: task prompts, evaluator references, local inputs | [benchmark/README.md](benchmark/README.md) |

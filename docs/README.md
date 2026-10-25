@@ -3,6 +3,7 @@
 | File | Contents | Produced by |
 |---|---|---|
 | [REPOSITORY_LAYOUT.md](REPOSITORY_LAYOUT.md) | Where each folder lived before the 2026-10-14 re-layout | — |
+| [migration/README.md](migration/README.md) | Clone instructions, preserved ignored evidence, dataset restoration and local setup exclusions | Migration audit, 2026-10-25 |
 | [HISTORY_ANALYSIS_INSTRUCTIONS.md](HISTORY_ANALYSIS_INSTRUCTIONS.md) | Procedure for building the per-task evidence packages in `runs/` | — |
 | [Journal.md](Journal.md) | Notes from the early GalaxyBench experiments | — |
 | [reports/Result_table.md](reports/Result_table.md) | Cross-benchmark result tables, 2026-09-23 (archive scores, before the site-matched rescoring) | [analysis/scripts/build_result_tables.py](../analysis/scripts/build_result_tables.py) |
