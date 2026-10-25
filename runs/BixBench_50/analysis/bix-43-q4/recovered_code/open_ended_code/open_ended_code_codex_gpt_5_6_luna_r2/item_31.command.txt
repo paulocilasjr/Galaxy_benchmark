@@ -1,0 +1,27 @@
+/bin/bash -lc "cat > /workspace/run_variant.py <<'PY'
+import sys, pandas as pd, gseapy
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+base='/workspace/inputs'; mode=sys.argv[1]
+c=pd.read_csv(base+'/counts_raw_unfiltered.csv',index_col=0); l=pd.read_csv(base+'/sample_layout.csv'); l['col']=l.SampleID.str.replace('-','_',regex=False)
+m=pd.read_csv(base+'/ensg_to_gene_name.tsv',sep='\\t'); ids=set(m.ENSG)
+if mode.startswith('mapped'): c=c.loc[c.index.isin(ids)]
+if mode.startswith('prefilter'): c=c.loc[c.sum(axis=1)>=10]
+if mode.endswith('full'):
+ lay=l.copy(); c=c[lay.col.tolist()].T; c.index=lay.SampleID.tolist(); meta=lay.set_index('SampleID')[['Group']]
+else:
+ lay=l[l.Group.isin(['DMSO','Cisplatin_IC50_CBD_IC50'])].copy(); c=c[lay.col.tolist()].T; c.index=lay.SampleID.tolist(); meta=lay.assign(condition=lay.Group.map({'DMSO':'DMSO','Cisplatin_IC50_CBD_IC50':'treat'})).set_index('SampleID')[['condition']]
+c=c.loc[:,c.sum()>0].astype(int)
+design='Group' if mode.endswith('full') else 'condition'
+print(mode,c.shape)
+d=DeseqDataSet(counts=c,metadata=meta,design_factors=design,refit_cooks=True,n_cpus=2); d.deseq2()
+if mode.endswith('full'): con=['Group','Cisplatin_IC50_CBD_IC50','DMSO']
+else: con=['condition','treat','DMSO']
+s=DeseqStats(d,contrast=con,alpha=.05,cooks_filter=True,independent_filter=True); s.summary(); r=s.results_df
+r['gene_name']=r.index.map(dict(zip(m.ENSG,m.gene_name)))
+deg=r[(r.padj<.05)&(abs(r.log2FoldChange)>=.5)&r.gene_name.notna()]
+lib=gseapy.get_library(name='Reactome_2022',organism='Human'); path=set(lib[[k for k in lib if k.startswith('TP53 Regulates Transcription Of Cell Cycle Genes')][0]])
+print('DEGs',len(deg),'overlap',len(set(deg.gene_name)&path),'/',len(path), sorted(set(deg.gene_name)&path))
+print(deg[deg.gene_name.isin(path)][['gene_name','log2FoldChange','pvalue','padj']].sort_values('gene_name').to_string(index=False))
+PY
+python /workspace/run_variant.py mapped_subset"

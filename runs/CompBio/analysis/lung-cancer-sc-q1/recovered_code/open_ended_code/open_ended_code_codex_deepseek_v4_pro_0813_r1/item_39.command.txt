@@ -1,0 +1,46 @@
+/bin/bash -c "python - <<'PY'
+import scanpy as sc, numpy as np, pandas as pd, time, anndata
+f='lung.cancer.sc.h5ad'
+t=time.time(); adata=sc.read_h5ad(f); print('read', time.time()-t)
+adata.var_names_make_unique()
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+sc.pp.highly_variable_genes(adata, n_top_genes=2000, flavor='seurat_v3', batch_key='sampleID')
+print('hvg', time.time()-t, 'n hvg', adata.var.highly_variable.sum())
+sc.pp.pca(adata, n_comps=50, use_highly_variable=True, svd_solver='arpack')
+print('pca', time.time()-t)
+# KMeans with 30 clusters on PCA
+from sklearn.cluster import KMeans
+X=adata.obsm['X_pca']
+km=KMeans(n_clusters=30, random_state=0, n_init=3, max_iter=300)
+labels=km.fit_predict(X)
+adata.obs['kmeans']=labels.astype(str)
+print('kmeans done', time.time()-t)
+# Save obs and marker scores? Save cluster marker summary for key genes
+markers=['PTPRC','EPCAM','KRT5','KRT14','TP63','SOX2','NKX2-1','NAPSA','SFTPB','SFTPC','KRT7','CD3D','CD3E','CD4','CD8A','MS4A1','CD79A','MZB1','JCHAIN','CD14','FCGR3A','LYZ','CD68','CD163','FCER1A','CLEC9A','CD1C','LILRA4','LAMP3','CCR7','KIT','TPSAB1','CPA3','COL1A1','DCN','PECAM1','VWF','CLDN5','MKI67','MUC1','AGER','SCGB1A1','FOXJ1','HOPX','ABCA3','KRT15','KRT6A','DSC3','DSG3','SERPINB3','SERPINB4','KRT17','SLC34A2','CLDN3','ELF3','EPAS1']
+sym=adata.var['symbol'].astype(str).values
+# map
+idx_map={}
+for g in np.unique(sym): idx_map[g]=np.where(sym==g)[0]
+X=adata.X
+expr={}
+for g in markers:
+    idx=idx_map.get(g)
+    if idx is not None and len(idx)>0:
+        expr[g]=np.asarray(X[:,idx[0]].toarray()).ravel()
+    else: expr[g]=np.zeros(adata.n_obs)
+expr['sampleID']=adata.obs['sampleID'].values
+expr['kmeans']=adata.obs['kmeans'].values
+expr_df=pd.DataFrame(expr,index=adata.obs_names)
+# group by kmeans and sampleID
+cluster_summary=expr_df.groupby('kmeans').agg(n=('PTPRC','size'), **{g:(g,'mean') for g in markers})
+print('cluster summary done')
+cluster_summary.to_csv('cluster_summary.csv')
+# sample cluster cross-tab
+ct=pd.crosstab(adata.obs['sampleID'], adata.obs['kmeans'])
+ct.to_csv('sample_cluster_counts.csv')
+# save kmeans labels and sampleID
+adata.obs[['sampleID','kmeans']].to_csv('cell_kmeans_labels.csv')
+print('saved', time.time()-t)
+print(cluster_summary.to_string())
+PY"

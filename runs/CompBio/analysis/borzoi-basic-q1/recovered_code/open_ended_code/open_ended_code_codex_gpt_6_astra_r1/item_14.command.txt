@@ -1,0 +1,28 @@
+/bin/bash -lc "cat > inspect_weights.py <<'PY'
+import h5py
+import json
+import math
+import collections
+import sys
+for filename in sys.argv[1:]:
+    with h5py.File(filename, 'r') as f:
+        print(filename, 'attributes:', list(f.attrs), 'groups:', list(f.keys())[:10])
+        if 'model_config' in f.attrs:
+            config = json.loads(f.attrs['model_config'])
+            with open(filename + '.config.json', 'w') as out:
+                json.dump(config, out, indent=2)
+        weights=[]
+        def visit(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                weights.append(dict(name=name, shape=obj.shape, count=math.prod(obj.shape), dtype=str(obj.dtype)))
+        f.visititems(visit)
+        with open(filename + '.weights.json', 'w') as out:
+            json.dump(weights, out, indent=2)
+        totals=collections.Counter()
+        for w in weights:
+            totals[w['name'].split('/')[-1]]+=w['count']
+        print('Totals by variable:', totals)
+        print('All parameters:',sum(w['count'] for w in weights))
+        print('Excluding moving statistics:',sum(w['count'] for w in weights if 'moving_mean' not in w['name'] and 'moving_variance' not in w['name']))
+        print('Final weights:',weights[-12:])
+PY"

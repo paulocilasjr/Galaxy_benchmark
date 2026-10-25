@@ -1,0 +1,27 @@
+/bin/bash -lc "python - <<'PY'
+import struct, json
+D=open('zenodo_tail.bin','rb').read(); tail_start=18731132386; cabs=18743175510; csize=7956778
+p=cabs-tail_start; end=p+csize; out=[]
+while p<end:
+ if D[p:p+4]"'!=b'"'PK\\x01\\x02': print('bad',p,D[p:p+8]); break
+ vals=struct.unpack_from('<4s6H3L5H2L',D,p)
+ sig,ver_made,ver_needed,flags,method,time,date,crc,csize32,usize32,nlen,xlen,clen,disk,iattr,eattr,loff32=vals
+ name=D[p+46:p+46+nlen].decode('utf-8')
+ extra=D[p+46+nlen:p+46+nlen+xlen]
+ loff=loff32; csz=csize32; usz=usize32
+ ep=0
+ while ep+4<=len(extra):
+  typ,sz=struct.unpack_from('<HH',extra,ep); dat=extra[ep+4:ep+4+sz]
+  if typ==0x0001:
+   q=0
+   if usize32==0xffffffff: usz=struct.unpack_from('<Q',dat,q)[0]; q+=8
+   if csize32==0xffffffff: csz=struct.unpack_from('<Q',dat,q)[0]; q+=8
+   if loff32==0xffffffff: loff=struct.unpack_from('<Q',dat,q)[0]; q+=8
+  ep+=4+sz
+ out.append({'name':name,'method':method,'csize':csz,'usize':usz,'loff':loff,'flags':flags})
+ p+=46+nlen+xlen+clen
+print('entries',len(out),'parsed bytes',p-(cabs-tail_start), 'expected',csize)
+for x in out:
+ if any(y in x['name'] for y in ['train_gru','model_best','params.json']): print(x)
+open('zip_entries.json','w').write(json.dumps(out,indent=2))
+PY"

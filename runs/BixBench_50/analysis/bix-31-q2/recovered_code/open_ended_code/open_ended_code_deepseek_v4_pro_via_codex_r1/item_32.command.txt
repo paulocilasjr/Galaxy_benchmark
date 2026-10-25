@@ -1,0 +1,71 @@
+/bin/bash -c "python - <<'PY'
+import time, os, gc, warnings
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+t0=time.time()
+print('loading', flush=True)
+counts=pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0).T
+counts.index.name='sample'
+print('counts', counts.shape, flush=True)
+meta=pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv', index_col=0)
+meta=meta.loc[counts.index]
+meta['batch']=pd.Categorical(meta['batch'], categories=sorted(meta['batch'].astype(int).unique()))
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'])
+assert meta.index.equals(counts.index)
+assert 'FAM138A' in counts.columns
+
+dds=DeseqDataSet(counts=counts, metadata=meta, design='~batch+sex', n_cpus=1, quiet=False, low_memory=True)
+del counts
+gc.collect()
+print('dds made, design columns', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+dds.deseq2()
+print('deseq2 done', time.time()-t0, flush=True)
+print('LFC columns available', dds.varm['LFC'].columns.tolist(), flush=True)
+
+stat=DeseqStats(dds, contrast=['sex','M','F'], alpha=0.05, n_cpus=1, quiet=False)
+stat.summary()
+print('summary done', time.time()-t0, flush=True)
+print('LFC columns in stats', stat.LFC.columns.tolist(), flush=True)
+print('results cols', stat.results_df.columns.tolist(), flush=True)
+
+coeff='sex[T.M]'
+coeff_idx=stat.LFC.columns.get_loc(coeff)
+prior_var=stat._fit_prior_var(coeff_idx=coeff_idx)
+prior_scale=float(np.minimum(np.sqrt(prior_var), 1))
+print('prior_var', prior_var, 'prior_scale', prior_scale, flush=True)
+
+gene='FAM138A'
+gene_idx=dds.var_names.get_loc(gene)
+design_matrix=dds.obsm['design_matrix'].values
+size=1.0/dds.var['dispersions'].values
+offset=np.log(dds.obs['size_factors']).values
+
+print('running exact apeGLM for', gene, flush=True)
+lfcs, inv_hessians, converged = stat.inference.lfc_shrink_nbinom_glm(
+    design_matrix=design_matrix,
+    counts=dds.X[:, [gene_idx]],
+    size=size[[gene_idx]],
+    offset=offset,
+    prior_no_shrink_scale=15,
+    prior_scale=prior_scale,
+    optimizer='L-BFGS-B',
+    shrink_index=coeff_idx,
+)
+ln_lfc=float(np.array(lfcs)[0, coeff_idx])
+log2_lfc=ln_lfc/np.log(2)
+se_ln=np.sqrt(np.abs(np.array(inv_hessians)[0, coeff_idx, coeff_idx]))
+print('target raw (natural-log LFC)', ln_lfc, 'log2 LFC', log2_lfc, 'se ln', se_ln, 'converged', converged, flush=True)
+print('unshrunken row', flush=True)
+print(stat.results_df.loc[gene], flush=True)
+print('unshrunken log2 LFC', stat.results_df.loc[gene,'log2FoldChange'], 'baseMean', stat.results_df.loc[gene,'baseMean'], flush=True)
+crit=(stat.results_df['log2FoldChange'].abs()>0.5)&(stat.results_df['baseMean']>10)
+print('passing criteria unshrunken', int(crit.sum()), 'FAM passes', bool(crit.loc[gene]), flush=True)
+
+os.makedirs('/workspace/codex_output', exist_ok=True)
+with open('/workspace/codex_output/answer.txt','w') as f:
+    f.write(f'{log2_lfc:.15g}\\n')
+print('wrote', log2_lfc, 'elapsed', time.time()-t0, flush=True)
+PY"

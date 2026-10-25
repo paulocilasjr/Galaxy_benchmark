@@ -1,0 +1,82 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import re, math
+p=Path('/workspace/inputs/data.xlsx')
+ns={'a':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+def col_index(cell_ref):
+    s=re.match(r'([A-Z]+)', cell_ref).group(1); n=0
+    for ch in s: n=n*26+ord(ch)-64
+    return n-1
+with ZipFile(p) as z:
+    root=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    ss=[''.join(t.text or '' for t in si.findall('.//a:t', ns)) for si in root.findall('a:si', ns)]
+    sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    rows=[]
+    for row in sheet.findall('.//a:sheetData/a:row', ns):
+        vals={}
+        for c in row.findall('a:c', ns):
+            val=''
+            v=c.find('a:v', ns)
+            if v is not None:
+                val=v.text
+                if c.attrib.get('t')=='s': val=ss[int(val)]
+            vals[col_index(c.attrib['r'])]=val
+        if vals:
+            rows.append([vals.get(i,'') for i in range(max(vals)+1)])
+width=max(len(r) for r in rows)
+rows=[r+['']*(width-len(r)) for r in rows]
+header=rows[0]
+ages=[]; ys=[]
+for r in rows[1:]:
+    d=dict(zip(header,r))
+    if d.get('Sequence number','').strip():
+        ages.append(float(d['Age']))
+        eff=d['Efficacy'].strip()
+        ys.append(1.0 if eff=='PR' else 0.0)
+
+def logistic(eta):
+    if eta>=0:
+        z=math.exp(-eta); return 1/(1+z)
+    z=math.exp(eta); return z/(1+z)
+
+def fit(ages,ys):
+    b0=0.0; b1=0.0
+    for it in range(100):
+        g0=g1=0.0
+        h00=h01=h11=0.0
+        ll=0.0
+        for x,y in zip(ages,ys):
+            eta=b0+b1*x
+            p=logistic(eta)
+            # log likelihood stable
+            if eta>=0:
+                log1pexp=eta+math.log1p(math.exp(-eta))
+            else:
+                log1pexp=math.log1p(math.exp(eta))
+            ll += y*eta - log1pexp
+            diff=y-p
+            w=p*(1-p)
+            g0 += diff
+            g1 += diff*x
+            h00 -= w
+            h01 -= w*x
+            h11 -= w*x*x
+        # solve H step = g, beta_new = beta - step
+        det=h00*h11-h01*h01
+        s0=( h11*g0 - h01*g1)/det
+        s1=(-h01*g0 + h00*g1)/det
+        nb0=b0-s0; nb1=b1-s1
+        if max(abs(nb0-b0), abs(nb1-b1)) < 1e-13:
+            return nb0, nb1, it+1, ll, (g0,g1)
+        b0,b1=nb0,nb1
+    return b0,b1,it+1,ll,(g0,g1)
+for event_name, yvec in [('PR',ys),('nonPR',[1-y for y in ys])]:
+    b0,b1,it,ll,score=fit(ages,yvec)
+    print(event_name, 'n',len(yvec),'events',sum(yvec),'it',it)
+    print('intercept %.15g age %.15g OR %.15g ll %.15g score %r'%(b0,b1,math.exp(b1),ll,score))
+# grouped summaries useful for plausibility
+print('mean age responders', sum(x for x,y in zip(ages,ys) if y)/sum(ys))
+print('mean age nonresponders', sum(x for x,y in zip(ages,ys) if not y)/(len(ys)-sum(ys)))
+PY"

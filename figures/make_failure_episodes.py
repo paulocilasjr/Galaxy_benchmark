@@ -21,12 +21,14 @@ import shlex
 
 import pandas as pd
 
+import replaced_runs  # figures/replaced_runs.py
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-EVIDENCE = [os.path.join(ROOT, b, 'analysis', '*', 'history_analysis_evidence.json') for b in ('BixBench_50', 'CompBio', 'IWC')]
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+EVIDENCE = [os.path.join(ROOT, b, 'analysis', '*', 'history_analysis_evidence.json') for b in ('runs/BixBench_50', 'runs/CompBio', 'runs/IWC')]
 TRACE_MODEL = {'codex_gpt_5_5': 'GPT-5.5', 'codex_gpt_5_6_sol': 'GPT-5.6 Sol', 'codex_gpt_5_6_luna': 'GPT-5.6 Luna',
                'deepseek_v4_pro_via_codex': 'DeepSeek V4 Pro', 'codex_deepseek_v4_pro_0813': 'DeepSeek V4 Pro',
                'codex_deepseek_v4_pro': 'DeepSeek V4 Pro', 'gpt_5_5': 'GPT-5.5', 'gpt_5_6_sol': 'GPT-5.6 Sol',
@@ -120,6 +122,7 @@ def galaxy_episodes():
 
 def main():
     ep = pd.concat([galaxy_episodes(), shell_episodes()], ignore_index=True)
+    ep = replaced_runs.drop_replaced(ep)      # IWC wf_007: the superseded runs' episodes are not the scored runs'
     r = pd.read_csv(SCORED)
     r['run_correct'] = (r.score >= r.benchmark.map(CORRECT_AT) - 1e-9).astype(int)
     ep = ep.merge(r[['benchmark', 'task', 'cfg', 'env', 'replicate', 'run_correct', 'cluster']],

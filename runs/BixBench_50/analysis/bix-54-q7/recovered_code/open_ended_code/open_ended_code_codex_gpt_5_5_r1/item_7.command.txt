@@ -1,0 +1,49 @@
+/bin/bash -lc "Rscript - <<'RS'
+library(splines)
+d <- read.csv('inputs/Swarm_2.csv', stringsAsFactors=FALSE)
+parse_p <- function(r) {
+  parts <- strsplit(r, ':')
+  sapply(parts, function(x) as.numeric(x[1]) / sum(as.numeric(x)))
+}
+# endpoint-inclusive same-system 98/287 curve, excluding unrelated strain 1
+d2 <- subset(d, StrainNumber %in% c('98','287','287_98'))
+d2"'$p287 <- ifelse(d2$StrainNumber == '"'98', 0,
+                  ifelse(d2"'$StrainNumber == '"'287', 1, parse_p(d2"'$Ratio)))
+cat('"'n inclusive', nrow(d2), 'range', range(d2"'$p287), '"'\\n')
+mods <- list(
+  quadratic = lm(Area ~ poly(p287, 2, raw=TRUE), data=d2),
+  cubic = lm(Area ~ poly(p287, 3, raw=TRUE), data=d2),
+  ns4 = lm(Area ~ ns(p287, df=4), data=d2)
+)
+print(sapply(mods, AIC))
+print(sapply(mods, BIC))
+print(sapply(mods, function(m) summary(m)"'$adj.r.squared))
+for (nm in names(mods)) {
+  m <- mods[[nm]]
+  f <- function(x) predict(m, newdata=data.frame(p287=x))
+  opt <- optimize(function(x) -f(x), interval=range(d2$p287), tol=.Machine$double.eps''^0.25)
+  cat(nm, '"'opt p', opt"'$minimum, '"'pred', -opt"'$objective, '"'\\n')
+}
+# Dense grid check for natural spline possible local maxima
+xg <- seq(0,1,length.out=1000001)
+yg <- predict(mods"'$ns4, newdata=data.frame(p287=xg))
+cat('"'ns grid max', xg[which.max(yg)], max(yg), '\\n')
+# interior-only check
+di <- subset(d, StrainNumber == '287_98')
+di"'$p287 <- parse_p(di$Ratio)
+cat('"'n interior', nrow(di), 'range', range(di"'$p287), '"'\\n')
+mods_i <- list(
+  quadratic = lm(Area ~ poly(p287, 2, raw=TRUE), data=di),
+  cubic = lm(Area ~ poly(p287, 3, raw=TRUE), data=di),
+  ns4 = lm(Area ~ ns(p287, df=4), data=di)
+)
+print(sapply(mods_i, AIC))
+print(sapply(mods_i, BIC))
+print(sapply(mods_i, function(m) summary(m)"'$adj.r.squared))
+for (nm in names(mods_i)) {
+  m <- mods_i[[nm]]
+  f <- function(x) predict(m, newdata=data.frame(p287=x))
+  opt <- optimize(function(x) -f(x), interval=range(di$p287), tol=.Machine$double.eps''^0.25)
+  cat('"'i', nm, 'opt p', opt"'$minimum, '"'pred', -opt"'$objective, '"'\\n')
+}
+RS"

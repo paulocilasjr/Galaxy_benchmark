@@ -1,0 +1,27 @@
+/bin/bash -lc "python -u - <<'PY'
+from urllib.request import urlopen
+from pathlib import Path
+from collections import Counter
+ref=''.join(urlopen('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.6&rettype=fasta&retmode=text',timeout=30).read().decode().splitlines()[1:]).upper()
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+def reads(p): return Path(p).read_text().splitlines()[1::4]
+def pos(s):
+ f=ref.find(s)
+ if f>=0:return f
+ r=ref.find(rc(s))
+ return r if r>=0 else None
+CDS0,CDS1=597,2037 # 0-based half-open from 598..2037 inclusive
+for name in ['exo','endo','mix']:
+ a=reads(f'exogenous.mix.reads.q1.{name}.fq')
+ ps=[pos(s) for s in a]
+ hit=[p for p in ps if p is not None]
+ outside=[p for p in hit if p<CDS0 or p+50>CDS1]
+ wholly_utr=[p for p in hit if p+50<=CDS0 or p>=CDS1]
+ overlap_cds=[p for p in hit if p<CDS1 and p+50>CDS0]
+ print(name,'n',len(a),'hit',len(hit),'no',ps.count(None),'outside/intersectUTR',len(outside),'whollyUTR',len(wholly_utr),'boundary',len(outside)-len(wholly_utr),'p',len(outside)/len(a), 'positions none')
+ print('start <598',sum(p is not None and p<CDS0 for p in ps),'start >=2037',sum(p is not None and p>=CDS1 for p in ps), 'starts boundary low',sum(p is not None and CDS0-49<=p<CDS0 for p in ps),'high',sum(p is not None and CDS1-49<=p<CDS1 for p in ps))
+q=sum(p is not None and (p<CDS0 or p+50>CDS1) for p in [pos(s) for s in reads('exogenous.mix.reads.q1.endo.fq')])/len(reads('exogenous.mix.reads.q1.endo.fq'))
+obs=sum(p is not None and (p<CDS0 or p+50>CDS1) for p in [pos(s) for s in reads('exogenous.mix.reads.q1.mix.fq')])/len(reads('exogenous.mix.reads.q1.mix.fq'))
+print('q_end',q,'obs',obs,'f',1-obs/q)
+PY"

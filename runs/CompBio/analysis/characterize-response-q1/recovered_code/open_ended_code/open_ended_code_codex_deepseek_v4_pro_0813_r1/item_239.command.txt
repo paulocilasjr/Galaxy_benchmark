@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests
+u='https://ftp.ncbi.nlm.nih.gov/geo/series/GSE278nnn/GSE278058/suppl/GSE278058_Fth1_rnaseq_raw_reads.csv.gz'
+r=requests.get(u,timeout=120);print(r.status_code,len(r.content));open('geo2/GSE278058_counts.csv.gz','wb').write(r.content)
+PY
+python3 - <<'PY'
+import pandas as pd,gzip,io,numpy as np,collections
+q=[g.upper() for g in open('characterize.response.q1.txt').read().split()];qc=collections.Counter(q)
+df=pd.read_csv('geo2/GSE278058_counts.csv.gz',compression='gzip',index_col=0)
+print(df.shape,list(df.columns)[:20]);print(df.head())
+# columns correspond samples in order maybe
+ctrl=[c for c in df.columns if 'Non-treated' in c or c.startswith('Non')]; lps=[c for c in df.columns if 'LPS-treated' in c]
+print('ctrl',ctrl,'lps',lps)
+# if columns unnamed, use positions based on metadata
+if not ctrl:
+ # first 2 vs rest
+ ctrl=df.columns[:2]; lps=df.columns[2:]
+lib=df.sum(axis=0);cpm=df/lib*1e6
+A=cpm[ctrl].mean(axis=1);B=cpm[lps].mean(axis=1);lfc=np.log2((B+0.5)/(A+0.5))
+rows=[];seen=set()
+for g,x in lfc.items():
+ su=str(g).upper()
+ if su in seen:continue
+ seen.add(su);rows.append((str(g),x))
+d=pd.DataFrame(rows,columns=['g','x']).sort_values('x',ascending=False)
+for name,dd in [('up',d.head(112)),('down',d.tail(112)),('abspos',d[d.x>0].assign(al=d[d.x>0].x.abs()).sort_values('al',ascending=False).head(112)),('absneg',d[d.x<0].assign(al=d[d.x<0].x.abs()).sort_values('al',ascending=False).head(112))]:
+ cc=collections.Counter(dd.g.str.upper());ov=sum(min(v,qc.get(k,0)) for k,v in cc.items());print(name,ov,[(k,v) for k,v in cc.items() if qc.get(k,0)>0][:30]);print('first',' '.join(dd.g.tolist()[:40]))
+PY"

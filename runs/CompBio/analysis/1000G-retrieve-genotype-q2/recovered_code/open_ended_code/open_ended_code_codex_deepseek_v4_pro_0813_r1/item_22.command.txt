@@ -1,0 +1,39 @@
+/bin/bash -lc "cat > scripts/get_candidates.py <<'PY'
+import gzip, pymysql, sys, os, json
+from collections import defaultdict
+
+# read top1000 peaks, keep chr1 intervals
+intervals=[]
+with open('data/top1000_peaks.bed') as f:
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        chrom, start, end = parts[0], int(parts[1]), int(parts[2])
+        if chrom=='chr1':
+            intervals.append((start,end))
+print('chr1 intervals', len(intervals), intervals[:3])
+# connect
+conn=pymysql.connect(host='genome-mysql.soe.ucsc.edu', user='genome', password='', db='hg38', read_timeout=600, write_timeout=600, connect_timeout=30, charset='utf8mb4')
+cur=conn.cursor()
+# Build OR conditions
+conds = ' OR '.join(['(chromStart < %d AND chromEnd > %d)' % (end,start) for start,end in intervals])
+sql = (\"SELECT chromStart, chromEnd, name, observed FROM snp151Common \"
+       \"WHERE chrom='chr1' AND observed REGEXP '"'^[ACGT]/[ACGT]$'"' AND class='single' AND locType='exact' AND (\" + conds + \") ORDER BY chromStart\")
+print('sql len', len(sql), flush=True)
+cur.execute(sql)
+rows=cur.fetchall()
+print('candidate rows', len(rows), flush=True)
+# write positions and observed
+seen={}
+with open('data/candidates.tsv','w') as f:
+    f.write('chromStart\\tchromEnd\\tPOS\\tname\\tobserved\\n')
+    for chromStart, chromEnd, name, observed in rows:
+        pos=chromStart+1
+        if pos in seen:
+            # ucsc can duplicate rs names? Keep first by order; print dup
+            continue
+        seen[pos]=True
+        f.write(f'{chromStart}\\t{chromEnd}\\t{pos}\\t{name}\\t{observed}\\n')
+cur.close(); conn.close()
+print('unique pos', len(seen), 'first rows', rows[:3])
+PY
+python3 scripts/get_candidates.py"

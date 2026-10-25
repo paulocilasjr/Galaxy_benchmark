@@ -1,0 +1,48 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:g=pd.read_csv(f,sep='\\t').gene_symbols.astype(str).to_numpy();mp={x.upper():i for i,x in enumerate(g)}
+Xs=[]
+for z in ['1','2']:
+ with gzip.open(f'subtype.inflammation.q1.{z}.mtx.gz','rb') as f:Xs.append(mmread(f).tocsr())
+X=sparse.hstack(Xs,format='csr'); n1=Xs[0].shape[1]; batch=np.r_[np.zeros(n1,int),np.ones(Xs[1].shape[1],int)]
+lib=np.asarray(X.sum(0)).ravel();Xn=X.multiply(1e4/np.maximum(lib,1)).tocsr();Xn.data=np.log1p(Xn.data)
+sets={
+'astrocyte':['GFAP','ALDH1L1','AQP4','SLC1A3','SOX9','GJA1'],
+'microglial cell':['P2RY12','C1QA','C1QB','C1QC','TYROBP','AIF1','LST1','CSF1R'],
+'RPE cell':['RPE65','BEST1','RLBP1','PMEL','MITF','LRAT','MERTK','RDH5'],
+'cone cell':['ARR3','GNB3','PDE6H','GNAT2','GUCA1C','GRK7','OPN1SW'],
+'rod cell':['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','GNGT1','CNGB1'],
+'horizontal cell':['LHX1','LHX2','ONECUT1','PROX1','CALB1','GAD1','GAD2','VSX1'],
+'bipolar cell':['VSX2','PRKCA','GRM6','TRPM1','CABP5','PCP4','OTX2'],
+'RGC':['RBPMS','SNCG','ISL1','POU4F1','POU4F2','THY1','NEFL','SLC17A6'],
+'T cells':['CD3D','CD3E','TRBC1','TRBC2','CD2','CD247','IL7R','LTB'],
+'macrophage':['LYZ','FCER1G','TYROBP','CD68','LILRB1','AIF1','CD14','MS4A7','LGALS3','MARCO','ADGRE1','OLR1'],
+'Schwann cell':['S100B','SOX10','PLP1','MPZ','NCAM1','ERBB3','MAG','PMP22'],
+'Pericyte':['RGS5','CSPG4','MCAM','PDGFRB','ACTA2','COL4A1','DES','NOTCH3','ABCC9','KCNJ8'],
+'B cell':['CD79A','MS4A1','CD37','CD74','HLA-DRA','CD79B','CD22','CD19'],
+'fibroblast':['COL1A1','COL1A2','DCN','LUM','COL3A1','COL6A1','PDGFRA','C7','FBLN1'],
+'muller glia cell':['SLC1A3','RLBP1','GLUL','SLC1A2','RAX','KCNJ10','AQP4','FABP7','DIO2','SOX9'],
+'endothelial cell':['EMCN','KDR','ESAM','PECAM1','VWF','ENG','CLDN5','RAMP2','PLVAP','RGCC']}
+scores={}
+for ct,gs in sets.items():
+ ii=[mp[x] for x in gs if x in mp];scores[ct]=np.asarray(Xn[ii,:].mean(0)).ravel()
+S=pd.DataFrame(scores); best=S.to_numpy().argmax(1); cts=list(sets)
+# activation program select genes with robust eye1 difference (not just generic FOS)
+prog=['CD69','IL18RAP','CMKLR1','CSF3R','CCL5','CXCL9','CXCL10','CXCL11','CCL2','CCL7','CCL20','IL1B','NFKBIA','MARCO','OLR1','ADGRE1','CD14','LGALS3','SPP1','IL15','IL1R1','CSF1','NLRP3','TLR3','OSMR','LIF','CXCR6','SELL','TNFRSF9','SLAMF1']
+pi=[mp[x] for x in prog if x in mp]
+# log-normalized module mean, cell-level fraction genes detected
+P=np.asarray(Xn[pi,:].mean(0)).ravel(); Pd=np.asarray((X[pi,:]>0).mean(0)).ravel()
+print('max-marker label / eye and inflammation score')
+for ct in cts:
+ print('\\n',ct)
+ for b in [0,1]:
+  ii=(best==cts.index(ct))&(batch==b); print('eye',b+1,'n',int(ii.sum()),'prog mean',round(float(P[ii].mean()),3),'prog detect',round(float(Pd[ii].mean()),3),'CD69',int(((X[mp['CD69'],:].toarray().ravel()>0)&ii).sum()),'CCL5',int(((X[mp['CCL5'],:].toarray().ravel()>0)&ii).sum()))
+# alternatively top muller cells with muller score > .5 and score margin
+for cutoff in [.3,.5,.7,1.0]:
+ ii=S['muller glia cell']>cutoff
+ print('\\nMuller score>',cutoff,'n',ii.sum())
+ for b in [0,1]:
+  z=ii&(batch==b);print('eye',b+1,'n',z.sum(),'prog',round(float(P[z].mean()),3),'detect',round(float(Pd[z].mean()),3),'CD69',int(((X[mp['CD69'],:].toarray().ravel()>0)&z).sum()))
+PY"

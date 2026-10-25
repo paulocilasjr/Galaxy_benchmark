@@ -21,7 +21,7 @@ import pandas as pd
 from scipy.stats import rankdata
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -32,8 +32,8 @@ from PIL import Image  # noqa: E402
 plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'mathtext.it': 'Arial:italic',  # italic P
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
 OUT = os.path.join(ROOT, 'figures')
 B, SEED = 20000, 20261002
 B_PERM = 200000          # randomization draws; Monte Carlo error on a Holm-adjusted P near 0.05 is below 0.003

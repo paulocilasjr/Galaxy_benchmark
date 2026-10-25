@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np,pandas as pd
+from scipy.io import mmread
+from scipy import sparse
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as f:g=pd.read_csv(f,sep='\\t').gene_symbols.astype(str).to_numpy();mp={x.upper():i for i,x in enumerate(g)}
+with gzip.open('subtype.inflammation.q1.1.mtx.gz','rb') as f:X=mmread(f).tocsr()
+lib=np.asarray(X.sum(0)).ravel();Xn=X.multiply(1e4/np.maximum(lib,1)).tocsr();Xn.data=np.log1p(Xn.data)
+def score(gs):
+ ii=[mp[x] for x in gs if x in mp];return np.asarray(Xn[ii,:].mean(0)).ravel()
+rod=['RHO','GNAT1','PDE6A','PDE6B','SAG','NRL','NR2E3','ROM1','GNGT1','CNGB1']
+muller=['SLC1A3','RLBP1','GLUL','VIM','SOX9','RAX','KCNJ10','AQP4','FABP7','SLC1A2','DIO2']
+astro=['GFAP','AQP4','ALDH1L1','SLC1A3','GJA1','SOX9','CLDN11','ATP1B2','AGT']
+mac=['LYZ','FCER1G','TYROBP','CTSD','CD68','LILRB1','AIF1','CTSS','CD14','MS4A7','LGALS3','MARCO','ADGRE1','OLR1']
+inf=['CD69','CCL5','IL18RAP','CMKLR1','CSF3R','OLR1','MARCO','ADGRE1','P2RY2','IL1B','CXCL10','CCL2','CCL20','CXCL9','CXCL6']
+s={x:score(y) for x,y in [('rod',rod),('muller',muller),('astro',astro),('mac',mac)]}
+cd=X.getrow(mp['CD69']).toarray().ravel()>0
+print('CD69 n',cd.sum())
+print('quantiles scores CD69+ vs -')
+for k,v in s.items():print(k,np.round(np.percentile(v[cd],[0,10,25,50,75,90,100]),2),np.round(np.percentile(v[~cd],[0,10,25,50,75,90,100]),2))
+print('score group counts')
+for desc,ii in [('CD69+',cd),('CD69- ',~cd),('Muller strong',s['muller']>0.5),('Rod strong',s['rod']>1.0),('Muller only', (s['muller']>0.5)&(s['rod']<0.5)),('Rod only',(s['rod']>1)&(s['muller']<.5)),('double',(s['rod']>1)&(s['muller']>.5))]:
+ print(desc,ii.sum(),'CD69',int((ii&cd).sum()),'CCL5',int((ii&(X.getrow(mp['CCL5']).toarray().ravel()>0)).sum()))
+print('\\nCD69+ grouped by muller/rod score')
+for lo,hi in [(0,.25),(.25,.5),(.5,.75),(.75,1),(1,1.5),(1.5,100)]:
+ ii=cd&(s['muller']>=lo)&(s['muller']<hi)
+ print('M',lo,hi,'n',ii.sum(),'rod',np.mean(s['rod'][ii]) if ii.any() else None,'rod q',np.percentile(s['rod'][ii],[10,50,90]) if ii.any() else None)
+print('\\nCD69+ cells with top Muller and Rod scores')
+for label,v in [('Muller',s['muller']),('Rod',s['rod'])]:
+ print(label)
+ for j in np.where(cd)[0][np.argsort(v[cd])[-10:][::-1]]: print(j,'M',round(s['muller'][j],2),'R',round(s['rod'][j],2),'Mac',round(s['mac'][j],2),'astro',round(s['astro'][j],2),'CD69',X[mp['CD69'],j],'CCL5',X[mp['CCL5'],j])
+PY"

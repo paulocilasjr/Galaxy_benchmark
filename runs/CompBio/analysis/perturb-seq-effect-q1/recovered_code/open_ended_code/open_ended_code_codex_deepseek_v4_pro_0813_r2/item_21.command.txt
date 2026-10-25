@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import scipy.io, numpy as np, pandas as pd
+from scipy.sparse import csr_matrix
+from scipy.stats import ttest_ind
+mat=scipy.io.mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().astype(float)
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+g2g=dict(zip(ref.id,ref.target_gene_name)); g2name=dict(zip(ref.id,ref.name))
+bc['pos']=np.arange(len(bc)); calls=calls.merge(bc,left_on='cell_barcode',right_on='barcode')
+totals=np.asarray(mat.sum(axis=0)).ravel()
+cpm=mat.multiply(1.0/totals).tocsr()*10000
+logcpm=cpm.copy(); logcpm.data=np.log1p(logcpm.data)
+# map feature gene names to row indices
+name_to_idx={n:i for i,n in enumerate(feat['name'])}
+# if duplicates? let's check
+# nt cells all non-targeting
+nt=calls[calls.feature_call.str.startswith('guide_00')]
+ntv=logcpm[:,nt.pos.values]
+rows=[]
+for guide,grp in calls.groupby('feature_call'):
+    gene=g2g[guide]
+    if gene=='Non-Targeting': continue
+    idx=name_to_idx.get(gene)
+    if idx is None:
+        print('target not in matrix:',gene); continue
+    a=logcpm[idx,grp.pos.values].toarray().ravel(); b=ntv[idx,:].toarray().ravel()
+    t,p=ttest_ind(a,b,equal_var=False)
+    sd=np.sqrt(((len(a)-1)*a.var(ddof=1)+(len(b)-1)*b.var(ddof=1))/(len(a)+len(b)-2))
+    d=(a.mean()-b.mean())/sd if sd>0 else np.nan
+    rows.append(dict(guide=guide,gene=gene,idx=idx,n=len(a),target_mean=a.mean(),nt_mean=b.mean(),diff=a.mean()-b.mean(),d=d,p=p))
+res=pd.DataFrame(rows).sort_values('diff')
+print('On-target expression difference (target vs NT):')
+print(res.to_string(index=False))
+# identify guides with |diff| > maybe
+print('\\nEffective knockdown (d<-1 or p<.001):')
+print(res[(res.d<-1)|(res.p<.001)].to_string(index=False))
+PY"

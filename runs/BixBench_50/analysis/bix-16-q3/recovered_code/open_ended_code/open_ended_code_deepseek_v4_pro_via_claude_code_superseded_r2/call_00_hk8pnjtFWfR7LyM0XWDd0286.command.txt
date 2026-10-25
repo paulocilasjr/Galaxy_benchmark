@@ -1,0 +1,71 @@
+source venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy.stats import spearmanr, rankdata
+
+# Verify specific genes manually
+crispr_ids_all = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:, 0].tolist()
+omics_ids_all = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:, 0].tolist()
+
+common = sorted(set(crispr_ids_all) & set(omics_ids_all))
+
+# Read headers
+crispr_header = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()
+omics_header = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()
+
+def parse_gene_name(col_name):
+    col_name = col_name.strip()
+    if '(' in col_name:
+        return col_name.split('(')[0].strip()
+    return col_name
+
+# Build gene -> column index maps
+crispr_gene_to_col = {}
+for i, col in enumerate(crispr_header):
+    gene = parse_gene_name(col)
+    if i > 0 and gene not in crispr_gene_to_col:
+        crispr_gene_to_col[gene] = i
+
+omics_gene_to_col = {}
+for i, col in enumerate(omics_header):
+    gene = parse_gene_name(col)
+    if i > 0 and gene not in omics_gene_to_col:
+        omics_gene_to_col[gene] = i
+
+# Check top-correlated genes from our earlier analysis
+check_genes = ['SGF29', 'PAICS', 'WNK1', 'ILK', 'MYC', 'KRAS', 'TP53']
+
+for gene in check_genes:
+    if gene not in crispr_gene_to_col or gene not in omics_gene_to_col:
+        print(f'{gene}: not found in both datasets')
+        continue
+    
+    cc = crispr_gene_to_col[gene]
+    oc = omics_gene_to_col[gene]
+    
+    # Manual extraction: read only these two columns, then match rows
+    crispr_data = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0, cc])
+    omics_data = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0, oc])
+    
+    crispr_data = crispr_data[crispr_data.iloc[:, 0].isin(common)]
+    omics_data = omics_data[omics_data.iloc[:, 0].isin(common)]
+    
+    crispr_data = crispr_data.set_index(crispr_data.columns[0])
+    omics_data = omics_data.set_index(omics_data.columns[0])
+    
+    common_idx = crispr_data.index.intersection(omics_data.index)
+    x = crispr_data.loc[common_idx].iloc[:, 0].astype(float).values
+    y = omics_data.loc[common_idx].iloc[:, 0].astype(float).values
+    
+    mask = ~(np.isnan(x) | np.isnan(y))
+    rho, p = spearmanr(x[mask], y[mask])
+    
+    # Also check Pearson on ranks (should match)
+    x_ranked = rankdata(x[mask])
+    y_ranked = rankdata(y[mask])
+    rho2 = np.corrcoef(x_ranked, y_ranked)[0, 1]
+    
+    print(f'{gene}: n={mask.sum()}, spearmanr={rho:.6f}, rank-pearson={rho2:.6f}, '
+          f'x_range=[{x[mask].min():.4f}, {x[mask].max():.4f}], '
+          f'y_range=[{y[mask].min():.4f}, {y[mask].max():.4f}]')
+" 2>&1

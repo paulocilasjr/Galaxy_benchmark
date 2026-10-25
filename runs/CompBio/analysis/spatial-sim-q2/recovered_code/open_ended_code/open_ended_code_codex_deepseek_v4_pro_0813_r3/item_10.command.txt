@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.io, scipy.sparse, scipy.optimize
+sc=pd.read_csv('data/spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('data/spatial_q_sc_metadata.csv', index_col=0)
+celltypes=sorted(meta['cell_type'].unique())
+# signature mean raw counts per type
+S=np.column_stack([sc.values[meta['cell_type']==ct].mean(axis=0) for ct in celltypes])
+print('celltypes', celltypes)
+mat=scipy.io.mmread('data/matrix.mtx.gz').tocsr()
+# ensure genes order matches features? matrix rows features, sc columns? sc columns are Gene_0..Gene_999 likely same. Check names.
+feat=pd.read_csv('data/features.tsv.gz', header=None, compression='gzip')
+print(feat[1].tolist()[:5], sc.columns[:5].tolist())
+# matrix rows correspond features. sc.columns correspond genes.
+Y=mat.toarray() # 1000 x 900
+# each column spot
+P=np.zeros((len(celltypes), Y.shape[1]))
+for j in range(Y.shape[1]):
+    p,res=scipy.optimize.nnls(S, Y[:,j])
+    P[:,j]=p
+Pnorm=P/P.sum(axis=0, keepdims=True)
+df=pd.DataFrame(Pnorm.T, columns=celltypes)
+print(df.describe())
+print('correlations')
+print(df.corr())
+print('max cell type per spot counts')
+print(df.idxmax(axis=1).value_counts())
+# spot where tumor core fraction > thresholds
+for th in [0.1,0.2,0.3,0.4,0.5]:
+ print(th, (df['Tumor_Core']>th).sum(), 'nonzero', (df['Tumor_Core']>0).sum())
+print('max fractions mean',df.max(axis=1).describe())
+print(df.head())
+PY"

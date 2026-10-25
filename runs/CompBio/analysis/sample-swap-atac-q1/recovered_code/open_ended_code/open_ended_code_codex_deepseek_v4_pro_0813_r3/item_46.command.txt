@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import spearmanr, pearsonr
+atac=pd.read_csv('atac_gene_promoter_counts.tsv',sep='\\t')
+rna=pd.read_csv('bulk_rna_counts_clean.tsv',sep='\\t')
+atac_agg=atac.groupby('symbol').sum(numeric_only=True)
+common=atac_agg.index.intersection(rna['symbol']).tolist()
+print('common',len(common))
+A=atac_agg.loc[common].values.astype(float)
+R=rna.set_index('symbol').loc[common].values.astype(float)
+# filter genes with low total
+def norm_cpm(X):
+ lib=X.sum(axis=0,keepdims=True); lib[lib==0]=1
+ return X/lib*1e6
+Ac=norm_cpm(A); Rc=norm_cpm(R)
+# remove all-zero rows
+mask=((Ac>0).sum(axis=1)>0)&((Rc>0).sum(axis=1)>0)
+Ac=Ac[mask]; Rc=Rc[mask]; common=np.array(common)[mask]
+print('masked',len(common))
+A_log=np.log1p(Ac); R_log=np.log1p(Rc)
+# center/scale genes? Let's zscore rows across samples
+def zscore_rows(X):
+ mu=X.mean(axis=1,keepdims=True); sd=X.std(axis=1,keepdims=True); sd[sd==0]=1
+ return (X-mu)/sd
+Az=zscore_rows(A_log); Rz=zscore_rows(R_log)
+atac_cols=atac_agg.columns.tolist(); rna_cols=rna.columns[1:].tolist()
+print('\\nPearson log CPM raw')
+mat=np.corrcoef(A_log.T,R_log.T)[:len(atac_cols),len(atac_cols):]
+df=pd.DataFrame(mat,index=atac_cols,columns=rna_cols)
+print(df.round(3))
+for i,c in enumerate(atac_cols):
+ j=np.argmax(mat[i]); print(c,'->',rna_cols[j],mat[i,j].round(3))
+print('\\nPearson zscored rows')
+matz=np.corrcoef(Az.T,Rz.T)[:len(atac_cols),len(atac_cols):]
+dfz=pd.DataFrame(matz,index=atac_cols,columns=rna_cols)
+print(dfz.round(3))
+for i,c in enumerate(atac_cols):
+ j=np.argmax(matz[i]); print(c,'->',rna_cols[j],matz[i,j].round(3))
+PY"

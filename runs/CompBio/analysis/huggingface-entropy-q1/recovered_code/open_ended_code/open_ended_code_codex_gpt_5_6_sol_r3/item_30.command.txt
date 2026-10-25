@@ -1,0 +1,14 @@
+/bin/bash -lc 'HF_HOME="$PWD/hf_home" PYTHONPATH="$PWD" arch -arm64 runtime_arm64/bin/python - <<'"'PY'
+import json,math,torch
+from transformers import AutoTokenizer,AutoModelForMaskedLM
+p='downloads/model'; tok=AutoTokenizer.from_pretrained(p,trust_remote_code=True); model=AutoModelForMaskedLM.from_pretrained(p,trust_remote_code=True).eval().to('mps')
+seq=json.load(open('downloads/ucsc_sequence.json'))['dna'].upper(); base=tok(seq,return_tensors='pt')['input_ids'][0]
+positions=torch.arange(192,223); inp=base.repeat(len(positions),1); inp[torch.arange(len(positions)),positions]=tok.mask_token_id
+with torch.inference_mode(): out=model(inp.to('mps')).logits[torch.arange(len(positions),device='mps'),positions.to('mps')].cpu()
+saved=torch.load('results/final_tensors.pt',weights_only=True)['logits'][192:223]
+logp=torch.log_softmax(out.double(),-1); h=-(logp.exp()*logp).sum(-1)/math.log(2)
+print('max_logit_repeat_difference',float((out-saved).abs().max()))
+print('repeat_threshold_flags',''.join('1' if v<.5 else '0' for v in h.tolist()))
+print('repeat_entropies',h.tolist())
+print('verified_substring',seq[194:221])
+PY"

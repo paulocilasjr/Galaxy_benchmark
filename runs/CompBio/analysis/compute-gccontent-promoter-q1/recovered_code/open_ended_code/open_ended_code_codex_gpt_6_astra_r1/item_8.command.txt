@@ -1,0 +1,39 @@
+/bin/bash -lc "cat > calculate_promoter.py <<'PY'
+import gzip
+import json
+from pathlib import Path
+
+transcript_id = 'ENST00000269305'
+with gzip.open('Homo_sapiens.GRCh38.115.chr.gtf.gz', 'rt') as handle:
+    matches = [line.rstrip('\\n') for line in handle if '\\ttranscript\\t' in line and f'transcript_id \"{transcript_id}\";' in line]
+assert len(matches) == 1, matches
+Path('release115_transcript.gtf').write_text(matches[0] + '\\n')
+fields = matches[0].split('\\t')
+chromosome, transcript_start, transcript_end, strand = fields[0], int(fields[3]), int(fields[4]), fields[6]
+upstream, downstream = 500, 100
+if strand == '+':
+    tss = transcript_start
+    start, end = tss - upstream, tss + downstream - 1
+else:
+    assert strand == '-'
+    tss = transcript_end
+    start, end = tss - downstream + 1, tss + upstream
+with gzip.open('Homo_sapiens.GRCh38.dna.chromosome.17.fa.gz', 'rt') as handle:
+    header = next(handle).strip()
+    assert header.startswith('>17 ') and 'GRCh38' in header
+    chromosome_sequence = ''.join(line.strip() for line in handle).upper()
+assert 1 <= start <= end <= len(chromosome_sequence)
+sequence = chromosome_sequence[start-1:end]
+if strand == '-':
+    sequence = sequence.translate(str.maketrans('ACGT', 'TGCA'))[::-1]
+assert len(sequence) == upstream + downstream
+assert set(sequence) <= set('ACGT')
+Path('release115_promoter.fa').write_text(f'>{chromosome}:{start}-{end}:{strand}\\n{sequence}\\n')
+gc_count = sequence.count('G') + sequence.count('C')
+answer = f'{chromosome};{start};{end};{strand};{len(sequence)};{gc_count};{gc_count / len(sequence):.2f}'
+Path('answer.txt').write_text(answer + '\\n')
+print(matches[0])
+print(header)
+print(answer)
+print('Matches REST sequence:', sequence == Path('promoter_sequence.txt').read_text().strip().upper())
+PY"

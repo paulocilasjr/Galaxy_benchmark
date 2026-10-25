@@ -1,0 +1,71 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, gzip, re, collections
+fn='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+std=set([f'chr{i}' for i in list(range(1,23))+['X','Y']])
+tx_exons=collections.defaultdict(list)
+tx_cds=collections.defaultdict(list)
+tx_strand={}
+with gzip.open(fn,'rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        chrom=p[0]; typ=p[2]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+        if chrom not in std: continue
+        m=re.search(r'transcript_id \"(["'^"]+)"'"', attrs)
+        if not m: continue
+        tid=m.group(1)
+        if 'tag \"MANE Select\"' not in attrs: continue
+        tx_strand[tid]=strand
+        if typ=='exon':
+            tx_exons[tid].append((start,end))
+        elif typ in ('CDS','stop_codon','start_codon'):
+            tx_cds[tid].append((start,end))
+
+def union(intervals):
+    if not intervals: return []
+    intervals=sorted(intervals)
+    out=[]
+    a,b=intervals[0]
+    for c,d in intervals[1:]:
+        if c<=b+1:
+            b=max(b,d)
+        else:
+            out.append((a,b)); a,b=c,d
+    out.append((a,b))
+    return out
+
+def covered_len(intervals):
+    return sum(b-a+1 for a,b in union(intervals))
+
+five=[]; three=[]; cdslens=[]; counts=[]
+for tid, exs in tx_exons.items():
+    exu=union(exs)
+    cdu=union(tx_cds.get(tid,[]))
+    strand=tx_strand[tid]
+    total_ex=covered_len(exu)
+    cds_len=covered_len(cdu)
+    if not cdu:
+        print('no cds', tid, strand); continue
+    cs=min(a for a,b in cdu); ce=max(b for a,b in cdu)
+    five_len=0; three_len=0
+    for a,b in exu:
+        if strand=='+':
+            l1=max(0, min(b,cs-1)-a+1)
+            l2=max(0, b-max(a,ce+1)+1)
+        else:
+            l1=max(0, b-max(a,ce+1)+1)
+            l2=max(0, min(b,cs-1)-a+1)
+        five_len+=l1; three_len+=l2
+    five.append(five_len); three.append(three_len); cdslens.append(cds_len)
+    counts.append((tid,total_ex,cds_len,five_len,three_len))
+print('num transcripts',len(five))
+print('sum ex total check', sum(x[1] for x in counts))
+print('med raw', np.median(five), np.median(cdslens), np.median(three))
+print('floor', int(np.floor(np.median(five))), int(np.floor(np.median(cdslens))), int(np.floor(np.median(three))))
+print('int med', int(np.median(five)), int(np.median(cdslens)), int(np.median(three)))
+print('samples lengths')
+print(counts[:5])
+print('mean etc', np.mean(five), np.mean(cdslens), np.mean(three))
+print('min max', min(five),max(five),min(cdslens),max(cdslens),min(three),max(three))
+PY"

@@ -1,0 +1,21 @@
+/bin/bash -lc "cat > likelihood.py <<'PY'
+import numpy as np,pandas as pd,glob
+from scipy.stats import norm
+panel=pd.read_csv('integrated_call_samples_v3.20130502.ALL.panel',sep='\\t').set_index('sample');gwas=pd.read_csv('gwas.ancestry.q1.tsv.gz',sep='\\t').set_index('POS')
+pops=['AFR','EUR','EAS','SAS','AMR'];total=np.zeros(len(pops));ts=[]
+for file in sorted(glob.glob('block_*.npz')):
+ x=np.load(file); z=norm.isf(gwas.loc[x['pos']].P.to_numpy()/2); p=panel.loc[x['samples']]; rs=[]; valid=[]
+ for pop in pops:
+  gt=x['geno'][:,(p.super_pop==pop).to_numpy()].astype(float);gt-=gt.mean(axis=1,keepdims=True);sd=np.linalg.norm(gt,axis=1);gt/=np.maximum(sd[:,None],1e-10);rs.append(gt@gt.T);valid.append(sd>0)
+ valid=np.all(valid,axis=0)&np.isfinite(z)
+ ii,jj=np.triu_indices(len(z),1);keep=valid[ii]&valid[jj]&(abs(x['pos'][ii]-x['pos'][jj])<50000)&(np.max(np.abs(rs),axis=0)[ii,jj]>.5)
+ ii=ii[keep];jj=jj[keep];a=z[ii];b=z[jj];scores=[]
+ for r in rs:
+  r=np.abs(r[ii,jj])*.98
+  ll=-.5*np.log1p(-r*r)-(a*a+b*b)/(2*(1-r*r))+np.logaddexp(r*a*b/(1-r*r),-r*a*b/(1-r*r))+(a*a+b*b)/2
+  scores.append(np.mean(ll))
+ scores=np.array(scores);total+=scores;ts.append(scores)
+ print(file,len(ii),np.round(scores,3),flush=True)
+print(pops,np.round(total,3))
+PY
+python -u likelihood.py"

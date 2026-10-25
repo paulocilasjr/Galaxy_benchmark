@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, time, pathlib
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval()
+B=3; batch=[]
+for i in range(B): x=ids[0].clone(); x[i]=3; batch.append(x)
+inp=torch.stack(batch)
+# CPU
+model.to('cpu'); inp_cpu=inp
+with torch.no_grad(): out_cpu=model(input_ids=inp_cpu)
+lc=out_cpu.logits[:, :, :].cpu()
+# MPS
+model.to('mps'); inp_m=inp.to('mps')
+with torch.no_grad(): out_m=model(input_ids=inp_m)
+lm=out_m.logits.cpu()
+for i in range(B):
+ diff=(lc[i,i]-lm[i,i]).abs().max().item(); print(i,'masked pos max diff',diff,'cpu top',lc[i,i].topk(5).values.tolist(),'mps top',lm[i,i].topk(5).values.tolist())
+PY"

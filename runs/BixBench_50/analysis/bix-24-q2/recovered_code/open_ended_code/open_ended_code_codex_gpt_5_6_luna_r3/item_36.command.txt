@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from gprofiler import GProfiler
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+meta=pd.read_csv('inputs/sample_layout.csv')
+meta['col']=meta.SampleID.str.replace('-','_',regex=False)
+groups=['DMSO_Serum_starvation','CBD_IC50_Serum_starvation_16h']
+m=meta[meta.Group.isin(groups)].copy(); m['condition']=pd.Categorical(m.Group,categories=groups,ordered=True)
+c=counts[m.col].T.copy(); c.index=m.col.values; c.columns=counts.index.astype(str)
+print('fit start',flush=True)
+dds=DeseqDataSet(counts=c,metadata=m.set_index('col')[['condition']],design='~condition',quiet=True,n_cpus=1)
+dds.deseq2()
+st=DeseqStats(dds,contrast=['condition',groups[1],groups[0]],alpha=.05,quiet=True,n_cpus=1); st.summary()
+r=st.results_df.copy(); r['gene']=r.index
+v=r.dropna(subset=['padj','log2FoldChange']); sig=v[(v.padj<.05)&(v.log2FoldChange.abs()>.5)]
+up=sig.loc[sig.log2FoldChange>.5,'gene'].tolist(); down=sig.loc[sig.log2FoldChange<-.5,'gene'].tolist()
+universe=counts.index[counts.sum(axis=1)>0].astype(str).tolist()
+print('sets',len(up),len(down),'universe',len(universe),flush=True)
+gp=GProfiler(return_dataframe=True)
+for name,genes in [('UP',up),('DOWN',down)]:
+  df=gp.profile(query=genes,organism='hsapiens',sources=['GO:BP'],user_threshold=.05,all_results=True,significance_threshold_method='fdr',background=universe)
+  d=df[df.p_value<.05].copy()
+  mask=d.name.str.contains('metabol|lipid|fatty|glucose|glycol|oxidative|respirat|mitochond|biosynth|catabol|amino acid|organic acid|carbon|energy|carbohydrate|pyruvate|nucleotide|small molecule',case=False,regex=True,na=False)
+  print(name,'all_GO',len(df),'sig_GO',len(d),'metabolic_like_sig',int(mask.sum()),flush=True)
+  print(d[mask][['native','name','p_value','term_size','intersection_size','effective_domain_size']].sort_values('p_value').head(50).to_string(index=False),flush=True)
+PY"

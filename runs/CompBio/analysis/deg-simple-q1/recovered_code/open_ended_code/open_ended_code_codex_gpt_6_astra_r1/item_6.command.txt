@@ -1,0 +1,34 @@
+/bin/bash -lc "cat > scripts/count_alignments.py <<'PY'
+import sys,collections,json
+counts=collections.Counter()
+high=collections.Counter()
+stats=collections.Counter()
+for line in sys.stdin:
+ if line.startswith('@'):continue
+ p=line.rstrip().split('\\t');flag=int(p[1]);stats['records']+=1
+ if flag&4:stats['unmapped']+=1;continue
+ if flag&2304:continue
+ stats['mapped']+=1
+ ref=p[2].split('|')
+ gene=ref[1];symbol=ref[5]
+ tags=dict(x.split(':',2)[::2] for x in p[11:])
+ if int(tags.get('AS','0'))<60:stats['low_score']+=1;continue
+ counts[(gene,symbol)]+=1
+ if int(p[4])>=20:high[(gene,symbol)]+=1
+with open(sys.argv[1], 'w') as out:
+ out.write('gene\\tsymbol\\tcount\\thigh_mapq\\n')
+ for (g,s),n in counts.most_common():out.write(f'{g}\\t{s}\\t{n}\\t{high[(g,s)]}\\n')
+print(json.dumps(stats),file=sys.stderr)
+PY
+python - <<'PY'
+import gzip,collections,json
+out={}
+for sample in ['A','B']:
+ lengths=collections.Counter();n=0
+ with gzip.open(f'deg.simple.q1.sample{sample}.fq.gz','rt') as f:
+  for line in f:
+   seq=next(f).strip();next(f);next(f);n+=1;lengths[len(seq)]+=1
+ out[sample]={'reads':n,'lengths':dict(lengths)}
+print(out)
+json.dump(out,open('results/read_stats.json','w'))
+PY"

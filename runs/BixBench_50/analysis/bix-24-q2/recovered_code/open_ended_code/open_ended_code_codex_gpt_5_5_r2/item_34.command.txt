@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from gprofiler import GProfiler
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+meta = pd.read_csv('inputs/sample_layout.csv')
+meta['sample'] = meta['SampleID'].str.replace('-', '_', regex=False)
+meta = meta.set_index('sample')
+keep = meta['Group'].isin(['DMSO','CBD_IC50'])
+meta2 = meta.loc[keep, ['Group']].copy()
+counts_t = counts.T.loc[meta2.index]
+print(counts_t.shape)
+print(meta2.to_string())
+dds = DeseqDataSet(counts=counts_t, metadata=meta2, design='~ Group', ref_level=['Group','DMSO'], n_cpus=4, quiet=True)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['Group','CBD_IC50','DMSO'], alpha=0.05, n_cpus=4, quiet=True)
+stat.summary()
+res=stat.results_df.copy()
+res_valid=res.dropna(subset=['padj','log2FoldChange'])
+sig=res_valid[(res_valid.padj<0.05)&(res_valid.log2FoldChange.abs()>0.5)]
+up=sig[sig.log2FoldChange>0].index.astype(str).tolist()
+down=sig[sig.log2FoldChange<0].index.astype(str).tolist()
+universe=res_valid.index.astype(str).tolist()
+print('universe',len(universe),'sig',len(sig),'up',len(up),'down',len(down))
+print('top up names', sig.sort_values('log2FoldChange', ascending=False).head(20)[['log2FoldChange','padj']].to_string())
+print('top down names', sig.sort_values('log2FoldChange').head(20)[['log2FoldChange','padj']].to_string())
+gp=GProfiler(return_dataframe=True)
+for bgname,bg in [('tested',universe),('default',None)]:
+  print('\\nBACKGROUND',bgname)
+  for name,genes in [('up',up),('down',down)]:
+    kwargs={'background':bg} if bg is not None else {}
+    enr=gp.profile(organism='hsapiens', query=genes, sources=['GO:BP'], user_threshold=0.05, **kwargs)
+    n=0 if enr is None else len(enr)
+    print('ENR',name,n)
+    if n:
+      cols=['native','name','p_value','term_size','query_size','intersection_size']
+      print(enr[cols].head(25).to_string(index=False))
+      met=enr[enr['name'].str.contains('metabolic|metabolism|catabolic|biosynthetic|glycol|oxidative|respir|mitochond|lipid|fatty|amino acid|carbohydrate|nucleotide|protein', case=False, regex=True, na=False)]
+      print('METLIKE',len(met))
+      print(met[cols].head(20).to_string(index=False))
+PY"

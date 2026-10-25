@@ -1,0 +1,41 @@
+/bin/bash -lc "Rscript - <<'RS'
+suppressPackageStartupMessages({library(AnnotationDbi); library(org.Hs.eg.db); library(GO.db)})
+z <- readRDS('/workspace/.de_tmp.rds'); r <- z"'$res; sig <- z$sig
+# Universe: genes whose hypotheses survived DESeq2 independent filtering and have BP annotation.
+base_u <- r$gene[!is.na(r$padj)]
+ann <- AnnotationDbi::select(org.Hs.eg.db, keys=unique(base_u), keytype='"'ENSEMBL', columns=c('GOALL','ONTOLOGYALL'))
+ann <- unique(ann["'!is.na(ann$GOALL) & ann$ONTOLOGYALL == '"'BP', c('ENSEMBL','GOALL')])
+u <- intersect(base_u, unique(ann"'$ENSEMBL)); ann <- ann[ann$ENSEMBL %in% u,]
+up <- intersect(sig$gene[sig$log2FoldChange > 0],u)
+down <- intersect(sig$gene[sig$log2FoldChange < 0],u)
+ora <- function(fg) {
+  sets <- split(ann$ENSEMBL, ann$GOALL); sets <- lapply(sets, unique)
+  sets <- sets[lengths(sets) >= 10 & lengths(sets) <= 500]
+  hit <- vapply(sets, function(s) sum(fg %in% s), integer(1))
+  ok <- hit > 0; sets <- sets[ok]; hit <- hit[ok]
+  N <- length(u); n <- length(fg); K <- lengths(sets)
+  p <- phyper(hit-1, K, N-K, n, lower.tail=FALSE)
+  o <- data.frame(GO=names(sets), Term=Term(GOTERM[names(sets)]), fgHit=hit, setSize=K, pvalue=p, padj=p.adjust(p,'"'BH'), stringsAsFactors=FALSE)
+  o[order(o"'$padj,o$pvalue,-o$fgHit),]
+}
+ou <- ora(up); od <- ora(down)
+met_ids <- unique(c('"'GO:0008152', unlist(GOBPOFFSPRING[['GO:0008152']], use.names=FALSE)))
+report <- function(o,label) {
+  sm <- o[o"'$padj<0.05,]; mm <- sm[sm$GO %in% met_ids,]
+  cat('"'\\n',label,'foreground',if(label=='UP')length(up) else length(down),'universe',length(u),'mapped ann pairs',nrow(ann),'\\n')
+  cat('significant BP terms',nrow(sm),'metabolic descendants',nrow(mm),'\\n')
+  cat('TOP ALL:\\n'); print(head(sm,30),row.names=FALSE)
+  cat('ALL SIGNIFICANT METABOLIC:\\n'); print(mm,row.names=FALSE)
+}
+report(ou,'UP'); report(od,'DOWN')
+# extra sensitivity: count nominal and FDR metabolic terms; minimum adjusted p
+for (x in list(UP=ou,DOWN=od)) {
+ mm <- x[x"'$GO %in% met_ids,]
+ cat(names(x),'"'')
+}
+cat('\\nSummary metrics:\\n')
+for (nm in c('UP','DOWN')) {
+ o <- if(nm=='UP') ou else od; mm <- o[o"'$GO %in% met_ids,]
+ cat(nm,'"'met terms tested',nrow(mm),'nominal<.05',sum(mm"'$pvalue<.05),'"'FDR<.05',sum(mm"'$padj<.05),'"'minP',min(mm"'$pvalue),'"'minPadj',min(mm"'$padj),'"'\\n')
+}
+RS"

@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, torch, time
+torch.set_num_threads(1)
+from saluki_torch import Saluki, load_weights
+MODEL_PATHS=[f'models/train_gru/f{fi}_c{ci}/train/model0_best.h5' for fi in range(10) for ci in range(5)]
+UPSTREAM='GCCGCCACCATGGTGAGCAAGGGCGAGTAG'
+UTR='TATACATAATAAGGGCT'
+BASES='ACGT'; MAXLEN=12288
+
+def encode_sequence(full_dna):
+    L=len(full_dna); code=np.array([BASES.index(ch) for ch in full_dna], dtype=np.int64)
+    one=np.eye(4,dtype=np.float32)[code]
+    x=np.zeros((MAXLEN,6),dtype=np.float32); x[:L,:4]=one
+    for pos in range(9,30,3): x[pos,4]=1.0
+    return x
+
+def build_batch(seqs):
+    arr=np.stack([encode_sequence(s) for s in seqs],axis=0)
+    return torch.from_numpy(arr).permute(0,2,1).contiguous()
+
+def variants(cur):
+    out=[(cur,'current')]
+    for i,ref in enumerate(cur):
+        for b in BASES:
+            if b"'!=ref:
+                out.append((cur[:i]+b+cur[i+1:],f'"'{i}{ref}>{b}'))
+    return out
+cands=variants(UTR); seqs=[UPSTREAM+u for u,_ in cands]; X=build_batch(seqs)
+total=np.zeros(len(seqs),dtype=np.float32)
+t0=time.time()
+for mp in MODEL_PATHS:
+    model=Saluki(); load_weights(model,mp); model.eval()
+    with torch.no_grad(): total += model(X).numpy().ravel()
+    del model
+scores=total/len(MODEL_PATHS)
+print('elapsed',time.time()-t0)
+best_idx=int(np.argmax(scores[1:]))+1
+print('current',UTR,scores[0])
+for rank in range(10):
+    idx=int(np.argsort(-scores[1:])[rank])+1
+    print(rank+1,cands[idx][1],cands[idx][0],scores[idx])
+print('BEST',cands[best_idx][1],cands[best_idx][0],scores[best_idx])
+print('FULL',UPSTREAM+cands[best_idx][0])
+PY"

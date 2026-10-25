@@ -1,0 +1,79 @@
+/usr/bin/bash -lc "/usr/bin/micromamba run -p /tmp/de-env Rscript - <<'RS'
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(jsonlite))
+ref_dir <- '/workspace/data/inputs/counts_from_reference_condition'
+chg_dir <- '/workspace/data/inputs/counts_from_changed_condition'
+files_ref <- list.files(ref_dir, pattern='[.]dat"'$'"', recursive=TRUE, full.names=TRUE)
+files_chg <- list.files(chg_dir, pattern='[.]dat"'$'"', recursive=TRUE, full.names=TRUE)
+files <- c(files_ref, files_chg)
+files <- files[order(basename(files))]
+condition <- factor(ifelse(grepl('counts_from_changed_condition', files), 'changed', 'reference'),
+                    levels=c('reference','changed'))
+sample_names <- gsub('[.]dat"'$'"', '', basename(files))
+names(condition) <- sample_names
+
+read_one <- function(f) {
+  x <- read.delim(f, check.names=FALSE, stringsAsFactors=FALSE, colClasses=c('character','integer'))
+  stopifnot(ncol(x)==2, identical(colnames(x)[1], 'Geneid'))
+  x
+}
+lst <- lapply(files, read_one)
+ids <- lapply(lst, function(x) x[[1]])
+stopifnot(all(vapply(ids, identical, logical(1), ids[[1]])))
+counts <- do.call(cbind, lapply(lst, function(x) x[[2]]))
+colnames(counts) <- sample_names
+rownames(counts) <- ids[[1]]
+
+keep <- rowSums(counts >= 10) >= 2
+counts_f <- counts[keep, , drop=FALSE]
+col_data <- data.frame(condition=condition[colnames(counts_f)], row.names=colnames(counts_f))
+col_data"'$condition <- factor(col_data$condition, levels=c('"'reference','changed'))
+dds <- DESeqDataSetFromMatrix(countData=counts_f, colData=col_data, design=~condition)
+dds <- DESeq(dds)
+res <- results(dds, contrast=c('condition','changed','reference'), independentFiltering=FALSE, cooksCutoff=FALSE)
+manual_fdr <- p.adjust(res"'$pvalue, method='"'BH')
+out <- data.frame(
+  gene_id=rownames(res),
+  log2_fold_change=as.numeric(res"'$log2FoldChange),
+  p_value=as.numeric(res$pvalue),
+  fdr=as.numeric(manual_fdr),
+  stringsAsFactors=FALSE
+)
+stopifnot(nrow(out) == sum(keep))
+stopifnot(identical(out$gene_id, rownames(counts_f)))
+stopifnot(all(is.finite(out$log2_fold_change)))
+stopifnot(all(is.finite(out$p_value)), all(is.finite(out$fdr)))
+stopifnot(all(out$p_value >= 0 & out$p_value <= 1))
+stopifnot(all(out$fdr >= 0 & out$fdr <= 1))
+
+dir.create('"'/workspace/final_answer', showWarnings=FALSE)
+dir.create('/workspace/run_trace', showWarnings=FALSE)
+write.table(out, '/workspace/final_answer/differential_expression.tsv', sep='\\t', quote=FALSE, row.names=FALSE, col.names=TRUE)
+writeLines(toJSON(list(method='DESeq2'), auto_unbox=TRUE, pretty=TRUE), '/workspace/final_answer/method.json')
+
+log_lines <- c(
+  paste0('analysis_time=', Sys.time()),
+  paste0('input_genes=', nrow(counts)),
+  paste0('retained_genes=', nrow(counts_f)),
+  paste0('reference_samples=', paste(names(condition)[condition == 'reference'], collapse=',')),
+  paste0('changed_samples=', paste(names(condition)[condition == 'changed'], collapse=',')),
+  paste0('method=DESeq2'),
+  paste0('deseq2_version=', as.character(packageVersion('DESeq2'))),
+  paste0('filter=rowSums(counts >= 10) >= 2'),
+  paste0('contrast=changed vs reference'),
+  paste0('lfc=unshrunken MLE'),
+  paste0('p_value=Wald test'),
+  paste0('fdr=Benjamini-Hochberg across retained genes'),
+  paste0('rows_written=', nrow(out))
+)
+writeLines(log_lines, '/workspace/run_trace/analysis.log')
+cat('wrote final files\\n')
+cat('rows:', nrow(out), '\\n')
+cat('columns:', paste(colnames(out), collapse='\\t'), '\\n')
+RS
+printf '\\n--- validation ---\\n'
+head -n 5 /workspace/final_answer/differential_expression.tsv
+wc -l /workspace/final_answer/differential_expression.tsv
+cat /workspace/final_answer/method.json
+printf '\\n'
+cat /workspace/run_trace/analysis.log"

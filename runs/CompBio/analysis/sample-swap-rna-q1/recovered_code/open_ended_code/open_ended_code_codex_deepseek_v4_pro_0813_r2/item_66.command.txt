@@ -1,0 +1,78 @@
+/bin/bash -lc "cat > build_reference.py <<'PY'
+import gzip, json, csv, sys
+import numpy as np, pandas as pd
+
+# Load annotations
+ann=pd.read_csv('ref/annotations.tsv.gz',sep='\\t',dtype=str)
+print(ann.shape, ann.columns.tolist())
+# map our labels to original cell_type patterns
+patterns={
+ 'endoderm':['endoderm'],
+ 'endostyle_csg':['endostyle_csg'],
+ 'epidermal_neural':['epidermal_neural1','epidermal_neural2'],
+ 'epidermis':['epidermis_1','epidermis_2'],
+ 'mesodermal_notochord':['mesodermal_notochord'],
+ 'muscular_somites':['muscular_somites'],
+ 'neural':['neural'],
+ 'neural_like':['neural_like1','neural_like2'],
+ 'putative_neuro_endo':['putative_neuro_endo'],
+ 'somite':['somite'],
+ 'tailbud':['tailbud'],
+ 'tailbud_neural':['tailbud_neural'],
+}
+ann['group']=ann['cell_type'].map(lambda x: next((k for k,vals in patterns.items() if x in vals), None))
+print(ann['group'].value_counts(dropna=False))
+
+# Load our genes
+our=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+our_genes=set(our.index)
+print('our genes',len(our_genes))
+
+# Open sc_counts, process rows
+path='ref/sc_counts.tsv.gz'
+fin=gzip.open(path,'rt')
+header=fin.readline().rstrip('\\n').split('\\t')
+# map cell->group
+cell_group={}
+for cell,g in zip(ann['cell'],ann['group']):
+    cell_group[cell]=g
+# Some cells in header not annotations? check
+missing=[c for c in header if c not in cell_group]
+print('header cells',len(header),'missing annotations',len(missing),missing[:5])
+groups=list(patterns.keys())
+group_sums={g:np.zeros(len(header),dtype=np.float64) for g in groups}
+# We'll accumulate directly using mapping array
+gidx=np.array([groups.index(cell_group.get(c)) if cell_group.get(c) in groups else -1 for c in header], dtype=np.int32)
+counts_per_group=np.bincount(gidx[gidx>=0], minlength=len(groups))
+print('counts per group',dict(zip(groups,counts_per_group.tolist())))
+
+kept=[]
+kept_sums={g:np.zeros(len(our_genes), dtype=np.float64) for g in groups}
+kept_idx={gene:i for i,gene in enumerate(our.index)}
+# We'll accumulate only our genes
+n=0
+for line in fin:
+    parts=line.rstrip('\\n').split('\\t')
+    if len(parts)"'!=len(header)+1:
+        # maybe last?
+        pass
+    gene=parts[0]
+    if gene not in kept_idx:
+        continue
+    vals=np.array(parts[1:], dtype=np.float64)
+    gi=kept_idx[gene]
+    for g_index,g in enumerate(groups):
+        mask=(gidx==g_index)
+        kept_sums[g][gi]=vals[mask].sum()
+    n+=1
+    if n%2000==0:
+        print('"'processed',n,'our rows',flush=True)
+fin.close()
+ref=pd.DataFrame(kept_sums, index=our.index)
+# normalize each col CPM (per million) like our file maybe sum to 1e6
+ref_cpm=ref/ref.sum(axis=0, skipna=True)*1e6
+ref_cpm.to_csv('reference_pseudobulk.tsv.gz',sep='\\t',compression='gzip')
+print('saved reference', ref_cpm.shape)
+print(ref_cpm.sum())
+PY
+python3 build_reference.py"

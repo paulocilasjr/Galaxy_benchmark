@@ -1,0 +1,28 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+from pathlib import Path
+from phykit.services.alignment.base import Alignment
+from scipy.stats import mannwhitneyu
+from Bio import AlignIO
+import numpy as np
+
+def vals(group, minseq=1, common=None):
+ out=[]
+ for p in sorted(Path('work_rcv',group).glob('*.mafft')):
+  og=p.name.removesuffix('.faa.mafft')
+  if common is not None and og not in common: continue
+  if len(AlignIO.read(p,'fasta')) < minseq: continue
+  x=Alignment(alignment_file_path=str(p)).calculate_rcv()
+  out.append((og,x,round(x,4)))
+ return out
+anames={p.name.removesuffix('.faa.mafft') for p in Path('work_rcv/animals').glob('*.mafft')}
+fnames={p.name.removesuffix('.faa.mafft') for p in Path('work_rcv/fungi').glob('*.mafft')}
+for label,minseq,common in [('all',1,None),('nseq>=2',2,None),('shared',1,anames&fnames),('shared_nseq>=2',2,anames&fnames)]:
+ a=vals('animals',minseq,common); f=vals('fungi',minseq,common)
+ print('\\n',label,'n',len(a),len(f))
+ for precision in ('full','cli-rounded'):
+  x=[z[1 if precision=='full' else 2] for z in a]; y=[z[1 if precision=='full' else 2] for z in f]
+  print(precision,'mean',np.mean(x),np.mean(y),'median',np.median(x),np.median(y),'zeros',sum(v==0 for v in x),sum(v==0 for v in y),'ties_unique',len(set(x)),len(set(y)))
+  for cc in (True,False):
+   r=mannwhitneyu(x,y,alternative='two-sided',method='asymptotic',use_continuity=cc)
+   print(' cc',cc,'U',r.statistic,'p',repr(r.pvalue))
+PY"

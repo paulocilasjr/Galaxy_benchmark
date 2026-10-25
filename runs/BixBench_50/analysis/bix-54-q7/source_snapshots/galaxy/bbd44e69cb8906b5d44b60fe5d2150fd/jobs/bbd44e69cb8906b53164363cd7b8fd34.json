@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b53164363cd7b8fd34",
+  "history_id": "bbd44e69cb8906b5d44b60fe5d2150fd",
+  "tool_id": "codex_colony_area_models_r_v3",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-02T10:50:56.981905",
+  "update_time": "2026-08-02T10:51:20.331389",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analyze.R <<'RSCRIPT'\noptions(stringsAsFactors = FALSE, digits = 17)\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 1L) stop(\"Expected one CSV input path\")\ninput_path <- args[[1L]]\n\nsuppressPackageStartupMessages(library(splines))\nd <- read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE)\n\nrequired <- c(\"StrainNumber\", \"Ratio\", \"Replicate\", \"Area\")\nmissing_cols <- setdiff(required, names(d))\nif (length(missing_cols) > 0L) stop(paste(\"Missing required columns:\", paste(missing_cols, collapse = \", \")))\n\nd$StrainNumber <- trimws(as.character(d$StrainNumber))\nd$Ratio <- trimws(as.character(d$Ratio))\nd$Replicate <- trimws(as.character(d$Replicate))\nd$Area <- suppressWarnings(as.numeric(as.character(d$Area)))\nif (any(!is.finite(d$Area))) stop(\"Area contains non-finite values\")\n\nd$p287 <- NA_real_\nis_mix <- d$StrainNumber == \"287_98\"\nmix_parts <- strsplit(d$Ratio[is_mix], \":\", fixed = TRUE)\nif (length(mix_parts) > 0L) {\n  if (any(lengths(mix_parts) != 2L)) stop(\"Mixture ratios must have exactly two components\")\n  a <- vapply(mix_parts, function(z) suppressWarnings(as.numeric(z[[1L]])), numeric(1))\n  b <- vapply(mix_parts, function(z) suppressWarnings(as.numeric(z[[2L]])), numeric(1))\n  if (any(!is.finite(a)) || any(!is.finite(b)) || any(a < 0) || any(b < 0) || any(a + b <= 0)) {\n    stop(\"Invalid mixture ratio\")\n  }\n  d$p287[is_mix] <- a / (a + b)\n}\nd$p287[d$StrainNumber == \"98\" & !is_mix] <- 0\nd$p287[d$StrainNumber == \"287\" & !is_mix] <- 1\n\ncomponent_system <- d$StrainNumber %in% c(\"98\", \"287\", \"287_98\")\nif (any(!component_system & d$StrainNumber != \"1\")) {\n  stop(\"Unexpected strain labels outside the 287_98 system\")\n}\n\nprimary <- d[component_system & is.finite(d$Area) & is.finite(d$p287), , drop = FALSE]\nif (nrow(primary) != 42L) stop(paste(\"Unexpected primary row count:\", nrow(primary)))\nif (length(unique(primary$Replicate)) != 3L) stop(\"Unexpected replicate structure\")\nif (any(primary$p287 < 0 | primary$p287 > 1)) stop(\"Proportion outside [0,1]\")\nprimary$p287 <- pmin(pmax(primary$p287, 0), 1)\ninterior <- primary[primary$StrainNumber == \"287_98\", , drop = FALSE]\nif (nrow(interior) != 36L) stop(paste(\"Unexpected interior row count:\", nrow(interior)))\n\nmake_optimum <- function(fit, dat, ngrid = 20001L) {\n  domain <- range(dat$p287)\n  grid <- seq(domain[[1L]], domain[[2L]], length.out = ngrid)\n  grid_pred <- as.numeric(stats::predict(fit, newdata = data.frame(p287 = grid)))\n  if (any(!is.finite(grid_pred))) stop(\"Non-finite grid prediction\")\n  if (ngrid >= 3L) {\n    local_idx <- which(\n      grid_pred[2:(ngrid - 1L)] >= grid_pred[1:(ngrid - 2L)] &\n      grid_pred[2:(ngrid - 1L)] >= grid_pred[3:ngrid]\n    ) + 1L\n  } else {\n    local_idx <- integer(0L)\n  }\n  candidate_idx <- unique(c(1L, ngrid, local_idx))\n  refine_one <- function(i) {\n    if (i == 1L || i == ngrid) {\n      return(c(p = grid[[i]], predicted_area = grid_pred[[i]]))\n    }\n    refined <- stats::optimize(\n      f = function(x) as.numeric(stats::predict(fit, newdata = data.frame(p287 = x))),\n      interval = c(grid[[i - 1L]], grid[[i + 1L]]),\n      maximum = TRUE\n    )\n    c(p = refined$maximum, predicted_area = refined$objective)\n  }\n  candidates <- do.call(rbind, lapply(candidate_idx, refine_one))\n  best <- candidates[which.max(candidates[, \"predicted_area\"]), ]\n  c(\n    optimum_frequency = as.numeric(best[[\"p\"]]),\n    predicted_area = as.numeric(best[[\"predicted_area\"]]),\n    domain_min = domain[[1L]],\n    domain_max = domain[[2L]]\n  )\n}\n\nfit_scope <- function(dat, scope_name) {\n  formulas <- list(\n    quadratic = Area ~ p287 + I(p287^2),\n    cubic = Area ~ p287 + I(p287^2) + I(p287^3),\n    natural_spline_df4 = Area ~ splines::ns(p287, df = 4)\n  )\n  comparison_rows <- list()\n  optimum_rows <- list()\n  for (model_name in names(formulas)) {\n    fit <- stats::lm(formulas[[model_name]], data = dat)\n    fit_summary <- summary(fit)\n    opt <- make_optimum(fit, dat)\n    comparison_rows[[model_name]] <- data.frame(\n      scope = scope_name,\n      model = model_name,\n      n = nobs(fit),\n      parameters = length(stats::coef(fit)),\n      aic = as.numeric(stats::AIC(fit)),\n      bic = as.numeric(stats::BIC(fit)),\n      r_squared = as.numeric(fit_summary$r.squared),\n      adjusted_r_squared = as.numeric(fit_summary$adj.r.squared),\n      rss = as.numeric(deviance(fit)),\n      optimum_frequency = opt[[\"optimum_frequency\"]],\n      predicted_area = opt[[\"predicted_area\"]],\n      domain_min = opt[[\"domain_min\"]],\n      domain_max = opt[[\"domain_max\"]],\n      stringsAsFactors = FALSE\n    )\n    optimum_rows[[model_name]] <- data.frame(\n      scope = scope_name,\n      model = model_name,\n      n = nobs(fit),\n      aic = as.numeric(stats::AIC(fit)),\n      optimum_frequency = opt[[\"optimum_frequency\"]],\n      predicted_area = opt[[\"predicted_area\"]],\n      domain_min = opt[[\"domain_min\"]],\n      domain_max = opt[[\"domain_max\"]],\n      stringsAsFactors = FALSE\n    )\n  }\n  comparison <- do.call(rbind, comparison_rows)\n  optimums <- do.call(rbind, optimum_rows)\n  comparison$selected_by_aic <- comparison$model == comparison$model[which.min(comparison$aic)]\n  optimums$selected_by_aic <- optimums$model == optimums$model[which.min(optimums$aic)]\n  list(comparison = comparison, optimums = optimums)\n}\n\nprimary_fit <- fit_scope(primary, \"primary_full_boundaries\")\ninterior_fit <- fit_scope(interior, \"interior_mixtures_only\")\ncomparison <- rbind(primary_fit$comparison, interior_fit$comparison)\noptimums <- rbind(primary_fit$optimums, interior_fit$optimums)\n\nprimary_selected <- primary_fit$optimums[which.min(primary_fit$optimums$aic), , drop = FALSE]\nprimary_selected$selection_metric <- \"minimum_AIC\"\nprimary_selected$selection_scope <- \"primary_full_boundaries\"\nprimary_selected <- primary_selected[, c(\n  \"selection_scope\", \"selection_metric\", \"model\", \"n\", \"aic\",\n  \"optimum_frequency\", \"predicted_area\", \"domain_min\", \"domain_max\"\n), drop = FALSE]\n\nutils::write.table(\n  comparison,\n  file = \"model_comparison.tsv\",\n  sep = \"\\t\", quote = FALSE, row.names = FALSE\n)\nutils::write.table(\n  optimums,\n  file = \"model_optima.tsv\",\n  sep = \"\\t\", quote = FALSE, row.names = FALSE\n)\nutils::write.table(\n  primary_selected,\n  file = \"optimal_prediction.tsv\",\n  sep = \"\\t\", quote = FALSE, row.names = FALSE\n)\n\nRSCRIPT\nRscript --vanilla analyze.R \"/jetstream2/scratch/main/jobs/78866940/inputs/dataset_780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f.dat\"",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input": {
+      "id": "f9cad7b01a472135fb6c9aa1c37ba4ca",
+      "src": "hda",
+      "uuid": "780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f"
+    }
+  },
+  "outputs": {
+    "model_comparison": {
+      "id": "f9cad7b01a472135b56fd987a0189a2a",
+      "src": "hda",
+      "uuid": "06d7e840-ef88-42f1-b6d1-4fecfe0a2c96"
+    },
+    "model_optima": {
+      "id": "f9cad7b01a4721357fbefc3548f34b5a",
+      "src": "hda",
+      "uuid": "a02d6731-ad4c-49b8-8e56-edba333c81e5"
+    },
+    "optimal_prediction": {
+      "id": "f9cad7b01a47213501c80b43dd4470c7",
+      "src": "hda",
+      "uuid": "04796d0c-199f-4d08-98ca-fdd837b9c315"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

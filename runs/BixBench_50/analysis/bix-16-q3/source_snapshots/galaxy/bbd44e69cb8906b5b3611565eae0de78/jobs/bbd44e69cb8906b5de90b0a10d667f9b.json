@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5de90b0a10d667f9b",
+  "history_id": "bbd44e69cb8906b5b3611565eae0de78",
+  "tool_id": "depmap_expr_essentiality_spearman_count_v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-15T05:02:55.181209",
+  "update_time": "2026-07-15T05:06:07.871725",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\ncat > analysis.py <<'PY'\nimport csv\nimport math\nimport sys\nfrom collections import OrderedDict\n\nimport numpy as np\nfrom scipy import stats\n\ncrispr_path, expr_path, model_path, out_path = sys.argv[1:5]\nthreshold = 0.6\nmin_pairs = 3\nmissing = set(['', 'NA', 'NaN', 'nan', 'NAN', 'null', 'NULL', 'None'])\n\ndef parse_float(value):\n    if value in missing:\n        return np.nan\n    try:\n        return float(value)\n    except Exception:\n        return np.nan\n\ndef read_header(path):\n    with open(path, 'r', newline='') as handle:\n        return next(csv.reader(handle))\n\ndef check_duplicate_labels(labels, label):\n    seen = set()\n    dupes = []\n    for item in labels:\n        if item in seen:\n            dupes.append(item)\n        seen.add(item)\n    if dupes:\n        raise RuntimeError('%s has duplicate feature labels, examples: %s' % (label, ', '.join(dupes[:5])))\n\ncell_line_ids = set()\nwith open(model_path, 'r', newline='') as handle:\n    reader = csv.DictReader(handle)\n    for row in reader:\n        if row.get('ModelType') == 'Cell Line':\n            mid = row.get('ModelID')\n            if mid:\n                cell_line_ids.add(mid)\nif not cell_line_ids:\n    raise RuntimeError('No ModelType == Cell Line rows found in Model.csv')\n\ncrispr_header = read_header(crispr_path)\nexpr_header = read_header(expr_path)\ncrispr_features = crispr_header[1:]\nexpr_features = expr_header[1:]\ncheck_duplicate_labels(crispr_features, 'CRISPRGeneEffect')\ncheck_duplicate_labels(expr_features, 'Expression')\nexpr_index = {name: i + 1 for i, name in enumerate(expr_features)}\ncommon_features = [name for name in crispr_features if name in expr_index]\nif not common_features:\n    raise RuntimeError('No shared feature labels between CRISPR and expression matrices')\ncrispr_cols = [crispr_header.index(name) for name in common_features]\nexpr_cols = [expr_index[name] for name in common_features]\n\ncrispr_by_id = OrderedDict()\ncrispr_total_rows = 0\ncrispr_cell_line_rows = 0\nwith open(crispr_path, 'r', newline='') as handle:\n    reader = csv.reader(handle)\n    next(reader)\n    for row in reader:\n        crispr_total_rows += 1\n        if not row:\n            continue\n        model_id = row[0]\n        if model_id not in cell_line_ids:\n            continue\n        crispr_cell_line_rows += 1\n        if model_id in crispr_by_id:\n            raise RuntimeError('Duplicate CRISPR ModelID: %s' % model_id)\n        vals = np.empty(len(common_features), dtype=np.float64)\n        for out_i, col_i in enumerate(crispr_cols):\n            vals[out_i] = parse_float(row[col_i]) if col_i < len(row) else np.nan\n        crispr_by_id[model_id] = vals\n\nexpr_rows = []\ncrispr_rows = []\npaired_ids = []\nexpr_total_rows = 0\nexpr_cell_line_rows = 0\nseen_expr = set()\nwith open(expr_path, 'r', newline='') as handle:\n    reader = csv.reader(handle)\n    next(reader)\n    for row in reader:\n        expr_total_rows += 1\n        if not row:\n            continue\n        model_id = row[0]\n        if model_id not in cell_line_ids:\n            continue\n        expr_cell_line_rows += 1\n        if model_id in seen_expr:\n            raise RuntimeError('Duplicate expression ModelID: %s' % model_id)\n        seen_expr.add(model_id)\n        dep_vals = crispr_by_id.get(model_id)\n        if dep_vals is None:\n            continue\n        vals = np.empty(len(common_features), dtype=np.float64)\n        for out_i, col_i in enumerate(expr_cols):\n            vals[out_i] = parse_float(row[col_i]) if col_i < len(row) else np.nan\n        expr_rows.append(vals)\n        crispr_rows.append(dep_vals)\n        paired_ids.append(model_id)\n\nif not paired_ids:\n    raise RuntimeError('No paired cell-line ModelIDs between expression and CRISPR matrices')\nexpr = np.vstack(expr_rows)\n# Convert negative-going gene effect to positive-going essentiality/dependency strength.\nessentiality = -np.vstack(crispr_rows)\n\ncount = 0\ntested = 0\nnan_or_low_pairs = 0\nmax_rho = None\nmax_gene = None\nfor j, gene in enumerate(common_features):\n    x = expr[:, j]\n    y = essentiality[:, j]\n    mask = np.isfinite(x) & np.isfinite(y)\n    n = int(mask.sum())\n    if n < min_pairs:\n        nan_or_low_pairs += 1\n        continue\n    x_valid = x[mask]\n    y_valid = y[mask]\n    if np.all(x_valid == x_valid[0]) or np.all(y_valid == y_valid[0]):\n        nan_or_low_pairs += 1\n        continue\n    rho, pvalue = stats.spearmanr(x_valid, y_valid)\n    if rho is None or not np.isfinite(rho):\n        nan_or_low_pairs += 1\n        continue\n    tested += 1\n    rho = float(rho)\n    if max_rho is None or rho > max_rho:\n        max_rho = rho\n        max_gene = gene\n    if rho >= threshold:\n        count += 1\n\nwith open(out_path, 'w', newline='') as handle:\n    writer = csv.writer(handle, delimiter='\\t')\n    writer.writerow(['field', 'value'])\n    writer.writerow(['strong_positive_count', count])\n    writer.writerow(['rho_threshold', threshold])\n    writer.writerow(['method', 'spearman'])\n    writer.writerow(['essentiality_coordinate', '-CRISPRGeneEffect'])\n    writer.writerow(['model_filter', 'ModelType == Cell Line'])\n    writer.writerow(['id_alignment', 'ModelID intersection'])\n    writer.writerow(['feature_pairing', 'exact shared gene labels'])\n    writer.writerow(['min_pairs', min_pairs])\n    writer.writerow(['model_cell_line_count', len(cell_line_ids)])\n    writer.writerow(['crispr_total_rows', crispr_total_rows])\n    writer.writerow(['crispr_cell_line_rows', crispr_cell_line_rows])\n    writer.writerow(['expression_total_rows', expr_total_rows])\n    writer.writerow(['expression_cell_line_rows', expr_cell_line_rows])\n    writer.writerow(['paired_cell_line_rows', len(paired_ids)])\n    writer.writerow(['common_features', len(common_features)])\n    writer.writerow(['tested_features', tested])\n    writer.writerow(['not_tested_low_pairs_or_constant', nan_or_low_pairs])\n    writer.writerow(['max_rho', '' if max_rho is None else repr(max_rho)])\n    writer.writerow(['max_rho_gene', '' if max_gene is None else max_gene])\nPY\npython analysis.py \"/jetstream2/scratch/main/jobs/78534768/inputs/dataset_9636c8d0-6d2a-43c6-813c-7499bae129e2.dat\" \"/jetstream2/scratch/main/jobs/78534768/inputs/dataset_896d10a3-0b70-4b73-89a9-c7948520f1a7.dat\" \"/jetstream2/scratch/main/jobs/78534768/inputs/dataset_8ad7ee46-88f5-480d-808d-5f15793cb952.dat\" summary.tsv",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "crispr": {
+      "id": "f9cad7b01a47213598080d7cc23c555b",
+      "src": "hda",
+      "uuid": "9636c8d0-6d2a-43c6-813c-7499bae129e2"
+    },
+    "expression": {
+      "id": "f9cad7b01a472135f821155380263db7",
+      "src": "hda",
+      "uuid": "896d10a3-0b70-4b73-89a9-c7948520f1a7"
+    },
+    "model": {
+      "id": "f9cad7b01a472135e555809d8f897a5e",
+      "src": "hda",
+      "uuid": "8ad7ee46-88f5-480d-808d-5f15793cb952"
+    }
+  },
+  "outputs": {
+    "summary": {
+      "id": "f9cad7b01a472135775e79e76cd18983",
+      "src": "hda",
+      "uuid": "3845cdad-14a4-49a1-8ef6-2fb39f326671"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

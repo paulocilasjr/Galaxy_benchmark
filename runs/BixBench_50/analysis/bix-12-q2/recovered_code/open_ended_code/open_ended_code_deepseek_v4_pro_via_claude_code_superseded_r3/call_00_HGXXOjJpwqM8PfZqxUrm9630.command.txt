@@ -1,0 +1,118 @@
+cat > /workspace/parsimony_informative.py << 'PYEOF'
+import os
+import sys
+from collections import Counter
+
+def parse_fasta_alignment(filepath):
+    """Parse a FASTA alignment file, return list of (header, sequence) tuples."""
+    records = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_header is not None:
+                    records.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]  # remove '>'
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            records.append((current_header, ''.join(current_seq)))
+    return records
+
+def is_parsimony_informative(column, gap_chars='-Xx.?*'):
+    """
+    Determine if an alignment column is parsimony informative.
+    
+    A site is parsimony informative if:
+    1. At least two different character states (amino acids) are present
+    2. Each of those character states appears in at least two sequences
+    
+    Gaps and ambiguous characters are treated as missing data.
+    """
+    # Count only non-gap, non-ambiguous characters
+    valid_chars = [c.upper() for c in column if c not in gap_chars]
+    if len(valid_chars) < 2:
+        return False
+    
+    counts = Counter(valid_chars)
+    
+    # Need at least 2 different states
+    if len(counts) < 2:
+        return False
+    
+    # Each state must appear in at least 2 sequences
+    for state, count in counts.items():
+        if count < 2:
+            return False
+    
+    return True
+
+def compute_pis_percentage(filepath):
+    """Compute percentage of parsimony informative sites in an alignment."""
+    records = parse_fasta_alignment(filepath)
+    if len(records) < 2:
+        return None
+    
+    # All sequences should have the same length in an alignment
+    seqs = [seq for _, seq in records]
+    aln_length = len(seqs[0])
+    
+    # Verify all sequences have same length
+    for seq in seqs:
+        if len(seq) != aln_length:
+            print(f"WARNING: {filepath} has sequences of different lengths!", file=sys.stderr)
+            return None
+    
+    pis_count = 0
+    for col_idx in range(aln_length):
+        column = [seq[col_idx] for seq in seqs]
+        if is_parsimony_informative(column):
+            pis_count += 1
+    
+    return (pis_count / aln_length) * 100.0
+
+def main():
+    mafft_dir = '/workspace/tmp_fungi'
+    
+    files = sorted([f for f in os.listdir(mafft_dir) if f.endswith('.mafft')])
+    
+    percentages = []
+    for filename in files:
+        filepath = os.path.join(mafft_dir, filename)
+        pct = compute_pis_percentage(filepath)
+        if pct is not None:
+            percentages.append(pct)
+    
+    percentages.sort()
+    n = len(percentages)
+    
+    if n == 0:
+        print("No alignments found!")
+        return
+    
+    # Compute median
+    if n % 2 == 1:
+        median = percentages[n // 2]
+    else:
+        median = (percentages[n // 2 - 1] + percentages[n // 2]) / 2.0
+    
+    print(f"Number of alignments: {n}")
+    print(f"Median % parsimony informative sites: {median}")
+    print(f"Min: {min(percentages):.2f}%")
+    print(f"Max: {max(percentages):.2f}%")
+    print(f"Mean: {sum(percentages)/n:.2f}%")
+    
+    # Print the median only for answer file
+    with open('/workspace/codex_output/answer.txt', 'w') as f:
+        f.write(f"{median}\n")
+    print(f"\nAnswer written to /workspace/codex_output/answer.txt")
+
+if __name__ == '__main__':
+    main()
+PYEOF
+python3 /workspace/parsimony_informative.py

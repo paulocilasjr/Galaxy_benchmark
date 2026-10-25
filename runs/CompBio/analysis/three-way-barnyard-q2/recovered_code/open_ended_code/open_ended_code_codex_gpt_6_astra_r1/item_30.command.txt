@@ -1,0 +1,45 @@
+/bin/bash -lc "cat > compare_species.py <<'PY'
+import numpy as np,collections,gzip,json
+species=['human','mouse','pig'];n=1471997
+scores=np.zeros((n+1,3),dtype=np.int16)
+for si,sp in enumerate(species):
+ cnt=0
+ for line in open('results/'+sp+'.paf'):
+  p=line.split('\\t');rid=int(p[0].split('/')[0].split('_')[1]);match=int(p[9]);aln=int(p[10])
+  if match<50 or match/aln<.9:continue
+  score=int(next(t[5:] for t in p[12:] if t.startswith('AS:i:')))
+  scores[rid,si]=max(score,scores[rid,si]);cnt+=1
+ print(sp,cnt,flush=True)
+bcs=[l.split()[0] for l in open('barcode_counts.tsv')];idx={b:i for i,b in enumerate(bcs)};rbc=np.zeros(n+1,dtype=np.int16);umis=['']
+with gzip.open('three.way.barnyard.q2.R1.fq.gz','rt') as f:
+ for rid,h in enumerate(f,1):
+  seq=next(f).strip();next(f);next(f);rbc[rid]=idx[seq[:16]];umis.append(seq[16:])
+rank=np.sort(scores,axis=1);best=scores.argmax(1);gap=rank[:,2]-rank[:,1]
+arrays={}
+for mingap in [1,10,20,40]:
+ good=(gap>=mingap)&(rank[:,2]>=100);a=np.zeros((len(bcs),3),dtype=int)
+ np.add.at(a,(rbc[good],best[good]),1);arrays[str(mingap)]=a
+ frac=a.max(1)/np.maximum(1,a.sum(1))
+ for purity in [.8,.9,.95]:
+  passed=(frac>=purity)&(a.sum(1)>=20)
+  print('gap',mingap,'purity',purity,'cells',passed.sum(),'assignments',dict(collections.Counter(np.array(species)[a[passed].argmax(1)])),flush=True)
+np.savez('results/species_score_counts.npz',**arrays,barcodes=bcs)
+a=arrays['20'];frac=a.max(1)/np.maximum(1,a.sum(1));assign=np.array(species)[a.argmax(1)];passed=(frac>=.9)&(a.sum(1)>=20)
+with open('results/final_barcode_assignments.tsv','w') as f:
+ f.write('barcode\\thuman\\tmouse\\tpig\\tpurity\\tassignment\\n')
+ for bi,bc in enumerate(bcs):f.write('\\t'.join(map(str,[bc,*a[bi],frac[bi],assign[bi] if passed[bi] else 'mixed_or_uncertain']))+'\\n')
+meta=json.load(open('refs/transcript_metadata.json'));d=collections.defaultdict(set)
+for si,sp in enumerate(species):
+ for line in open('results/'+sp+'.paf'):
+  p=line.split('\\t');rid=int(p[0].split('/')[0].split('_')[1]);bi=rbc[rid]
+  if not passed[bi] or assign[bi]"'!=sp or best[rid]!=si or gap[rid]<20:continue
+  t=meta[sp+'"'|'+p[5]];gene=t.get('gene_symbol',t['gene']);d[(bi,sp,gene)].add(umis[rid])
+agg=collections.Counter();cells=collections.Counter()
+for (bi,sp,gene),u in d.items():agg[sp,gene]+=len(u);cells[sp,gene]+=1
+with open('results/final_gene_counts.tsv','w') as f:
+ f.write('species\\tgene\\tumis\\tcells\\n')
+ for (sp,gene),c in agg.most_common():f.write(f'{sp}\\t{gene}\\t{c}\\t{cells[sp,gene]}\\n')
+for sp in species:
+ print('\\n',sp,[(g,c,cells[s,g]) for (s,g),c in agg.most_common() if s==sp][:100],flush=True)
+PY
+for sp in human mouse pig; do tail -n 3 results/"'$sp.mapping.log; done'

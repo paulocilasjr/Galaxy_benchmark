@@ -1,0 +1,14 @@
+/bin/bash -lc "Rscript - <<'RS'
+suppressPackageStartupMessages({library(DESeq2);library(AnnotationDbi);library(org.Hs.eg.db);library(GO.db)})
+cts<-as.matrix(read.csv('inputs/counts_raw_unfiltered.csv',row.names=1,check.names=FALSE));m<-read.csv('inputs/sample_layout.csv',stringsAsFactors=FALSE);m"'$id<-gsub('"'-','_',m"'$SampleID);cts<-cts[,m$id];colnames(cts)<-m$SampleID;rownames(m)<-m$SampleID;m$Group<-relevel(factor(m$Group),ref='"'DMSO')
+dds<-DESeq(DESeqDataSetFromMatrix(cts,m,~Group),quiet=TRUE);r<-as.data.frame(results(dds,contrast=c('Group','CBD_IC50','DMSO'),alpha=.05));r"'$gene<-rownames(r);sig<-subset(r,!is.na(padj)&padj<.05&abs(log2FoldChange)>.5)
+allids<-r$gene[r$baseMean>0];ann<-AnnotationDbi::select(org.Hs.eg.db,keys=allids,keytype='"'ENSEMBL',columns=c('GOALL','ONTOLOGYALL'));ann<-unique(ann["'!is.na(ann$GOALL)&ann$ONTOLOGYALL=='"'BP',c('ENSEMBL','GOALL')]);met<-unique(c('GO:0008152',unlist(GOBPOFFSPRING[['GO:0008152']],use.names=FALSE)))
+run<-function(ufilter,maxsize){u0<-r"'$gene[ufilter];u<-intersect(u0,ann$ENSEMBL);a<-ann[ann$ENSEMBL%in%u,]; sets<-lapply(split(a$ENSEMBL,a$GOALL),unique);sets<-sets[lengths(sets)>=10&lengths(sets)<=maxsize]; cat('"'universe',length(u),'max',maxsize,'\\n');for(nm in c('UP','DOWN')){fg0<-sig"'$gene[if(nm=='"'UP')sig"'$log2FoldChange>0 else sig$log2FoldChange<0];fg<-intersect(fg0,u);h<-vapply(sets,function(s)sum(fg%in%s),integer(1));ok<-h>0; ss<-sets[ok]; hh<-h[ok];K<-lengths(ss);p<-phyper(hh-1,K,length(u)-K,length(fg),lower.tail=FALSE);o<-data.frame(GO=names(ss),Term=Term(GOTERM[names(ss)]),hit=hh,size=K,p=p,padj=p.adjust(p,'"'BH'));o<-o[order(o"'$padj,o$p),];sm<-o[o$padj<.05,];mm<-sm[sm$GO%in%met,];cat(nm,'"'fg',length(fg),'all',nrow(sm),'met',nrow(mm),'best',if(nrow(mm))min(mm"'$padj)else NA,'"'nominal metabolic',sum(o"'$GO%in%met&o$p<.05),'"'\\n');if(nm=='DOWN'&&maxsize==500) print(head(o[o"'$GO%in%met,],15),row.names=FALSE)}}}
+cat('"'Universe: non-NA padj\\n');run("'!is.na(r$padj),500)
+cat('"'Universe: non-NA pvalue\\n');run("'!is.na(r$pvalue),500)
+cat('"'Universe: baseMean positive\\n');run(r"'$baseMean>0,500)
+cat('"'No upper size cutoff\\n');run("'!is.na(r$padj),Inf)
+# gene symbols for directional foreground
+mp<-AnnotationDbi::select(org.Hs.eg.db,keys=sig$gene,keytype='"'ENSEMBL',columns='SYMBOL');mp<-mp["'!duplicated(mp$ENSEMBL),];ss<-merge(sig,mp,by.x='"'gene',by.y='ENSEMBL',all.x=TRUE)
+cat('\\nUP symbols:\\n');cat(ss"'$SYMBOL[ss$log2FoldChange>0],sep='"',');cat('\\nDOWN symbols:\\n');cat(ss"'$SYMBOL[ss$log2FoldChange<0],sep='"',');cat('\\n')
+RS"

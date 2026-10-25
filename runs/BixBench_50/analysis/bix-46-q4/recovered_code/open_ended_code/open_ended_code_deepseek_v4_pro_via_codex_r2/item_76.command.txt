@@ -1,0 +1,39 @@
+/bin/bash -c "python3 - <<'PY'
+import subprocess, zipfile, xml.etree.ElementTree as ET, statistics
+# load res
+rscript=r'''
+for (f in c('/workspace/inputs/res_1vs97.rds','/workspace/inputs/res_1vs98.rds')) { con<-gzfile(f,'rb'); x<-unserialize(con); close(con); y<-unclass(x); ld<-attr(y,'listData'); rn<-attr(y,'rownames'); cat('###FILE',basename(f),'\\n'); for(i in seq_along(rn)) cat(rn[i],ld"'$log2FoldChange[i],'"'\\n',sep='\\t') }
+'''
+out=subprocess.run(['Rscript','-e',rscript],capture_output=True,text=True,check=True).stdout
+res={};cur=None
+for line in out.splitlines():
+ if line.startswith('###FILE'):cur=line.split()[1];res[cur]={};continue
+ p=line.split('\\t');
+ if len(p)>=2:res[cur][p[0]]=float(p[1])
+ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+def parse(fn,col):
+ with zipfile.ZipFile(fn) as z:root=ET.fromstring(z.read('word/document.xml'))
+ t=root.find('.//w:tbl',ns);d={}
+ for tr in t.findall('w:tr',ns)[2:]:
+  cells=[''.join(x.text or '' for x in c.findall('.//w:t',ns)) for c in tr.findall('w:tc',ns)]
+  if len(cells)>=4 and cells[0]:
+   s=cells[col].strip(); d[cells[0]]=None if s in ('','-') else float(s)
+ return d
+# columns: rhlR=1, rhlI=2
+hcdR=parse('/workspace/ppat.1006504.s012.docx',1); hcdI=parse('/workspace/ppat.1006504.s012.docx',2)
+bioR=parse('/workspace/ppat.1006504.s013.docx',1); bioI=parse('/workspace/ppat.1006504.s013.docx',2)
+configs=[('res97 assumed rhlR',res['res_1vs97.rds'],hcdR,bioR),('res98 assumed rhlI',res['res_1vs98.rds'],hcdI,bioI)]
+for label,rfcs,hcd,bio in configs:
+ honly=[]; bonly=[]; both=[]
+ for g,t in hcd.items():
+  if t is None: continue
+  if bio.get(g) is None: honly.append((g,t,bio.get(g)))
+  elif bio.get(g) is not None: both.append((g,t,bio.get(g)))
+ for g,t in bio.items():
+  if t is not None and hcd.get(g) is None: bonly.append((g,hcd.get(g),t))
+ print('\\n',label,'counts honly/bonly/both',len(honly),len(bonly),len(both))
+ for name,arr in [('HCD-only',honly),('biofilm-only',bonly),('both',both)]:
+  vals=[abs(rfcs[g]) for g,_,_ in arr if g in rfcs]
+  if vals:
+   print(name,'n',len(vals),'meanabs',statistics.mean(vals),'median',statistics.median(vals))
+PY"

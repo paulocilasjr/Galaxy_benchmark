@@ -21,7 +21,7 @@ import openpyxl
 import pandas as pd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -32,9 +32,9 @@ from PIL import Image  # noqa: E402
 plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'mathtext.it': 'Arial:italic',  # italic P
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-ERRORS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig5.xlsx')
-LEDGER = os.path.join(ROOT, 'analysis_reports', 'galaxy_improvement_20260924', 'v2_trace_friction', 'ledger.json')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+ERRORS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig5.xlsx')
+LEDGER = os.path.join(ROOT, 'analysis', 'galaxy_improvement_20260924', 'v2_trace_friction', 'ledger.json')
 OUT = os.path.join(ROOT, 'figures')
 B, SEED, B_PERM = 20000, 20261002, 200000
 W, MM = 180.0, 1 / 25.4

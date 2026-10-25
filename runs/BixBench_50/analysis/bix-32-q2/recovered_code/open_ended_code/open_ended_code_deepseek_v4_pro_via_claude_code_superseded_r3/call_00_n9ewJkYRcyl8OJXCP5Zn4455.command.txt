@@ -1,0 +1,47 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+from collections import defaultdict
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+import pickle
+
+res_99 = pd.read_csv("/tmp/analysis/res_99.csv")
+with open("/tmp/analysis/kegg_data.pkl", "rb") as f:
+    kegg_data = pickle.load(f)
+pathway_genes_raw = {k: set(v) for k, v in kegg_data["pathway_genes"].items()}
+
+all_genes = set(res_99["gene"])
+all_kegg_genes = set()
+for gs in pathway_genes_raw.values():
+    all_kegg_genes.update(gs)
+universe = all_genes & all_kegg_genes
+N = len(universe)
+
+de_down = set(res_99[res_99["log2FoldChange"] < -1.5]["gene"]) & universe
+K = len(de_down)
+
+# Check padj for specific pathways of interest
+check_pids = ['pau01110', 'pau01310', 'pau04146']
+all_results = []
+
+for pid in pathway_genes_raw:
+    pw_in_u = pathway_genes_raw[pid] & universe
+    n = len(pw_in_u)
+    if n < 2: continue
+    x = len(pw_in_u & de_down)
+    if x == 0: continue
+    pval = hypergeom.sf(x - 1, N, K, n)
+    fe = (x / n) / (K / N)
+    all_results.append((pid, pval, fe, x, n))
+
+pvals = [r[1] for r in all_results]
+_, padjs, _, _ = multipletests([r[1] for r in all_results], method='fdr_bh')
+
+for pid in check_pids:
+    for r, padj in zip(all_results, padjs):
+        if r[0] == pid:
+            print(f"{pid}: p={r[1]:.6f}, padj={padj:.6f}, fe={r[2]:.4f}, overlap={r[3]}, pw_size={r[4]}")
+            break
+    else:
+        print(f"{pid}: no result (overlap=0)")
+PYEOF

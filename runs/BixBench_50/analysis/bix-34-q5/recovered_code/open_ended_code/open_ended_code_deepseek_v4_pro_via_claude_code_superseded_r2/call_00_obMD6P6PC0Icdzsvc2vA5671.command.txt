@@ -1,0 +1,81 @@
+/workspace/venv/bin/python3 -c "
+import sys
+sys.path.insert(0, '/workspace/venv/lib/python3.11/site-packages')
+import dendropy
+import os
+import numpy as np
+
+animal_dir = '/workspace/extracted'
+fungi_dir = '/workspace/extracted_fungi'
+
+def compute_mean_patristic(tree_file):
+    tree = dendropy.Tree.get(path=tree_file, schema='newick', preserve_underscores=True)
+    taxa = [leaf.taxon for leaf in tree.leaf_node_iter()]
+    n = len(taxa)
+    if n < 2:
+        return None, n
+    pdm = tree.phylogenetic_distance_matrix()
+    distances = []
+    for i in range(n):
+        for j in range(i+1, n):
+            distances.append(pdm(taxa[i], taxa[j]))
+    return np.mean(distances), n
+
+# Get shared OGs
+animals_s = set()
+for f in os.listdir(animal_dir):
+    if f.endswith('.treefile'):
+        animals_s.add(f.replace('.mafft.clipkit.treefile', ''))
+
+fungi_s = set()
+for f in os.listdir(fungi_dir):
+    if f.endswith('.treefile'):
+        fungi_s.add(f.replace('.mafft.clipkit.treefile', ''))
+
+shared = sorted(animals_s & fungi_s)
+print(f'Shared orthogroups: {len(shared)}')
+
+animal_means = []
+fungi_means = []
+per_gene_ratios = []
+
+for og in shared:
+    am, an = compute_mean_patristic(os.path.join(animal_dir, og + '.mafft.clipkit.treefile'))
+    fm, fn = compute_mean_patristic(os.path.join(fungi_dir, og + '.mafft.clipkit.treefile'))
+    animal_means.append(am)
+    fungi_means.append(fm)
+    per_gene_ratios.append(fm/am)
+
+animal_median = np.median(animal_means)
+fungi_median = np.median(fungi_means)
+
+print(f'\\nAnimal mean patristic distances:')
+print(f'  Min: {np.min(animal_means):.6f}')
+print(f'  Q1: {np.percentile(animal_means, 25):.6f}')
+print(f'  Median: {animal_median:.6f}')
+print(f'  Q3: {np.percentile(animal_means, 75):.6f}')
+print(f'  Max: {np.max(animal_means):.6f}')
+
+print(f'\\nFungi mean patristic distances:')
+print(f'  Min: {np.min(fungi_means):.6f}')
+print(f'  Q1: {np.percentile(fungi_means, 25):.6f}')
+print(f'  Median: {fungi_median:.6f}')
+print(f'  Q3: {np.percentile(fungi_means, 75):.6f}')
+print(f'  Max: {np.max(fungi_means):.6f}')
+
+print(f'\\nRatio (fungi median / animal median): {fungi_median / animal_median:.10f}')
+print(f'Median of per-gene ratios: {np.median(per_gene_ratios):.10f}')
+
+# also check: are there any trees with branch length issues?
+print(f'\\nAnimal species counts per orthogroup:')
+from collections import Counter
+ac = Counter()
+fc = Counter()
+for og in shared:
+    tree = dendropy.Tree.get(path=os.path.join(animal_dir, og + '.mafft.clipkit.treefile'), schema='newick', preserve_underscores=True)
+    ac[len(list(tree.leaf_node_iter()))] += 1
+    tree = dendropy.Tree.get(path=os.path.join(fungi_dir, og + '.mafft.clipkit.treefile'), schema='newick', preserve_underscores=True)
+    fc[len(list(tree.leaf_node_iter()))] += 1
+print(f'  Animals: {dict(ac)}')
+print(f'  Fungi: {dict(fc)}')
+" 2>&1

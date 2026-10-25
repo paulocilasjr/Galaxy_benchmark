@@ -1,0 +1,89 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter, defaultdict
+import re, math
+
+class Node:
+    __slots__=('children','length','label')
+    def __init__(self, children=None, length=None, label=''):
+        self.children=children or []
+        self.length=length
+        self.label=label
+
+def parse_newick(s):
+    s=s.strip()
+    if s.endswith(';'): s=s[:-1]
+    i=0
+    def skip():
+        nonlocal i
+        while i<len(s) and s[i].isspace(): i+=1
+    def label():
+        nonlocal i
+        skip(); start=i
+        while i<len(s) and s[i] not in ',():;[]': i+=1
+        return s[start:i].strip()
+    def length():
+        nonlocal i
+        skip()
+        if i<len(s) and s[i]==':':
+            i+=1; skip(); start=i
+            while i<len(s) and s[i] not in ',();[]': i+=1
+            return float(s[start:i].strip())
+        return None
+    def subtree():
+        nonlocal i
+        skip()
+        if i<len(s) and s[i]=='(':
+            i+=1; kids=[subtree()]
+            while True:
+                skip()
+                if i<len(s) and s[i]==',': i+=1; kids.append(subtree())
+                else: break
+            skip()
+            assert s[i]==')', (i,s[i:i+20],s)
+            i+=1
+            lab=label(); bl=length()
+            return Node(kids,bl,lab)
+        else:
+            lab=label(); bl=length()
+            return Node([],bl,lab)
+    root=subtree(); skip()
+    if i "'!= len(s): print('"'trailing',repr(s[i:]))
+    return root
+
+def metrics(root):
+    vals=[]
+    def walk(n, depth=0):
+        if n.length is not None: vals.append((n.length, bool(n.children)))
+        for c in n.children: walk(c,depth+1)
+    walk(root)
+    total=sum(x for x,_ in vals)
+    internal=sum(x for x,intn in vals if intn)
+    ext=sum(x for x,intn in vals if not intn)
+    return len(vals),sum(1 for x,intn in vals if intn),total,internal,ext,internal/total if total else math.nan,internal/ext if ext else math.nan
+
+with ZipFile('inputs/scogs_fungi.zip') as z:
+    trees={n.split('.')[0]: z.read(n).decode() for n in z.namelist() if n.endswith('.treefile')}
+    faas={n.split('.')[0]: z.read(n).decode() for n in z.namelist() if n.endswith('.faa')}
+print('tree count',len(trees),'faa count',len(faas),'missing trees',sorted(set(faas)-set(trees)))
+for k in sorted(set(faas)-set(trees)):
+    print('missing',k,'seqs',faas[k].count('\\n>') + (1 if faas[k].startswith('>') else 0))
+
+rows=[]
+for k,s in trees.items():
+    root=parse_newick(s); m=metrics(root)
+    leaves=[]
+    def get(n):
+        if not n.children: leaves.append(n.label)
+        for c in n.children: get(c)
+    get(root)
+    rows.append((k,len(leaves),*m,s.strip()))
+print('leaf count',Counter(r[1] for r in rows))
+print('edge count',Counter(r[2] for r in rows))
+print('internal edge count',Counter(r[3] for r in rows))
+print('treeness total ratio stats',min(r[8] for r in rows),max(r[8] for r in rows),sum(r[8] for r in rows)/len(rows))
+print('above .06 total',sum(r[8]>.06 for r in rows),'of',len(rows),'pct',100*sum(r[8]>.06 for r in rows)/len(rows))
+print('above .06 internal/external',sum(r[9]>.06 for r in rows),'pct',100*sum(r[9]>.06 for r in rows)/len(rows))
+print('leaves and ratios samples')
+for r in sorted(rows,key=lambda x:x[8])[:10]+sorted(rows,key=lambda x:x[8])[-10:]: print(r[0], 'n',r[1],'edges',r[2],'intedges',r[3],'total',r[4],'internal',r[5],'ext',r[6],'ratio',r[8], 'i/e',r[9])
+PY"

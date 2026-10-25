@@ -1,0 +1,117 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+import re, statistics
+
+base=Path('inputs')
+# Load status rows
+wb=load_workbook(base/'230215_Trio_Status.xlsx', read_only=True, data_only=True)
+rows=list(wb.active.iter_rows(values_only=True))
+headers=list(rows[0])
+status=[]
+for r in rows[1:]:
+    d=dict(zip(headers,r))
+    sid=str(d['Sample ID']).strip()
+    # Excel numeric IDs appear as e.g. 185
+    if sid.endswith('.0'):
+        sid=sid[:-2]
+    d['sid_norm']=sid
+    status.append(d)
+carriers=[d for d in status if str(d['BLM Mutation Status']).strip()=='Carrier']
+print('carriers', len(carriers), [d['sid_norm'] for d in carriers])
+
+# Map files by status sample id: numeric prefix before hyphen or SRR exact
+files=sorted((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+file_by_sid={}
+for p in files:
+    name=p.stem.split('CHIP_')[-1]
+    sid=name.split('-')[0] if not name.startswith('SRR') else name
+    file_by_sid[sid]=p
+print('missing carriers', [d['sid_norm'] for d in carriers if d['sid_norm'] not in file_by_sid])
+
+# helper: load rows robustly
+def read_table(path):
+    wb=load_workbook(path, read_only=True, data_only=True)
+    ws=wb.active
+    ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True)
+    top=next(it)  # group header
+    hdr=list(next(it))
+    for vals in it:
+        if not any(v is not None for v in vals):
+            continue
+        yield dict(zip(hdr, vals))
+
+def norm_bool(v):
+    if isinstance(v, bool): return v
+    if v is None: return None
+    return str(v).strip().lower() == 'true'
+
+def parse_float(v):
+    if v is None or v=='': return None
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+def excluded_region(row):
+    fields=[row.get('Sequence Ontology (Combined)'), row.get('Effect (Combined)'), row.get('HGVS c. (Clinically Relevant)')]
+    text=' | '.join('' if x is None else str(x) for x in fields).lower()
+    # Requested exclusions: Intronic, Intergenic, UTR regions.
+    return ('intron' in text) or ('intergenic' in text) or ('utr' in text)
+
+def pass_variant(row):
+    z=str(row.get('Zygosity') or '').strip().lower()
+    if z == 'reference':
+        return False
+    if excluded_region(row):
+        return False
+    vaf=parse_float(row.get('Variant Allele Freq'))
+    if vaf is None or not (vaf < 0.3):
+        return False
+    # Keep explicit CHIP annotation if present; rows in these files are CHIP filtered, but this avoids DNAm-only rows.
+    inchip=row.get('In_CHIP')
+    if inchip is not None and not norm_bool(inchip):
+        return False
+    return True
+
+counts={}
+debug=[]
+all_so=set(); all_effect=set(); all_inchip=set()
+for d in carriers:
+    sid=d['sid_norm']
+    p=file_by_sid.get(sid)
+    if p is None:
+        continue
+    n=0; total=0; nonref=0; low=0; region_ex=0; chipfalse=0
+    examples=[]
+    for row in read_table(p):
+        total += 1
+        all_so.add(row.get('Sequence Ontology (Combined)'))
+        all_effect.add(row.get('Effect (Combined)'))
+        all_inchip.add(row.get('In_CHIP'))
+        if str(row.get('Zygosity') or '').strip().lower() "'!= '"'reference': nonref += 1
+        if parse_float(row.get('Variant Allele Freq')) is not None and parse_float(row.get('Variant Allele Freq')) < 0.3: low += 1
+        if excluded_region(row): region_ex += 1
+        if row.get('In_CHIP') is not None and not norm_bool(row.get('In_CHIP')): chipfalse += 1
+        if pass_variant(row):
+            n += 1
+            if len(examples)<5:
+                examples.append((row.get('Chr:Pos'), row.get('Gene Names'), row.get('Sequence Ontology (Combined)'), row.get('Zygosity'), row.get('Variant Allele Freq')))
+    counts[sid]=n
+    debug.append((sid,p.name,n,total,nonref,low,region_ex,chipfalse,examples))
+
+for item in debug:
+    sid,name,n,total,nonref,low,region_ex,chipfalse,examples=item
+    print('\\n',sid,name,'count',n,'total',total,'nonref',nonref,'lowvaf',low,'region_ex_any',region_ex,'chipfalse',chipfalse)
+    print(' examples', examples)
+vals=list(counts.values())
+print('\\ncounts', counts)
+print('n with files', len(vals), 'sorted', sorted(vals))
+print('median', statistics.median(vals))
+vals20=vals+[0]
+print('median if missing carrier 533 as 0', statistics.median(vals20), 'sorted20', sorted(vals20))
+print('In_CHIP unique', all_inchip)
+print('SO sample', sorted(x for x in all_so if x)[:50])
+print('Effect unique', sorted(x for x in all_effect if x)[:50])
+PY"

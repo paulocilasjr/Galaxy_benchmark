@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+import scanpy as sc
+import scvi
+import torch
+sc.settings.verbosity=1
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad')
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+r.obs['batch']='ref'; q.obs['batch']='query'
+r.obs['label']=r.obs['target_gene'].astype(str).values
+q.obs['label']='unknown'
+adata=ad.concat([r,q], join='inner', index_unique=None, keys=None, label='batch')
+# Need integer counts; X currently raw counts int64.
+sc.pp.filter_genes(adata, min_counts=1)
+sc.pp.highly_variable_genes(adata, n_top_genes=3000, flavor='seurat_v3', batch_key='batch')
+adata=adata[:, adata.var.highly_variable].copy()
+print('adata', adata.shape)
+scvi.model.SCANVI.setup_anndata(adata, batch_key='batch', labels_key='label', unlabeled_category='unknown')
+model=scvi.model.SCANVI(adata, n_latent=20, n_layers=2)
+model.train(max_epochs=100, early_stopping=True, batch_size=512, plan_kwargs={'lr':1e-3})
+print('trained')
+# predict
+pred=model.predict(adata)
+# actually predict labels for all? model.predict returns latent? use model.predict(adata, soft=False) maybe
+# Let's get latent and train classifier
+latent=model.get_latent_representation(adata)
+adata.obsm['X_scANVI']=latent
+ref_mask=adata.obs['batch'].values=='ref'
+qmask=~ref_mask
+from sklearn.neighbors import KNeighborsClassifier
+clf=KNeighborsClassifier(n_neighbors=20, weights='distance').fit(latent[ref_mask], adata.obs['label'].values[ref_mask])
+pred_labels=clf.predict(latent[qmask])
+q.obs['pred_label']=pred_labels
+print('\\nPer query guide majority pred')
+print(q.obs.groupby('guide', observed=True)['pred_label'].agg(lambda x: x.mode()[0] if len(x) else 'NA').to_string())
+for target in ['PABPC1','NUDT21','LEO1']:
+    sub=q.obs[q.obs.pred_label==target]
+    print('\\ntarget',target, sub.guide.value_counts().head(10).to_dict())
+PY"

@@ -1,0 +1,36 @@
+/usr/bin/bash -lc 'set -euo pipefail
+work=/workspace/.host_filter_work
+out=/workspace/final_answer
+mkdir -p "$out"
+cp "$work/retained.fastq.1.gz" "$out/filtered_forward.fastqsanger.gz"
+cp "$work/retained.fastq.2.gz" "$out/filtered_reverse.fastqsanger.gz"
+ls -lh "$out"/filtered_forward.fastqsanger.gz "$out"/filtered_reverse.fastqsanger.gz
+printf '"'%s\\n' 'gzip integrity:'
+gzip -t \""'$out/filtered_forward.fastqsanger.gz"
+gzip -t "$out/filtered_reverse.fastqsanger.gz"
+printf '"'%s\\n' 'record counts:'
+for f in \""'$out"/filtered_forward.fastqsanger.gz "$out"/filtered_reverse.fastqsanger.gz; do gzip -dc "$f" | awk '"'END {print FILENAME, NR/4}'; done
+printf '%s\\n' 'pair-ID synchronization check:'
+awk 'NR%4==1 {sub(/"'^@/,""); split($0,a," "); print a[1]}'"' <(gzip -dc \""'$out/filtered_forward.fastqsanger.gz") > "$work/forward.ids"
+awk '"'NR%4==1 {sub(/"'^@/,""); split($0,a," "); print a[1]}'"' <(gzip -dc \""'$out/filtered_reverse.fastqsanger.gz") > "$work/reverse.ids"
+if cmp -s "$work/forward.ids" "$work/reverse.ids"; then echo synchronized; else echo NOT_SYNCHRONIZED; exit 1; fi
+printf '"'%s\\n' 'input/retained exact-record validation:'
+PATH=/workspace/.host_filter_env/bin:"'$PATH python3 - "$fwd" "$rev" "$out/filtered_forward.fastqsanger.gz" "$out/filtered_reverse.fastqsanger.gz" <<'"'PY'
+import gzip, sys
+orig_f, orig_r, keep_f, keep_r = sys.argv[1:]
+def records(path):
+    with gzip.open(path, 'rt', newline='') as h:
+        while True:
+            block = [h.readline() for _ in range(4)]
+            if not block[0]: break
+            if any(x == '' for x in block): raise RuntimeError(f'truncated FASTQ: {path}')
+            yield tuple(block)
+for op, kp in ((orig_f, keep_f), (orig_r, keep_r)):
+    original = set(records(op))
+    kept = list(records(kp))
+    if not all(rec in original for rec in kept):
+        raise SystemExit(f'non-original record found in {kp}')
+    if len(kept) "'!= len(set(kept)):
+        raise SystemExit(f'"'duplicate record found in {kp}')
+    print(f'{kp}: {len(kept)} exact original records')
+PY"

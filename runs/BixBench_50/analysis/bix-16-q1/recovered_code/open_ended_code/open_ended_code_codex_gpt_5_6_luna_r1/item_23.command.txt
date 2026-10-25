@@ -1,0 +1,22 @@
+/bin/bash -lc "python - <<'PY'
+import csv,time
+import numpy as np,pandas as pd
+from scipy.stats import rankdata
+crf='inputs/CRISPRGeneEffect.csv'; exf='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+def hdr(f):
+ with open(f,newline='',encoding='utf-8') as h:return next(csv.reader(h))
+ch,eh=hdr(crf),hdr(exf); es=set(eh[1:]); common=[x for x in ch[1:] if x in es]
+cr=pd.read_csv(crf,usecols=[0]+[i for i,x in enumerate(ch) if i and x in es],index_col=0,dtype={x:np.float64 for x in common})
+ex=pd.read_csv(exf,usecols=[0]+[i for i,x in enumerate(eh) if i and x in set(common)],index_col=0,dtype={x:np.float64 for x in common})
+ids=cr.index.intersection(ex.index); cr=cr.loc[ids,common]; ex=ex.loc[ids,common]
+print('shapes',cr.shape,ex.shape,'missing',int(cr.isna().sum().sum()),int(ex.isna().sum().sum()))
+rho=np.empty(len(common)); nobs=np.empty(len(common),dtype=int)
+for j,g in enumerate(common):
+ a=ex.iloc[:,j].to_numpy(); b=cr.iloc[:,j].to_numpy(); ok=np.isfinite(a)&np.isfinite(b); nobs[j]=ok.sum()
+ ra=rankdata(a[ok],method='average'); rb=rankdata(b[ok],method='average'); ra-=ra.mean(); rb-=rb.mean(); rho[j]=np.dot(ra,rb)/np.sqrt(np.dot(ra,ra)*np.dot(rb,rb))
+maxi=np.argsort(rho)[::-1]; mini=np.argsort(rho)
+print('TOP for negative corr with positive-going essentiality (= max raw gene-effect corr)')
+for i in maxi[:10]: print(common[i], 'raw',format(rho[i],'.12f'),'essentiality',format(-rho[i],'.12f'),'n',nobs[i])
+print('TOP if treating raw gene-effect as essentiality (= min raw corr)')
+for i in mini[:10]: print(common[i], 'raw',format(rho[i],'.12f'),'essentiality',format(-rho[i],'.12f'),'n',nobs[i])
+PY"

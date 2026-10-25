@@ -1,0 +1,58 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import time
+import numpy as np
+import pandas as pd
+import scanpy as sc
+
+files = ['pbmc3k.h5ad','10x_pbmc68k_reduced.h5ad']
+adatas = []
+for f in files:
+    t=time.time()
+    a=sc.read_h5ad(f)
+    print(f, 'loaded', time.time()-t, a.shape, a.var_names.dtype, a.var.keys())
+    adatas.append(a)
+
+# exact var_names; ensure strings
+for a in adatas:
+    # no filter gene_symbols if absent, else drop missing
+    if 'gene_symbols' in a.var.columns:
+        keep = ~a.var['gene_symbols'].isna()
+        print('dropping missing gene_symbols', int((~keep).sum()), 'of', a.n_vars)
+        a = a[:, keep].copy()
+    else:
+        print('no gene_symbols column')
+    a.var_names = a.var_names.astype(str)
+
+common = list(set(adatas[0].var_names) & set(adatas[1].var_names))
+print('common count', len(common))
+# subset each to common in their order
+subs=[]
+for i,a in enumerate(adatas):
+    mask = np.isin(a.var_names, common)
+    sub=a[:, mask].copy()
+    print('sub', i, sub.shape, sub.var_names[:5])
+    subs.append(sub)
+
+hvg_sets=[]
+for i,a in enumerate(subs):
+    sc.pp.highly_variable_genes(a, flavor='seurat')
+    vals = a.var['highly_variable'].astype(str).to_numpy()
+    allowed = {'True','1','TRUE'}
+    hv = a.var_names[ np.isin(vals, list(allowed)) ].astype(str).tolist()
+    print('hvg', i, len(hv), 'total', a.n_vars)
+    hvg_sets.append(set(hv))
+
+intersection = hvg_sets[0] & hvg_sets[1]
+union = hvg_sets[0] | hvg_sets[1]
+print('intersection', len(intersection), 'union', len(union))
+if len(union)==0:
+    jaccard=float('nan')
+else:
+    jaccard=len(intersection)/len(union)
+print('jaccard raw', jaccard)
+if np.isnan(jaccard):
+    print('NaN')
+else:
+    print(round(jaccard,2))
+PY
+python [REDACTED LOCAL PATH]"

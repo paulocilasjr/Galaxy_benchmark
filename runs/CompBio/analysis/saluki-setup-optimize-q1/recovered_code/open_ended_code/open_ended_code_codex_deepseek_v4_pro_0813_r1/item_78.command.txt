@@ -1,0 +1,63 @@
+/bin/bash -lc "cat > test_gru_act.py <<'PY'
+import numpy as np, torch, h5py, json
+torch.set_num_threads(1)
+from saluki_torch import Saluki, load_weights, left_justify_input
+
+def hard_sigmoid(x): return torch.clamp(0.2*x + 0.5, 0.0, 1.0)
+
+def forward_manual(model, X, act='hard_sigmoid'):
+    x = model.conv_initial(X)
+    for i in range(6):
+        x = model.lns[i](x); x=torch.relu(x); x=model.convs[i](x); x=model.pools[i](x)
+    x = model.lns[6](x); x=torch.relu(x); x=x.transpose(1,2)
+    # reverse time for go_backwards
+    x = x.flip(dims=[1])
+    N,L,C=x.shape
+    # load weights fresh from model.gru
+    W = model.gru.weight_ih_l0.t() # 64,192 in py order r,z,h
+    U = model.gru.weight_hh_l0.t()
+    b_i = model.gru.bias_ih_l0
+    b_h = model.gru.bias_hh_l0
+    Xproj = x @ W + b_i
+    h = torch.zeros(N,64)
+    if act=='hard_sigmoid': f=hard_sigmoid
+    else: f=torch.sigmoid
+    for t in range(L):
+        xt=Xproj[:,t,:]
+        xz, xr, xh = xt[:,64:128], xt[:,0:64], xt[:,128:192]
+        uz = h @ U[:,64:128] + b_h[64:128]
+        ur = h @ U[:,0:64] + b_h[0:64]
+        uh = h @ U[:,128:192] + b_h[128:192]
+        z=f(xz+uz)
+        r=f(xr+ur)
+        htilde=torch.tanh(xh + r*uh)
+        h=z*h + (1-z)*htilde
+    h = model.bn1(h.unsqueeze(2)).squeeze(2); h=torch.relu(h); h=model.dense1(h); h=model.bn2(h.unsqueeze(2)).squeeze(2); h=torch.relu(h); out=model.dense2(h)
+    return out
+
+# patch left_justify_input in saluki_torch? create here
+def left_justify_input(X):
+    Y=torch.zeros_like(X)
+    # X N,C,L
+    s=X[:,:4,:].sum(dim=1)
+    for i in range(X.shape[0]):
+        idx=(s[i]"'!=0).nonzero()
+        start=idx[0,0].item() if idx.shape[0]>0 else 0
+        length=X.shape[2]-start
+        Y[i,:,:length]=X[i,:,start:]
+    return Y
+
+with h5py.File('"'models/train_gru/f0_c0/ism_scores.h5','r') as f:
+ seqs=f['seqs'][:5]; coding=f['coding'][:5]; splice=f['splice'][:5]
+X=np.concatenate([seqs.astype(np.float32),coding[...,None].astype(np.float32),splice[...,None].astype(np.float32)],axis=2)
+X=torch.from_numpy(X).permute(0,2,1).contiguous()
+X=left_justify_input(X)
+model=Saluki(); load_weights(model,'models/train_gru/f0_c0/train/model0_best.h5'); model.eval()
+with torch.no_grad():
+ pred=forward_manual(model,X,'hard_sigmoid')
+ print('hard',pred.ravel())
+ pred_sig=forward_manual(model,X,'sigmoid')
+ print('sig',pred_sig.ravel())
+with h5py.File('models/train_gru/f0_c0/test0_preds.h5','r') as f: print('saved',f['preds'][:5].ravel())
+PY
+python test_gru_act.py"

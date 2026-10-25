@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, pandas as pd, numpy as np
+from collections import defaultdict
+
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+log=np.log1p(df)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+
+wb=openpyxl.load_workbook('supp/mmc6.xlsx', read_only=True, data_only=True)
+ws=wb['Table S5']
+sets=defaultdict(list)
+current=None
+for r in ws.iter_rows(values_only=True):
+    ct=r[0]
+    if ct: current=str(ct).strip()
+    if current is None: continue
+    # combine plotting and expected genes, dedupe later
+    for cell in [r[1], r[3]]:
+        if cell and isinstance(cell,str) and cell.startswith('Traes'):
+            sets[current].append(cell)
+wb.close()
+for ct in sets:
+    sets[ct]=list(dict.fromkeys(sets[ct]))
+print({k:len(v) for k,v in sets.items()})
+res=pd.DataFrame(index=list(sets.keys()), columns=df.columns,dtype=float)
+for ct,gs in sets.items():
+    present=[g for g in gs if g in df.index]
+    res.loc[ct]=z.loc[present].mean()
+print(res.round(2))
+print('best per col')
+for col in df.columns:
+    print(col, res[col].idxmax(), res[col].max().round(2))
+PY"

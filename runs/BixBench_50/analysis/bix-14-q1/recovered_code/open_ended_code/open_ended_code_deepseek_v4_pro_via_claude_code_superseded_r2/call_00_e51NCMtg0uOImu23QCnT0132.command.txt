@@ -1,0 +1,71 @@
+source venv/bin/activate && python3 << 'PYEOF'
+import pandas as pd
+import os
+import re
+
+var_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+trio = pd.read_excel('/workspace/inputs/230215_Trio_Status.xlsx')
+blm_carriers = trio[trio['BLM Mutation Status'] == 'Carrier']
+carrier_ids = set(blm_carriers['Sample ID'].astype(str).tolist())
+
+coding_so_terms = {
+    'synonymous_variant',
+    'missense_variant',
+    'inframe_insertion',
+    'inframe_deletion',
+    'frameshift_variant',
+    'stop_gained',
+    'stop_lost',
+    'start_lost',
+    'coding_sequence_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+# Full detailed verification
+all_coding_low_vaf = []
+
+for fname in sorted(os.listdir(var_dir)):
+    m = re.search(r'CHIP_(\d+)-([^.]+)\.xlsx$', fname)
+    if not m:
+        continue
+    cid = m.group(1)
+    if cid not in carrier_ids:
+        continue
+    
+    fpath = os.path.join(var_dir, fname)
+    df = pd.read_excel(fpath, header=None)
+    data = df.iloc[2:].copy()
+    data.columns = range(data.shape[1])
+    data['VAF_num'] = pd.to_numeric(data[9], errors='coerce')
+    
+    # Non-reference, VAF < 0.3, coding
+    low_vaf_coding = data[
+        (data[4] != 'Reference') & 
+        (data['VAF_num'].notna()) & 
+        (data['VAF_num'] < 0.3) &
+        (data[13].isin(coding_so_terms))
+    ]
+    
+    for _, row in low_vaf_coding.iterrows():
+        all_coding_low_vaf.append({
+            'carrier': cid,
+            'chr_pos': row[0],
+            'gene': row[12],
+            'so': row[13],
+            'vaf': row['VAF_num'],
+            'zygosity': row[4]
+        })
+
+print(f"Total coding variants with VAF < 0.3 across all BLM carriers: {len(all_coding_low_vaf)}")
+print(f"\nBreakdown by SO term:")
+from collections import Counter
+so_counts = Counter(v['so'] for v in all_coding_low_vaf)
+for term, count in so_counts.most_common():
+    print(f"  {term}: {count}")
+
+print(f"\nAll variants:")
+for v in all_coding_low_vaf:
+    print(f"  Carrier {v['carrier']}: {v['chr_pos']} {v['gene']} {v['so']} VAF={v['vaf']:.6f}")
+
+print(f"\nFraction synonymous: {so_counts['synonymous_variant']}/{len(all_coding_low_vaf)} = {so_counts['synonymous_variant']/len(all_coding_low_vaf):.6f}")
+PYEOF

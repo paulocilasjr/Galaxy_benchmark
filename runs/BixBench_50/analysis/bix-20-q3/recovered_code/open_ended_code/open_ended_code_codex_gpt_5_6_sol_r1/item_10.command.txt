@@ -1,0 +1,54 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+from openpyxl import load_workbook
+import re
+meta=load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True).active
+rows=list(meta.iter_rows(values_only=True)); hdr=rows[0]
+carriers={str(r[0]).strip() for r in rows[1:] if str(r[3]).strip()=='Carrier'}
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+matched=[]
+for p in files:
+    tail=p.stem.split('CHIP_',1)[1]
+    sid=next((x for x in carriers if tail==x or tail.startswith(x+'-')),None)
+    if sid: matched.append((sid,p))
+print('carriers metadata',len(carriers),sorted(carriers))
+print('matched files',len(matched),[x for x,_ in sorted(matched)])
+print('missing',sorted(carriers-{x for x,_ in matched}))
+stage=Counter(); consequences=Counter(); classes=Counter(); zyg=Counter(); chip=Counter(); malformed=[]
+ret=[]
+for sid,p in sorted(matched):
+    ws=load_workbook(p,read_only=True,data_only=True).active; ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True); top=next(it); cols=list(next(it)); idx={v:i for i,v in enumerate(cols) if v is not None}
+    needed=['Chr:Pos','Ref/Alt','Zygosity','Variant Allele Freq','Sequence Ontology (Combined)','Classification','In_CHIP']
+    if any(k not in idx for k in needed): print('MISSINGCOL',p,[k for k in needed if k not in idx]); continue
+    for row in it:
+      def g(k): return row[idx[k]] if idx[k]<len(row) else None
+      stage['all_rows']+=1; zyg[str(g('Zygosity'))]+=1; chip[str(g('In_CHIP'))]+=1
+      if g('In_CHIP') not in (True,'True',1): continue
+      stage['chip']+=1
+      if str(g('Zygosity')).strip().lower()=='reference': continue
+      stage['nonref']+=1
+      v=g('Variant Allele Freq')
+      try: v=float(v)
+      except: malformed.append((sid,g('Chr:Pos'),v)); continue
+      if not v < .3: continue
+      stage['vaf_lt_03']+=1
+      so='' if g('Sequence Ontology (Combined)') is None else str(g('Sequence Ontology (Combined)')
+      consequences[so]+=1
+      if re.search(r'("'^|[,&;| ])(?:intron_variant|intergenic_variant|[35]_prime_UTR_variant)(?:$|[,&;| ])'"',so): continue
+      stage['consequence_retained']+=1
+      cl=g('Classification')
+      classes['<blank>' if cl is None or str(cl).strip()=='' else str(cl).strip()]+=1
+      if cl is None or str(cl).strip()=='': continue
+      stage['clinvar_classified']+=1
+      ret.append((sid,g('Chr:Pos'),g('Ref/Alt'),v,so,str(cl).strip()))
+print('stage',stage)
+print('zyg',zyg)
+print('chip',chip)
+print('malformed',len(malformed),malformed[:10])
+print('consequences after nonref/vaf',consequences)
+print('classes retained consequence',classes)
+print('classified rows:')
+for x in ret: print('\\t'.join(map(str,x)))
+PY"

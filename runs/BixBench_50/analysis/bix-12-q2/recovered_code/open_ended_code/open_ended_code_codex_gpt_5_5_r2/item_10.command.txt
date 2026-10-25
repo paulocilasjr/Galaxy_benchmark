@@ -1,0 +1,62 @@
+/bin/bash -lc "python3 - <<'PY'
+import zipfile, statistics, collections, math
+from collections import Counter
+
+def parse_fasta(txt):
+    recs=[]; name=None; seq=[]
+    for line in txt.splitlines():
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None:
+                recs.append((name,''.join(seq)))
+            name=line[1:].split()[0]; seq=[]
+        else:
+            seq.append(line)
+    if name is not None: recs.append((name,''.join(seq)))
+    return recs
+
+def pi_count(seqs, mode='nogap'):
+    L=len(seqs[0])
+    pi=0
+    for col in zip(*seqs):
+        if mode=='nogap':
+            states=[c.upper() for c in col if c not in '-.?']
+        elif mode=='gapstate':
+            states=[c.upper() for c in col if c not in '.?']
+        elif mode=='complete_nogap':
+            if any(c in '-.?' for c in col):
+                continue
+            states=[c.upper() for c in col]
+        counts=Counter(states)
+        if sum(v>=2 for v in counts.values()) >= 2:
+            pi += 1
+    return pi
+
+def gapless_len(seqs):
+    return sum(1 for col in zip(*seqs) if not any(c in '-.?' for c in col))
+
+zf=zipfile.ZipFile('/workspace/inputs/scogs_fungi.zip')
+rows=[]
+for n in sorted([n for n in zf.namelist() if n.endswith('.faa.mafft')]):
+    recs=parse_fasta(zf.read(n).decode())
+    seqs=[s for _,s in recs]
+    assert len(set(map(len,seqs)))==1
+    L=len(seqs[0])
+    pi=pi_count(seqs,'nogap')
+    pigap=pi_count(seqs,'gapstate')
+    picomp=pi_count(seqs,'complete_nogap')
+    gl=gapless_len(seqs)
+    rows.append((n,len(seqs),L,gl,pi,pigap,picomp,pi/L*100,pigap/L*100,(picomp/gl*100 if gl else float('nan'))))
+for i,label in [(7,'nogap denom all cols'),(8,'gap as state denom all cols'),(9,'complete cols denom complete cols')]:
+    vals=[r[i] for r in rows]
+    print(label, 'n', len(vals), 'median', statistics.median(vals), 'min', min(vals), 'max', max(vals))
+print('nseq distribution', collections.Counter(r[1] for r in rows))
+print('pi zeros', sum(r[4]==0 for r in rows))
+# show middle sorted values around median for primary
+vals=sorted(r[7] for r in rows)
+print('middle index/value', len(vals)//2, vals[len(vals)//2])
+print('around median', vals[124:131])
+# top columns? sample first rows
+print('sample rows', rows[:3])
+PY"

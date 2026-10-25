@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from scipy.optimize import nnls
+base='extracted'
+meta=pd.read_csv(f'{base}/spatial_q_sc_metadata.csv')
+counts=pd.read_csv(f'{base}/spatial_q_sc_counts.csv', index_col=0)
+cell_col=meta.columns[0]
+celltypes=sorted(meta['cell_type'].unique())
+A=np.vstack([counts.loc[meta.loc[meta.cell_type==ct, cell_col].values].values.mean(axis=0) for ct in celltypes]).T.astype(float)
+print('types', celltypes)
+print('mean library sizes')
+for ct,lib in zip(celltypes,A.sum(axis=0)):
+    print(ct, lib)
+M=mmread(f'{base}/matrix.mtx.gz').tocsc().astype(float)
+barcodes=[l.strip() for l in gzip.open(f'{base}/barcodes.tsv.gz','rt')]
+# fit target and neighboring/selected spots. array is 30x30, spot index row-major? spot 710 -> row 20 col 23? Actually positions below.
+for spotid in ['Spot_710-1','Spot_709-1','Spot_711-1','Spot_680-1','Spot_740-1']:
+    j=barcodes.index(spotid)
+    y=np.asarray(M[:,j].todense()).ravel()
+    coef,res=nnls(A,y)
+    print('\\n',spotid,'total',y.sum(),'res',res)
+    print(', '.join(f'{ct}:{c:.3f}' for ct,c in zip(celltypes,coef)))
+# fit all spots quickly and inspect coefficient distribution near thresholds
+coefs=[]
+for j in range(M.shape[1]):
+    y=np.asarray(M[:,j].todense()).ravel()
+    coef,res=nnls(A,y)
+    coefs.append(coef)
+C=np.vstack(coefs)
+pos=C[C>0]
+print('\\ncoef quantiles positive', np.quantile(pos,[0,0.01,0.05,0.1,0.25,0.5,0.75,0.9,0.95,0.99,1]))
+# sorted target coefs
+j=barcodes.index('Spot_710-1')
+coef=coefs[j]
+print('target sorted', sorted(zip(celltypes,coef), key=lambda x:-x[1]))
+# counts of coefficients > thresholds
+for t in [0.05,0.1,0.2,0.5,0.8]:
+    print('n >',t, (C>t).sum(axis=1).mean(), 'target', [ct for ct,c in zip(celltypes,coef) if c>t])
+PY"

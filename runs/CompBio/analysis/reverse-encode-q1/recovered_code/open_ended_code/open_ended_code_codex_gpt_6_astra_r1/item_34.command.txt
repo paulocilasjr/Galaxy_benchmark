@@ -1,0 +1,33 @@
+/bin/bash -lc "cat > verify_prefix.py <<'PY'
+import json,requests,pysam,numpy as np,gzip,sys,os
+T={}
+for l in gzip.open('reverse.encode.q1.tsv.gz','rt'):
+ c,s,e,v=l.split();T[c,int(s)//10000]=round(float(v)*76.275859)
+bs=json.load(open('alpha_bams.json'))
+def run(exp):
+ fs=bs['/experiments/'+exp+'/']; counts={};lasts=[]
+ for f in fs.values():
+  path=f['accession']+'.prefix.bam'
+  if not os.path.exists(path):
+   r=requests.get(f['cloud_metadata']['url'],headers={'Range':'bytes=0-4194303'},timeout=60);r.raise_for_status();open(path,'wb').write(r.content)
+  b=pysam.AlignmentFile(path,'rb',ignore_truncation=True);n=0
+  try:
+   for a in b:
+    if a.is_unmapped:continue
+    last=(a.reference_name,a.reference_start)
+    if a.mapping_quality<30:continue
+    n+=1
+    for i in range(a.reference_start//10000,(a.reference_end-1)//10000+1):
+     k=(a.reference_name,i);counts[k]=counts.get(k,0)+1
+  except (OSError,ValueError):pass
+  lasts.append(last);print(exp,f['accession'],'read',n,'last',last,flush=True)
+  try:b.close()
+  except:pass
+ end=min(p for c,p in lasts if c=='chr1')//10000
+ x=np.array([T['chr1',i] for i in range(end)]);y=np.array([counts.get(('chr1',i),0) for i in range(end)])
+ print('RESULT',exp,'bins',end,'equal',sum(x==y),'cor',np.corrcoef(x,y)[0,1],'ratio',y.sum()/x.sum(),'first',list(zip(x,y))[:25],flush=True)
+ return {'experiment':exp,'bins':end,'equal':int(sum(x==y)),'cor':float(np.corrcoef(x,y)[0,1])}
+if __name__=='__main__':
+ for exp in sys.argv[1:]:run(exp)
+PY
+python -u verify_prefix.py ENCSR541PUY"

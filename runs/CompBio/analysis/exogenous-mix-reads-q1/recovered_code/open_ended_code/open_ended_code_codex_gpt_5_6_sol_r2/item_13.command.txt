@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+# Exact/near-exact map positions, then compare binned source distributions via weighted least squares and multinomial MLE.
+from urllib.request import urlopen
+import numpy as np
+from scipy.optimize import minimize_scalar
+ref=''.join(urlopen('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NM_004235.6&rettype=fasta&retmode=text').read().decode().splitlines()[1:]).upper()
+tr=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(tr)[::-1]
+def pos(s):
+ for q in (s,rc(s)):
+  p=ref.find(q)
+  if p>=0:return p
+ best=(99,0)
+ for q in (s,rc(s)):
+  for i in range(len(ref)-49):
+   d=sum(a"'!=b for a,b in zip(q,ref[i:i+50]))
+   if d<best[0]:best=(d,i)
+ return best[1]
+P={}
+for n in ('"'exo','endo','mix'):
+ with open(f'exogenous.mix.reads.q1.{n}.fq') as f:z=f.read().splitlines()
+ P[n]=np.array([pos(s) for s in z[1::4]])
+for width in [100,150,200,250,300,400,500,750]:
+ edges=np.r_[np.arange(0,2888,width),2888]
+ hs={n:np.histogram(P[n],edges)[0] for n in P}
+ # Dirichlet smoothing modestly toward uniform, ML on fixed empirical component densities
+ for alpha in [0,0.5,1,2]:
+  pe=(hs['exo']+alpha)/(len(P['exo'])+alpha*len(hs['exo']))
+  pn=(hs['endo']+alpha)/(len(P['endo'])+alpha*len(hs['endo']))
+  hm=hs['mix']
+  f=minimize_scalar(lambda f:-np.sum(hm*np.log(np.maximum(f*pe+(1-f)*pn,1e-15))),bounds=(0,1),method='bounded').x
+  if alpha in (0.5,1): print('bin',width,'alpha',alpha,'exoMLE',round(f,4))
+ # unweighted proportions L2
+ pe=hs['exo']/len(P['exo']);pn=hs['endo']/len(P['endo']);pm=hs['mix']/len(P['mix'])
+ f=np.dot(pm-pn,pe-pn)/np.dot(pe-pn,pe-pn)
+ print('bin',width,'L2 exo',round(f,4))
+PY"

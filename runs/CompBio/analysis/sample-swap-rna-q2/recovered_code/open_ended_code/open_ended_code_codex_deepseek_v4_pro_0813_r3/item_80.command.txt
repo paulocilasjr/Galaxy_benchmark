@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re, itertools
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+cols=df.columns.tolist()
+deg=pd.read_csv('refs/wheat_root_atlas/conserved_marker_analysis/input/tae_log2FC0.5_FDR0.05.csv')
+print(deg.columns)
+print(deg['cluster'].value_counts())
+# mapping numeric clusters based on regulons final: 1 epidermis,2 cortex,3 meristems,4 provascular,5 rootcap meristem qc,6 pericycle,7 epidermis,8 root_hair,9 endodermis,10 xylem,11 LRC/rootcap,12 G2/meristems,13 phloem,14 columella/rootcap
+mapnum={1:'epidermis',2:'cortex',3:'meristems',4:'provascular',5:'root_cap',6:'pericycle',7:'epidermis',8:'root_hair',9:'endodermis',10:'xylem',11:'root_cap',12:'meristems',13:'phloem',14:'root_cap'}
+sets={ct:set() for ct in cols}
+for _,row in deg.iterrows():
+    c=row['cluster']; g=row['gene ID']
+    if pd.notna(c) and pd.notna(g):
+        bt=mapnum.get(int(c))
+        if bt: sets[bt].add(g)
+for ct in cols:
+ g=[x for x in sets[ct] if x in df.index]
+ sets[ct]=g
+ print(ct,len(g))
+# score by top logFC markers maybe all; expression normalized by max
+def score(col,genes):
+ mat=df.loc[genes]; mx=mat.max(axis=1); prop=mat.div(mx.where(mx>0),axis=0).fillna(0); return prop[col].mean()
+obs={ct:score(ct,sets[ct]) for ct in cols}
+print('obs')
+for ct,v in obs.items(): print(ct,round(v,3))
+print('total',sum(obs.values()))
+losses=[]
+for a,b in itertools.combinations(cols,2):
+ loss=(obs[a]-score(b,sets[a]))+(obs[b]-score(a,sets[b]))
+ losses.append((loss,a,b))
+for loss,a,b in sorted(losses, reverse=True)[:10]: print('swap',a,b,'loss',round(loss,3))
+PY"

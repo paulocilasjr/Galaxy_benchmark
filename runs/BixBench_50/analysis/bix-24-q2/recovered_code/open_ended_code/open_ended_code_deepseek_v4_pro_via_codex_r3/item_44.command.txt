@@ -1,0 +1,29 @@
+/bin/bash -c "python3 - <<'PY'
+import pandas as pd, numpy as np, time
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+counts = pd.read_csv('/workspace/inputs/counts_raw_unfiltered.csv', index_col=0)
+counts.columns=[c.replace('_','-') for c in counts.columns]
+layout=pd.read_csv('/workspace/inputs/sample_layout.csv').set_index('SampleID')
+sel=[s for s in counts.columns if s.split('-')[0] in ['3','7']]
+sub=counts[sel]
+# variants
+variants={
+ 'total6_ge5': sub[sub.sum(axis=1)>=5],
+ 'total6_ge10': sub[sub.sum(axis=1)>=10],
+ 'pergroup_total_ge5': sub[(sub[[s for s in sel if s.startswith('3-')]].sum(axis=1)>=5)&(sub[[s for s in sel if s.startswith('7-')]].sum(axis=1)>=5)],
+ 'each_sample_ge1': sub[(sub>0).sum(axis=1)>=3],
+}
+for name,ct_counts in variants.items():
+    print('\\nVARIANT',name,ct_counts.shape)
+    meta=layout.loc[sel,['Group']].copy(); meta['group']=pd.Categorical(meta['Group'], categories=['DMSO','CBD_IC50'])
+    ct=ct_counts.T.copy(); ct.index.name='sample'
+    dds=DeseqDataSet(counts=ct, metadata=meta[['group']], design='~group', quiet=True, n_cpus=4)
+    dds.deseq2()
+    stat=DeseqStats(dds, contrast=['group','CBD_IC50','DMSO'], alpha=0.05, independent_filter=True, cooks_filter=True, n_cpus=4)
+    stat.summary()
+    res=stat.results_df
+    sig=res[(res.padj<0.05)&(res.log2FoldChange.abs()>0.5)]
+    print('sig',len(sig),'up',(sig.log2FoldChange>0).sum(),'down',(sig.log2FoldChange<0).sum(),'padj_notna',res.padj.notna().sum())
+    res.to_csv(f'/workspace/tmp/deseq2_pairwise_{name}.tsv',sep='\\t')
+PY"

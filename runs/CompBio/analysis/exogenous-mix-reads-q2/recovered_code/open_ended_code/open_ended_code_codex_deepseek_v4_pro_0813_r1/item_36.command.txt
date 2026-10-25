@@ -1,0 +1,72 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+pos=defaultdict(list)
+for lab,t in [('+',seq),('-',rc)]:
+ for i in range(len(t)-50+1): pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+# feature: (lab,i) start; possible plus 0..L-50, minus 0..L-50 => 2*(L-49)
+L=len(seq); nplus=L-49; features=[]
+for lab in ['+','-']:
+ for i in range(L-49): features.append((lab,i))
+idx={f:k for k,f in enumerate(features)}
+def counts(name):
+ c=Counter()
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline(); bp=bestpos(s); c[idx[bp]]+=1
+ return c
+ce=counts('exo'); cy=counts('endo'); cz=counts('mix')
+F=len(features)
+# observed only feature counts, include zeros for optimization? use all but probabilities small. Use array with pseudocount.
+def arr(c):
+ a=np.zeros(F)
+ for k,v in c.items(): a[k]=v
+ return a
+Xraw=arr(ce); Yraw=arr(cy); Zraw=arr(cz)
+# Smooth X and use as fixed; probabilities
+pseud=1e-3
+X=(Xraw+pseud)/(Xraw.sum()+pseud*F)
+Ny=Yraw.sum(); Nz=Zraw.sum()
+def run(init_delta=0.5,init_pi=0.5,initE='endo',iters=10000,tol=1e-12):
+ E=(Yraw+pseud)/(Yraw.sum()+pseud*F) if initE=='endo' else np.ones(F)/F
+ if initE=='endo': E=0.9*(Yraw+pseud)/(Yraw.sum()+pseud*F)+0.1*np.ones(F)/F
+ elif initE=='uniform': E=np.ones(F)/F
+ elif initE=='mix': E=(Zraw+pseud)/(Zraw.sum()+pseud*F)
+ delta=init_delta; pi=init_pi
+ for it in range(iters):
+  py=delta*X+(1-delta)*E
+  pz=pi*X+(1-pi)*E
+  ry=delta*X/np.maximum(py,1e-300)
+  rz=pi*X/np.maximum(pz,1e-300)
+  delta_new=np.sum(Yraw*ry)/Ny
+  pi_new=np.sum(Zraw*rz)/Nz
+  Enum=Yraw*(1-ry)+Zraw*(1-rz)+pseud
+  E_new=Enum/Enum.sum()
+  change=max(abs(delta_new-delta),abs(pi_new-pi),np.max(np.abs(E_new-E)))
+  delta,pi,E=delta_new,pi_new,E_new
+  if it>20 and change<tol: break
+ ll=np.sum(Yraw*np.log(delta*X+(1-delta)*E))+np.sum(Zraw*np.log(pi*X+(1-pi)*E))
+ return delta,pi,ll,it,change
+for d0 in [0.01,0.1,0.3,0.5,0.8,0.99]:
+ for p0 in [0.01,0.3,0.5,0.8,0.99]:
+  for ei in ['endo','uniform','mix']:
+   delta,pi,ll,it,ch=run(d0,p0,ei,iters=5000)
+   if d0 in [0.01,0.5,0.99] and p0 in [0.01,0.5,0.99]:
+    print('init',d0,p0,ei,'-> delta',delta,'pi',pi,'ll',ll,'it',it,'change',ch)
+PY"

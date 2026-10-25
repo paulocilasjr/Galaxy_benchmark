@@ -1,0 +1,37 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import mcnemar
+sets=['cond1','common','cond2']
+dfs={}
+for s in sets:
+ dfs[s]=pd.read_csv(f'macs/bdgdiff/{s}.shuffled_motif_scan.tsv',sep='\\t')
+# motif names from columns ending _orig
+orig_cols=[c for c in dfs['cond2'].columns if c.endswith('_orig')]
+rows=[]
+for oc in orig_cols:
+ motif=oc[:-5]; sc=motif+'_shuf'
+ row={'motif':motif}
+ for s in sets:
+  d=dfs[s]; o=d[oc]>0; sh=d[sc]>0
+  a=(o&sh).sum(); b=(o&~sh).sum(); c=(~o&sh).sum(); dd=(~o&~sh).sum()
+  # paired OR = b/c
+  por=(b/c) if c>0 else np.inf
+  row[f'{s}_orig_frac']=o.mean(); row[f'{s}_shuf_frac']=sh.mean(); row[f'{s}_paired_OR']=por
+  # mcnemar p
+  try: row[f'{s}_mcnemar_p']=mcnemar([[a,b],[c,dd]], exact=False, correction=True).pvalue
+  except Exception: row[f'{s}_mcnemar_p']=np.nan
+ # interaction: compare b/c in cond2 vs common via logistic? use conditional? rough
+ # compute odds ratio of exposure set for discordant? Simpler: ratio of paired ORs
+ row['interaction_ratio']=row['cond2_paired_OR']/row['common_paired_OR']
+ rows.append(row)
+res=pd.DataFrame(rows)
+# sort by cond2 paired OR desc or interaction ratio desc
+res['cond2_orig_minus_shuf']=res['cond2_orig_frac']-res['cond2_shuf_frac']
+res['common_orig_minus_shuf']=res['common_orig_frac']-res['common_shuf_frac']
+res=res.sort_values('cond2_orig_minus_shuf',ascending=False)
+pd.set_option('display.width',300); pd.set_option('display.max_rows',100)
+print(res[['motif','cond2_orig_frac','cond2_shuf_frac','cond2_orig_minus_shuf','common_orig_frac','common_shuf_frac','common_orig_minus_shuf','interaction_ratio']].to_string(index=False,float_format=lambda x:f'{x:,.4g}'))
+print('\\nSorted interaction ratio')
+res2=res.sort_values('interaction_ratio',ascending=False)
+print(res2[['motif','interaction_ratio','cond2_paired_OR','common_paired_OR','cond2_orig_minus_shuf','common_orig_minus_shuf']].to_string(index=False,float_format=lambda x:f'{x:,.4g}'))
+PY"

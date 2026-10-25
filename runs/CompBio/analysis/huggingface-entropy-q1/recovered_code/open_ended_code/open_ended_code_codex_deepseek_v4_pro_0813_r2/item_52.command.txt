@@ -1,0 +1,43 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, pathlib
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+import mamba_ssm.modules.mamba_simple as ms
+from mamba_ssm.ops.selective_scan_interface import selective_scan_ref
+saved={}
+orig=ms.selective_scan_fn
+def wrap(u,delta,A,B,C,D=None,z=None,delta_bias=None,delta_softplus=False,return_last_state=False):
+    if not saved:
+        for n,t in [('u',u),('delta',delta),('A',A),('B',B),('C',C),('D',D),('z',z),('db',delta_bias)]:
+            saved[n]=t.detach().clone() if t is not None else None
+    return orig(u,delta,A,B,C,D,z,delta_bias,delta_softplus,return_last_state)
+ms.selective_scan_fn=wrap
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+B=2; batch=[]
+for i in range(B): x=ids[0].clone(); x[i]=3; batch.append(x)
+inp=torch.stack(batch)
+with torch.no_grad(): out=model(input_ids=inp)
+print('saved keys',saved.keys())
+for k,v in saved.items():
+ print(k, v.shape, v.dtype, 'finite',torch.isfinite(v).all().item(), 'minmax', torch.nan_to_num(v).min().item(), torch.nan_to_num(v).max().item())
+# CPU test
+args={k:saved[k] for k in ['u','delta','A','B','C','D','z','db'] if k in saved and saved[k] is not None}
+for k in ['u','delta','A','B','C','D','z','db']:
+ if saved[k] is not None: args[k]=saved[k].to('cpu')
+print('CPU scan...')
+out_cpu=selective_scan_ref(**args, delta_softplus=True)
+o=out_cpu[0] if isinstance(out_cpu,tuple) else out_cpu
+print('cpu finite',torch.isfinite(o).all().item(),'nan',torch.isnan(o).sum().item(),'inf',torch.isinf(o).sum().item())
+# MPS scan from clones
+args_mps={k:saved[k].clone() for k in ['u','delta','A','B','C','D','z','db'] if saved[k] is not None}
+out_mps=selective_scan_ref(**args_mps, delta_softplus=True)
+o=out_mps[0] if isinstance(out_mps,tuple) else out_mps
+print('mps finite',torch.isfinite(o).all().item(),'nan',torch.isnan(o).sum().item(),'inf',torch.isinf(o).sum().item())
+# Compare first few
+print('cpu first',o[0,0,:5].cpu() if not isinstance(out_cpu,tuple) else out_cpu[0][0,0,:5].cpu())
+print('mps first', (out_mps[0] if isinstance(out_mps,tuple) else out_mps)[0,0,:5].cpu())
+PY"

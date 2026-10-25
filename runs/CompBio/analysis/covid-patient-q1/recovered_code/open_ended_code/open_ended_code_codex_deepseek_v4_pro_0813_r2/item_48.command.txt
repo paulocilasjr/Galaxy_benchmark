@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+D=np.load('cell_scores.npz', allow_pickle=True)
+cats=D['cats']; df={}
+for k in D.keys():
+    if k"'!='"'cats': df[k]=D[k]
+df=pd.DataFrame(df,index=cats)
+for k in ['type_CD14_Mono','type_CD16_Mono','type_T','type_NK','type_B','type_Plasma','type_cDC','type_pDC','type_Platelet','type_RBC']:
+    df[k+'_prop']=df[k]/df['total_cells']
+df['ISG_all']=df['ISG_all_sum']/df['total_cells']
+df['ISG_mono']=df['ISG_mono_sum']/df['cnt_mono']
+df['ISG_T']=df['ISG_T_sum']/df['cnt_T']
+df['ISG_B']=df['ISG_B_sum']/df['cnt_B']
+feats=['ISG_all','ISG_mono','ISG_T','ISG_B','type_CD14_Mono_prop','type_T_prop','type_NK_prop','type_B_prop','type_Plasma_prop']
+X=df[feats].values
+Xsc=StandardScaler().fit_transform(X)
+# GMM 2 components, several seeds, choose
+for seed in range(5):
+    g=GaussianMixture(n_components=2, covariance_type='full', n_init=5, random_state=seed).fit(Xsc)
+    lab=g.predict(Xsc)
+    print('seed',seed,'means ISG mono',g.means_[:,1], 'labels size',np.bincount(lab))
+# use seed 0 labels
+g=GaussianMixture(n_components=2,covariance_type='full',n_init=20,random_state=0).fit(Xsc)
+lab=g.predict(Xsc)
+res=pd.DataFrame({'lab':lab,'ISG_mono':df['ISG_mono'],'T_prop':df['type_T_prop'],'Mono_prop':df['type_CD14_Mono_prop']}, index=cats)
+print('\\nCluster 0')
+print(res[res.lab==0].sort_values('ISG_mono').to_string())
+print('\\nCluster 1')
+print(res[res.lab==1].sort_values('ISG_mono').to_string())
+# KMeans
+from sklearn.cluster import KMeans
+km=KMeans(n_clusters=2,n_init=20,random_state=0).fit(Xsc)
+print('km labels'); print(pd.Series(km.labels_,index=cats).sort_index().to_string())
+PY"

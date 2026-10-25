@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import fisher_exact
+sc=pd.read_csv('extracted/spatial_q_sc_counts.csv',index_col=0);meta=pd.read_csv('extracted/spatial_q_sc_metadata.csv',index_col=0);sp=mmread('extracted/matrix.mtx.gz').tocsr().toarray().T;pos=pd.read_csv('extracted/tissue_positions.csv');types=sorted(meta.cell_type.unique());
+ref=meta.join(sc.div(sc.sum(1),axis=0)).groupby('cell_type')[sc.columns].mean().loc[types].T.values;ref/=ref.sum(0,keepdims=True); y=sp/sp.sum(1,keepdims=True);co=np.array([nnls(ref,a)[0] for a in y]);co/=co.sum(1,keepdims=True)
+mean_total=sc.sum(1).mean(); n=np.rint(sp.sum(1)/mean_total).astype(int); cnt=np.rint(co*n[:,None]).astype(int);
+print('n dist',dict(zip(*np.unique(n,return_counts=True))),'cnt sums dist',dict(zip(*np.unique(cnt.sum(1),return_counts=True))),'diff',np.sum(cnt.sum(1)"'!=n))
+jT=types.index('"'Tumor_Core'); tm=cnt[:,jT]>=1
+print('tumor spots',tm.sum(),'tumor cells',cnt[:,jT].sum(),'total cells',cnt.sum())
+print('global counts',dict(zip(types,cnt.sum(0))))
+xy=pos[['array_row','array_col']].values.astype(float);D=cdist(xy,xy)
+for radius in [0,1.01,np.sqrt(2)+.01,2.01,3,4,5]:
+ near=D[:,tm].min(axis=1)<=radius
+ print('\\nradius',radius,'near spots',near.sum())
+ for t in types:
+  j=types.index(t); pres=cnt[:,j]>0
+  print(t,'pres near/far',f'{pres[near].mean():.3f}/{pres[~near].mean():.3f}','cellshare',f'{cnt[near,j].sum()/cnt[near].sum():.3f}/{cnt[~near,j].sum()/cnt[~near].sum():.3f}','mean cnt',f'{cnt[near,j].mean():.3f}/{cnt[~near,j].mean():.3f}')
+print('\\nco-occurrence with tumor same spots:')
+for t in types:
+ j=types.index(t); pr=cnt[:,j]>0
+ tab=np.array([[np.sum(tm&pr),np.sum(tm&~pr)],[np.sum(~tm&pr),np.sum(~tm&~pr)]])
+ print(t,tab.tolist(),'odds,p',fisher_exact(tab))
+print('\\nmin distance summaries')
+d=D[:,tm].min(1)
+for t in types:
+ j=types.index(t); m=cnt[:,j]>0
+ print(t,'n',m.sum(),'mean all',d[m].mean(),'median',np.median(d[m]),'q',np.quantile(d[m],[.25,.75]),'near0/1/2',[(d[m]<=r).sum() for r in [0,1.01,2.01]])
+print('\\nweighted cell distances')
+for t in types:
+ j=types.index(t)
+ print(t,'cells',cnt[:,j].sum(),'mean',np.average(d,weights=cnt[:,j]),'q',np.quantile(np.repeat(d,cnt[:,j]),[.25,.5,.75]))
+PY"

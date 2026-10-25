@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import re, subprocess, anndata as ad
+from collections import Counter, defaultdict
+# parse original paired hto/guides
+lines=[x.strip() for x in subprocess.check_output(['strings','-n','4','k562_hto_guide_segment.bin'], text=True).splitlines()]
+pat=re.compile(r'"'^(?:[A-Z0-9]+-I'"\\d+|NT-I\\d+)"'$'"')
+start=next(i for i,x in enumerate(lines) if pat.match(x))
+hto_before=[x for x in lines[:start] if x.startswith('HTO-')]
+guides_all=[x for x in lines if pat.match(x)]
+hto_all=hto_before[-len(guides_all):]
+selected=set(['CDC73-I2','CPSF1-I3','CPSF2-I1','CPSF3-I3','CPSF3L-I8','CPSF4-I8','CPSF6-I5','CPSF7-I1','CSTF1-I5','CSTF2-I4','CSTF3-I5','CTR9-I7','FIP1L1-I1','LEO1-I2','NUDT21-I3','PABPC1-I1','PABPN1-I2','PAF1-I6','PAPOLA-I3','PCF11-I5','PHF3-I5','RBBP6-I4','RPAP2-I2','RPRD1A-I5','RPRD1B-I1','SCAF1-I2','SCAF4-I4','SCAF8-I3','SCAF11-I3','SF3A1-I5','SRSF3-I1','SYMPK-I3','THOC5-I1']+[f'NT-I{i}' for i in range(1,11)])
+comb=set(['HTO-29-TATCACATCGGT','HTO-52-GACGTACCGGAT','HTO-51-CGCCTATATACT','HTO-54-TCCAATGCAACT','HTO-30-CACATAATGACG','HTO-44-TAACGACGTGGT'])
+# filter original cells preserving order
+filtered=[(h,g) for h,g in zip(hto_all,guides_all) if g in selected and h in comb]
+print('filtered cells',len(filtered), 'selected total')
+# assign guideN labels for nonNT in first occurrence order
+mapping={}; seq=[]
+for h,g in filtered:
+    if g.startswith('NT-'):
+        seq.append(g)
+    else:
+        if g not in mapping:
+            mapping[g]=f'guide{len(mapping)+1}'
+        seq.append(mapping[g])
+q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+qseq=q.obs['guide'].astype(str).tolist()
+print('mapping len',len(mapping))
+for orig,new in mapping.items(): print(new, orig)
+print('sim seq first 100:', seq[:100])
+print('qseq  first 100:', qseq[:100])
+print('sim counts',Counter(seq))
+print('q counts',Counter(qseq))
+# compare NT sequence exact?
+sim_nt=[g for g in seq if g.startswith('NT-')]; q_nt=[g for g in qseq if g.startswith('NT-')]
+print('NT match prefix?', sim_nt[:50]==q_nt[:50], 'lens',len(sim_nt),len(q_nt))
+# LCS? no
+PY"

@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import gzip
+from collections import defaultdict, Counter
+files=['human.paf','mouse.paf','pig.paf']
+best={f:{} for f in files}
+for f in files:
+ d=best[f]
+ for line in open(f):
+  a=line.rstrip().split('\\t'); q=a[0]
+  span=int(a[3])-int(a[2]); nm=int(a[9])
+  tags={x.split(':',2)[0]:x.split(':',2)[2] for x in a[12:]}
+  v=(int(tags.get('AS',0)),span,nm,int(a[11]))
+  if v>d.get(q,(-1,0,0,0)): d[q]=v
+cell_of={}; order=[]
+with gzip.open('three.way.barnyard.q1.R1.fq.gz','rt') as h:
+ while True:
+  n=h.readline()
+  if not n: break
+  s=h.readline().strip(); h.readline(); h.readline()
+  b=s[:16]; cell_of[n[1:].strip().replace('/1','/2')]=b
+  if b not in order: order.append(b)
+score=defaultdict(lambda:[0,0,0]); wins=defaultdict(lambda:[0,0,0]); ties=Counter(); total=Counter()
+for fidx,f in enumerate(files):
+ for q,v in best[f].items(): score[cell_of[q]][fidx]+=v[0]
+for q,b in cell_of.items():
+ vals=[best[f].get(q,(0,0,0,0))[0] for f in files]
+ total[b]+=1
+ m=max(vals)
+ if m==0: continue
+ ws=[i for i,x in enumerate(vals) if x==m]
+ if len(ws)==1: wins[b][ws[0]]+=1
+ else: ties[b]+=1
+# score label vs winner label
+labels=[]
+for b in order:
+ ss=score[b]; ws=[i for i,x in enumerate(ss) if x==max(ss)]
+ wl=[i for i,x in enumerate(wins[b]) if x==max(wins[b])]
+ labels.append((b,ss,wins[b],ties[b],ws,wl))
+print('score labels',Counter(('human','mouse','pig')[x[4][0]] if len(x[4])==1 else 'tie' for x in labels))
+print('winner labels',Counter(('human','mouse','pig')[x[5][0]] if len(x[5])==1 else 'tie' for x in labels))
+print('score/winner agreement',sum(len(x[4])==1 and len(x[5])==1 and x[4][0]==x[5][0] for x in labels),'of',len(labels))
+print('per-cell minimum winning reads', min(max(x[2]) for x in labels), 'median', sorted(max(x[2]) for x in labels)[len(labels)//2])
+print('cells with ties',sum(x[3]>0 for x in labels),'max ties',max(x[3] for x in labels))
+print('score-labelled cells with lowest margins')
+for x in sorted(labels,key=lambda z:max(z[1])-sorted(z[1])[-2])[:10]: print(x)
+PY"

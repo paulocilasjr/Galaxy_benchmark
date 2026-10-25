@@ -1,0 +1,31 @@
+/bin/bash -lc "cat > analyze_coverage.py <<'PY'
+import pysam,numpy as np
+fa=pysam.FastaFile('source.fa')
+chrom=fa.references[0];seq=fa.fetch(chrom);length=len(seq);step=100000
+counts=np.zeros((2,(length+step-1)//step),dtype=int)
+positions=[]
+discord=[]
+with pysam.AlignmentFile('mapped.bam','rb') as f:
+ for a in f:
+  if a.is_unmapped or a.is_secondary or a.is_supplementary:continue
+  counts[0,a.reference_start//step]+=1
+  if a.mapping_quality>=20:
+   counts[1,a.reference_start//step]+=1
+   positions.append((a.reference_start,a.reference_end))
+   if abs(a.template_length)>100000 and not a.mate_is_unmapped:discord.append((a.query_name,a.reference_start,a.reference_end,a.next_reference_start,a.template_length,a.mapping_quality))
+with open('coverage.tsv','w') as out:
+ out.write('chrom\\tstart\\tend\\treads_all\\treads_mapq20\\tn_fraction\\n')
+ for i in range(counts.shape[1]):
+  s=i*step;e=min(s+step,length);nf=seq[s:e].upper().count('N')/(e-s)
+  out.write(f'{chrom}\\t{s}\\t{e}\\t{counts[0,i]}\\t{counts[1,i]}\\t{nf:.4f}\\n')
+  if counts[1,i]<20:print('LOW',s,e,counts[:,i],nf)
+gaps=[];last=0
+for s,e in positions:
+ if s>last:gaps.append((s-last,last,s))
+ last=max(last,e)
+print('LARGEST GAPS')
+for size,s,e in sorted(gaps,reverse=True)[:30]:
+ print(size,s,e,'N_frac',seq[s:e].upper().count('N')/size)
+print('DISCORDANT',len(discord))
+for d in discord[:60]:print(d)
+PY"

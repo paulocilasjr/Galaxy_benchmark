@@ -1,0 +1,65 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad
+import scanpy as sc
+import pandas as pd
+import numpy as np
+
+files=['pbmc3k.h5ad','10x_pbmc68k_reduced.h5ad']
+adata=[]
+for f in files:
+    a=ad.read_h5ad(f)
+    print(f, 'shape', a.shape, 'var_names dtype', a.var_names.dtype, 'unique', len(a.var_names.unique()))
+    if 'gene_symbols' in a.var.columns:
+        print(' gene_symbols missing', a.var['gene_symbols'].isna().sum(), 'nunique', a.var['gene_symbols'].nunique())
+        # filter missing gene_symbols per instruction? Need decide subset
+    adata.append(a)
+
+# common genes intersection of var_names exact string values
+common = sorted(set(adata[0].var_names.astype(str)) & set(adata[1].var_names.astype(str)))
+print('common count', len(common))
+# subset in order? use index intersection preserving order perhaps
+for i,a in enumerate(adata):
+    mask=a.var_names.isin(common)
+    print('before filter', i, a.shape)
+    # exclude missing gene_symbols if column exists; only var-level filter beyond this
+    if 'gene_symbols' in a.var.columns:
+        # keep rows not missing gene_symbols (but no further)
+        mask = mask & a.var['gene_symbols'].notna()
+    a = a[:, mask].copy()
+    print('after subset/filter', i, a.shape)
+    # common may need intersection after filter? We'll check
+    adata[i]=a
+
+# Recompute common after filtering maybe intersection
+common2=sorted(set(adata[0].var_names.astype(str)) & set(adata[1].var_names.astype(str)))
+print('common after filter', len(common2))
+for i,a in enumerate(adata):
+    m=a.var_names.isin(common2)
+    a=a[:,m].copy()
+    print('final',i,a.shape)
+    adata[i]=a
+
+for i,a in enumerate(adata):
+    print('running HVG',i, a.shape, 'X dtype',a.X.dtype, 'X sparse', hasattr(a.X,'toarray'))
+    sc.pp.highly_variable_genes(a, flavor='seurat')
+    hv = a.var['highly_variable']
+    print(a.var[['highly_variable']].head())
+    print('value counts')
+    print(hv.astype(str).value_counts(dropna=False))
+    accepted={'True','1','TRUE'}
+    hvg=set(a.var_names[hv.astype(str).isin(accepted)])
+    print('HVG count',len(hvg), 'first', list(hvg)[:10])
+    adata[i]=a
+    if i==0: h1=hvg
+    else: h2=hvg
+
+inter=len(h1 & h2); union=len(h1 | h2)
+print('h1',len(h1),'h2',len(h2),'inter',inter,'union',union)
+if union==0:
+    jac=np.nan
+else:
+    jac=inter/union
+print('jac',jac)
+print('ROUNDED', f'{jac:.2f}' if np.isfinite(jac) else 'NaN')
+PY
+python [REDACTED LOCAL PATH]"

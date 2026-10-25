@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, warnings
+warnings.filterwarnings('ignore')
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_path='inputs/Issy_ASXL1_blood_featureCounts_GeneTable_final.txt'
+meta_path='inputs/Issy_ASXL1_blood_coldata_gender.xlsx'
+counts=pd.read_csv(counts_path, sep=r'\\s+', index_col=0)
+meta=pd.read_excel(meta_path)
+print('counts', counts.shape, 'meta', meta.shape)
+print('missing in meta from counts', [s for s in counts.columns if s not in set(meta['sample'])])
+print('meta not in counts', [s for s in meta['sample'] if s not in set(counts.columns)])
+counts=counts[meta['sample']]
+meta=meta.set_index('sample')
+# factors
+meta['condition']=pd.Categorical(meta['condition'], categories=['Control','ASXL1'], ordered=False)
+meta['sex']=pd.Categorical(meta['sex'], categories=['F','M'], ordered=False)
+print(meta[['condition','sex']])
+print(meta['condition'].value_counts())
+print(meta['sex'].value_counts())
+
+dds=DeseqDataSet(counts=counts, metadata=meta[['condition','sex']], design='~ sex + condition', design_factors=['sex','condition'], ref_level=['F','Control'], quiet=False)
+dds.deseq2()
+print('dds done')
+# results with alpha 0.05
+st=DeseqStats(dds, contrast=['condition','ASXL1','Control'], alpha=0.05, independent_filter=True, cooks_filter=True)
+st.summary()
+print('summary done')
+res=st.results_df
+print(res.shape)
+print(res.columns.tolist())
+print(res.head())
+print('padj notna', res['padj'].notna().sum())
+print('padj<.05', (res['padj'] < 0.05).sum())
+print('padj<=.05', (res['padj'] <= 0.05).sum())
+print(res['padj'].describe())
+# inspect independent filter threshold
+print('threshold attrs', st.independent_filter, getattr(st,'alpha',None))
+if hasattr(st,'filter_threshold'): print('filter_threshold', st.filter_threshold)
+# all significant gene names maybe
+sig=res[res['padj']<0.05].sort_values('padj')
+print('sig head/tail')
+print(sig[['baseMean','log2FoldChange','stat','pvalue','padj']].head(20))
+print('n sig',len(sig))
+PY"

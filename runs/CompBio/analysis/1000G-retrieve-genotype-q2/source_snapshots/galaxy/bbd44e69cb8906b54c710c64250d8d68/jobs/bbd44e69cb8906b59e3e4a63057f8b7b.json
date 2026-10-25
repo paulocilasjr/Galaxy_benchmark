@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b59e3e4a63057f8b7b",
+  "history_id": "bbd44e69cb8906b54c710c64250d8d68",
+  "tool_id": "build_1000g_encode_common_chr1_v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-09T12:03:14.865348",
+  "update_time": "2026-08-09T12:04:44.027797",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "pip install --quiet pysam==0.23.3\npython - <<'PY'\nimport concurrent.futures, gzip, hashlib, io, json, urllib.parse, urllib.request\nimport pysam\nENCODE_URL = \"https://encode-public.s3.amazonaws.com/2021/02/01/355cd23e-dc72-498f-9d8a-ac5b7f64e9f1/ENCFF717TCQ.bed.gz\"\nVCF_URL = \"https://1000genomes.s3.amazonaws.com/1000G_2504_high_coverage/working/20201028_3202_raw_GT_with_annot/20201028_CCDG_14151_B01_GRM_WGS_2020-08-05_chr1.recalibrated_variants.vcf.gz\"\nBASES = {\"A\",\"C\",\"G\",\"T\"}\ndef get_bytes(url):\n    req = urllib.request.Request(url, headers={\"User-Agent\":\"Galaxy-UDT/1.0\"})\n    with urllib.request.urlopen(req, timeout=180) as r:\n        return r.read()\npeak_rows = []\nwith gzip.GzipFile(fileobj=io.BytesIO(get_bytes(ENCODE_URL))) as fh:\n    for raw in fh:\n        if not raw.strip() or raw.startswith(b\"#\"):\n            continue\n        f = raw.decode().rstrip(\"\\n\").split(\"\\t\")\n        if len(f) < 9:\n            raise RuntimeError(\"ENCODE input is not narrowPeak-like\")\n        peak_rows.append((float(f[8]), f[0], int(f[1]), int(f[2])))\nif len(peak_rows) < 1000:\n    raise RuntimeError(\"ENCODE file has fewer than 1000 peaks\")\npeak_rows.sort(key=lambda x: (-x[0], x[1], x[2], x[3]))\ntop = peak_rows[:1000]\nchr1_intervals = sorted((s,e) for q,c,s,e in top if c == \"chr1\")\nif not chr1_intervals:\n    raise RuntimeError(\"No chr1 peaks among top 1000\")\nmerged = []\nfor s,e in chr1_intervals:\n    if not merged or s > merged[-1][1]:\n        merged.append([s,e])\n    elif e > merged[-1][1]:\n        merged[-1][1] = e\n\ndef query_ucsc(interval):\n    s,e = interval\n    params = urllib.parse.urlencode({\"genome\":\"hg38\",\"track\":\"snp151Common\",\"chrom\":\"chr1\",\"start\":s,\"end\":e})\n    req = urllib.request.Request(\"https://api.genome.ucsc.edu/getData/track?\" + params, headers={\"User-Agent\":\"Galaxy-UDT/1.0\"})\n    with urllib.request.urlopen(req, timeout=180) as r:\n        data = json.load(r)\n    out = set()\n    recs = data.get(\"snp151Common\", [])\n    for rec in recs:\n        alleles = rec.get(\"observed\", \"\").split(\"/\")\n        if len(alleles) == 2 and len(set(alleles)) == 2 and all(a in BASES for a in alleles):\n            pos = int(rec[\"chromStart\"]) + 1\n            if s <= pos - 1 < e:\n                out.add(pos)\n    return len(recs), out\n\ncommon_positions = set()\nucsc_records = 0\nwith concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:\n    for n, positions in pool.map(query_ucsc, merged):\n        ucsc_records += n\n        common_positions.update(positions)\nif not common_positions:\n    raise RuntimeError(\"No qualifying UCSC common SNP positions\")\n\nvf = pysam.VariantFile(VCF_URL)\nsamples = sorted(list(vf.header.samples))\nif len(samples) != 3202:\n    raise RuntimeError(\"Expected 3202 samples, found %d\" % len(samples))\noriginal_samples = list(vf.header.samples)\norder = [original_samples.index(name) for name in samples]\nrows = []\nseen = set()\nfor s,e in merged:\n    for rec in vf.fetch(\"chr1\", s, e):\n        pos = rec.pos\n        if pos not in common_positions:\n            continue\n        if len(rec.ref) != 1 or rec.ref not in BASES:\n            continue\n        if rec.alts is None or len(rec.alts) != 1 or len(rec.alts[0]) != 1 or rec.alts[0] not in BASES:\n            continue\n        key = (pos, rec.ref, rec.alts[0])\n        if key in seen:\n            continue\n        seen.add(key)\n        vals = list(rec.samples.values())\n        calls = []\n        for i in order:\n            gt = vals[i].get(\"GT\")\n            if gt == (0,0):\n                calls.append(\"0/0\")\n            elif gt == (0,1) or gt == (1,0):\n                calls.append(\"0/1\")\n            elif gt == (1,1):\n                calls.append(\"1/1\")\n            else:\n                calls.append(\"./.\")\n        rows.append((pos, rec.ref, rec.alts[0], calls))\nvf.close()\nrows.sort(key=lambda x: (x[0], x[1], x[2]))\nwith open(\"genotypes.tsv\", \"w\", newline=\"\") as out:\n    out.write(\"\\t\".join([\"CHROM\",\"POS\",\"REF\",\"ALT\"] + samples) + \"\\n\")\n    for pos,ref,alt,calls in rows:\n        out.write(\"\\t\".join([\"chr1\",str(pos),ref,alt] + calls) + \"\\n\")\nwith open(\"genotypes.tsv\", \"rb\") as fh:\n    content = fh.read()\nmd5 = hashlib.md5(content).hexdigest()\nline_count = content.count(b\"\\n\")\nif not content.endswith(b\"\\n\") or line_count != len(rows) + 1:\n    raise RuntimeError(\"Output line validation failed\")\nwith open(\"qc.txt\", \"w\") as q:\n    q.write(\"top_peaks=1000\\n\")\n    q.write(\"chr1_top_peak_rows=%d\\n\" % len(chr1_intervals))\n    q.write(\"chr1_merged_intervals=%d\\n\" % len(merged))\n    q.write(\"ucsc_records_examined=%d\\n\" % ucsc_records)\n    q.write(\"qualifying_common_positions=%d\\n\" % len(common_positions))\n    q.write(\"samples=%d\\n\" % len(samples))\n    q.write(\"sample_header_lexicographic=%s\\n\" % str(samples == sorted(samples)).lower())\n    q.write(\"variant_rows=%d\\n\" % len(rows))\n    q.write(\"lines=%d\\n\" % line_count)\n    q.write(\"md5=%s\\n\" % md5)\n    q.write(\"answer=%d;%s\\n\" % (line_count, md5))\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "run": "\"1\"",
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {},
+  "outputs": {
+    "genotypes": {
+      "id": "f9cad7b01a472135e407fd43b0f9c853",
+      "src": "hda",
+      "uuid": "75fabe01-5418-4987-90a8-baecd7251d05"
+    },
+    "qc": {
+      "id": "f9cad7b01a472135b3b790ad64d81880",
+      "src": "hda",
+      "uuid": "516c5d1e-b7b0-46da-8e33-643ae60a7755"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "\n[notice] A new release of pip is available: 24.0 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\n",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "\n[notice] A new release of pip is available: 24.0 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\n",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

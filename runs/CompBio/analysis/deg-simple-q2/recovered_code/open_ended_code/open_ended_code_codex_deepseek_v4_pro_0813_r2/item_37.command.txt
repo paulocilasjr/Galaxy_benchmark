@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam,gzip,re,collections
+# annotation
+annot='Homo_sapiens.GRCh38.113.gtf.gz'; tx2gene={}; gene2tx=collections.defaultdict(set)
+with gzip.open(annot,'rt') as fh:
+    for line in fh:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9: continue
+        a=dict(re.findall(r'(\\S+?)\\s+\"(["'^"]*)"'"', p[8]))
+        tid=a.get('transcript_id'); gn=a.get('gene_name')
+        if tid and gn and tid not in tx2gene:
+            tx2gene[tid]=gn; gene2tx[gn].add(tid)
+def base(ref): return re.sub(r'\\.\\d+"'$'"','',ref)
+counts={}
+for s,b in [('A','A.bam'),('B','B.bam')]:
+    c=collections.Counter(); f=pysam.AlignmentFile(b,'rb')
+    for r in f.fetch(until_eof=True):
+        if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+        c[base(r.reference_name)]+=1
+    counts[s]=c; f.close()
+rows=[]
+for gene,txs in gene2tx.items():
+    ca=sum(counts['A'].get(t,0) for t in txs); cb=sum(counts['B'].get(t,0) for t in txs)
+    if ca+cb<50: continue
+    if len(txs)<2: continue
+    # find top transcript in each
+    topA=max(txs,key=lambda t: counts['A'].get(t,0)); topB=max(txs,key=lambda t: counts['B'].get(t,0))
+    # exclusivity fraction A top and B top in opposite
+    a_top=counts['A'].get(topA,0); b_top=counts['B'].get(topB,0)
+    if topA "'!= topB and a_top>0 and b_top>0:
+        rows.append((abs((a_top/ca)-(b_top/cb)), ca, cb, gene, topA, a_top, ca, topB, b_top, cb))
+rows.sort(reverse=True)
+for r in rows[:50]:
+    print(r)
+PY'

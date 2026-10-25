@@ -1,0 +1,44 @@
+/bin/bash -c "python3 - <<'PY'
+import h5py, numpy as np
+from collections import defaultdict
+
+def ds_counts(fn):
+    total=0; moving=0; trainable=0
+    bytype=defaultdict(lambda:[0,0,0]) # total, moving, trainable
+    with h5py.File(fn,'r') as f:
+        for name, obj in f['model_weights'].items():
+            # layer top-level group
+            def rec(g, layer):
+                nonlocal total,moving,trainable
+                for k,o in g.items():
+                    if isinstance(o,h5py.Dataset):
+                        cnt=np.prod(o.shape,dtype=np.int64)
+                        total+=cnt
+                        if k.startswith('moving_'):
+                            moving+=cnt
+                            bytype[layer][1]+=cnt
+                        else:
+                            trainable+=cnt
+                            bytype[layer][2]+=cnt
+                        bytype[layer][0]+=cnt
+                    else:
+                        rec(o, layer)
+            rec(obj, name)
+    return total,moving,trainable,bytype
+
+for fn in ['models/model0_best.h5','models/model1_best.h5']:
+    total,moving,trainable,by=ds_counts(fn)
+    print(fn)
+    print('total',total,'moving',moving,'trainable',trainable)
+    print('trunk trainable excluding head dense_20?')
+    head_human=None; head_mouse=None
+    # top-level layer dense_20 is output in both; size differs
+    tr=0
+    for name,(t,m,tr_) in by.items():
+        if name=='dense_20':
+            print('head/output', name, t, m, tr_)
+        else:
+            tr+=tr_
+    print('nontrunk trainable',trainable-tr,'trunk trainable',tr)
+    print('num layers with weights',len(by))
+PY"

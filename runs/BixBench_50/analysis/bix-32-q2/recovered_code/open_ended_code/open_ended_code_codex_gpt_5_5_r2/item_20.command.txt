@@ -1,0 +1,22 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) { x <- readRDS(f); ld <- attr(x, 'listData'); data.frame(gene=attr(x,'rownames'), lfc=ld"'$log2FoldChange) }
+files <- c(`97`='"'inputs/res_1vs97.rds', "'`98`='"'inputs/res_1vs98.rds', "'`99`='"'inputs/res_1vs99.rds')
+res <- lapply(files, read_res)
+links <- system(\"curl -fsSL 'https://rest.kegg.jp/link/pathway/pau'\", intern=TRUE)
+p <- strsplit(links, '\\t')
+map <- data.frame(gene=sub('"'^pau:'"','',vapply(p,"'`[`,character(1),1)), pathway=sub('"'"'^path:'"','',vapply(p,"'`[`,character(1),2)))
+all_genes <- Reduce(intersect, lapply(res, `[[`, '"'gene'))
+map <- map[map"'$gene %in% all_genes,]
+universe <- unique(map$gene)
+p2g <- lapply(split(map$gene,map$pathway), unique)
+ora <- function(fg) { fg <- intersect(unique(fg), universe); N<-length(universe); n<-length(fg); data.frame(pathway=names(p2g), pvalue=sapply(p2g, function(g) {M<-length(intersect(g, universe)); k<-sum(fg %in% g); if(k>0) phyper(k-1,M,N-M,n,lower.tail=FALSE) else 1})) }
+for (cut in c('"'raw','BH')) {
+ sig <- list(up=list(),down=list())
+ for (nm in names(res)) for (dir in c('up','down')) {
+   d<-res[[nm]]; fg<-if(dir=='up') d"'$gene[d$lfc>1.5] else d$gene[d$lfc< -1.5]
+   o<-ora(fg); o$padj<-p.adjust(o$pvalue,'"'BH')
+   sig[[dir]][[nm]]<-o"'$pathway[if(cut=='"'raw') o"'$pvalue<0.05 else o$padj<0.05]
+ }
+ cat(cut, '"'common up', paste(Reduce(intersect,sig"'$up), collapse='"','), 'common down', paste(Reduce(intersect,sig"'$down), collapse='"','), 'total', length(union(Reduce(intersect,sig"'$up), Reduce(intersect,sig$down))), '"'\\n')
+}
+RS"

@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, pandas as pd, numpy as np
+from collections import defaultdict
+
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+log=np.log1p(df)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+
+def fnum(x):
+    try:return float(x)
+    except:return 0.0
+wb=openpyxl.load_workbook('supp/mmc5.xlsx', read_only=True, data_only=True)
+ws=wb['Table S4']
+rows=[]
+for r in ws.iter_rows(values_only=True):
+    if r[0] and isinstance(r[0],str) and r[0].startswith('Traes') and r[7] and r[7]"'!='"'cluster':
+        gene=r[0]; cl=str(r[7]).strip()
+        if cl.startswith('10 - Xylem'): cl='10 - Xylem'
+        rows.append((gene,cl,fnum(r[2]),fnum(r[5]),fnum(r[3])))
+wb.close()
+clusters=['0 - Unknown','1 - Epidermis','2 - Cortex','3 - G1/S','4 - Provascular Cells','5 - Unknown','6 - Pericycle','7 - Epidermis','8 - Root Hair','9 - Endodermis','10 - Xylem','11 - Endodermis/Phloem','12 - G2/M','13 - Phloem','14 - Root Cap']
+# marker sets per cluster top N by ratio
+for N in [50,100,200,400]:
+    chosen={}
+    for cl in clusters:
+        pool=[r for r in rows if r[1]==cl]
+        best={}
+        for g,c,lfc,ratio,p1 in pool:
+            key=(ratio,lfc,p1)
+            if g not in best or key>best[g][0]: best[g]=key
+        gs=sorted(best, key=lambda g:best[g], reverse=True)[:N]
+        chosen[cl]=[g for g in gs if g in df.index]
+    # score columns for each cluster
+    res=pd.DataFrame(index=clusters,columns=df.columns,dtype=float)
+    for cl,genes in chosen.items():
+        res.loc[cl]=z.loc[genes].mean()
+    print('\\nN',N)
+    print(res.round(2))
+    print('best cluster per col:')
+    for col in df.columns:
+        best=res[col].idxmax(); val=res[col].max()
+        print(f'{col:12s} -> {best:25s} {val:.2f}')
+PY"

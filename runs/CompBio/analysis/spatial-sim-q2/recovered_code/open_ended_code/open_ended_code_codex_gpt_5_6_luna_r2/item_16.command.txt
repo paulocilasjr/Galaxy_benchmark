@@ -1,0 +1,31 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import numpy as np,csv
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=np.loadtxt('data/spatial_q_sc_counts.csv',delimiter=',',skiprows=1,usecols=range(1,1001))
+with open('data/spatial_q_sc_metadata.csv') as f: rows=list(csv.reader(f))[1:]
+labels=np.array([r[1] for r in rows]); types=sorted(set(labels));
+S=np.array([sc[labels==t].mean(0) for t in types])
+sp=mmread('data/matrix.mtx.gz').toarray()
+sn=sp/(sp.sum(0,keepdims=True)+1e-9)
+ref=S/(S.sum(1,keepdims=True)+1e-9)
+# rows are observations, cols genes
+allc=np.corrcoef(np.vstack([ref,sn.T]))
+cor=allc[:len(types),len(types):]
+print('types',types)
+print('ref-v-spot corr stats per type',[(types[i],round(float(np.min(cor[i])),3),round(float(np.median(cor[i])),3),round(float(np.max(cor[i])),3)) for i in range(len(types))])
+assign=np.argmax(cor,axis=0)
+print('corr spot assignments',[(types[i],int((assign==i).sum())) for i in range(len(types))])
+X=S.T
+coef=[]; res=[]
+for j in range(sp.shape[1]):
+ c,r=nnls(X,sp[:,j]); coef.append(c);res.append(r)
+coef=np.array(coef); res=np.array(res)
+print('coef overall totals',[(types[i],round(float(coef[:,i].min()),3),round(float(np.median(coef[:,i]),3),3),round(float(coef[:,i].max()),3),round(float(coef[:,i].sum()),3)) for i in range(len(types))])
+props=coef/(coef.sum(1,keepdims=True)+1e-9)
+pa=np.argmax(props,axis=1)
+print('nnls dominant assignments',[(types[i],int((pa==i).sum())) for i in range(len(types))])
+for i,t in enumerate(types):
+ ii=np.argsort(props[:,i])[::-1][:10]
+ print(t,'top',[(int(j),round(float(coef[j,i]),3),round(float(props[j,i]),3),round(float(sp[:,j].sum()),0)) for j in ii])
+PY"

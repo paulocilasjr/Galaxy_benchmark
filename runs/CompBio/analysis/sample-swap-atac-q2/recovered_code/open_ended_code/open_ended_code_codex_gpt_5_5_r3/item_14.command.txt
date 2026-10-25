@@ -1,0 +1,70 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import gzip, requests, pandas as pd, numpy as np, math, json, os, sys
+fn='sample.swap.atac.q2.tsv.gz'
+df=pd.read_csv(fn, sep='\\t', compression='gzip')
+cols=list(df.columns[3:])
+libs=df[cols].sum()
+# organize bins by chrom for window selection
+# We'll use boolean query on df enough for small list.
+markers={
+ 'Rod':['RHO','NRL','PDE6B','GNAT1','SAG','CNGB1','PDE6A','NR2E3','ROM1','RP1'],
+ 'Cone':['ARR3','OPN1LW','OPN1MW','OPN1SW','GNAT2','PDE6C','PDE6H','CNGB3','GNGT2','THRB'],
+ 'Mullerglia':['RLBP1','GLUL','SLC1A3','VIM','CLU','CRYAB','SLC1A2','KCNJ10','AQP4'],
+ 'Astrocyte':['GFAP','ALDH1L1','AQP4','S100B','SOX9','GJA1','SLC1A3'],
+ 'Microglia':['PTPRC','AIF1','CX3CR1','C1QA','C1QB','TYROBP','P2RY12','TMEM119','CSF1R','LST1'],
+ 'GABAamacrine':['GAD1','GAD2','SLC6A1','SLC32A1','TFAP2A','TFAP2B','PAX6'],
+ 'AIIamacrine':['SLC6A9','GLRA2','PROX1','TFAP2A','PAX6','GAD1','GAD2'],
+ 'Horizontal':['LHX1','ONECUT1','ONECUT2','PROX1','CALB1','LIM1'],
+ 'Retinalganglioncell':['RBPMS','THY1','POU4F1','POU4F2','SLC17A6','SNCG','NEFL','NEFM','ISL1']
+}
+allsyms=sorted(set(sum(markers.values(),[])))
+r=requests.post('https://mygene.info/v3/query', data={'q': ','.join(allsyms), 'scopes':'symbol,alias', 'fields':'symbol,genomic_pos_hg38,genomic_pos', 'species':'human'}, timeout=60)
+r.raise_for_status()
+coord={}
+for item in r.json():
+    sym=item.get('query')
+    gp=item.get('genomic_pos_hg38') or item.get('genomic_pos')
+    if not gp: continue
+    if isinstance(gp, list):
+        # choose normal autosome/X/Y if possible largest score? first normal
+        choices=[g for g in gp if str(g.get('chr')) in [str(i) for i in range(1,23)]+['X','Y','MT']]
+        gp=choices[0] if choices else gp[0]
+    ch='chr'+str(gp['chr']).replace('chr','')
+    if ch=='chrMT': ch='chrM'
+    coord[sym]=(ch, int(gp['start']), int(gp['end']), int(gp.get('strand',0) or 0), item.get('symbol'))
+print('coords', len(coord),'missing', [s for s in allsyms if s not in coord])
+# function window: gene body +/- 20kb and promoter +/-10? test both
+for mode,pad in [('gene50k',50000),('gene10k',10000),('prom50k',50000),('prom10k',10000)]:
+    gene_scores={}
+    for sym,(ch,st,en,strand,official) in coord.items():
+        if mode.startswith('prom'):
+            tss=st if strand>=0 else en
+            wst=tss-pad; wen=tss+pad
+        else:
+            wst=st-pad; wen=en+pad
+        sub=df[(df.chrom==ch)&(df.end>wst)&(df.start<wen)]
+        if sub.empty: continue
+        # CPM window counts
+        score=(sub[cols].sum()/libs*1e6)
+        gene_scores[sym]=score
+    print('\\nMODE',mode)
+    # per marker set average zscore/rank? print expected marker set scores across columns
+    for ct, syms in markers.items():
+        avail=[s for s in syms if s in gene_scores]
+        if not avail: continue
+        M=pd.DataFrame([gene_scores[s] for s in avail], index=avail)
+        # use log1p CPM then average
+        avg=np.log1p(M).mean(axis=0).sort_values(ascending=False)
+        print(ct, 'top:', ', '.join(f'{k}:{v:.2f}' for k,v in avg.head(4).items()))
+    print('marker-set confusion best labels:')
+    scoremat=[]
+    for ct,syms in markers.items():
+        avail=[s for s in syms if s in gene_scores]
+        M=pd.DataFrame([gene_scores[s] for s in avail], index=avail)
+        avg=np.log1p(M).mean(axis=0)
+        scoremat.append(avg.rename(ct))
+    S=pd.DataFrame(scoremat)
+    print(S.round(2))
+PY"

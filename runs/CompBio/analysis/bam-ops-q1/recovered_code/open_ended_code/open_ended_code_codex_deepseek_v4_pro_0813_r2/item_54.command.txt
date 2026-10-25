@@ -1,0 +1,32 @@
+/bin/bash -c "cat > scan_tar_headers.py <<'PY'
+import subprocess, struct, sys, time
+URL='https://zenodo.org/api/records/19443186/files/compbiobench_v1_data.tar/content'
+TOTAL=12001320960
+pos=0
+count=0
+start=time.time()
+while pos + 512 <= TOTAL:
+    cmd=['curl','-L','--max-time','60','-sS','-r',f'{pos}-{pos+511}',URL]
+    r=subprocess.run(cmd, capture_output=True, timeout=90)
+    data=r.stdout
+    if len(data)<512:
+        print('short at',pos,len(data),'stderr',r.stderr[:200]); break
+    name=data[0:100].split(b'\\0')[0].decode('utf-8','replace')
+    if not name:
+        print('empty name at',pos); break
+    # parse size at offset 124 length12 octal/numeric
+    sizefield=data[124:136].strip(b' \\0')
+    try:
+        size=int(sizefield or b'0',8)
+    except Exception as e:
+        print('size parse fail',name,sizefield,e); break
+    typeflag=data[156:157]
+    print(f'{pos:>12} {size:>12} {name}', flush=True)
+    count+=1
+    if count>=300:
+        break
+    pos += 512 + ((size+511)//512)*512
+    # handle longname/pax not needed? skip data
+print('count',count,'elapsed',time.time()-start)
+PY
+python scan_tar_headers.py"

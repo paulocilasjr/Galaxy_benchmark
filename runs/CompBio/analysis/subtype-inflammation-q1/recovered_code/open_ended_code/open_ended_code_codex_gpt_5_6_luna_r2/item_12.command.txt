@@ -1,0 +1,29 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy.sparse import csr_matrix
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as h:
+ next(h); genes=[line.rstrip().split('\\t')[1] for line in h]
+idx={x:i for i,x in enumerate(genes)}
+for f in ['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz']:
+ X=mmread(f).tocsc().astype(np.float32); lib=np.asarray(X.sum(axis=0)).ravel()
+ c=np.asarray(X[idx['CCL5'],:].todense()).ravel()
+ for threshold in [0,1,2,5,10]:
+  cells=c>threshold
+  print('\\n',f,'CCL5>',threshold,'n',cells.sum(),'mean ccl5',c[cells].mean() if cells.any() else 0)
+  if not cells.any(): continue
+  # normalized avg of positive and all, use log normalized counts? raw normalized mean
+  avg=np.asarray(X[:,cells].multiply(1e4/lib[cells]).mean(axis=1)).ravel()
+  avg0=np.asarray(X[:,~cells].multiply(1e4/lib[~cells]).mean(axis=1)).ravel() if (~cells).any() else np.zeros(X.shape[0])
+  # effect mean log1p per-cell maybe compute using only rows? use avg+eps
+  rat=np.log2((avg+0.02)/(avg0+0.02))
+  order=np.argsort(rat)[::-1]
+  print('top enriched')
+  shown=0
+  for i in order:
+   if avg[i]<0.05: continue
+   print(f'{genes[i]:25s} l2={rat[i]:5.2f} pos={avg[i]:7.2f} neg={avg0[i]:7.2f} prev={X[i,cells].nnz/cells.sum()*100:5.1f}%')
+   shown+=1
+   if shown>=50: break
+  print('key markers',[(m,round(float(avg[idx[m]]),2),round(float(avg0[idx[m]]),2),int(X[idx[m],cells].nnz)) for m in ['CD3D','CD3E','CD3G','TRBC1','TRBC2','IL7R','LTB','NKG7','CD8A','CD8B','MALAT1','PTPRC','P2RY12','TYROBP','LST1','CST3','HLA-DRA','CCL5','GZMK','GZMB','GNLY','KLRD1','IL32','B2M'] if m in idx])
+PY"

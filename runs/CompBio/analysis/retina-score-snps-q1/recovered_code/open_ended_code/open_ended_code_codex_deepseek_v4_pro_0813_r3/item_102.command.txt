@@ -1,0 +1,65 @@
+/bin/bash -c "python - <<'PY'
+import pandas as pd, urllib.request,json,concurrent.futures,time,os, numpy as np
+from pyliftover import LiftOver
+lo=LiftOver('ref/hg19ToHg38.over.chain.gz')
+df=pd.read_csv('retina.score.snps.q1.tsv',sep='\\t')
+def rc(s): return s.upper().translate(str.maketrans('ACGT','TGCA'))[::-1]
+records=[]
+for i,r in df.iterrows():
+    res=lo.convert_coordinate(r['chr'], r['start'])
+    if res:
+        c,p0,strand,score=res[0]
+        if strand=='-':
+            p=p0-1
+            ref=rc(r['ref']); alt=rc(r['alt'])
+            strand_final='-'
+        else:
+            p=p0
+            ref=r['ref'].upper(); alt=r['alt'].upper(); strand_final='+'
+        chrom=c
+    else:
+        # fallback: use hg38 same coordinate? use original chr/start (0-based) and original alleles
+        chrom=r['chr']; p=r['start']; ref=r['ref'].upper(); alt=r['alt'].upper(); strand_final='fallback'
+    records.append({'idx':i,'chr':chrom,'pos0':p,'pos1':p+1,'ref':ref,'alt':alt,'strand':strand_final,'label':r['label'],'orig_ref':r['ref'],'orig_alt':r['alt']})
+out=pd.DataFrame(records)
+out.to_csv('work/snps_final_hg38.tsv',sep='\\t',index=False)
+print(out.head())
+print('fallback',out[out.strand=='fallback'])
+# fetch sequences
+INP_LEN=2114; HALF=1056
+def fetch(row):
+    idx=row['idx']; chrom=row['chr']; p=int(row['pos0'])
+    start=p-HALF; end=start+INP_LEN
+    url=f'https://api.genome.ucsc.edu/getData/sequence?genome=hg38;chrom={chrom};start={start};end={end}'
+    try:
+        d=json.load(urllib.request.urlopen(url))
+        seq=d['dna'].upper()
+        if len(seq)"'!=INP_LEN:
+            return idx,None,'"'LEN'+str(len(seq))
+        # verify center
+        center=seq[HALF]
+        return idx,seq,center
+    except Exception as e:
+        return idx,None,'ERR'+str(e)
+t=time.time()
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    results=list(ex.map(fetch,[r for _,r in out.iterrows()]))
+print('fetch time',time.time()-t)
+seqs={idx:seq for idx,seq,center in results if seq is not None}
+errs=[(idx,center) for idx,seq,center in results if seq is None]
+print('errors',errs[:10],len(errs))
+# check center matches ref
+mism=[]
+for idx,row in out.iterrows():
+    if idx in seqs:
+        got=seqs[idx][HALF]; ref=row['ref']
+        if ref"'!='"'N' and got"'!=ref: mism.append((idx,got,ref,row.to_dict()))
+print('"'center mismatches',len(mism)); print(mism[:10])
+# save fasta and npy order
+seq_list=[seqs[i] for i in out['idx']]
+open('work/rod_snps.fa','w').write('\\n'.join(f'>{i}_{out.iloc[j][\"chr\"]}_{out.iloc[j][\"pos1\"]}'+'\\n'+seq for j,(i,seq) in enumerate(zip(out['idx'],seq_list)))+'\\n')
+# one-hot later
+out['seq']=seq_list
+out.to_pickle('work/snps_final_hg38_with_seq.pkl')
+print('saved')
+PY"

@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.request,edlib,re,collections
+from Bio.Seq import Seq
+b=urllib.request.urlopen('https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz',timeout=120).read();z=gzip.decompress(b).decode().splitlines();chrom=''.join(z[1:]).upper();lo=27070000;ref=chrom[lo:27090000]
+def reads(p):
+ with gzip.open(p,'rt') as f:
+  while 1:
+   h=f.readline().strip()
+   if not h:return
+   s=f.readline().strip();f.readline();f.readline();yield h,s
+def parse(c):return [(op,int(n)) for n,op in re.findall(r'(\\d+)([=XID])',c)]
+def best(s):
+ a=[]
+ for o,q in [('+',s),('-',str(Seq(s).reverse_complement()))]:
+  x=edlib.align(q,ref,mode='HW',task='path',k=-1);a.append((x['editDistance'],o,q,x['locations'][0],x['cigar']))
+ return min(a,key=lambda x:(x[0],x[3][0]))
+base=[collections.Counter() for _ in ref];cov=[0]*len(ref);ins=collections.Counter();dele=collections.Counter();starts=[];ends=[]
+for fn in ['phase.chain.q1.R1.fq.gz','phase.chain.q1.R2.fq.gz']:
+ for h,s in reads(fn):
+  d,o,q,(st,en),c=best(s);starts.append(st);ends.append(en);t=st;qi=0
+  for op,n in parse(c):
+   if op in '=X':
+    for j in range(n):base[t][q[qi]]+=1;cov[t]+=1;t+=1;qi+=1
+   elif op=='I':ins[(t,q[qi:qi+n])]+=1;qi+=n
+   else:dele[(t,n)]+=1;t+=n
+print('mapped abs',lo+min(starts)+1,lo+max(ends)+1)
+print('potential high fraction bases')
+for i,c in enumerate(base):
+ if cov[i]>=5 and len(c)>1:
+  vals=c.most_common(); alt=sum(n for _,n in vals[1:]);
+  if vals[1][1]>=3 and vals[1][1]/cov[i]>=.25:
+   print(lo+i+1,chrom[lo+i],cov[i],vals)
+print('potential indels count>=3')
+for (t,s),n in ins.items():
+ if n>=3:print('I',lo+t+1,repr(s),n)
+for (t,l),n in dele.items():
+ if n>=3:print('D',lo+t+1,chrom[lo+t:lo+t+l],n)
+PY"

@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests, base64, numpy as np, math
+H1='JfVtzAhFSCS-j6tNALioCQ'; HFF='3e8b4161-556e-4722-bcef-88265a3436a1'; server='https://higlass.4dnucleome.org/api/v1/tiles/'
+offset=1943767673; res_for_z={12:1000,11:2000,10:5000,9:10000,8:25000}
+cache={}
+def fetch(uid,z,x,y):
+ key=f'{uid}.{z}.{x}.{y}'
+ if key in cache: return cache[key]
+ j=requests.get(server,params={'d':key},timeout=60).json()[key]
+ dt='<f2' if j.get('dtype')=='float16' else '<f4'
+ arr=np.frombuffer(base64.b64decode(j['dense']),dtype=dt).astype('f4').reshape(256,256)
+ cache[key]=arr
+ return arr
+
+def mosaic(uid,z,win):
+ res=res_for_z[z]; gs=offset+win[0]; ge=offset+win[1]; tw=256*res
+ x0=gs//tw; x1=(ge-1)//tw
+ mat=np.full(((x1-x0+1)*256,(x1-x0+1)*256),np.nan,'f4')
+ for x in range(x0,x1+1):
+  for y in range(x0,x1+1): mat[(y-x0)*256:(y-x0+1)*256,(x-x0)*256:(x-x0+1)*256]=fetch(uid,z,x,y)
+ a=(gs//res)-x0*256; b=math.ceil(ge/res)-x0*256
+ return mat[a:b,a:b], res
+
+def local_peaks(arr, win, res, sign=1, minsep=40000, top=30, region=None):
+ n=arr.shape[0]; coords=np.arange(n)*res + win[0] + res/2
+ A=arr.copy()*sign
+ # upper/lower both, ignore diagonal and nan and zeros
+ mask=np.isfinite(A)
+ dist=np.abs(coords[:,None]-coords[None,:])
+ mask &= dist>=minsep
+ if region:
+  lo1,hi1,lo2,hi2=region
+  X=coords[None,:]; Y=coords[:,None]
+  # unordered window: one anchor in [lo1,hi1], other in [lo2,hi2]
+  mask &= (((X>=lo1)&(X<=hi1)&(Y>=lo2)&(Y<=hi2)) | ((Y>=lo1)&(Y<=hi1)&(X>=lo2)&(X<=hi2)))
+ A[~mask]=-np.inf
+ # non-max suppression radius bins
+ out=[]; B=A.copy(); rad=max(1,int(10000/res))
+ for _ in range(top):
+  idx=np.unravel_index(np.nanargmax(B), B.shape); val=B[idx]
+  if not np.isfinite(val): break
+  y,x=idx; out.append((val*sign, int(coords[x]), int(coords[y]), x,y))
+  B[max(0,y-rad):min(n,y+rad+1), max(0,x-rad):min(n,x+rad+1)] = -np.inf
+ return out
+
+win=(7500000,7950000)
+for z in [11,12,10]:
+ h1,res=mosaic(H1,z,win); hff,_=mosaic(HFF,z,win); diff=h1-hff
+ print('\\nZ',z,'res',res)
+ for name,arr,sgn in [('H1-HFF positive',diff,1),('HFF-H1 positive',diff,-1),('H1 raw',h1,1),('HFF raw',hff,1)]:
+  print(name)
+  for v,x,y,ix,iy in local_peaks(arr,win,res,sgn,minsep=60000,top=10):
+   a,b=sorted([x,y]); print(f'  {v:.5g} {a}-{b} dist {b-a}')
+ print('target vicinity 7.60-7.66 vs 7.78-7.84')
+ for name,arr,sgn in [('H1-HFF',diff,1),('HFF-H1',diff,-1),('H1 raw',h1,1),('HFF raw',hff,1)]:
+  peaks=local_peaks(arr,win,res,sgn,minsep=60000,top=10,region=(7600000,7660000,7780000,7840000))
+  print(name, [(round(v,5),x,y) for v,x,y,_,_ in peaks[:5]])
+PY"

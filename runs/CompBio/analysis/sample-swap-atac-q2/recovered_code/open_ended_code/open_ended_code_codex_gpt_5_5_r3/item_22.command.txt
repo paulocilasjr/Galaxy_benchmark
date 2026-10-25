@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import requests,pandas as pd,numpy as np
+fn='sample.swap.atac.q2.tsv.gz'; df=pd.read_csv(fn,sep='\\t',compression='gzip')
+cols=list(df.columns[3:]); libs=df[cols].sum()
+syms=['RLBP1','GLUL','SLC1A3','SLC1A2','KCNJ10','CRYAB','CLU','VIM','AQP4','GFAP','ALDH1L1','S100B','GJA1','SOX9','SOX2','NES','HES1','NOTCH1','FABP7','APOE']
+r=requests.post('https://mygene.info/v3/query',data={'q':','.join(syms),'scopes':'symbol,alias','fields':'symbol,genomic_pos_hg38,genomic_pos','species':'human'},timeout=60)
+coord={}
+for it in r.json():
+ gp=it.get('genomic_pos_hg38') or it.get('genomic_pos')
+ if not gp: continue
+ if isinstance(gp,list):
+  normal=[g for g in gp if str(g.get('chr')) in list(map(str,range(1,23)))+['X','Y']]
+  gp=normal[0] if normal else gp[0]
+ coord[it['query']]=('chr'+str(gp['chr']).replace('chr',''),int(gp['start']),int(gp['end']),int(gp.get('strand',0) or 0))
+for mode,pad in [('prom10',10000),('gene10',10000),('gene50',50000)]:
+ print('\\n'+mode)
+ for s in syms:
+  if s not in coord: continue
+  ch,st,en,strand=coord[s]
+  if mode.startswith('prom'):
+   tss=st if strand>=0 else en; wst=tss-pad; wen=tss+pad
+  else: wst=st-pad; wen=en+pad
+  sub=df[(df.chrom==ch)&(df.end>wst)&(df.start<wen)]
+  if sub.empty: continue
+  score=np.log1p(sub[cols].sum()/libs*1e6).sort_values(ascending=False)
+  print(s, ' | '.join(f'{k}:{v:.2f}' for k,v in score.head(5).items()))
+PY"

@@ -1,0 +1,86 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+from collections import defaultdict, Counter
+# parse
+contigs=[]; name=None; seq=[]
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'):
+        if name: contigs.append((name,''.join(seq)))
+        name=line[1:].split()[0]; seq=[]
+    else: seq.append(line.upper())
+if name: contigs.append((name,''.join(seq)))
+L=36
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+windows=[]
+# state id -> (ci, seq)
+for ci,(name,s) in enumerate(contigs):
+    for pos in range(len(s)-L+1):
+        k=s[pos:pos+L]
+        windows.append((ci,k))
+        windows.append((ci,rc(k)))
+idx=defaultdict(list)
+seed_len=6
+for sid,(ci,w) in enumerate(windows):
+    for off in range(0,L,seed_len):
+        idx[(off,w[off:off+seed_len])].append(sid)
+print('states',len(windows),'index keys',len(idx))
+reads=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        r=f.readline().strip().upper(); f.readline(); f.readline()
+        reads.append(r)
+# hist per read: counts[ci][d]
+allh=[]; miss=0; cand_sizes=[]; minhist=Counter(); best_unique=Counter(); best_frac=Counter()
+for r in reads:
+    cand=set()
+    for off in range(0,L,seed_len):
+        cand.update(idx.get((off,r[off:off+seed_len]),()))
+    cand_sizes.append(len(cand))
+    h=[[0]*10 for _ in range(4)]
+    mind=99; bestcs=[]
+    for sid in cand:
+        ci,w=windows[sid]
+        d=sum(a"'!=b for a,b in zip(r,w))
+        if d<10: h[ci][d]+=1
+        if d<mind:
+            mind=d; bestcs=[ci]
+        elif d==mind:
+            bestcs.append(ci)
+    if mind==99:
+        miss+=1
+    else:
+        minhist[mind]+=1
+        for ci in set(bestcs): best_frac[ci]+=1/len(set(bestcs))
+        if len(set(bestcs))==1: best_unique[set(bestcs).pop()]+=1
+    allh.append(h)
+print('"'miss',miss,'cand avg',sum(cand_sizes)/len(cand_sizes),'max',max(cand_sizes),'minhist',minhist)
+print('best frac',[best_frac[i] for i in range(4)], [best_frac[i]/len(reads)*100 for i in range(4)])
+print('best unique',[best_unique[i] for i in range(4)])
+# EM for pi with fixed e, using d<=9 hist
+def em(e):
+    alpha=e/(3*(1-e))
+    powa=[alpha**d for d in range(10)]
+    pi=[.25]*4
+    for it in range(2000):
+        new=[0.0]*4; ll=0.0
+        for h in allh:
+            Lc=[sum(h[c][d]*powa[d] for d in range(10)) for c in range(4)]
+            den=sum(pi[c]*Lc[c] for c in range(4))
+            if den<=0:
+                # no candidate, no info
+                for c in range(4): new[c]+=pi[c]
+            else:
+                ll+=math.log(den)
+                for c in range(4): new[c]+=pi[c]*Lc[c]/den
+        s=sum(new); new=[x/s for x in new]
+        if max(abs(new[c]-pi[c]) for c in range(4))<1e-12: break
+        pi=new
+    return pi,ll,it
+for e in [0.002,0.005,0.008,0.01,0.015,0.02,0.03,0.05]:
+    pi,ll,it=em(e)
+    print('e',e,'pi',[round(100*x,3) for x in pi],'ll',round(ll,2),'it',it)
+PY"

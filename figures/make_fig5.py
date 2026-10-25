@@ -10,7 +10,7 @@ b, where the extra input comes from: Galaxy / custom-code ratios of actions and 
 c, reducing Galaxy token use: Galaxy / custom-code tokens per complete 50-task BixBench-Verified-50 run before and after
    each round of interface changes (July, GPT-5.5: archived July 6 batch, then the archived runs; October, GPT-5.6 Sol:
    archived runs, the one-replicate intermediate round from the batch summary, then the token-optimization batch), from
-   token_improvment/ (run_inventory.csv, earlier_rounds/, site_snapshot/summary.json);
+   runs/token_optimization/ (run_inventory.csv, earlier_rounds/, site_snapshot/summary.json);
 d, what the retained record holds for each analysis step in each condition, separating structured records from free
    text in the retained trace, records of the environment only, and evidence that was not retained or not recorded
    (unknown, not absent);
@@ -42,9 +42,10 @@ import numpy as np
 import panel_io  # noqa: E402  (figures/panel_io.py)
 import openpyxl
 import pandas as pd
+import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -56,10 +57,10 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-DESIGN = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
-ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+DESIGN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'design', 'per_run_design_metadata.csv')
+ACTIONS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM, B_MEDIAN = 20000, 20261002, 200000, 2000
@@ -88,7 +89,7 @@ OPS = [('Finding tools (search, tool descriptions)', ('search_galaxy_tools', 'in
 OP_COLOR = [style.GALAXY, style.NEUTRAL_DARK, '#8a8a8a', '#bdbdbd', '#e3e3e3']
 # Panel c: what the retained record holds for each analysis step. Galaxy steps are Galaxy jobs; custom-code steps are
 # the agent's shell commands that the run-level evidence labels as analysis.
-EVIDENCE = [os.path.join(ROOT, b, 'analysis', '*', 'history_analysis_evidence.json') for b in ('BixBench_50', 'CompBio', 'IWC')]
+EVIDENCE = [os.path.join(ROOT, b, 'analysis', '*', 'history_analysis_evidence.json') for b in ('runs/BixBench_50', 'runs/CompBio', 'runs/IWC')]
 NOT_PRIMARY = {'deepseek_v4_pro_via_claude_code_superseded', 'codex_gpt_6_astra'}
 VERSION_CMD = re.compile(r'--version|__version__|packageVersion|pip (show|list|freeze)|conda (list|env export)|'
                          r'sessionInfo|importlib\.metadata|\bversion\(\)', re.I)
@@ -108,7 +109,7 @@ def load_runs():
     r['cluster'] = r.benchmark + ':' + r.cluster.astype(str)
     r['ok'] = r.score >= r.benchmark.map(CORRECT_AT) - 1e-9
     t = pd.read_csv(os.path.join(AN, 'token_run_observations.csv'))
-    t = t[t.model_primary]
+    t = replaced_runs.replace_tokens(t[t.model_primary])     # IWC wf_007: the replacing runs' usage
     r = r.merge(t[KEY + ['input_tokens', 'cached', 'output_tokens']], on=KEY, how='left')
     ws = openpyxl.load_workbook(ACTIONS, read_only=True)['abf_runs']
     rows = list(ws.iter_rows(values_only=True))
@@ -118,6 +119,7 @@ def load_runs():
                                             'IWC': 'IWC'}),
                  cfg=a.model_configuration.replace({'DeepSeek V4 Pro (Codex)': 'DeepSeek V4 Pro'}),
                  env=a.execution_condition.map({'Galaxy condition': GAL, 'Open-ended code condition': CODE}))
+    a = replaced_runs.drop_replaced(a)                        # IWC wf_007: no actions recorded for the replacing runs
     r = r.merge(a[KEY + ['actions']], on=KEY, how='left')
     r['tokens_per_action'] = r.input_tokens / r.actions.where(r.actions > 0)
     r['uncached'] = r.input_tokens - r.cached
@@ -128,6 +130,7 @@ def load_calls():
     c = pd.read_csv(os.path.join(GC, 'calls.csv.gz'), low_memory=False,
                     usecols=['benchmark', 'task', 'model', 'replicate', 'tool', 'galaxy_server', 'chars_returned',
                              'tool_id_full'])
+    c = replaced_runs.drop_replaced(c)                        # IWC wf_007: superseded runs
     return c[c.model.isin(TRACE_MODEL) & c.galaxy_server].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
 
 
@@ -233,6 +236,10 @@ def replies(calls, r):
                              char_pct=100 * s.chars_returned.sum() / total))
     fr = pd.read_csv(os.path.join(AN, 'token_interface_friction.csv'))
     never = fr[fr.measure == 'Inspected tools never run in the same run'].set_index('benchmark')
+    gone = replaced_runs.superseded_inspection()              # IWC wf_007: the superseded runs' share
+    never.loc['IWC', 'count'] -= gone['never_run']
+    never.loc['IWC', 'denominator'] -= gone['inspected']
+    never['percent'] = 100 * never['count'] / never.denominator
     cached = (r.dropna(subset=['input_tokens']).assign(share=lambda x: x.cached / x.input_tokens)
               .groupby(['benchmark', 'env']).share.median() * 100)
     return pd.DataFrame(rows), never, cached
@@ -247,7 +254,7 @@ def evidence(calls):
     image = (design.docker_image.notna() | design.docker_image_id.notna() | design.iso_image_id.notna())
     image = dict(zip(zip(design.benchmark, design.task, design.run_id), image))
     steps, runs = [], []
-    for path in sorted(p for pattern in EVIDENCE for p in glob.glob(pattern)):
+    for path in sorted(p for pattern in EVIDENCE for p in glob.glob(pattern) if not replaced_runs.replaced_evidence(p)):
         d = json.load(open(path))
         for run in d['runs']:
             model = re.sub(r'_r\d+$', '', re.sub(r'^(galaxy|open_ended_code)_', '', run['run_id']))
@@ -298,7 +305,7 @@ def evidence(calls):
 def example_record(r):
     """The matched step of panel d, read from the retained evidence of bix-45-q1."""
     task, gal_id, code_id = EXAMPLE
-    d = json.load(open(os.path.join(ROOT, 'BixBench_50', 'analysis', task, 'history_analysis_evidence.json')))
+    d = json.load(open(os.path.join(ROOT, 'runs/BixBench_50', 'analysis', task, 'history_analysis_evidence.json')))
     runs = {x['run_id']: x for x in d['runs']}
     g = [e for e in runs[gal_id]['events'] if 'phykit' in str(e.get('tool') or '').lower()][0]
     c = [e for e in runs[code_id]['events'] if e['event_type'] == 'analysis']
@@ -340,7 +347,7 @@ def trade(r):
 
 
 # ---------------------------------------------------------------- token reduction rounds (panel c)
-TOKEN_DIR = os.path.join(ROOT, 'token_improvment')
+TOKEN_DIR = os.path.join(ROOT, 'runs/token_optimization')
 ROUNDS = [  # (comparison, stage, label, source)
     ('July', 'before', 'Round 1 in place: shorter skills, prompt guidance', 'july6'),
     ('July', 'after', 'Round 2: submit, wait and check in one MCP call', 'archive GPT-5.5'),

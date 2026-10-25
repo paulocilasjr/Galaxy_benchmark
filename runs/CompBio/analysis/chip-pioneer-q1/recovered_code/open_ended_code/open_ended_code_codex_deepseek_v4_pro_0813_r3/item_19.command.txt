@@ -1,0 +1,32 @@
+/bin/bash -lc "cat > count_overlap.py <<'PY'
+import os, glob, subprocess, sys, multiprocessing as mp
+from collections import defaultdict
+
+files = sorted(glob.glob('chip.pioneer.q1/*.bed.gz'))
+# region files
+regions = ['dnase/hotspots_union.bed','dnase/peaks_union.bed']
+# main chrom regex
+awk = r'''awk 'BEGIN{FS=OFS=\"\\t\"} "'$1 ~ /''^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)$/ {print $1,$2,$3}'"' '''
+
+def process(args):
+    f, region = args
+    cmd = f\"gzip -dc {f} | {awk} | bedtools intersect -a stdin -b {region} -sorted -c | awk '{{n++; if("'$4>0) a++}} END{{print n+0, a+0}}'"'\"
+    out = subprocess.check_output(cmd, shell=True, text=True)
+    n,a = map(int, out.strip().split())
+    return f, region, n, a
+
+if __name__ == '__main__':
+    args = [(f,r) for f in files for r in regions]
+    results = {}
+    with mp.Pool(processes=3) as pool:
+        for f,r,n,a in pool.imap_unordered(process, args, chunksize=1):
+            results[(f,r)] = (n,a)
+            print(f, os.path.basename(r), n, a, flush=True)
+    # save
+    with open('overlap_counts.tsv','w') as out:
+        for f in files:
+            for r in regions:
+                n,a = results[(f,r)]
+                out.write(f\"{f}\\t{r}\\t{n}\\t{a}\\n\")
+PY
+python3 count_overlap.py"

@@ -1,0 +1,34 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import stats
+from pathlib import Path
+p=Path('extracted')
+f=pd.read_csv(p/'filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','name','type'])
+c=pd.read_csv(p/'protospacer_calls_per_cell.csv')
+r=pd.read_csv(p/'feature_reference.csv')
+X=mmread(p/'filtered_feature_bc_matrix/matrix.mtx.gz').tocsr()
+lib=np.asarray(X.sum(0)).ravel(); norm=X.multiply(1e4/lib).tocsr(); ln=norm.copy(); ln.data=np.log1p(ln.data)
+c['target']=c.feature_call.map(r.set_index('id').target_gene_name)
+ctrl=np.flatnonzero(c.target.values=='Non-Targeting')
+print('control cells',len(ctrl),'mean libs',lib[ctrl].mean())
+for gid in ['guide_011','guide_012']:
+ idx=np.flatnonzero(c.feature_call.values==gid)
+ print('\\n',gid,c.loc[idx,['cell_barcode','target']].to_string(index=False))
+ for j in range(20):
+  vals=np.asarray(norm[j,idx].todense()).ravel(); cv=np.asarray(norm[j,ctrl].todense()).ravel()
+  # pseudocount mean normalized? log mean
+  print(f'{f.name[j]:8s} {vals.mean():9.2f} med {np.median(vals):7.2f} ctrl {cv.mean():9.2f} ratio {(vals.mean()+.1)/(cv.mean()+.1):.3f} logfc {np.mean(np.log1p(vals))-np.mean(np.log1p(cv)):.3f}')
+ print('score values',np.round(np.asarray(ln[:20,idx].mean(axis=0)).ravel(),3))
+# per guide number genes with logFC< -.2 / avg expression
+rows=[]
+for gid,g in c.groupby('feature_call'):
+ idx=g.index.to_numpy(); target=g.target.iloc[0]
+ scores=np.asarray(ln[:20,idx].mean(axis=0)).ravel()
+ # gene-wise mean log expr
+ lfc=np.asarray(ln[:20,idx].mean(axis=1)).ravel()-np.asarray(ln[:20,ctrl].mean(axis=1)).ravel()
+ rows.append((gid,target,len(idx),scores.mean(),np.median(lfc),np.sum(lfc<-.1),np.sum(lfc<-.2),lfc.min(),lfc.max()))
+o=pd.DataFrame(rows,columns=['guide','target','n','score','median_gene_lfc','down_.1','down_.2','min_lfc','max_lfc']).sort_values('score')
+print('\\nall sorted by pathway score')
+print(o.to_string(index=False,float_format=lambda x:f'{x:.3f}'))
+PY"

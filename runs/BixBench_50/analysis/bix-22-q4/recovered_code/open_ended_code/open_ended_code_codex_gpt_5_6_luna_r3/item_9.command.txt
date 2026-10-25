@@ -1,0 +1,81 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from collections import Counter
+
+ann_path='inputs/Sample_annotated_Zenodo.csv'
+meta_path='inputs/GeneMetaInfo_Zenodo.csv'
+counts_path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+
+with open(ann_path, newline='') as f:
+    ann=list(csv.DictReader(f))
+cd14=[r['sample'] for r in ann if r['celltype']=='CD14']
+
+meta={}
+with open(meta_path, newline='') as f:
+    reader=csv.DictReader(f)
+    for r in reader:
+        gene=r['']
+        meta[gene]=(int(r['Length']),r['gene_biotype'])
+
+lengths=[]
+means=[]
+totals=[]
+used_genes=[]
+rows=0
+coding_rows=0
+missing_meta=[]
+invalid=[]
+with open(counts_path, newline='') as f:
+    reader=csv.reader(f)
+    header=next(reader)
+    indices=[header.index(s) for s in cd14]
+    for row in reader:
+        rows += 1
+        gene=row[0]
+        info=meta.get(gene)
+        if info is None:
+            missing_meta.append(gene)
+            continue
+        length,biotype=info
+        if biotype"'!='"'protein_coding':
+            continue
+        coding_rows += 1
+        try:
+            vals=[int(row[i]) for i in indices]
+        except Exception as e:
+            invalid.append((gene,str(e)))
+            continue
+        total=sum(vals)
+        if total >= 10:
+            used_genes.append(gene)
+            lengths.append(float(length))
+            means.append(total/len(indices))
+            totals.append(total)
+
+n=len(lengths)
+mx=sum(lengths)/n
+my=sum(means)/n
+ssx=sum((x-mx)**2 for x in lengths)
+ssy=sum((y-my)**2 for y in means)
+sp=sum((x-mx)*(y-my) for x,y in zip(lengths,means))
+r=sp/math.sqrt(ssx*ssy)
+print('count rows',rows)
+print('protein-coding rows',coding_rows)
+print('used genes',n)
+print('missing metadata',len(missing_meta),missing_meta[:5])
+print('invalid count rows',len(invalid),invalid[:5])
+print('total range',min(totals),max(totals))
+print('length range',min(lengths),max(lengths))
+print('mean range',min(means),max(means))
+print('pearson_direct %.17g' % r)
+print('pearson_decimal %.15f' % r)
+try:
+    import numpy as np
+    from scipy.stats import pearsonr
+    arrx=np.asarray(lengths,dtype=np.float64)
+    arry=np.asarray(means,dtype=np.float64)
+    print('numpy_corr %.17g' % np.corrcoef(arrx,arry)[0,1])
+    print('scipy_r %.17g' % pearsonr(arrx,arry).statistic)
+except Exception as e:
+    print('numpy/scipy check failed',repr(e))
+PY"

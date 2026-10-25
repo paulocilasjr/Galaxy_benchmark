@@ -1,0 +1,61 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict,Counter
+import gzip,math,time
+import numpy as np
+fa={}
+for l in open('read.proportions.q1.fa'):
+ l=l.strip()
+ if l.startswith('>'):n=l[1:];fa[n]=''
+ else:fa[n]+=l
+keys=list(fa);L=36;M=len(fa[keys[0]])-L+1;comp=str.maketrans('ACGTN','TGCAN');rc=lambda s:s.translate(comp)[::-1]
+reads=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while f.readline():s=f.readline().strip();f.readline();f.readline();reads.append(s)
+for K in [8,6]:
+ ix=defaultdict(list)
+ for ci,c in enumerate(keys):
+  g=fa[c]
+  for p in range(len(g)-K+1):ix[g[p:p+K]].append((ci,p))
+ t=time.time();D=Counter(); lows=Counter(); examples=[]
+ # Store distances only for each read/chrom top <= maybe
+ alld=[]
+ for ri,r in enumerate(reads):
+  out=[[] for _ in keys]
+  for oi,q in enumerate((r,rc(r))):
+   cand=[set() for _ in keys]
+   for o in range(L-K+1):
+    for ci,p in ix.get(q[o:o+K],[]):
+     st=p-o
+     if 0<=st<M:cand[ci].add(st)
+   for ci,c in enumerate(keys):
+    vals=[sum(a"'!=b for a,b in zip(q,fa[c][st:st+L])) for st in cand[ci]]
+    out[ci].extend(vals)
+  mins=[min(v) if v else 99 for v in out]
+  D[min(mins)]+=1; lows[tuple(mins)]+=1
+  alld.append(out)
+ print('"'K',K,'time',time.time()-t,'best',D,'tuples top',lows.most_common(5))
+ if K==6: candidates=alld
+# EM likelihood with K6 candidate distances; use e q values
+for e in [.001,.005,.008,.01,.02,.03]:
+ # Compute per-read per chr log likelihood using all candidate windows, background omitted. log factor; orientation average constants irrelevant
+ logs=[]
+ for out in candidates:
+  ll=[]
+  for vals in out:
+   if not vals: ll.append(-1e9);continue
+   # duplicates? candidates set across orientations separately; a start could appear both orientations, correct sum
+   terms=[(L-d)*math.log1p(-e)+d*math.log(e/3) for d in vals]
+   m=max(terms); ll.append(m+math.log(sum(math.exp(x-m) for x in terms))-math.log(M))
+  logs.append(ll)
+ # EM start equal
+ pi=np.ones(4)/4
+ for it in range(100):
+  post=[];new=np.zeros(4); total=0
+  for ll in logs:
+   z=np.array([math.log(pi[c])+ll[c] for c in range(4)])
+   m=max(z);p=np.exp(z-m);p/=p.sum();new+=p
+  new/=len(logs)
+  if np.max(abs(new-pi))<1e-10:break
+  pi=new
+ print('e',e,'pi',pi,'it',it)
+PY"

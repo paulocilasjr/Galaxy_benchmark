@@ -1,0 +1,55 @@
+/bin/bash -lc "python3 - <<'PY' > overlap_metrics.tsv
+import sys
+from collections import defaultdict
+infile='fragments_by_barcode.tsv'
+autosomes={f'chr{i}' for i in range(1,23)}
+
+def flush(barcode, chrom, events):
+    if not barcode or not events:
+        return None
+    events.sort()
+    cov=0; prev=None; over_bases=0; over_segments=0; maxcov=0; area_over=0
+    in_over=False
+    for pos,delta in events:
+        if prev is not None and pos>prev:
+            if cov>=3:
+                over_bases += pos-prev
+                area_over += (cov-2)*(pos-prev)
+                if not in_over:
+                    over_segments += 1
+                    in_over=True
+            else:
+                in_over=False
+        cov += delta
+        if cov>maxcov: maxcov=cov
+        prev=pos
+    return over_bases,over_segments,maxcov,area_over
+
+cur_b=None; cur_c=None; events=[]
+metrics=defaultdict(lambda:[0,0,0,0,0]) # frags, over_bases, over_segments, maxcov, area_over
+last_b=None
+with open(infile) as f:
+    for line in f:
+        b,c,s,e=line.rstrip('\\n').split('\\t')
+        if c not in autosomes:
+            continue
+        s=int(s); e=int(e)
+        if b"'!=cur_b or c!=cur_c:
+            res=flush(cur_b,cur_c,events)
+            if res:
+                ob,os,mc,ao=res
+                m=metrics[cur_b]; m[1]+=ob; m[2]+=os; m[3]=max(m[3],mc); m[4]+=ao
+            events=[]; cur_b=b; cur_c=c
+        metrics[b][0]+=1
+        events.append((s,1)); events.append((e,-1))
+res=flush(cur_b,cur_c,events)
+if res:
+    ob,os,mc,ao=res
+    m=metrics[cur_b]; m[1]+=ob; m[2]+=os; m[3]=max(m[3],mc); m[4]+=ao
+print('"'barcode\\tfrags\\tover_bases\\tover_segments\\tmaxcov\\tarea_over')
+for b,m in metrics.items():
+    print(b,*m,sep='\\t')
+PY
+sort -k3,3nr overlap_metrics.tsv | head -30
+sort -k4,4nr overlap_metrics.tsv | head -30
+sort -k6,6nr overlap_metrics.tsv | head -30"

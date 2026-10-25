@@ -1,0 +1,72 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, math
+p='inputs/scogs_fungi.zip'
+# PhyKIT simple newick summary parser replicating _scan_simple_newick_summary
+def scan(text):
+    text=text.strip()
+    if not text or any(c in text for c in \"'\\\"[]\"):
+        return None
+    tip_names=[]; total=0.0; internal=0.0; prev=None; i=0; n=len(text)
+    delims='(),:;'; ws=' \\t\\r\\n'
+    while i<n:
+        ch=text[i]
+        if ch in ws:
+            i+=1; continue
+        if ch=='(':
+            if prev not in (None,'(',','): return None
+            prev='('; i+=1; continue
+        if ch==',':
+            if prev in (None,'(',','): return None
+            prev=','; i+=1; continue
+        if ch==')':
+            if prev in (None,'(',','): return None
+            prev=')'; i+=1; continue
+        if ch==';':
+            if len(set(tip_names))"'!=len(tip_names): return None
+            return tip_names,total,internal
+        if ch=='"':':
+            if prev in (None,'(',','): return None
+            i+=1; start=i
+            while i<n and text[i] not in ',);':
+                if text[i] in ws: break
+                i+=1
+            number=text[start:i]
+            if not number: return None
+            try: bl=float(number)
+            except: return None
+            if not math.isfinite(bl): return None
+            total+=bl
+            if prev in (')','internal_label'): internal+=bl
+            prev='branch_length'; continue
+        start=i
+        while i<n and text[i] not in delims and text[i] not in ws: i+=1
+        token=text[start:i]
+        if not token: return None
+        if prev in ('(',',',None):
+            tip_names.append(token); prev='terminal_label'
+        elif prev==')': prev='internal_label'
+        else: return None
+    return None
+
+vals=[]
+with zipfile.ZipFile(p) as z:
+    names=sorted(n for n in z.namelist() if n.endswith('.treefile'))
+    for name in names:
+        text=z.read(name).decode()
+        res=scan(text)
+        if res is None: print('FAILED',name,text[:100]); continue
+        tips,total,internal=res
+        t=internal/total if total else None
+        vals.append((name,t,internal,total))
+print('n',len(vals))
+for name,t,i,total in vals:
+    if t is not None and 0.05 < t < 0.07:
+        print('near',name,t,round(t,4),i,total)
+print('raw >0.06', sum(1 for _,t,_,_ in vals if t is not None and t>0.06))
+print('round4 >0.06', sum(1 for _,t,_,_ in vals if t is not None and round(t,4)>0.06))
+print('raw count exact equal?', [(name,t) for name,t,i,total in vals if t is not None and abs(t-0.06)<1e-12][:10])
+print('total internal stats')
+import statistics
+ts=[t for _,t,_,_ in vals if t is not None]
+print(len(ts),min(ts),max(ts),statistics.median(ts),sum(t>0.06 for t in ts),sum(t>0.06 for t in ts)/len(ts)*100)
+PY"

@@ -1,0 +1,52 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, tempfile, subprocess, sys, os, shutil, json, statistics
+from scipy.stats import mannwhitneyu
+
+inputs='/workspace/inputs'
+work=tempfile.mkdtemp(prefix='phykit_rates_', dir='/workspace')
+try:
+    rates={}
+    genes_by_group={}
+    for group, zname in [('animals','scogs_animals.zip'),('fungi','scogs_fungi.zip')]:
+        zpath=os.path.join(inputs,zname)
+        outdir=os.path.join(work,group)
+        os.makedirs(outdir)
+        vals=[]
+        genes=[]
+        with zipfile.ZipFile(zpath) as z:
+            tree_members=sorted(n for n in z.namelist() if n.endswith('.faa.mafft.clipkit.treefile'))
+            for n in tree_members:
+                gene=n.split('.faa.mafft.clipkit.treefile')[0]
+                p=os.path.join(outdir, os.path.basename(n))
+                with open(p,'wb') as f:
+                    f.write(z.read(n))
+                cp=subprocess.run([sys.executable,'-m','phykit','evo_rate',p], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                val=float(cp.stdout.strip().splitlines()[-1])
+                vals.append(val)
+                genes.append(gene)
+        rates[group]=dict(zip(genes, vals))
+        genes_by_group[group]=genes
+        print(group, 'n', len(vals), 'min', min(vals), 'median', statistics.median(vals), 'max', max(vals), 'mean', statistics.mean(vals))
+        print('first5', list(zip(genes, vals))[:5])
+    a=[rates['animals'][g] for g in genes_by_group['animals']]
+    f=[rates['fungi'][g] for g in genes_by_group['fungi']]
+    res=mannwhitneyu(a,f)  # animals first, SciPy defaults
+    print('all tree-bearing genes U,p', res.statistic, res.pvalue)
+    inter=sorted(set(rates['animals']) & set(rates['fungi']))
+    ai=[rates['animals'][g] for g in inter]
+    fi=[rates['fungi'][g] for g in inter]
+    resi=mannwhitneyu(ai,fi)
+    print('shared tree-bearing genes n', len(inter), 'U,p', resi.statistic, resi.pvalue)
+    # Check U alternative params don't alter statistic
+    for alt in ['two-sided','less','greater']:
+        print('all alt', alt, mannwhitneyu(a,f, alternative=alt).statistic)
+    # Manual U from rankdata for all
+    from scipy.stats import rankdata
+    ranks=rankdata(a+f, method='average')
+    n1=len(a)
+    U1=sum(ranks[:n1])-n1*(n1+1)/2
+    print('manual all U1', U1)
+    print('U2 all', len(a)*len(f)-U1)
+finally:
+    shutil.rmtree(work)
+PY"

@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np
+from scipy import sparse
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0); qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+def sig(X,guide,nt,g): return X[guide==g].mean(0)-nt
+# var top 1000
+rg=[g for g in r.obs.guide.cat.categories if not g.startswith('NT-')]; qg=[g for g in q.obs.guide.cat.categories if not g.startswith('NT-')]
+Er=np.array([sig(R,rguide,rnt,g) for g in rg]); Eq=np.array([sig(Q,qguide,qnt,g) for g in qg])
+v=Er.var(0)+Eq.var(0); idx=np.argsort(v)[-1000:]
+def corr(a,b): return np.corrcoef(a[idx],b[idx])[0,1]
+for refg in ['LEO1-I2','FIP1L1-I1','CTR9-I7','CDC73-I2','PAF1-I6']:
+    print('\\n',refg)
+    ri=rg.index(refg)
+    tops=sorted([(qg[j],corr(Er[ri],Eq[j])) for j in range(len(qg))], key=lambda x:-x[1])[:8]
+    print(tops)
+for qgid in ['guide14','guide17','guide20','guide9','guide28']:
+    j=qg.index(qgid)
+    tops=sorted([(rg[i],corr(Er[i],Eq[j])) for i in range(len(rg))], key=lambda x:-x[1])[:5]
+    print('\\nquery',qgid,'best refs',tops)
+PY"

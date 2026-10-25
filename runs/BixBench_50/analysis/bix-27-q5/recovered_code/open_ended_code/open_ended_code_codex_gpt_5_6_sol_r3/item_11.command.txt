@@ -1,0 +1,33 @@
+/bin/bash -lc "Rscript - <<'RS'
+expr_path <- 'inputs/ROSMAP_genexp_ad.csv'
+meta_path <- 'inputs/ROSMAP_meta_ad.csv'
+d <- read.csv(expr_path, check.names=FALSE, stringsAsFactors=FALSE)
+m <- read.csv(meta_path, check.names=FALSE, stringsAsFactors=FALSE)
+ids <- names(d)[-1]
+dup_ids <- names(which(table(ids) > 1))
+keep <- "'!(ids %in% dup_ids)
+stopifnot(length(ids)==222L, length(unique(ids))==199L, length(dup_ids)==21L, sum(keep)==178L)
+stopifnot(identical(sort(ids), sort(m$projid)))
+raw <- as.matrix(d[-1])
+stopifnot(is.numeric(raw), all(is.finite(raw)), all(raw >= 0))
+X <- t(log10(raw[, keep, drop=FALSE] + 1))
+stopifnot(nrow(X)==178L, ncol(X)==2456L, all(is.finite(X)))
+vars <- apply(X, 2, var)
+cat('"'resolved samples:', nrow(X), 'genes:', ncol(X), 'zero variance genes:', sum(vars==0), '\\n')
+fit <- prcomp(X, center=TRUE, scale.=FALSE, rank.=100)
+ratio_prcomp <- fit"'$sdev[1]''^2 / sum(fit$sdev''^2)
+Xc <- sweep(X, 2, colMeans(X), '"'-')
+ev <- eigen(tcrossprod(Xc), symmetric=TRUE, only.values=TRUE)"'$values
+ratio_eigen <- ev[1] / sum(Xc''^2)
+ratio_trace <- fit$sdev[1]''^2 / sum(vars)
+cat(sprintf('"'prcomp components retained: %d; sdev count: %d\\n', ncol(fit"'$rotation), length(fit$sdev)))
+cat(sprintf('"'PC1 fraction prcomp: %.17g\\n', ratio_prcomp))
+cat(sprintf('PC1 fraction eigen:  %.17g\\n', ratio_eigen))
+cat(sprintf('PC1 fraction trace:  %.17g\\n', ratio_trace))
+cat(sprintf('PC1 percentage:      %.15g%%\\n', 100*ratio_prcomp))
+cat(sprintf('absolute checks: %.3g %.3g\\n', abs(ratio_prcomp-ratio_eigen), abs(ratio_prcomp-ratio_trace)))
+# Sensitivity only: retain all columns, confirming collision handling materially changes estimand.
+Xall <- t(log10(raw + 1))
+fall <- prcomp(Xall, center=TRUE, scale.=FALSE, rank.=100)
+cat(sprintf('all-record percentage (invalid identity scope): %.15g%%\\n',100*fall"'$sdev[1]''^2/sum(fall$sdev''^2)))
+RS'

@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+z=np.load('donor_pseudobulk.npz', allow_pickle=True)
+counts=z['counts']; donors=z['donors'].astype(str); genes=z['genes'].astype(str); cell_counts=z['cell_counts']; donor_codes=z['donor_codes']
+nums=np.array([int(d.replace('donor','')) for d in donors])
+lib=counts.sum(axis=1); logcpm=np.log1p(counts/lib[:,None]*1e6)
+gene_to_i={g:i for i,g in enumerate(genes)}
+Hnums=set([1,5,11,12,17,21,24,27,29,32])
+H=np.array([n in Hnums for n in nums])
+meanH=logcpm[H].mean(0); meanC=logcpm[~H].mean(0); sd=logcpm.std(0)+1e-8
+# nearest centroid in standardized high-variable space and disease marker summary
+mask=(logcpm.mean(0)>0.05); var=logcpm.var(0); idx=np.where(mask)[0]; top=idx[np.argsort(var[idx])[-1000:]]
+X=logcpm[:,top]; X=(X-X.mean(0))/(X.std(0)+1e-8)
+cH=X[H].mean(0); cC=X[~H].mean(0)
+dH=np.sqrt(((X-cH)**2).mean(1)); dC=np.sqrt(((X-cC)**2).mean(1))
+# disease score from top positive minus negative DE genes
+D=meanC-meanH
+pos=np.argsort(D)[-100:]; neg=np.argsort(D)[:100]
+score=logcpm[:,pos].mean(1)-logcpm[:,neg].mean(1)
+# key markers
+markers=['IFI27','ISG15','MX1','OAS1','IFIT3','FCGR1A','S100A8','S100A9','S100A12','RNASE2','SOCS3','FCER1A','GIMAP7']
+rows=[]
+for i,d in enumerate(donors):
+    row={'donor':d,'num':nums[i],'cluster':'H' if H[i] else 'C','distH':dH[i],'distC':dC[i],'margin_dC-dH':dC[i]-dH[i],'DEscore':score[i]}
+    for m in markers:
+        if m in gene_to_i: row[m]=logcpm[i,gene_to_i[m]]
+    rows.append(row)
+df=pd.DataFrame(rows).sort_values('margin_dC-dH') # negative means closer to C
+print(df[['donor','num','cluster','distH','distC','margin_dC-dH','DEscore','IFI27','FCGR1A','S100A8','S100A9','FCER1A','GIMAP7']].to_string(index=False, float_format=lambda x:f'{x:7.3f}'))
+print('\\nNumeric order')
+print(pd.DataFrame(rows).sort_values('num')[['donor','cluster','margin_dC-dH','DEscore','IFI27','FCGR1A','S100A8','S100A9','FCER1A','GIMAP7']].to_string(index=False, float_format=lambda x:f'{x:7.3f}'))
+PY"

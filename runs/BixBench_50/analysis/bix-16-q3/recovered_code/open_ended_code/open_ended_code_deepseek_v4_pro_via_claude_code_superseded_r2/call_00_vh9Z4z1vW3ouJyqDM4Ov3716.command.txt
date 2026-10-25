@@ -1,0 +1,100 @@
+source venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy.stats import spearmanr
+
+# Quick check: sample genes and look at max correlation
+crispr_ids_all = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:, 0].tolist()
+omics_ids_all = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:, 0].tolist()
+
+common = sorted(set(crispr_ids_all) & set(omics_ids_all))
+
+crispr_header = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()
+omics_header = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()
+
+def parse_gene_name(col_name):
+    col_name = col_name.strip()
+    if '(' in col_name:
+        return col_name.split('(')[0].strip()
+    return col_name
+
+# Build gene-column maps
+crispr_gene_to_col = {}
+for i, col in enumerate(crispr_header):
+    gene = parse_gene_name(col)
+    if i > 0 and gene not in crispr_gene_to_col:
+        crispr_gene_to_col[gene] = i
+
+omics_gene_to_col = {}
+for i, col in enumerate(omics_header):
+    gene = parse_gene_name(col)
+    if i > 0 and gene not in omics_gene_to_col:
+        omics_gene_to_col[gene] = i
+
+common_genes = sorted(set(crispr_gene_to_col.keys()) & set(omics_gene_to_col.keys()))
+
+# Sample 500 genes and compute correlations
+import random
+random.seed(42)
+sample_genes = random.sample(common_genes, min(500, len(common_genes)))
+
+correlations_raw = []
+correlations_essentiality = []
+
+for gene in sample_genes:
+    cc = crispr_gene_to_col[gene]
+    oc = omics_gene_to_col[gene]
+    
+    crispr_data = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0, cc])
+    omics_data = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0, oc])
+    
+    crispr_data = crispr_data[crispr_data.iloc[:, 0].isin(common)]
+    omics_data = omics_data[omics_data.iloc[:, 0].isin(common)]
+    
+    crispr_data = crispr_data.set_index(crispr_data.columns[0])
+    omics_data = omics_data.set_index(omics_data.columns[0])
+    
+    common_idx = crispr_data.index.intersection(omics_data.index)
+    x = crispr_data.loc[common_idx].iloc[:, 0].astype(float).values
+    y = omics_data.loc[common_idx].iloc[:, 0].astype(float).values
+    
+    mask = ~(np.isnan(x) | np.isnan(y))
+    if mask.sum() > 10:
+        rho_raw, _ = spearmanr(x[mask], y[mask])
+        rho_ess, _ = spearmanr(-x[mask], y[mask])
+        correlations_raw.append(rho_raw)
+        correlations_essentiality.append(rho_ess)
+
+correlations_raw = np.array(correlations_raw)
+correlations_essentiality = np.array(correlations_essentiality)
+
+# Remove NaN
+correlations_raw = correlations_raw[~np.isnan(correlations_raw)]
+correlations_essentiality = correlations_essentiality[~np.isnan(correlations_essentiality)]
+
+print(f'Sample size: {len(correlations_raw)}')
+print(f'Raw score correlation distribution:')
+print(f'  Min: {correlations_raw.min():.4f}, Max: {correlations_raw.max():.4f}')
+print(f'  Mean: {correlations_raw.mean():.4f}, Std: {correlations_raw.std():.4f}')
+print(f'  >= 0.6: {(correlations_raw >= 0.6).sum()}')
+print(f'  <= -0.6: {(correlations_raw <= -0.6).sum()}')
+
+print(f'Essentiality (-raw) correlation distribution:')
+print(f'  Min: {correlations_essentiality.min():.4f}, Max: {correlations_essentiality.max():.4f}')
+print(f'  Mean: {correlations_essentiality.mean():.4f}, Std: {correlations_essentiality.std():.4f}')
+print(f'  >= 0.6: {(correlations_essentiality >= 0.6).sum()}')
+print(f'  <= -0.6: {(correlations_essentiality <= -0.6).sum()}')
+
+# Print top correlations
+if len(correlations_raw) > 0:
+    top_raw_idx = np.argsort(correlations_raw)[-10:]
+    print(f'\\nTop 10 raw correlations:')
+    for idx in reversed(top_raw_idx):
+        print(f'  Gene {sample_genes[idx]}: {correlations_raw[idx]:.4f}')
+
+if len(correlations_essentiality) > 0:
+    top_ess_idx = np.argsort(correlations_essentiality)[-10:]
+    print(f'\\nTop 10 essentiality correlations:')
+    for idx in reversed(top_ess_idx):
+        print(f'  Gene {sample_genes[idx]}: {correlations_essentiality[idx]:.4f}')
+" 2>&1

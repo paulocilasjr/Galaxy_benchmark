@@ -1,0 +1,25 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4e1f39245f2f9a7c6ca6323c/workspace && python - <<'PY'
+import os, sys, time, math
+sys.path.insert(0, os.getcwd())
+import numpy as np, torch
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+seq=open('sequence.txt').read().strip(); L=len(seq)
+print('loading')
+tok=AutoTokenizer.from_pretrained('model_files', trust_remote_code=True)
+model=AutoModelForMaskedLM.from_pretrained('model_files', trust_remote_code=True); model.eval()
+print('moving')
+model=model.to('mps')
+base_ids=tok(''.join(seq), add_special_tokens=False).input_ids
+base_t=torch.tensor(base_ids,device='mps')
+B=8
+for bi in range(3):
+    positions=list(range(bi*B,(bi+1)*B)); nb=len(positions)
+    masked=base_t.unsqueeze(0).repeat(nb,1).clone()
+    pos_t=torch.tensor(positions,device='mps')
+    masked[torch.arange(nb,device='mps'),pos_t]=tok.mask_token_id
+    print('forward',bi, flush=True)
+    with torch.no_grad():
+        logits=model(masked).logits
+    print('ok',bi, logits.shape, flush=True)
+    del masked, logits
+PY"

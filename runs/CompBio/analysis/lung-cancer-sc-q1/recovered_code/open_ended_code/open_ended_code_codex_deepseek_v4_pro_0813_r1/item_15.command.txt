@@ -1,0 +1,53 @@
+/bin/bash -c "python - <<'PY'
+import h5py, numpy as np, pandas as pd
+f='remote_adata.h5ad'
+with h5py.File(f,'r') as h:
+    def cat(h,k):
+        cats=np.array([x.decode() for x in h[k]['categories'][:]])
+        codes=h[k]['codes'][:]
+        return cats, codes
+    patient_cats, pcodes=cat(h,'obs/patient')
+    cond_cats, ccodes=cat(h,'obs/condition')
+    origin_cats, ocodes=cat(h,'obs/origin')
+    tissue_cats, tcodes=cat(h,'obs/tissue')
+    dataset_cats, dcodes=cat(h,'obs/dataset')
+    sample_cats, scodes=cat(h,'obs/sample')
+    # convert to arrays
+    patient=patient_cats[pcodes]
+    cond=cond_cats[ccodes]
+    origin=origin_cats[ocodes]
+    tissue=tissue_cats[tcodes]
+    dataset=dataset_cats[dcodes]
+    sample=sample_cats[scodes]
+    print('patient unique', len(patient_cats))
+    # target patients counts from our file
+    ours=[1076,3838,4672,4060,1454,3055,529,3995,277,1653,4022,1889,3732,2442,2219,2454,5154,1481,2385,2282,4938,2545,424,344,1995,2962,2788,4146,4579,4744,4802,604,594,600,599,2635,2610,2539,2569,4567,2723,1738,2696,2803,3235,3120,3429,3596,279,2632,3974,3088,3760,2732,4154,4402,1389,1186,573,1937,2952,1125,360,334,558,525,1063]
+    # Filter origin == tumor_primary and tissue lung and condition LUAD/LUSC maybe
+    for filt_name, mask in [
+        ('all', np.ones(len(patient),bool)),
+        ('tumor_primary', origin==b'tumor_primary'),
+        ('tumor_primary_lung', (origin==b'tumor_primary') & (tissue==b'lung')),
+        ('tumor_primary_lung_luad_lusc', (origin==b'tumor_primary') & (tissue==b'lung') & ((cond==b'LUAD')|(cond==b'LUSC'))),
+        ('tumor_primary_lung_luad', (origin==b'tumor_primary') & (tissue==b'lung') & (cond==b'LUAD')),
+        ('tumor_primary_lung_lusc', (origin==b'tumor_primary') & (tissue==b'lung') & (cond==b'LUSC')),
+    ]:
+        cnt=pd.Series(patient[mask]).value_counts()
+        vals=sorted(cnt.tolist(), reverse=True)
+        print(filt_name, 'n_patients', len(cnt), 'n_cells', int(mask.sum()), 'top counts', vals[:20])
+        if len(cnt)>=67:
+            # compare sorted counts to ours sorted? check if every our count appears among remote counts at least? duplicates allowed
+            import collections
+            rem=collections.Counter(cnt.tolist()); o=collections.Counter(ours)
+            common=sum((rem & o).values())
+            print(' common multiset count with ours (of 67)', common, 'total our', sum(o.values()))
+    # Try per dataset patient counts and multiset match
+    print('\\nper dataset counts match ours:')
+    for ds in np.unique(dataset):
+        mask=(origin==b'tumor_primary') & (tissue==b'lung') & (dataset==ds)
+        cnt=pd.Series(patient[mask]).value_counts()
+        if len(cnt)>=40:
+            import collections
+            rem=collections.Counter(cnt.tolist()); o=collections.Counter(ours)
+            common=sum((rem & o).values())
+            print(ds.decode() if isinstance(ds,bytes) else ds, len(cnt), common, 'n_cells', mask.sum())
+PY"

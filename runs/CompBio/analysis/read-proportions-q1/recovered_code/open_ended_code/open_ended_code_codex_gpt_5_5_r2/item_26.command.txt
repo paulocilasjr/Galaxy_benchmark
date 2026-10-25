@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+import gzip, collections
+trans=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(trans)[::-1]
+seqs=[]; name=None; chunks=[]
+for line in Path('read.proportions.q1.fa').read_text().splitlines():
+    if line.startswith('>'):
+        if name: seqs.append((name,''.join(chunks)))
+        name=line[1:].split()[0]; chunks=[]
+    else: chunks.append(line.strip())
+if name: seqs.append((name,''.join(chunks)))
+L=36
+idx=collections.defaultdict(set)
+winset=[set() for _ in range(4)]
+for ci,(n,s) in enumerate(seqs):
+    for ss in (s,rc(s)):
+        for pos in range(len(ss)-L+1):
+            w=ss[pos:pos+L]
+            idx[w].add(ci); winset[ci].add(w)
+# number of genomic start/orientation windows whose read sequence maps to contig set
+avail=collections.Counter()
+unique_avail=[0]*4
+for ci,(n,s) in enumerate(seqs):
+    for ss in (s,rc(s)):
+        for pos in range(len(ss)-L+1):
+            st=tuple(sorted(idx[ss[pos:pos+L]]))
+            avail[(ci,st)]+=1
+            if st==(ci,): unique_avail[ci]+=1
+print('unique available starts by true chr', unique_avail)
+print('unique fraction', [x/(2*(3000-L+1)) for x in unique_avail])
+# exact unique read counts
+exact_unique=[0]*4; exact_any=0
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        r=f.readline().strip(); f.readline(); f.readline()
+        st=tuple(sorted(idx.get(r,())))
+        if st: exact_any+=1
+        if len(st)==1: exact_unique[st[0]]+=1
+print('exact unique counts', exact_unique)
+rat=[exact_unique[i]/unique_avail[i] for i in range(4)]
+print('count/marker', rat, 'normalized', [x/sum(rat) for x in rat])
+PY"

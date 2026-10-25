@@ -1,0 +1,33 @@
+/bin/bash -c "python3 - <<'EOF'
+import pandas as pd, numpy as np, os
+res=pd.read_csv('diff_peaks.tsv', sep='\\t')
+gc=pd.read_csv('union_gc.txt', sep='\\t', skiprows=1, header=None, names=['chr','start','end','pct_at','pct_gc','A','C','G','T','N','oth','len'])
+for c in ['start','end','pct_gc','len']:
+    gc[c]=pd.to_numeric(gc[c], errors='coerce')
+res['is_gained_all'] = ((res.log2FC>1.5)&(res.cpm_max>=3)&(res.perturb_count>=10)).astype(int)
+cand=res[(res.is_gained_all==0)&(res.cpm_max>=1)].merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end']).dropna(subset=['pct_gc','len'])
+cand['len_bin']=(cand.len//50*50).astype(int)
+cand['gc_bin']=(np.round(cand.pct_gc*100)/100).round(2)
+cand_bins={g:sub for g,sub in cand.groupby(['len_bin','gc_bin'])}
+for k in [500,1000,2000,5000]:
+    g=pd.read_csv(f'gained_top{k}.bed', sep='\\t', header=None, names=['chr','start','end'])
+    g=g.merge(gc[['chr','start','end','pct_gc','len']], on=['chr','start','end']).dropna(subset=['pct_gc','len'])
+    g['len_bin']=(g.len//50*50).astype(int)
+    g['gc_bin']=(np.round(g.pct_gc*100)/100).round(2)
+    controls=[]
+    for _,row in g.iterrows():
+        key=(row.len_bin,row.gc_bin)
+        sub=cand_bins.get(key)
+        if sub is None or len(sub)==0:
+            # fallback same length any gc nearest
+            sub=cand[(cand.len_bin==row.len_bin)]
+            if len(sub)==0:
+                sub=cand.iloc[(cand.len-row.len).abs().argsort()[:1000]]
+        controls.append(sub.sample(n=1, replace=False, random_state=None) if len(sub)>0 else None)
+    controls=[c for c in controls if c is not None]
+    bg=pd.concat(controls)[['chr','start','end']].drop_duplicates()
+    bg.to_csv(f'exact_bg{k}.bed', sep='\\t', header=False, index=False)
+    bggc=bg.merge(gc,on=['chr','start','end'])
+    print(k,'g',len(g),'bg',len(bg),'len med',round(bggc.len.median(),1),'gc med',round(bggc.pct_gc.median(),3),'mean',round(bggc.pct_gc.mean(),3),'g mean gc',round(g.pct_gc.mean(),3))
+EOF
+ls -lh exact_bg*.bed"

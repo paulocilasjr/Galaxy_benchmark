@@ -1,0 +1,23 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+import openpyxl,re
+meta=list(openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True).active.iter_rows(values_only=True))[1:]
+ids={str(r[0]).strip() for r in meta if r[3]=='Carrier'}
+files=[p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx') if (m:=re.search(r'_CHIP_(["'^-'"\\.]+)',p.name)) and m.group(1) in ids]
+coding_terms={'synonymous_variant','missense_variant','frameshift_variant','inframe_insertion','inframe_deletion','stop_gained','stop_lost','start_lost','protein_altering_variant','coding_sequence_variant'}
+checks=Counter(); coding=[]
+for p in files:
+ ws=openpyxl.load_workbook(p,read_only=True,data_only=True).active; ws.reset_dimensions()
+ it=ws.iter_rows(min_row=2,values_only=True); h=next(it); ix={v:i for i,v in enumerate(h)}
+ for row in it:
+  try:v=float(row[ix['Variant Allele Freq']])
+  except (TypeError,ValueError):continue
+  if v < .3 and row[ix['Sequence Ontology (Combined)']] in coding_terms:
+   rec={k:row[ix[k]] for k in ['Chr:Pos','Ref/Alt','Sequence Ontology (Combined)','Zygosity','Read Depths (DP)','Genotype Qualities (GQ)','Filter','In_CHIP']}
+   rec['sample']=p.name; rec['vaf']=v; coding.append(rec)
+   checks[(rec['Zygosity'],rec['Filter'],rec['In_CHIP'],rec['Read Depths (DP)']>=10,rec['Genotype Qualities (GQ)']>=20)] += 1
+print('validation groups',checks)
+print('N coding',len(coding),'synonymous',sum(r['Sequence Ontology (Combined)']=='synonymous_variant' for r in coding),'missense',sum(r['Sequence Ontology (Combined)']=='missense_variant' for r in coding))
+print('fraction exact = 30/41 =',30/41)
+PY"

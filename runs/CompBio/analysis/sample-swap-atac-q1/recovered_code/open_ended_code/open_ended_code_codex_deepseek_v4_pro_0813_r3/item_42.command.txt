@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.stats import spearmanr, pearsonr
+# load
+atac=pd.read_csv('atac_gene_promoter_counts.tsv',sep='\\t')
+rna=pd.read_csv('bulk_rna_counts_clean.tsv',sep='\\t')
+# aggregate atac by symbol, sum
+atac_agg=atac.groupby('symbol').sum(numeric_only=True)
+print('atac agg',atac_agg.shape)
+# common symbols
+common=atac_agg.index.intersection(rna['symbol']).tolist()
+print('common',len(common))
+A=atac_agg.loc[common].values.astype(float)
+R=rna.set_index('symbol').loc[common].values.astype(float)
+# remove rows with zero total? 
+# normalize per sample to CPM
+def norm_cpm(X):
+    lib=X.sum(axis=0, keepdims=True); lib[lib==0]=1
+    return X/lib*1e6
+Ac=norm_cpm(A); Rc=norm_cpm(R)
+# log transform
+A_log=np.log1p(Ac); R_log=np.log1p(Rc)
+# center? not for pearson
+atac_cols=atac_agg.columns.tolist()
+rna_cols=rna.columns[1:].tolist()
+print('atac cols',atac_cols)
+print('rna cols',rna_cols)
+print('\\nPearson log1p CPM')
+mat=np.zeros((len(atac_cols),len(rna_cols)))
+for i in range(len(atac_cols)):
+ for j in range(len(rna_cols)):
+  mat[i,j]=pearsonr(A_log[:,i],R_log[:,j])[0]
+df=pd.DataFrame(mat,index=atac_cols,columns=rna_cols)
+pd.set_option('display.width',200); pd.set_option('display.max_columns',50)
+print(df.round(3))
+print('\\nBest RNA tissue per ATAC sample (pearson)')
+for i,c in enumerate(atac_cols):
+ j=np.argmax(mat[i]); print(c, '->', rna_cols[j], mat[i,j].round(3))
+# spearman maybe slow but ok 15x17x8k = 2M; okay
+print('\\nSpearman log1p CPM')
+mat2=np.zeros_like(mat)
+for i in range(len(atac_cols)):
+ for j in range(len(rna_cols)):
+  mat2[i,j]=spearmanr(A_log[:,i],R_log[:,j])[0]
+df2=pd.DataFrame(mat2,index=atac_cols,columns=rna_cols)
+print(df2.round(3))
+for i,c in enumerate(atac_cols):
+ j=np.argmax(mat2[i]); print(c, '->', rna_cols[j], mat2[i,j].round(3))
+PY"

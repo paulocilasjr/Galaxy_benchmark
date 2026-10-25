@@ -1,0 +1,30 @@
+/bin/bash -lc "Rscript - <<'RS'
+x <- readRDS('repo/A4/input/healthy_vs_covid_COVID-Healthy_module_score_gsva_filtered_samples_genes.rds')
+x"'$group <- ifelse(grepl('"'_HC_', x"'$sample), '"'HC', ifelse(grepl('_T0_', x"'$sample), '"'COVID_T0', 'OTHER'))
+y <- subset(x, group %in% c('HC','COVID_T0'))
+agg <- aggregate(module.score ~ pathway + celltype + group, data=y, FUN=mean)
+wide <- reshape(agg, idvar=c('pathway','celltype'), timevar='group', direction='wide')
+wide"'$diff <- wide$module.score.COVID_T0 - wide$module.score.HC
+# overall pathway mean diff and leadingEdge sample from any row
+pathdiff <- aggregate(diff ~ pathway, data=wide, FUN=mean)
+le <- aggregate(leadingEdge ~ pathway, data=y, FUN=function(z) z[1])
+pd <- merge(pathdiff, le, by='"'pathway')
+pd <- pd[order(-abs(pd"'$diff)),]
+up <- pd[pd$diff>0,]; dn <- pd[pd$diff<0,]
+# top 100 pathways each by absolute, unique genes
+top_up <- head(up, 100); top_dn <- head(dn, 100)
+extract <- function(rows) unique(unlist(strsplit(rows$leadingEdge, '"' ')))
+up_genes <- extract(top_up); dn_genes <- extract(top_dn)
+cat('up pathways', nrow(top_up), 'genes', length(up_genes), '\\n')
+cat('dn pathways', nrow(top_dn), 'genes', length(dn_genes), '\\n')
+writeLines(up_genes, 'covid_up_genes.txt')
+writeLines(dn_genes, 'covid_dn_genes.txt')
+# also save top pathways with diffs
+write.csv(pd, 'pathway_diff_with_le.csv', row.names=FALSE)
+RS
+python - <<'PY'
+import pandas as pd
+pd=pd.read_csv('pathway_diff_with_le.csv')
+print(pd.head(20).to_string())
+print(pd.tail(20).to_string())
+PY"

@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+mat=mmread('matrix.mtx.gz').tocsc().toarray().T.astype(float) # 900x1000
+means=sc.groupby(meta.cell_type).mean()
+X=means.values.T # 1000x6
+cts=means.index.tolist()
+coefs=[]; sums=[]; res=[]
+for s in mat:
+    coef, r=nnls(X,s)
+    coefs.append(coef); sums.append(coef.sum()); res.append(r)
+C=pd.DataFrame(coefs,columns=cts)
+print(C.describe())
+# Look at spot 710
+print('spot710 coeff', C.loc[710].to_dict(), 'sum',sums[710],'res',res[710])
+# for each spot compute rounded coefficients to nearest integers, sum rounded vs total cell estimate
+R=C.round()
+print('rounded spot710', R.loc[710].to_dict())
+# distribution of coefficient fractional closeness
+frac=np.abs(C-C.round()).sum(axis=1)
+print('frac stats', frac.describe())
+print('top largest frac')
+print(frac.sort_values(ascending=False).head(20))
+print('spot710 frac', frac.loc[710])
+# Count number of spots with rounded composition equals B1,E1,M1 and same order
+mask=(R.B_Cell==1)&(R.Endothelial==1)&(R.Macrophage==1)
+print('spots B1 E1 M1',mask.sum())
+print(C[mask].head())
+# any integer compositions distribution
+comps=R.astype(int).astype(str).agg('-'.join,axis=1)
+print(comps.value_counts().head(30))
+PY"

@@ -1,0 +1,19 @@
+/bin/bash -lc "python - <<'PY'
+# Reproduce dominant label metrics with raw marker fit and compare each against non-type
+import pandas as pd,numpy as np,gzip,scipy.io as sio
+from scipy.optimize import nnls
+from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0); meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0); pos=pd.read_csv('tissue_positions.csv'); S=sio.mmread(gzip.open('matrix.mtx.gz','rt')).tocsr().toarray().T.astype(float)
+types=list(meta.cell_type.unique());X=sc.values.astype(float); means=np.array([X[meta.cell_type.values==t].mean(0) for t in types]);
+sets=[]
+for j in range(6):
+ other=np.max(np.delete(means,j,axis=0),axis=0); score=np.log2((means[j]+.1)/(other+.1));sets.append(np.argsort(score)[-50:])
+use=np.unique(np.concatenate(sets)); co=np.array([nnls(means[:,use].T,S[i,use])[0] for i in range(900)]); prop=co/co.sum(1,keepdims=True);lab=np.array(types)[prop.argmax(1)]
+coords=pos[['array_row','array_col']].to_numpy(); tumor=lab=='Tumor_Core';d=cdist(coords,coords[tumor]).min(1)
+print('target n',tumor.sum(),'coords',coords[tumor].tolist())
+for t in types[1:]:
+ m=lab==t; rest=~m&~tumor # exclude target? 
+ u,p=mannwhitneyu(d[m],d[rest],alternative='less')
+ print(t,'n',m.sum(),'d median mean',np.median(d[m]),d[m].mean(),'rest',np.median(d[rest]),d[rest].mean(),'p',p,'within 1,2,3',[(d[m]<=r).sum() for r in [1.01,2.01,3.01]])
+PY"

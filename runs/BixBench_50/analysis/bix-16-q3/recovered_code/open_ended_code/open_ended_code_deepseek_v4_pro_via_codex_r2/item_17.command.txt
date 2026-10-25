@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.stats, time
+
+def sym(x): return str(x).split(' (')[0]
+ch=pd.read_csv('inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()[1:]
+eh=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()[1:]
+cg={sym(x):x for x in ch}; eg={sym(x):x for x in eh}; common=sorted(set(cg)&set(eg))
+cids=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:,0].astype(str).tolist()
+eids=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:,0].astype(str).tolist()
+ids=sorted(set(cids)&set(eids), key=lambda x:cids.index(x))
+uc=['Unnamed: 0']+[cg[g] for g in common]; ue=['Unnamed: 0']+[eg[g] for g in common]
+dtype={col:np.float32 for col in uc[1:]}
+C=pd.read_csv('inputs/CRISPRGeneEffect.csv', usecols=uc,index_col=0,dtype=dtype,low_memory=False).loc[ids]
+E=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=ue,index_col=0,dtype=dtype,low_memory=False).loc[ids]
+count_pos=0; count_neg=0; hits=[]
+t=time.time()
+for g in common:
+    x=C[cg[g]].to_numpy(); y=E[eg[g]].to_numpy()
+    m=np.isfinite(x) & np.isfinite(y)  # expression finite all
+    if m.sum()<2:
+        continue
+    rho=scipy.stats.spearmanr(x[m], y[m]).statistic
+    if rho>=0.6: count_pos+=1
+    if rho<=-0.6:
+        count_neg+=1; hits.append((g,float(rho),int(m.sum())))
+print('scipy raw>=0.6',count_pos,'raw<=-0.6 (essentiality>=0.6)',count_neg,'hits',hits,'time',time.time()-t)
+PY"

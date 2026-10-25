@@ -1,0 +1,50 @@
+/bin/bash -c "python3 - <<'PY'
+import requests,time,json
+species=['microcebus_murinus','chlorocebus_sabaeus','papio_anubis','callithrix_jacchus','saimiri_boliviensis','gorilla_gorilla','pongo_abelii']
+H='ATGCTGCTGCTGGCGAGATGTCTGCTGCTAGTCCTCGTCTCCTCGCTGCTGGTATGCTCGGGACTGGCGTGCGGACCGGGCAGGGGGTTCGGGAAGAGGAGGCACCCCAAAAAGCTGACCCCTTTAGCCTACAAGCAGTTTATCCCCAATGTGGCCGAGAAGACCCTAGGCGCCAGCGGAAGGTATGAAGGGAAGATCTCCAGAAACTCCGAGCGATTTAAGGAACTCACCCCCAATTACAACCCCGACATCATATTTAAGGATGAAGAAAACACCGGAGCGGACAGGCTGATGACTCAG'
+def lev(a,b):
+ if len(a)<len(b):a,b=b,a
+ prev=list(range(len(b)+1))
+ for i,ca in enumerate(a,1):
+  cur=[i]
+  for j,cb in enumerate(b,1):
+   cur.append(min(prev[j]+1,cur[-1]+1,prev[j-1]+(ca"'!=cb)))
+  prev=cur
+ return prev[-1]
+def get(url,params=None):
+ for i in range(5):
+  try:
+   r=requests.get(url,params=params,headers={'"'Content-Type':'application/json'},timeout=60)
+   if r.status_code==200:return r.json()
+  except Exception as e:pass
+  time.sleep(3)
+ return None
+for sp in species:
+ data=get(f'https://rest.ensembl.org/lookup/symbol/{sp}/SHH',{'expand':'1'})
+ print('\\n',sp, 'data', bool(data))
+ if not data: continue
+ ts=[t for t in data.get('Transcript',[]) if t.get('biotype')=='protein_coding']
+ if not ts:
+  print('no pc'); continue
+ ts.sort(key=lambda t:(-((t.get('Translation') or {}).get('length') or 0), -(t.get('is_canonical') or 0)))
+ t=ts[0]; tid=t['id']; strand=t['strand']; tend=t['end']; tstart=t['start']; tr=t.get('Translation') or {}
+ exons=sorted(t.get('Exon',[]),key=lambda e:(e['start'] if strand==1 else -e['end']))
+ first=exons[0]
+ if strand==1: cds=tr['start']-tstart; eend=first['end']-tstart
+ else: cds=tend-tr['end']; eend=tend-first['start']
+ rseq=get(f'https://rest.ensembl.org/sequence/id/{tid}',{'type':'cdna'})
+ # note get uses json header; need fasta accept
+ if rseq is None:
+  # fetch fasta separately
+  for j in range(5):
+   rr=requests.get(f'https://rest.ensembl.org/sequence/id/{tid}',params={'type':'cdna'},headers={'Accept':'text/x-fasta'},timeout=60)
+   if rr.status_code==200:
+    seq=''.join(rr.text.splitlines()[1:]); break
+   seq=None; time.sleep(3)
+ else:
+  seq=None
+ if not seq: print('no seq'); continue
+ seg=seq[cds:eend+1]
+ print('transcript',tid,'prot',tr.get('length'),'canonical',t.get('is_canonical'),'seg len',len(seg),'dist',lev(seg,H),'start',seg[:30])
+ print('ext',seg[:9], 'seg[9:]==H?',seg[9:]==H)
+PY"

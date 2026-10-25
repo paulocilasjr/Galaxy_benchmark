@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+from collections import defaultdict
+# read hic
+rows=[]
+with open('ep.interactions.q1.hic.csv') as f:
+    for r in csv.DictReader(f):
+        counts=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+        rows.append((r['pair_id'],r['set'],int(r['distance_bp']),counts,sum(counts)/3))
+# simple bins around candidates +/-100kb and global model
+print('HIC candidates')
+for pid,set_,dist,counts,avg in rows:
+    if set_=='candidate':
+        bg=[avg2 for pid2,set2,d2,c2,avg2 in rows if set2=='background' and abs(d2-dist)<=100000]
+        print(pid,dist,counts,avg,'nearbg n',len(bg),'mean',statistics.mean(bg) if bg else None,'sd',statistics.stdev(bg) if len(bg)>1 else None,'z',(avg-statistics.mean(bg))/statistics.stdev(bg) if len(bg)>1 else None)
+# fit log(avg+0.5) ~ log(dist)
+bg=[r for r in rows if r[1]=='background']
+x=[math.log(r[2]) for r in bg]
+y=[math.log(r[4]+0.5) for r in bg]
+mx,my=statistics.mean(x),statistics.mean(y)
+b=sum((xi-mx)*(yi-my) for xi,yi in zip(x,y))/sum((xi-mx)**2 for xi in x)
+a=my-b*mx
+res=[yi-(a+b*xi) for xi,yi in zip(x,y)]
+sd=statistics.stdev(res)
+print('model log(avg+.5)=',a,b,'res sd',sd)
+for pid,set_,dist,counts,avg in rows:
+    if set_=='candidate':
+        pred=math.exp(a+b*math.log(dist))-0.5
+        z=(math.log(avg+0.5)-(a+b*math.log(dist)))/sd
+        print('model',pid,'obs',avg,'pred',pred,'z',z)
+# expr guide means/logfc
+data=defaultdict(lambda: defaultdict(list))
+byguide=defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+with open('ep.interactions.q1.expr.csv') as f:
+    for r in csv.DictReader(f):
+        pid=r['pair_id']; gid=r['guide_id']; cond=r['condition']; val=int(r['rna_count'])
+        data[pid][cond].append(val)
+        byguide[pid][gid][cond].append(val)
+print('\\nEXPR')
+for pid in sorted(data):
+    ctrl=data[pid]['control']; pert=data[pid]['perturbed']
+    fc=statistics.mean(pert)/statistics.mean(ctrl)
+    lfc=math.log2(fc)
+    guide_lfcs=[]
+    for gid in sorted(byguide[pid]):
+        mc=statistics.mean(byguide[pid][gid]['control']); mp=statistics.mean(byguide[pid][gid]['perturbed'])
+        guide_lfcs.append(math.log2(mp/mc))
+    print(pid,'ctrl',statistics.mean(ctrl),'pert',statistics.mean(pert),'log2fc',lfc,'guide_lfcs', ['%.2f'%v for v in guide_lfcs], 'meanabs',abs(lfc),'sdguides',statistics.stdev(guide_lfcs))
+PY"

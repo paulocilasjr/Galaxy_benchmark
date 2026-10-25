@@ -1,0 +1,21 @@
+/bin/bash -lc "bedtools getfasta -fi refs/hg38.fa -bed results/union_peaks.bed -fo results/union_peaks.fa
+PYTHONPATH=pydeps python3 - <<'PY'
+import numpy as np
+from scipy.stats import binomtest
+rows=[]
+for line in open('results/union_counts.tsv'):
+ c,s,e,r,p=line.split(); r=int(r); p=int(p)
+ lfc=np.log2((p+5)/(11257343+5*118109))-np.log2((r+5)/(10141848+5*118109))
+ # conditional exact-style binomial under global depth ratio
+ n=r+p; pv=binomtest(p,n,11257343/(11257343+10141848)).pvalue if n else 1
+ rows.append((c,int(s),int(e),r,p,lfc,pv))
+with open('results/union_stats.tsv','w') as out:
+ out.write('chrom\\tstart\\tend\\tref\\tperturb\\tlog2fc\\tpvalue\\n')
+ for x in rows: out.write('\\t'.join(map(str,x))+'\\n')
+for label,pred in [('gained',lambda x:x[5]>2 and x[3]+x[4]>=30),('lost',lambda x:x[5]<-2 and x[3]+x[4]>=30),('stable',lambda x:abs(x[5])<0.2 and x[3]+x[4]>=30)]:
+ with open('results/'+label+'.bed','w') as o:
+  for x in rows:
+   if pred(x): o.write(f'{x[0]}\\t{x[1]}\\t{x[2]}\\n')
+PY
+wc -l results/gained.bed results/lost.bed results/stable.bed
+ls -lh results/union_peaks.fa"

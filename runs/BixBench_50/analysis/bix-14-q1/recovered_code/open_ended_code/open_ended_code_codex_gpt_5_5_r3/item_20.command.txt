@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from openpyxl import load_workbook
+from collections import Counter
+import re
+
+def norm(x):
+    if x is None: return None
+    if isinstance(x,(int,float)) and float(x).is_integer(): return str(int(x))
+    return str(x).strip()
+wb=load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True); ws=wb.active
+rows=list(ws.iter_rows(values_only=True)); idx={h:i for i,h in enumerate(rows[0]) if h}
+file_by_id={re.search(r'CHIP_(.+)\\.xlsx"'$'"', p.name).group(1).split('-')[0]:p for p in Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')}
+coding={'synonymous_variant','missense_variant','frameshift_variant','inframe_insertion','inframe_deletion','stop_gained','stop_lost','start_lost','protein_altering_variant'}
+def count(statuses):
+    ids=[norm(r[idx['Sample ID']]) for r in rows[1:] if norm(r[idx['Sample ID']]) and r[idx['BLM Mutation Status']] in statuses]
+    den=num=0; so=Counter(); used=[]; missing=[]
+    for sid in ids:
+        p=file_by_id.get(sid)
+        if not p:
+            missing.append(sid); continue
+        used.append(sid)
+        wb=load_workbook(p,read_only=True,data_only=True); ws=wb.active; ws.reset_dimensions()
+        it=ws.iter_rows(values_only=True); next(it); hdr=next(it); col={h:i for i,h in enumerate(hdr) if h}
+        for r in it:
+            if not r or r[0] is None: continue
+            v=r[col['Variant Allele Freq']]
+            if v is None: continue
+            try: vf=float(v)
+            except: continue
+            seq=r[col['Sequence Ontology (Combined)']]
+            if vf<0.3 and seq in coding:
+                den+=1; so[seq]+=1
+                if seq=='synonymous_variant': num+=1
+    return ids,used,missing,den,num,so
+for statuses in [('Carrier',),('Affected','Carrier'),('Affected',)]:
+    ids,used,missing,den,num,so=count(set(statuses))
+    print(statuses,'ids',len(ids),'used',len(used),'missing',missing,'den',den,'num',num,'frac',num/den if den else None,'so',so)
+PY"

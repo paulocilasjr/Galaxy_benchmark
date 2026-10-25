@@ -1,0 +1,36 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+
+meta = pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+sc = pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+print('meta', meta.shape, meta.index[:3].tolist(), meta.index[-3:].tolist())
+print('sc', sc.shape)
+print(meta['cell_type'].value_counts())
+M = mmread('matrix.mtx.gz').tocsr()
+print('spatial', M.shape, type(M), 'nnz', M.nnz, 'sum', M.sum())
+barcodes = pd.read_csv('barcodes.tsv.gz', header=None)[0]
+features = pd.read_csv('features.tsv.gz', sep='\\t', header=None)
+print('barcodes', len(barcodes), barcodes[710])
+print('features', features.shape, features.head())
+# target column 710
+x = np.asarray(M[:,710].todense()).ravel()
+print('target sum', x.sum(), 'nnz', (x>0).sum(), 'min/max', x.min(), x.max())
+print('target first nonzero', [(int(i), int(v)) for i,v in zip(np.flatnonzero(x)[:30], x[x>0][:30])])
+# type mean raw and normalized, top genes by means
+scv=sc.to_numpy(dtype=float)
+for typ, idx in meta.groupby('cell_type').groups.items():
+    a=scv[idx,:]
+    print('\\nTYPE', typ, 'n',len(idx),'mean total',a.sum(1).mean(), 'first means', np.round(a[:,:60].mean(0),2))
+    print('top mean genes', [(sc.columns[i], round(a[:,i].mean(),2), round(a[:,i].std(),2)) for i in np.argsort(a.mean(0))[-20:][::-1]])
+# correlation target with type avg on all genes and log etc
+means = {}
+for typ, idx in meta.groupby('cell_type').groups.items(): means[typ]=scv[idx,:].mean(0)
+for normname, f in [('raw',lambda a:a),('log1p',lambda a:np.log1p(a)),('binary',lambda a:(a>0).astype(float))]:
+    tx=f(x)
+    print('\\n',normname)
+    for typ,mu in means.items():
+      v=f(mu)
+      print(typ, 'corr',np.corrcoef(tx,v)[0,1], 'cos', tx.dot(v)/(np.linalg.norm(tx)*np.linalg.norm(v)), 'dot',tx.dot(v))
+PY"

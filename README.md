@@ -6,6 +6,21 @@ Galaxy-Bench: A Benchmark for Evaluating Iterative, Robust, and Scientifically V
 
 Galaxy-Bench evaluates biomedical AI agents as iterative scientific problem-solvers rather than as single-shot task executors.
 
+## Repository map
+
+For cloning onto another computer, follow [the migration and archive restoration instructions](docs/migration/README.md).
+
+| Folder | What it holds | Start with |
+|---|---|---|
+| [benchmark/](benchmark/) | What an agent is given: task prompts, evaluator references, local inputs | [benchmark/README.md](benchmark/README.md) |
+| [runs/](runs/) | Archived evidence of the completed runs (BixBench-Verified-50, CompBioBench, IWC, token experiment) | [runs/README.md](runs/README.md) |
+| [analysis/](analysis/) | Code and outputs that read the run archives: collector, audits, site verification, integrity audit | [analysis/README.md](analysis/README.md) |
+| [figures/](figures/) | Current manuscript figures and the per-run score table `scored_runs.csv` | [figures/README.md](figures/README.md) |
+| [manuscript/](manuscript/) | Manuscript builds, figure evaluation and presentations | [manuscript/README.md](manuscript/README.md) |
+| [docs/](docs/) | Notes and long-form reports | [docs/README.md](docs/README.md) |
+
+[SKILL.md](SKILL.md) is the execution contract for new runs, which are written to `outputs/` (not tracked). [AGENTS.md](AGENTS.md) orients coding agents. Paths used before the 2026-10-14 re-layout are mapped in [docs/REPOSITORY_LAYOUT.md](docs/REPOSITORY_LAYOUT.md).
+
 ## Significance
 
 AI agents are increasingly proposed as interfaces for biomedical analysis, but current evaluation frameworks still miss the properties that determine scientific usefulness.
@@ -130,17 +145,17 @@ Primary outcomes:
 
 ## Status of the aims in the archived evaluation
 
-The archived evaluation analysed in `manuscript_material/` and `manuscript_narrative/` (4,240 runs on BixBench-Verified-50, CompBioBench and IWC) covers only part of this design. The aims above remain the benchmark's goals; this table records what that archive does and does not evaluate.
+The archived evaluation analysed in `manuscript/manuscript_material/` and `manuscript/manuscript_narrative/` (4,240 runs on BixBench-Verified-50, CompBioBench and IWC) covers only part of this design. The aims above remain the benchmark's goals; this table records what that archive does and does not evaluate.
 
 | Design element | In the archived evaluation |
 |---|---|
-| `open` vs `galaxy` execution | Evaluated: paired arms, four model configurations, three replicate runs per task and arm. The arms also differed in prompts, budgets and run campaigns (`manuscript_narrative/derived/design/`). |
+| `open` vs `galaxy` execution | Evaluated: paired arms, four model configurations, three replicate runs per task and arm. The arms also differed in prompts, budgets and run campaigns (`manuscript/manuscript_narrative/derived/design/`). |
 | `single_run` vs `multi_run`, best-of-n, improvement trajectory (Aim 1) | Not evaluated. The three replicate runs are independent and measure repeatability, not iterative refinement. |
 | Orchestration, failures and recovery (Aim 2) | Partly evaluated from traces: tool use, interface failures, recovery outcomes and execution attribution. Alternative workflow classes and exploration profiles are not formalized. |
-| Prompt variants (Aim 3) | Not evaluated in the archive. `low_context`, `medium_context` and `high_context` prompts exist under `experiments/` for GalaxyBench tasks. |
-| Multiple acceptable solutions and human-informed acceptability (Aim 4) | Partly evaluated: IWC uses route-specific references, and a targeted, AI-assisted trace audit records reference ambiguity. No human adjudication was performed; a protocol is in `manuscript_narrative/user-oriented/supplementary/Supplementary_Note_1_prospective_validation.md`. |
+| Prompt variants (Aim 3) | Not evaluated in the archive. `low_context`, `medium_context` and `high_context` prompts exist under `benchmark/experiments/` for GalaxyBench tasks. |
+| Multiple acceptable solutions and human-informed acceptability (Aim 4) | Partly evaluated: IWC uses route-specific references, and a targeted, AI-assisted trace audit records reference ambiguity. No human adjudication was performed; a protocol is in `manuscript/manuscript_narrative/user-oriented/supplementary/Supplementary_Note_1_prospective_validation.md`. |
 | `galaxy_skills` environment | Not run as a separate environment. Skills were available in both arms, and Galaxy-specific skills only in the Galaxy arm. |
-| Run artifact layout under `outputs/` | Not used by the archive. `outputs/` is created by new benchmark runs and is not part of this repository; archived runs are under `BixBench_50/`, `CompBio/` and `IWC/`. |
+| Run artifact layout under `outputs/` | Not used by the archive. `outputs/` is created by new benchmark runs and is not part of this repository; archived runs are under `runs/BixBench_50/`, `runs/CompBio/` and `runs/IWC/`. |
 
 ## Benchmark Positioning
 
@@ -329,4 +344,4 @@ Galaxy-Bench is intended to answer the questions reviewers will ask:
 - Does it preserve execution evidence strongly enough for audit?
 - Does it measure scientific acceptability rather than exact imitation alone?
 
-The execution and scoring rules are in [SKILL.md](SKILL.md). The formal score model, project specification and reviewer-readiness documents that earlier versions of this README linked (`docs/`, `project_spec/`) are not in this repository. Analyses of the archived runs are documented in [manuscript_material/](manuscript_material/) and [manuscript_narrative/](manuscript_narrative/).
+The execution and scoring rules are in [SKILL.md](SKILL.md). The formal score model, project specification and reviewer-readiness documents that earlier versions of this README linked (an earlier `docs/` folder and `project_spec/`) are not in this repository; the current [docs/](docs/) folder holds notes and reports. Analyses of the archived runs are documented in [manuscript/manuscript_material/](manuscript/manuscript_material/) and [manuscript/manuscript_narrative/](manuscript/manuscript_narrative/).

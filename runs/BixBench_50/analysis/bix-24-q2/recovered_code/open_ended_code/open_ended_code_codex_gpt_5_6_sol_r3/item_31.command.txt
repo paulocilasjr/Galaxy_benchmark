@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np,sqlite3
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0); de=pd.read_csv('tmp_pairwise_de.csv',index_col=0)
+org=sqlite3.connect('.go_tmp/org.sqlite'); godb=sqlite3.connect('.go_tmp/go.sqlite')
+ens=pd.read_sql_query('select distinct e.ensembl_id,g.gene_id from ensembl e join genes g on e._id=g._id',org)
+bp=pd.read_sql_query('select distinct g.gene_id,b.go_id from go_bp_all b join genes g on b._id=g._id',org)
+term=dict(godb.execute(\"select go_id,term from go_term where ontology='BP'\").fetchall())
+root=godb.execute(\"select _id from go_term where go_id='GO:0008152'\").fetchone()[0]
+met={x[0] for x in godb.execute('select t.go_id from go_bp_offspring o join go_term t on o._offspring_id=t._id where o._id=?',(root,))}|{'GO:0008152'}
+mp=ens.groupby('ensembl_id').gene_id.apply(set).to_dict()
+def mapped(ids):
+ out=set()
+ for x in ids: out.update(mp.get(x,set()))
+ return out
+univ=mapped(set(de.index)); bp=bp[bp.gene_id.isin(univ)]; gs=bp.groupby('go_id').gene_id.apply(set).to_dict(); gs={k:v for k,v in gs.items() if 10<=len(v)<=500}
+def ora(ids):
+ fg=mapped(set(ids))&univ; rows=[]
+ for go,s in gs.items():
+  k=len(fg&s)
+  if k: rows.append([go,term.get(go,''),k,len(s),hypergeom.sf(k-1,len(univ),len(s),len(fg))])
+ z=pd.DataFrame(rows,columns=['GO','term','hits','size','p']);z['padj']=multipletests(z.p,method='fdr_bh')[1];z['FE']=(z.hits/len(fg))/(z['size']/len(univ));z['met']=z.GO.isin(met)
+ return fg,z.sort_values(['padj','p','GO'])
+sig=de[(de.padj<.05)&(de.log2FoldChange.abs()>.5)]
+print('universe',len(univ),'DE',len(sig))
+for direction,ids in [('up',sig.index[sig.log2FoldChange>.5]),('down',sig.index[sig.log2FoldChange<-.5])]:
+ fg,z=ora(ids);zs=z[z.padj<.05];zm=zs[zs.met]
+ print('\\n',direction,'fg',len(fg),'sigGO',len(zs),'sig metabolic descendants',len(zm))
+ print('top all\\n',z.head(25)[['GO','term','hits','size','padj','FE','met']].to_string(index=False))
+ print('sig metabolic\\n',zm.head(40)[['GO','term','hits','size','padj','FE']].to_string(index=False))
+PY"

@@ -1,0 +1,44 @@
+/bin/bash -lc "cat > fetch_borzoi_exp_reps.py <<'PY'
+import requests,json,time,sys,re
+from concurrent.futures import ThreadPoolExecutor,as_completed
+exp=json.load(open('borzoi_encode_experiments.json'))
+accs=list(dict.fromkeys(e['accession'] for e in exp if e['accession']))
+print('accs',len(accs))
+def chunks(lst,n):
+ for i in range(0,len(lst),n): yield lst[i:i+n]
+chunks_list=list(chunks(accs,100))
+print('chunks',len(chunks_list))
+
+def fetch(chunk):
+ params=[('type','Experiment'),('format','json'),('limit','all'),
+         ('field','accession'),('field','dbxrefs'),
+         ('field','replicates.library.accession'),('field','replicates.biological_replicate_number'),('field','replicates.technical_replicate_number')]
+ for a in chunk: params.append(('accession',a))
+ last=None
+ for attempt in range(6):
+  try:
+   r=requests.get('https://www.encodeproject.org/search/',params=params,timeout=120)
+   if r.status_code==200:
+    return r.json().get('@graph',[])
+   last=(r.status_code,r.text[:200])
+   time.sleep(2*(attempt+1))
+  except Exception as e:
+   last=repr(e); time.sleep(2)
+ print('FAIL',chunk[0],last,file=sys.stderr); return []
+results=[None]*len(chunks_list)
+with ThreadPoolExecutor(max_workers=5) as ex:
+ futs={ex.submit(fetch,c):i for i,c in enumerate(chunks_list)}
+ for fut in as_completed(futs):
+  i=futs[fut]
+  try: results[i]=fut.result()
+  except Exception as e: print('future',i,e); results[i]=[]
+out=[]
+for res in results:
+ for g in res:
+  out.append({'accession':g.get('accession'),'dbxrefs':g.get('dbxrefs',[]),
+              'replicates':[{'library':r.get('library',{}).get('accession') if r.get('library') else None,
+                             'bio':r.get('biological_replicate_number'),'tech':r.get('technical_replicate_number')} for r in g.get('replicates',[])]})
+json.dump(out,open('borzoi_exp_reps.json','w'))
+print('saved',len(out),'missing',len(accs)-len(out))
+PY
+python3 fetch_borzoi_exp_reps.py"

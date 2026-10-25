@@ -1,0 +1,34 @@
+/bin/bash -lc "PYTHONPATH=pydeps python3 - <<'PY'
+import bisect,json,numpy as np
+from collections import defaultdict
+import MOODS.tools,MOODS.scan
+names=['FOXA1','ASCL1','TFAP2A','RUNX1','KLF4','PAX7','TCF7','REST','SPI1','GATA3']; ids=['MA0148.5','MA1100.3','MA0003.5','MA0002.3','MA0039.5','MA0680.3','MA0769.3','MA0138.3','MA0080.7','MA0037.5']; bg=MOODS.tools.flat_bg(4); mats=[]; lens=[]
+for mid in ids:
+ d=json.load(open('refs/'+mid+'.json')); m=MOODS.tools.log_odds([[float(x) for x in d['pfm'][b]] for b in 'ACGT'],bg,.1); mats.append(m);lens.append(len(m[0]))
+sm=[]
+for m in mats:sm += [m,MOODS.tools.reverse_complement(m)]
+sc=MOODS.scan.Scanner(7);sc.set_motifs(sm,bg,[MOODS.tools.threshold_from_p(m,bg,1e-4) for m in sm])
+summ=defaultdict(list)
+for l in open('results/peaks/perturb_summits.bed'):
+ c,s,e,*_=l.split();summ[c].append((int(s)+int(e))//2)
+for c in summ:summ[c].sort()
+rows=[]
+for l in open('results/union_counts.tsv'):
+ c,s,e,r,p=l.split();rows.append((c,int(s),int(e),int(r),int(p)))
+n=len(rows);r=np.array([x[3] for x in rows]);p=np.array([x[4] for x in rows]);lfc=np.log2((p+5)/(11257343+5*n))-np.log2((r+5)/(10141848+5*n));gain=(lfc>2)&(r+p>=30)
+seq=[];ch=[]
+for l in open('results/union_peaks.fa'):
+ if l[0]=='>':
+  if ch:seq.append(''.join(ch));ch=[]
+ else:ch.append(l.strip().upper())
+if ch:seq.append(''.join(ch))
+dists=defaultdict(list)
+for i in np.flatnonzero(gain):
+ c,start,_,_,_=rows[i]; arr=summ[c]
+ for j,hits in enumerate(sc.scan(seq[i])):
+  nm=names[j//2];ml=lens[j//2]
+  for h in hits:
+   pos=start+h.pos+ml//2;k=bisect.bisect_left(arr,pos);d=min([abs(pos-arr[z]) for z in (k-1,k) if 0<=z<len(arr)],default=999999);dists[nm].append(d)
+for nm in names:
+ x=np.array(dists[nm]);print(nm,len(x),round(np.mean(x<=25),3),round(np.mean(x<=50),3),round(np.mean(x<=100),3),round(np.median(x),1))
+PY"

@@ -1,0 +1,61 @@
+/bin/bash -lc "python - <<'PY'
+import csv, math
+from pathlib import Path
+
+base=Path('/workspace/inputs')
+meta={}
+with open(base/'GeneMetaInfo_Zenodo.csv', newline='') as f:
+    for row in csv.DictReader(f):
+        key=row['']
+        if key in meta:
+            raise RuntimeError(f'duplicate metadata gene {key}')
+        meta[key]=(float(row['Length']), row['gene_biotype'])
+
+with open(base/'Sample_annotated_Zenodo.csv', newline='') as f:
+    ann={row['sample']:row['celltype'] for row in csv.DictReader(f)}
+
+types=['CD4','CD8','CD14','CD19']
+with open(base/'BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    reader=csv.reader(f)
+    header=next(reader)
+    sample_names=header[1:]
+    if any(s not in ann for s in sample_names):
+        raise RuntimeError('unannotated matrix sample')
+    group_idx={ct:[i for i,s in enumerate(sample_names) if ann[s]==ct] for ct in types}
+    print('sample counts', {ct:len(ix) for ct,ix in group_idx.items()})
+    lengths=[]
+    avgs={ct:[] for ct in types}
+    nrows=0; npc=0; missing_meta=[]
+    for row in reader:
+        nrows+=1
+        gene=row[0]
+        if gene not in meta:
+            missing_meta.append(gene)
+            continue
+        length, biotype=meta[gene]
+        if biotype"'!='"'protein_coding':
+            continue
+        if len(row)"'!=len(header):
+            raise RuntimeError(f'"'bad row length for {gene}: {len(row)}')
+        vals=[float(v) for v in row[1:]]
+        lengths.append(length)
+        for ct, ix in group_idx.items():
+            avgs[ct].append(sum(vals[i] for i in ix)/len(ix))
+        npc+=1
+    if missing_meta:
+        print('matrix genes missing metadata', len(missing_meta), missing_meta[:5])
+    if nrows "'!= len(meta):
+        print('"'matrix rows',nrows,'metadata rows',len(meta))
+
+x=lengths
+print('protein coding rows used',len(x),'length range',min(x),max(x))
+# Correlation via centered sums. Means first help numerical stability.
+for ct in types:
+    y=avgs[ct]
+    mx=sum(x)/len(x); my=sum(y)/len(y)
+    sxx=sum((a-mx)*(a-mx) for a in x)
+    syy=sum((b-my)*(b-my) for b in y)
+    sxy=sum((a-mx)*(b-my) for a,b in zip(x,y))
+    r=sxy/math.sqrt(sxx*syy)
+    print(ct, 'r=',repr(r), 'abs=',repr(abs(r)), 'mean range=',min(y),max(y), 'zero averages=',sum(b==0 for b in y))
+PY"

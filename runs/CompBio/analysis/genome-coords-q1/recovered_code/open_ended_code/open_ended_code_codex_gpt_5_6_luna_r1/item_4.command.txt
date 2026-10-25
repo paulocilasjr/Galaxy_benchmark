@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+p='single_cell_dynamics_question.csv'
+df=pd.read_csv(p)
+xyz=df[['enh_x','enh_y','enh_z']].to_numpy()-df[['prom_x','prom_y','prom_z']].to_numpy()
+d=np.sqrt((xyz**2).sum(1))
+df['distance']=d
+df['contact']=(d<=260).astype(int)
+print(df.shape)
+print('cells',df.cell_id.nunique(),'time minmax',df.time.min(),df.time.max(),'per cell',df.groupby('cell_id').size().value_counts().head().to_dict())
+print('distance',df.distance.describe(percentiles=[.01,.05,.1,.25,.5,.75,.9,.95,.99]).to_string())
+print('contact rate',df.contact.mean(),'trans rate',df.transcription.mean(),'joint',pd.crosstab(df.contact,df.transcription,normalize=True))
+# sort and lag columns
+df=df.sort_values(['cell_id','time']).copy()
+g=df.groupby('cell_id',sort=False)
+df['contact_next']=g.contact.shift(-1)
+df['trans_next']=g.transcription.shift(-1)
+df['contact_prev']=g.contact.shift(1)
+df['trans_prev']=g.transcription.shift(1)
+valid=df[df.trans_next.notna()]
+print('\\ntransition next transcription given current contact/trans')
+print(pd.crosstab([valid.contact,valid.transcription],valid.trans_next,normalize='index').to_string())
+print('\\ntransition next contact given current trans/contact')
+print(pd.crosstab([valid.contact,valid.transcription],valid.contact_next,normalize='index').to_string())
+print('\\nP T_next by C current and stratified T current')
+for t in [0,1]:
+ x=valid[valid.transcription==t].groupby('contact').trans_next.agg(['mean','count'])
+ print('T=',t,x)
+print('\\nP C_next by T current stratified C current')
+for c in [0,1]:
+ x=valid[valid.contact==c].groupby('transcription').contact_next.agg(['mean','count'])
+ print('C=',c,x)
+# lag corr means by lag
+for lag in range(-5,6):
+ # C_t and T_{t+lag}; use shift relation
+ if lag>=0:
+  x=df.groupby('cell_id').contact.shift(0); y=df.groupby('cell_id').transcription.shift(-lag)
+ else:
+  x=df.groupby('cell_id').contact.shift(-lag); y=df.groupby('cell_id').transcription.shift(0)
+ v=x.notna()&y.notna()
+ print(lag, np.corrcoef(x[v],y[v])[0,1], 'means', x[v].mean(), y[v].mean())
+PY"

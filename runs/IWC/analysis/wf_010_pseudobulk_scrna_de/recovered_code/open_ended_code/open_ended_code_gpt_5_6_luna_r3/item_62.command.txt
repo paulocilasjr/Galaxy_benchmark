@@ -1,0 +1,43 @@
+/usr/bin/bash -lc "micromamba run -n sc_pseudobulk python - <<'PY'
+from pathlib import Path
+import math
+import numpy as np
+import pandas as pd
+import anndata as ad
+from scipy import sparse
+
+root=Path('/workspace')
+a=ad.read_h5ad(root/'data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad')
+obs=a.obs[['individual','disease','cell_type']].copy()
+for c in obs.columns: obs[c]=obs[c].astype(str)
+X=a.layers['counts'].tocsr().astype(np.int64)
+# Independent direct-slice aggregation of every qualifying pair.
+pairs_all=obs.groupby(['individual','cell_type'],sort=True,observed=True).size()
+pairs=[tuple(x) for x in pairs_all[pairs_all>=10].index.tolist()]
+full=[]
+for ind,ct in pairs:
+    idx=np.flatnonzero((obs.individual.to_numpy()==ind)&(obs.cell_type.to_numpy()==ct))
+    full.append(np.asarray(X[idx,:].sum(axis=0)).ravel())
+full=np.asarray(full,dtype=np.int64)
+n=len(pairs); M=float(np.median(full.sum(axis=1,dtype=np.int64))); S=math.ceil(10+0.7*(n-10)); threshold=10/M*1_000_000
+keep=(full.astype(float)/full.sum(axis=1)[:,None]*1_000_000>=threshold).sum(axis=0)>=S
+keep &= full.sum(axis=0)>=1000
+expected_genes=a.var.index.astype(str).to_numpy()[keep]
+expected_cols=['gene']+[ind.replace(' ','_').replace('-','_')+'_'+ct.replace(' ','_').replace('-','_') for ind,ct in pairs]
+out=pd.read_csv(root/'final_answer/pseudobulk_counts.tsv',sep='\\t')
+assert list(out.columns)==expected_cols
+assert out.shape==(int(keep.sum()),len(expected_cols))
+assert set(out.gene)==set(expected_genes)
+# Compare counts after aligning rows/columns by identifiers.
+out_idx=out.set_index('gene')
+out_idx=out_idx.loc[expected_genes,expected_cols[1:]]
+expected=full[:,keep].T
+assert np.array_equal(out_idx.to_numpy(dtype=np.int64),expected)
+# Every output entry is exactly an integer string, not merely a parseable float.
+raw_lines=(root/'final_answer/pseudobulk_counts.tsv').read_text().splitlines()[1:]
+for line in raw_lines[:20]:
+    for x in line.split('\\t')[1:]: assert x.isdigit(), x
+print('independent source recomputation passed')
+print('pairs',n,'genes',int(keep.sum()),'M',M,'S',S,'threshold',threshold)
+print('normal/covid',sum(obs.loc[obs.individual.eq(ind),'disease'].iloc[0]=='normal' for ind,ct in pairs),sum(obs.loc[obs.individual.eq(ind),'disease'].iloc[0]=='COVID-19' for ind,ct in pairs))
+PY"

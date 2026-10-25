@@ -1,0 +1,43 @@
+/bin/bash -lc "python3 - <<'PY'
+import pyBigWig, numpy as np, glob, os, time
+bw=pyBigWig.open('public/gm12878_dnase_rep1.bigWig')
+print(bw.chroms()['chr1'])
+# read bins and average bigwig values
+bins=[]
+with open('bins_10kb.bed') as f:
+    for line in f:
+        p=line.split(); bins.append((p[0],int(p[1]),int(p[2])))
+# Use bw.stats per chrom in chunks for speed
+chroms=[]
+with open('bins_10kb.bed') as f:
+    for line in f:
+        p=line.split(); chroms.append(p[0])
+vals=np.empty(len(bins),dtype=np.float64)
+# process per chrom
+from collections import defaultdict, deque
+by=defaultdict(list)
+for i,(c,s,e) in enumerate(bins): by[c].append((i,s,e))
+for c,items in by.items():
+    # query stats in chunks of 10000 intervals using bw.stats
+    starts=[s for _,s,_ in items]; ends=[e for _,_,e in items]; idx=[i for i,_,_ in items]
+    chunk=10000
+    for j in range(0,len(items),chunk):
+        st=starts[j:j+chunk]; en=ends[j:j+chunk]; ii=idx[j:j+chunk]
+        res=bw.stats(c,st,en,exact=True)
+        for k,r in enumerate(res):
+            vals[ii[k]]=0.0 if r is None else r
+print('dnase bin values mean',vals.mean(),'nonzero',(vals>0).mean())
+# load our cov counts and correlate
+names=[]; Ms=[]
+for f in sorted(glob.glob('cov/*.counts'), key=lambda x:int(os.path.basename(x).split('.')[0])):
+    a=np.loadtxt(f,usecols=3)
+    names.append(os.path.basename(f).split('.')[0]); Ms.append(a)
+Ms=np.array(Ms)
+# pearson raw and log2
+for mode, arr in [('raw',Ms),('log',np.log2(Ms+1))]:
+    print(mode)
+    for i,n in enumerate(names):
+        r=np.corrcoef(arr[i],vals)[0,1]
+        print(n, round(r,3))
+# Spearman for subset? no
+PY"

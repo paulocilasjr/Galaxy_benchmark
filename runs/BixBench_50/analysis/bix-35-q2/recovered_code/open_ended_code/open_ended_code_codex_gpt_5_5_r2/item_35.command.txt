@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile, tempfile, subprocess, pathlib, json, statistics, os
+from scipy.stats import mannwhitneyu
+
+archives = {'animals': 'inputs/scogs_animals.zip', 'fungi': 'inputs/scogs_fungi.zip'}
+all_rates = {}
+by_id = {}
+with tempfile.TemporaryDirectory(dir='/workspace', prefix='.tmp_evorate_') as td:
+    td = pathlib.Path(td)
+    for group, zpath in archives.items():
+        rates=[]
+        gids=[]
+        with zipfile.ZipFile(zpath) as zp:
+            members = sorted(n for n in zp.namelist() if n.endswith('.treefile'))
+            for n in members:
+                gid = n.split('.')[0]
+                out_path = td / f'{group}_{n}'
+                out_path.write_bytes(zp.read(n))
+                cp = subprocess.run(['python','-m','phykit','evo_rate',str(out_path)], cwd='/workspace', text=True, capture_output=True)
+                if cp.returncode "'!= 0:
+                    raise SystemExit(f'"'phykit failed for {zpath}:{n}\\nSTDOUT={cp.stdout}\\nSTDERR={cp.stderr}')
+                val = float(cp.stdout.strip().splitlines()[-1])
+                rates.append(val)
+                gids.append(gid)
+        all_rates[group] = rates
+        by_id[group] = dict(zip(gids, rates))
+        print(group, len(rates), 'min', min(rates), 'median', statistics.median(rates), 'max', max(rates))
+
+for name, a, f in [
+    ('all_available', all_rates['animals'], all_rates['fungi']),
+    ('intersection_only', [by_id['animals'][g] for g in sorted(set(by_id['animals']) & set(by_id['fungi']))], [by_id['fungi'][g] for g in sorted(set(by_id['animals']) & set(by_id['fungi']))]),
+]:
+    res = mannwhitneyu(a, f)  # two-sided default; statistic is U for first sample
+    print(name, 'n_animals', len(a), 'n_fungi', len(f), 'U', res.statistic, 'p', res.pvalue)
+    res_less = mannwhitneyu(a, f, alternative='less')
+    res_greater = mannwhitneyu(a, f, alternative='greater')
+    print(name, 'U_less', res_less.statistic, 'p_less', res_less.pvalue, 'U_greater', res_greater.statistic, 'p_greater', res_greater.pvalue)
+PY"

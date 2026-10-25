@@ -1,0 +1,75 @@
+python3 << 'PYEOF'
+from openpyxl import load_workbook
+import os
+import re
+
+chip_dir = '/workspace/inputs/CHIP_DP10_GQ20_PASS'
+exclude_ontology = {
+    'intron_variant', 'intergenic_variant',
+    '3_prime_UTR_variant', '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+# Verify sample 179 (2 CHIP variants)
+files = sorted(os.listdir(chip_dir))
+for f in files:
+    match = re.search(r'CHIP_(.+)\.xlsx', f)
+    if match:
+        sid = re.sub(r'-[A-Z0-9]+$', '', match.group(1))
+        if sid == '179':
+            filename = f
+            break
+
+wb = load_workbook(os.path.join(chip_dir, filename))
+ws = wb.active
+
+chip_variants = []
+for row in ws.iter_rows(min_row=3, values_only=True):
+    zygosity = row[4]
+    seq_onto = str(row[13]) if row[13] else ''
+    vaf_raw = row[9]
+    
+    if zygosity == 'Reference':
+        continue
+    if seq_onto in exclude_ontology:
+        continue
+    if vaf_raw is None:
+        continue
+    
+    vaf = float(vaf_raw)
+    if vaf < 0.3:
+        chip_variants.append({
+            'chr_pos': row[0],
+            'ref_alt': row[1],
+            'zygosity': zygosity,
+            'seq_onto': seq_onto,
+            'effect': row[14],
+            'gene': row[12],
+            'vaf': vaf,
+            'in_chip': row[29],
+            'dp': row[7],
+            'gq': row[8],
+        })
+
+print(f"Sample 179: {len(chip_variants)} CHIP variants (VAF < 0.3)")
+for v in chip_variants:
+    print(f"  {v['chr_pos']} {v['ref_alt']} {v['gene']} {v['seq_onto']} {v['zygosity']} VAF={v['vaf']:.4f} DP={v['dp']} GQ={v['gq']} In_CHIP={v['in_chip']}")
+
+print()
+
+# Also verify: are there variants that have VAF < 0.3 but In_CHIP is not True?
+print("=== Check: In_CHIP vs VAF<0.3 relationship ===")
+for fname in sorted(os.listdir(chip_dir))[:5]:
+    wb = load_workbook(os.path.join(chip_dir, fname))
+    ws = wb.active
+    in_chip_true_vaf_low = 0
+    in_chip_true_total = 0
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        if row[29] == 'True' or row[29] == True:
+            in_chip_true_total += 1
+            if row[9] is not None:
+                vaf = float(row[9])
+                if vaf < 0.3:
+                    in_chip_true_vaf_low += 1
+    print(f"  {fname}: In_CHIP=True total={in_chip_true_total}, with VAF<0.3={in_chip_true_vaf_low}")
+PYEOF

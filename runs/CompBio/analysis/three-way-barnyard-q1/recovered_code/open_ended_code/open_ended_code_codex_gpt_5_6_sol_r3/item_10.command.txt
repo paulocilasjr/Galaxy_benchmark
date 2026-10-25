@@ -1,0 +1,64 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,collections,statistics
+barcodes=[None]
+with gzip.open('three.way.barnyard.q1.R1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        seq=f.readline().strip(); f.readline(); f.readline()
+        n=int(h.split('_')[1].split('/')[0])
+        if n"'!=len(barcodes):
+            while len(barcodes)<=n: barcodes.append(None)
+            barcodes[n]=seq[:16]
+        else: barcodes.append(seq[:16])
+# per barcode vote counters under criteria
+criteria=['"'unique_score','mapq1','mapq5','mapq10','mapq20','mapq30','mapq60']
+votes={c:collections.defaultdict(collections.Counter) for c in criteria}
+read_species=collections.Counter(); ambiguous=0
+cur=None; recs=[]
+def flush(cur,recs):
+    global ambiguous
+    if cur is None:return
+    n=int(cur.split('_')[1].split('/')[0]); bc=barcodes[n]
+    # max s1 per species, take record with best tuple
+    best={}
+    for species,s1,mapq,nmatch,alen in recs:
+        tup=(s1,nmatch,-alen,mapq)
+        if species not in best or tup>best[species][0]: best[species]=(tup,mapq)
+    maxscore=max(x[0][0] for x in best.values())
+    tops=[sp for sp,x in best.items() if x[0][0]==maxscore]
+    if len(tops)"'!=1:
+        ambiguous+=1; return
+    sp=tops[0]; mq=best[sp][1]; read_species[sp]+=1
+    votes['"'unique_score'][bc][sp]+=1
+    for t in [1,5,10,20,30,60]:
+        if mq>=t: votes['mapq'+str(t)][bc][sp]+=1
+with open('mappings.paf') as f:
+    for line in f:
+        a=line.rstrip().split('\\t'); q=a[0]
+        if q"'!=cur:
+            flush(cur,recs);cur=q;recs=[]
+        sp=a[5].split('"'|',1)[0]; mq=int(a[11]); nmatch=int(a[9]); alen=int(a[10]);
+        s1=next((int(x[5:]) for x in a[12:] if x.startswith('s1:i:')),nmatch)
+        recs.append((sp,s1,mq,nmatch,alen))
+flush(cur,recs)
+print('unique_score_reads',read_species,'cross_species_ties',ambiguous)
+for c in criteria:
+    assign=collections.Counter(); margins=[]; evid=[]; ties=0
+    for bc in set(barcodes[1:]):
+        cnt=votes[c][bc]
+        if not cnt:
+            assign['none']+=1;continue
+        vals=cnt.most_common()
+        if len(vals)>1 and vals[0][1]==vals[1][1]:
+            assign['tie']+=1;ties+=1;continue
+        assign[vals[0][0]]+=1
+        second=vals[1][1] if len(vals)>1 else 0
+        margins.append(vals[0][1]/max(1,second)); evid.append(sum(cnt.values()))
+    print(c,dict(assign),'min_ratio',min(margins) if margins else None,'median_ratio',statistics.median(margins) if margins else None,'min_evidence',min(evid) if evid else None,'median_evidence',statistics.median(evid) if evid else None)
+    # contamination fraction summary
+    fr=[]
+    for cnt in votes[c].values():
+        s=sum(cnt.values()); fr.append(max(cnt.values())/s if s else 0)
+    print(' purity quantiles', [round(sorted(fr)[int((len(fr)-1)*p)],3) for p in [0,.01,.05,.25,.5,.75,.95,.99,1]])
+PY"

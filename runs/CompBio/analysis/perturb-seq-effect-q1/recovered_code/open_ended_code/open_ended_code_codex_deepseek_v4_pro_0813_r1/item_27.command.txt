@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, pandas as pd
+from scipy.io import mmread
+from scipy.stats import mannwhitneyu
+
+features=[]
+with gzip.open('filtered_feature_bc_matrix/features.tsv.gz','rt') as f:
+    for line in f: features.append(line.rstrip('\\n').split('\\t')[1])
+barcodes=[]
+with gzip.open('filtered_feature_bc_matrix/barcodes.tsv.gz','rt') as f:
+    barcodes=[line.strip() for line in f]
+mat=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsc()
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+id2target=dict(zip(ref.id, ref.target_gene_name))
+calls['target']=calls.feature_call.map(id2target)
+bc2col={b:i for i,b in enumerate(barcodes)}
+calls['col']=calls.cell_barcode.map(bc2col)
+lib=np.asarray(mat.sum(axis=0)).ravel()
+logcpm=np.log2(1 + np.asarray(mat.todense())*(10000/lib[None,:])) # genes x cells
+path_idx=[features.index(g) for g in features[:20]]
+nt_cols=calls[calls.target=='Non-Targeting'].col.values
+rows=[]
+for t,grp in calls[calls.target"'!='"'Non-Targeting'].groupby('target'):
+    cols=grp.col.values
+    # compute mean diff and p for each gene via vectorized Mann Whitney? use loop 1000*40 okay
+    ps=[]; diffs=[]
+    for i in range(logcpm.shape[0]):
+        a=logcpm[i,cols]; b=logcpm[i,nt_cols]
+        try:
+            u,p=mannwhitneyu(a,b,alternative='two-sided')
+        except Exception:
+            p=1.0
+        ps.append(p); diffs.append(a.mean()-b.mean())
+    ps=np.array(ps); diffs=np.array(diffs)
+    bh=ps*logcpm.shape[0]/np.maximum(1,(np.arange(1,len(ps)+1))[::-1]) # rough BH? not correct
+    # use statsmodels BH
+    from statsmodels.stats.multitest import multipletests
+    _, bh_p,_,_=multipletests(ps, method='fdr_bh')
+    de=(bh_p<0.05) & (diffs<0)
+    path_de=de[path_idx].sum(); path_neg=(diffs[path_idx]<-0.5).sum(); path_meandiff=diffs[path_idx].mean()
+    rows.append((t,len(cols),de.sum(),path_de,path_neg,path_meandiff,diffs[path_idx].min()))
+res=pd.DataFrame(rows,columns=['target','n','DE_all_down','DE_path_down','path_neg0.5','path_mean_diff','path_min_diff']).sort_values(['path_neg0.5','path_mean_diff'],ascending=[False,True])
+print(res.to_string(index=False))
+PY"

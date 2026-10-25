@@ -1,0 +1,26 @@
+/bin/bash -lc "cd work && python3 - <<'PY'
+import numpy as np
+from collections import Counter, defaultdict
+bc_list=[]
+with open('read_barcodes.tsv') as f:
+    for l in f: bc_list.append(l.rstrip().split('\\t')[1])
+barcodes=sorted(set(bc_list)); bidx={b:i for i,b in enumerate(barcodes)}; ridx=np.array([bidx[b] for b in bc_list],dtype=np.int32)
+h=np.load('human_scores.npy');m=np.load('mouse_scores.npy');p=np.load('pig_scores.npy')
+S=np.vstack([h,m,p]).T
+sums=np.zeros((len(barcodes),3)); means=np.zeros_like(sums)
+np.add.at(sums,ridx,S)
+# mean per read
+means=sums/np.bincount(ridx,minlength=len(barcodes))[:,None]
+for label,mat in [('sum',sums),('mean',means)]:
+    top=mat.argmax(axis=1); c=Counter(top)
+    print(label,c, 'pcts', [round(c[i]/len(barcodes)*100) for i in range(3)])
+    for k in range(3):
+        sel=[barcodes[i] for i in np.where(top==k)[0]]
+        print(' ',k,len(sel))
+# confidence: margin between normalized top species sums? print for thresholds
+for label,mat in [('sum',sums),('mean',means)]:
+    arr=np.sort(mat,axis=1); best=arr[:,2]; second=arr[:,1]; top=mat.argmax(axis=1)
+    for margin_ratio in [0.0,0.05,0.1,0.2,0.3]:
+        conf=(best-second) >= margin_ratio*best
+        c=Counter(top[conf]); print(label,'relmargin',margin_ratio,'n',conf.sum(),'counts',[c[i] for i in range(3)])
+PY"

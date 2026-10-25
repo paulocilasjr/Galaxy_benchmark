@@ -1,0 +1,71 @@
+/bin/bash -lc "cat > scripts/annotate_junctions.py <<'PY'
+import gzip,re,pickle,collections,os,pysam,bisect
+cache='reference/annotation.pkl'
+if not os.path.exists(cache):
+ genes={};tx=collections.defaultdict(list);exon_bounds=collections.defaultdict(set)
+ with gzip.open('reference/genes.gtf.gz','rt') as f:
+  for line in f:
+   if line.startswith('#'):continue
+   a=line.rstrip().split('\\t')
+   if a[2] not in ('gene','exon'):continue
+   c,s,e,st=a[0],int(a[3])-1,int(a[4]),a[6]
+   attrs=dict(re.findall(r'(\\w+) \"(["'^"]*)"'"',a[8]));g=attrs['gene_id']
+   if a[2]=='gene':genes[g]=(c,s,e,st,attrs['gene_name'],attrs.get('gene_type',''))
+   else:
+    tx[(c,attrs['transcript_id'])].append((s,e))
+    exon_bounds[c].update((s,e))
+ known=set()
+ for (c,t),xs in tx.items():
+  xs.sort()
+  known.update((c,xs[i][1],xs[i+1][0]) for i in range(len(xs)-1))
+ pickle.dump((genes,known,exon_bounds),open(cache,'wb'))
+ print('Annotation:',len(genes),'genes',len(known),'introns',flush=True)
+else:genes,known,exon_bounds=pickle.load(open(cache,'rb'))
+bins=collections.defaultdict(set)
+for g,(c,s,e,st,name,typ) in genes.items():
+ for b in range(s//100000,e//100000+1):bins[c,b].add(g)
+def overlap(c,s,e):
+ gs=set()
+ for b in range(s//100000,e//100000+1):gs.update(bins[c,b])
+ return [g for g in gs if genes[g][1]<e and genes[g][2]>s]
+bam=pysam.AlignmentFile('results/aligned.bam','rb')
+counts=collections.Counter();jcts=collections.Counter();jpos=collections.defaultdict(set);stats=collections.Counter()
+for r in bam:
+ if r.is_secondary or r.is_supplementary:continue
+ stats['total']+=1
+ if r.is_unmapped:continue
+ stats['mapped']+=1
+ if r.mapping_quality<20:continue
+ stats['mapq20']+=1
+ c=r.reference_name
+ for g in overlap(c,r.reference_start,r.reference_end):counts[g]+=1
+ pos=r.reference_start
+ for i,(op,n) in enumerate(r.cigartuples):
+  if op==3:
+   if i and i+1<len(r.cigartuples) and r.cigartuples[i-1][0] in (0,7,8) and r.cigartuples[i+1][0] in (0,7,8) and min(r.cigartuples[i-1][1],r.cigartuples[i+1][1])>=10:
+    key=(c,pos,pos+n);jcts[key]+=1;jpos[key].add(r.reference_start)
+  if op in (0,2,3,7,8):pos+=n
+print('Mapping:',stats)
+print('Top expressed genes:')
+for g,n in counts.most_common(30):print(genes[g],n)
+with open('results/junctions.tsv','w') as out:
+ out.write('chrom\\tstart\\tend\\treads\\tpositions\\tannotated\\tgenes\\n')
+ for (c,s,e),n in jcts.most_common():
+  gs=overlap(c,s,e);desc=';'.join(genes[g][4]+':'+genes[g][5]+':'+str(counts[g]) for g in gs)
+  out.write(f'{c}\\t{s}\\t{e}\\t{n}\\t{len(jpos[c,s,e])}\\t{(c,s,e) in known}\\t{desc}\\n')
+print('Top novel junctions:')
+for (c,s,e),n in [(k,n) for k,n in jcts.most_common() if k not in known][:60]:
+ print(c,s,e,n,len(jpos[c,s,e]),';'.join(genes[g][4]+':'+str(counts[g]) for g in overlap(c,s,e)))
+novel=[(c,s,e,n) for (c,s,e),n in jcts.items() if (c,s,e) not in known and n>=3]
+bychr=collections.defaultdict(list)
+for c,s,e,n in novel:bychr[c].append((s,e,n))
+pairs=[]
+for c,ls in bychr.items():
+ for s,e,n in ls:
+  for s2,e2,n2 in ls:
+   if 10<=s2-e<=1000 and (c,s,e2) in known:
+    pairs.append((min(n,n2),c,s,e,s2,e2,n,n2,';'.join(genes[g][4]+':'+str(counts[g]) for g in overlap(c,e,s2))))
+print('Cryptic exon candidates:')
+for x in sorted(pairs,reverse=True):print(x)
+pickle.dump((jcts,jpos,counts,pairs),open('results/junctions.pkl','wb'))
+PY"

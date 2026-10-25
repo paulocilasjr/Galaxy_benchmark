@@ -1,0 +1,95 @@
+/tmp/venv/bin/python3 -c "
+import sys
+sys.path.insert(0, '/tmp/venv/lib/python3.11/site-packages')
+from scipy.stats import rankdata
+import os
+
+ANIMALS_DIR = '/tmp/scogs_animals'
+FUNGI_DIR = '/tmp/scogs_fungi'
+
+def parse_mafft(filepath):
+    sequences = []
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_seq:
+                    sequences.append(''.join(current_seq))
+                    current_seq = []
+            else:
+                current_seq.append(line)
+        if current_seq:
+            sequences.append(''.join(current_seq))
+    return sequences
+
+def count_parsimony_informative_sites(sequences):
+    if not sequences:
+        return 0, 0
+    lengths = set(len(s) for s in sequences)
+    if len(lengths) != 1:
+        raise ValueError(f'Sequences have different lengths: {lengths}')
+    n_sites = lengths.pop()
+    n_parsimony_informative = 0
+    for col in range(n_sites):
+        chars = [seq[col] for seq in sequences]
+        counts = {}
+        for c in chars:
+            counts[c] = counts.get(c, 0) + 1
+        states_with_min2 = [c for c, cnt in counts.items() if cnt >= 2]
+        if len(states_with_min2) >= 2:
+            n_parsimony_informative += 1
+    return n_parsimony_informative, n_sites
+
+animal_mafft = set(f for f in os.listdir(ANIMALS_DIR) if f.endswith('.mafft'))
+fungi_mafft = set(f for f in os.listdir(FUNGI_DIR) if f.endswith('.mafft'))
+shared = sorted(animal_mafft & fungi_mafft)
+
+animal_pct = []
+fungi_pct = []
+
+for ortholog in shared:
+    animal_path = os.path.join(ANIMALS_DIR, ortholog)
+    fungi_path = os.path.join(FUNGI_DIR, ortholog)
+    animal_seqs = parse_mafft(animal_path)
+    fungi_seqs = parse_mafft(fungi_path)
+    animal_inf, animal_total = count_parsimony_informative_sites(animal_seqs)
+    fungi_inf, fungi_total = count_parsimony_informative_sites(fungi_seqs)
+    if animal_total > 0:
+        animal_pct.append(100.0 * animal_inf / animal_total)
+    if fungi_total > 0:
+        fungi_pct.append(100.0 * fungi_inf / fungi_total)
+
+# Check for ties
+from collections import Counter
+tie_counts_animal = Counter(animal_pct)
+tie_counts_fungi = Counter(fungi_pct)
+print('Animal PI% unique values:', len(tie_counts_animal))
+print('Animal PI% values with multiple occurrences:')
+for val, cnt in tie_counts_animal.most_common(10):
+    if cnt > 1:
+        print(f'  {val:.4f}%: {cnt} times')
+print()
+print('Fungi PI% unique values:', len(tie_counts_fungi))
+print('Fungi PI% values with multiple occurrences:')
+for val, cnt in tie_counts_fungi.most_common(10):
+    if cnt > 1:
+        print(f'  {val:.4f}%: {cnt} times')
+print()
+
+# Check rank sums with mid-ranks
+combined = animal_pct + fungi_pct
+n1 = len(animal_pct)
+ranks = rankdata(combined)
+R1 = sum(ranks[:n1])
+R2 = sum(ranks[n1:])
+U1 = R1 - n1*(n1+1)/2
+U2 = R2 - n2*(n2+1)/2
+n2 = len(fungi_pct)
+print(f'R1 = {R1}, R2 = {R2}')
+print(f'U1 = {U1}, U2 = {U2}')
+print(f'n1*n2 = {n1*n2}, U1+U2 = {U1+U2}')
+print(f'U1 fractional part: {U1 - int(U1)}')
+" 2>&1

@@ -1,0 +1,100 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import gzip, re, html, collections, json
+from html.parser import HTMLParser
+
+sample='sample.swap.rna.q2.tsv.gz'
+# load matrix indexed by gene -> list of values in sample order
+gene_expr={}
+sample_cols=None
+with gzip.open(sample,'rt') as f:
+    rawheader=f.readline().rstrip('\\n')
+    fields=rawheader.split('\\t')
+    sample_cols=fields[1:]
+    for line in f:
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)"'!=len(sample_cols)+1:
+            continue
+        gid=parts[0]
+        vals=[float(x) for x in parts[1:]]
+        gene_expr[gid]=vals
+print('"'matrix genes', len(gene_expr), 'cols', sample_cols)
+
+class TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_td=False; self.cur=''; self.row=[]; self.rows=[]
+    def handle_starttag(self, tag, attrs):
+        if tag=='td':
+            self.in_td=True; self.cur=''
+        elif tag=='tr' and self.row:
+            # shouldn't happen but reset
+            self.row=[]
+    def handle_endtag(self, tag):
+        if tag=='td' and self.in_td:
+            self.rows.append(self.cur.strip()) # no; need structure. We'll collect cells sequential globally but tr ignored
+            self.in_td=False
+        elif tag=='tr':
+            # collect completed cells for this row from a queue? easier maintain self.current_row_cells
+            pass
+    def handle_data(self,data):
+        if self.in_td:
+            self.cur += data
+
+# Simpler regex for rows: each <tr> ... </tr>, then tds
+rows=[]
+for fn in ['markers_p1.html','markers_p2.html']:
+    s=open(fn,encoding='utf-8').read()
+    for tr in re.findall(r'<tr>(.*?)</tr>', s, flags=re.S):
+        tds=re.findall(r'<td>(.*?)</td>', tr, flags=re.S)
+        tds=[html.unescape(re.sub(r'<.*?>','',td)).strip() for td in tds]
+        if len(tds)>=7:
+            rows.append(tds)
+print('rows', len(rows))
+# columns per displayed table: Genome, Organization, Symbol, Description, GeneID, Cluster, Doi
+markers=[]
+for r in rows:
+    genome=r[0]; org=r[1]; sym=r[2]; desc=r[3]; gid=r[4]; cluster=r[5]; doi=r[6]
+    markers.append((gid,cluster,sym,desc))
+print('markers parsed', len(markers))
+# unique gene ids per cluster
+bycluster=collections.defaultdict(set)
+for gid,cl,sym,desc in markers:
+    bycluster[cl].add(gid)
+for cl in sorted(bycluster):
+    print(cl, len(bycluster[cl]))
+
+# map direct cluster labels to sample column names
+label_to_col={
+ 'Cortex':'cortex',
+ 'Endodermis':'endodermis',
+ 'Epidermis':'epidermis',
+ 'Phloem':'phloem',
+ 'Provascular cells':'provascular',
+ 'Root cap':'root_cap',
+ 'Xylem':'xylem',
+ # maybe no Meristem/Root hair/Pericycle direct
+}
+# evaluate
+print('\\nDirect current markers: class -> mean expr per sample col (top rows)')
+for cl, genes in bycluster.items():
+    vals=collections.defaultdict(list)
+    counts=collections.Counter()
+    miss=0
+    for g in genes:
+        if g not in gene_expr:
+            miss+=1; continue
+        arr=gene_expr[g]
+        bi=max(range(len(arr)), key=lambda i: arr[i])
+        counts[sample_cols[bi]]+=1
+        for col, v in zip(sample_cols, arr):
+            vals[col].append(v)
+    if not vals:
+        print(cl, 'no genes found')
+        continue
+    means={c:sum(vv)/len(vv) for c,vv in vals.items()}
+    ranked=sorted(means.items(), key=lambda kv:kv[1], reverse=True)
+    print(f'\\n{cl}: n={len(genes)} found={len(genes)-miss} miss={miss}')
+    print('  top best-column votes:', counts.most_common(5))
+    print('  mean:', ', '.join(f'{c}:{m:.2f}' for c,m in ranked))
+PY
+python3 [REDACTED LOCAL PATH]"

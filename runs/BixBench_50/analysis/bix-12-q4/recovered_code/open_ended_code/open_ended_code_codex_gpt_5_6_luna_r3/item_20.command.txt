@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from pathlib import Path
+
+
+def read_fasta(s):
+    records=[]
+    name=None
+    seq=[]
+    for line in s.decode().splitlines():
+        if line.startswith('>'):
+            if name is not None:
+                records.append((name,''.join(seq)))
+            name=line[1:].strip().split()[0]
+            seq=[]
+        else:
+            seq.append(line.strip())
+    if name is not None:
+        records.append((name,''.join(seq)))
+    return records
+
+def metrics(records):
+    L=len(records[0][1]) if records else 0
+    assert all(len(s)==L for _,s in records), ([(n,len(s)) for n,s in records])
+    cols=list(zip(*(s for _,s in records)))
+    n= len(records)
+    pi_any=0; pi_no_gap=0; var=0; usable=0; const=0
+    patterns=Counter()
+    for col in cols:
+        c=Counter(col)
+        patterns[''.join(sorted(c))]+=1
+        # all observed characters, gaps considered as states
+        if len(c)>=2: var+=1
+        if sum(v>=2 for v in c.values())>=2: pi_any+=1
+        ng=[x for x in col if x not in '-?']
+        if ng:
+            usable+=1
+            cc=Counter(ng)
+            if len(cc)==1: const+=1
+            if len(cc)>=2: var_no_gap+=1
+            else: var_no_gap=locals().get('var_no_gap',0)
+            if sum(v>=2 for v in cc.values())>=2: pi_no_gap+=1
+        else:
+            var_no_gap=locals().get('var_no_gap',0)
+    return dict(n=n,L=L,gaps=sum(x in '-?' for col in cols for x in col),pi_any=pi_any,pi_no_gap=pi_no_gap,var=var,usable=usable,var_no_gap=var_no_gap,patterns=patterns)
+
+for group in ['animals','fungi']:
+    path='inputs/scogs_'+group+'.zip'
+    allm=[]
+    with ZipFile(path) as z:
+        names=[x for x in z.namelist() if x.endswith('.faa.mafft')]
+        for fn in sorted(names):
+            rec=read_fasta(z.read(fn))
+            m=metrics(rec); m['id']=fn[:-10]
+            allm.append(m)
+    print('\\n',group,'n=',len(allm),'seq_counts=',Counter(m['n'] for m in allm),'lengths=',Counter(m['L'] for m in allm).most_common(10))
+    print('PI any range',min(m['pi_any'] for m in allm),max(m['pi_any'] for m in allm),'percent range',min(100*m['pi_any']/m['L'] for m in allm),max(100*m['pi_any']/m['L'] for m in allm))
+    print('PI nogap range',min(m['pi_no_gap'] for m in allm),max(m['pi_no_gap'] for m in allm),'percent over L range',min(100*m['pi_no_gap']/m['L'] for m in allm),max(100*m['pi_no_gap']/m['L'] for m in allm))
+    print('total gaps',sum(m['gaps'] for m in allm),'all ids with n "'!=4'"',[(m['id'],m['n']) for m in allm if m['n']"'!=4][:10])
+    print('"'first 5')
+    for m in allm[:5]: print(m['id'],{k:v for k,v in m.items() if k not in ('patterns','id')})
+PY"

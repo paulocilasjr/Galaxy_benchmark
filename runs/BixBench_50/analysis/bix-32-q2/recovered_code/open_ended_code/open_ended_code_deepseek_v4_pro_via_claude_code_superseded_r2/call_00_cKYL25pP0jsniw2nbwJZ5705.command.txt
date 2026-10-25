@@ -1,0 +1,89 @@
+/workspace/venv/bin/python3 -c "
+import rdata, numpy as np, requests, warnings
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+warnings.filterwarnings('ignore')
+
+# Load data
+res97 = rdata.read_rda('/workspace/inputs/res_1vs97.rds')
+res98 = rdata.read_rda('/workspace/inputs/res_1vs98.rds')
+res99 = rdata.read_rda('/workspace/inputs/res_1vs99.rds')
+
+def get_results(res):
+    return {
+        'genes': [str(g) for g in res.rownames],
+        'lfc': res.listData['log2FoldChange'],
+        'pvalue': res.listData['pvalue'],
+        'padj': res.listData['padj'],
+    }
+
+data97 = get_results(res97)
+data98 = get_results(res98)
+data99 = get_results(res99)
+
+# Get pathway data
+r_link = requests.get('https://rest.kegg.jp/link/pau/pathway', timeout=30)
+links = r_link.text.strip().split('\n')
+pathway_genes = {}
+for line in links:
+    parts = line.strip().split('\t')
+    if len(parts) == 2:
+        pid = parts[0].replace('path:', '')
+        gene = parts[1].replace('pau:', '')
+        pathway_genes.setdefault(pid, set()).add(gene)
+
+r_list = requests.get('https://rest.kegg.jp/list/pathway/pau', timeout=30)
+pathway_names = {}
+for line in r_list.text.strip().split('\n'):
+    parts = line.split('\t')
+    if len(parts) >= 2:
+        pathway_names[parts[0].replace('path:', '')] = parts[1]
+
+all_genes_set = set(str(g) for g in res97.rownames)
+kegg_mapped = set()
+for gs in pathway_genes.values():
+    kegg_mapped |= gs
+universe = kegg_mapped & all_genes_set
+
+# Filter
+for pid in pathway_genes:
+    pathway_genes[pid] = pathway_genes[pid] & universe
+pathway_genes = {pid: gs for pid, gs in pathway_genes.items() if len(gs) >= 5}
+
+# Show details for each comparison's significant results
+def run_ora_detailed(fg, label):
+    N = len(universe)
+    K = len(fg)
+    results = []
+    for pid, pw_set in pathway_genes.items():
+        n = len(pw_set)
+        k = len(fg & pw_set)
+        if k == 0:
+            continue
+        pval = hypergeom.sf(k - 1, N, n, K)
+        results.append({'pid': pid, 'n': n, 'k': k, 'pval': pval, 'name': pathway_names.get(pid, '')})
+    
+    if results:
+        pvals = [r['pval'] for r in results]
+        _, padjs, _, _ = multipletests(pvals, method='fdr_bh')
+        for i, r in enumerate(results):
+            r['padj'] = padjs[i]
+    
+    sig = [r for r in results if r['padj'] < 0.05]
+    sig.sort(key=lambda r: r['padj'])
+    print(f'\n{label}: {len(fg)} fg genes, {len(sig)} sig pathways')
+    for r in sig:
+        print(f'  {r[\"pid\"]}: padj={r[\"padj\"]:.4f} k={r[\"k\"]}/{r[\"n\"]} ({r[\"name\"]})')
+    return {r['pid'] for r in sig}
+
+for label, data in [('97', data97), ('98', data98), ('99', data99)]:
+    for direction in ['up', 'down']:
+        genes_arr = np.array(data['genes'])
+        lfc = data['lfc']
+        if direction == 'up':
+            mask = lfc > 1.5
+        else:
+            mask = lfc < -1.5
+        fg = set(genes_arr[mask]) & universe
+        run_ora_detailed(fg, f'{label} {direction}')
+" 2>&1

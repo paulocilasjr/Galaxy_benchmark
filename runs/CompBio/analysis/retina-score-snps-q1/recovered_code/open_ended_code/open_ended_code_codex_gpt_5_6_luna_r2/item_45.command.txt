@@ -1,0 +1,33 @@
+/bin/bash -lc "python -u - <<'PY'
+from pathlib import Path
+import pandas as pd, json, urllib.request, concurrent.futures, time
+x=pd.read_csv('retina.score.snps.q1.tsv',sep='\\t')
+INP_LEN=2114
+
+def get(i):
+ r=x.iloc[i]; p=int(r.start); start=p-INP_LEN//2; end=start+INP_LEN
+ url=f'https://api.genome.ucsc.edu/getData/sequence?genome=hg19;chrom={r.chr};start={start};end={end}'
+ last=None
+ for k in range(5):
+  try:
+   with urllib.request.urlopen(url,timeout=30) as q: d=json.load(q)
+   dna=d['dna'].upper()
+   if len(dna)"'!=INP_LEN: raise ValueError((len(dna),d))
+   return i,dna,None
+  except Exception as e:
+   last=repr(e); time.sleep(1+k)
+ return i,None,last
+out=[None]*len(x); failures=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+ for n,(i,dna,err) in enumerate(ex.map(get,range(len(x))),1):
+  if err: failures.append((i,err))
+  else: out[i]=dna
+  if n%50==0: print('"'done',n,'failures',len(failures),flush=True)
+if failures: raise RuntimeError(failures[:10])
+Path('zenodo/hg19_windows.json').write_text(json.dumps(out))
+print('saved',len(out),'windows',flush=True)
+# check reference at coordinate offset for 0-based and notebook offset
+for off in [INP_LEN//2, INP_LEN//2-1]:
+ matches=sum(d[off]==str(r.ref).upper() for d,r in zip(out,x.itertuples()))
+ print('offset',off,'ref matches',matches,'of',len(x),flush=True)
+PY"

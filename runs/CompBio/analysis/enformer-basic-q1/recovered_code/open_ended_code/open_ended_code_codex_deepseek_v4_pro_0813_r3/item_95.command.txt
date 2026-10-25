@@ -1,0 +1,95 @@
+/bin/bash -c "cd tf_protos && python - <<'PY'
+import sys, struct, snappy
+sys.path.insert(0,'.')
+import tensor_bundle_pb2 as tb
+
+data=open('../enformer_saved/variables/variables.index','rb').read()
+footer=data[-48:]
+def read_varint(buf,pos):
+    shift=0; result=0
+    while True:
+        b=buf[pos]; pos+=1
+        result |= (b & 0x7f) << shift
+        if not (b & 0x80): return result,pos
+        shift+=7
+pos=0
+meta_off,pos=read_varint(footer,pos); meta_size,pos=read_varint(footer,pos)
+idx_off,pos=read_varint(footer,pos); idx_size,pos=read_varint(footer,pos)
+def parse_block(content):
+    num_restarts=struct.unpack('<I',content[-4:])[0]
+    restart_base=len(content)-4-4*num_restarts
+    pos=0; prev=b''; out=[]
+    while pos < restart_base:
+        shared,pos=read_varint(content,pos); nonshared,pos=read_varint(content,pos); vlen,pos=read_varint(content,pos)
+        key=prev[:shared]+content[pos:pos+nonshared]; pos+=nonshared
+        val=content[pos:pos+vlen]; pos+=vlen
+        prev=key; out.append((key,val))
+    return out
+idx_content=data[idx_off:idx_off+idx_size]
+idx_entries=parse_block(idx_content)
+bh=idx_entries[0][1]
+p=0; data_off,p=read_varint(bh,p); data_size,p=read_varint(bh,p)
+stored=data[data_off:data_off+data_size]; trailer=data[data_off+data_size:data_off+data_size+5]
+content=snappy.decompress(stored) if trailer[0]==1 else stored
+entries=parse_block(content)
+
+def numel(shape):
+    n=1
+    for d in shape.dim: n*=d.size
+    return n
+
+def is_trainable(name):
+    if name.startswith('_CHECKPOINTABLE_OBJECT_GRAPH'): return False
+    if name.startswith('save_counter'): return False
+    if '/moving_mean/' in name or '/moving_variance/' in name: return False
+    if '/_counter/' in name: return False
+    if name.endswith('/_hidden/.ATTRIBUTES/VARIABLE_VALUE') or '/average/' in name: return False
+    return True
+
+total=0
+train=[]; nontrain=[]
+for key,val in entries:
+    name=key.decode('utf-8','replace')
+    if not name: continue
+    be=tb.BundleEntryProto(); be.ParseFromString(val)
+    n=numel(be.shape)
+    if is_trainable(name):
+        total+=n; train.append((name,n,be.dtype,be.shape))
+    else:
+        nontrain.append((name,n,be.dtype))
+print('total trainable', total)
+print('train entries', len(train), 'nontrain entries', len(nontrain))
+# group by prefix
+from collections import defaultdict
+g=defaultdict(int); gc=defaultdict(int)
+for name,n,dt,shape in train:
+    if name.startswith('model/_downres/'):
+        # split stem vs tower
+        if '/_layers/0/' in name:
+            g['stem']+=n; gc['stem']+=1
+        else:
+            g['conv_tower']+=n; gc['conv_tower']+=1
+    elif name.startswith('model/_transformer/'):
+        g['transformer']+=n; gc['transformer']+=1
+    elif name.startswith('model/_final_pointwise/'):
+        g['final_pointwise']+=n; gc['final_pointwise']+=1
+    elif name.startswith('model/heads/'):
+        g['heads']+=n; gc['heads']+=1
+    else:
+        g['other']+=n; gc['other']+=1
+        print('other',name,n)
+print('groups')
+for k in ['stem','conv_tower','transformer','final_pointwise','heads','other']:
+    print(k, g[k], gc[k])
+# separate heads
+for key in ['head_human','head_mouse']:
+    hsum=0;hcnt=0
+    for name,n,dt,shape in train:
+        if f'model/heads/{key}/' in name:
+            hsum+=n;hcnt+=1
+    print(key,hsum,hcnt)
+# print all non-trainable names maybe
+print('nontrain total', sum(n for _,n,_ in nontrain))
+for name,n,dt in nontrain:
+    print('NT', n, dt, name)
+PY"

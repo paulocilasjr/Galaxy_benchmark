@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 -S - <<'PY'
+import csv, math, statistics as st
+from collections import defaultdict
+expr=[]
+with open('ep.interactions.q1.expr.csv') as f:
+ for r in csv.DictReader(f): r['rna_count']=int(r['rna_count']); expr.append(r)
+print('guide-level mean log2FC, sd, absmean/sd')
+for pid in sorted(set(r['pair_id'] for r in expr)):
+ vals=[]
+ for guide in sorted(set(r['guide_id'] for r in expr if r['pair_id']==pid)):
+  c=[r['rna_count'] for r in expr if r['pair_id']==pid and r['guide_id']==guide and r['condition']=='control']
+  p=[r['rna_count'] for r in expr if r['pair_id']==pid and r['guide_id']==guide and r['condition']=='perturbed']
+  vals.append(math.log2((sum(p)/len(p)+1)/(sum(c)/len(c)+1)))
+ mean=sum(vals)/len(vals); sd=st.stdev(vals)
+ t=mean/(sd/math.sqrt(len(vals))) if sd else float('inf')
+ print(pid, [round(v,3) for v in vals], 'mean',round(mean,3),'sd',round(sd,3),'t',round(t,2))
+# HIC fit log mean ~ a + b log distance (background)
+h=[]
+with open('ep.interactions.q1.hic.csv') as f:
+ for r in csv.DictReader(f):
+  counts=[int(r['count_rep1']),int(r['count_rep2']),int(r['count_rep3'])]
+  h.append((r['pair_id'],r['set'],int(r['distance_bp']),sum(counts)/3,counts))
+bg=[x for x in h if x[1]=='background']
+# ordinary least squares log(count+0.5) vs log(dist)
+xs=[math.log(d) for _,_,d,m,_ in bg]
+ys=[math.log(m+0.5) for _,_,d,m,_ in bg]
+xbar=sum(xs)/len(xs); ybar=sum(ys)/len(ys)
+b=sum((x-xbar)*(y-ybar) for x,y in zip(xs,ys))/sum((x-xbar)**2 for x in xs)
+a=ybar-b*xbar
+res=[y-(a+b*x) for x,y in zip(xs,ys)]
+sd=st.stdev(res)
+print('\\nHIC log model a,b,sd',a,b,sd)
+for pid,sett,d,m,counts in h:
+ if sett=='candidate':
+  pred=math.exp(a+b*math.log(d))-0.5
+  z=(math.log(m+0.5)-(a+b*math.log(d)))/sd
+  print(pid, 'dist',d,'mean',round(m,2),'pred',round(pred,2),'logres_z',round(z,2),'ratio',round((m+0.5)/(pred+0.5),2))
+PY"

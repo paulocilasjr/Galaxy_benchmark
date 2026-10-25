@@ -1,0 +1,89 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python - <<'PY'
+import csv, re, gzip, urllib.request, urllib.error, os, time, sys
+from pathlib import Path
+base=Path('geo_check/direct_scan'); base.mkdir(exist_ok=True)
+ours=open('geo_check/fingerprints/obs.txt').read().splitlines(); ours_set=set(ours)
+local_genes=[line.split('\\t')[0] for line in open('geo_check/fingerprints/genes.tsv')]
+rows=list(csv.DictReader(open('geo_check/geometadb/mouse_direct_candidates.csv')))
+# Prioritize neural-looking plausible and older first
+keywords=['thalam','hypoth','cortex','cortical','neuro','brain','gangli','ear','retina','olfactory','spinal','neural']
+def pr(r):
+    t=r['title'].lower()
+    return (0 if any(k in t for k in keywords) else 1, r['gse'])
+rows=sorted(rows,key=pr)
+results=[]
+
+def urls(field, kind):
+    parts=re.split(r'[;\\t\\s]+', field.strip())
+    out=[]
+    for u in parts:
+        if not u: continue
+        lu=u.lower()
+        if kind=='gene' and (lu.endswith('genes.tsv.gz') or lu.endswith('features.tsv.gz')): out.append(u)
+        if kind=='barcode' and (lu.endswith('barcodes.tsv.gz') or lu.endswith('barcode.tsv.gz')): out.append(u)
+    return out
+
+def fetch(url, path):
+    if path.exists() and path.stat().st_size>0: return True
+    u=url.replace('ftp://ftp.ncbi.nlm.nih.gov','https://ftp.ncbi.nlm.nih.gov')
+    try:
+        with urllib.request.urlopen(u, timeout=30) as r, open(path,'wb') as f:
+            while True:
+                b=r.read(1<<20)
+                if not b: break
+                f.write(b)
+        return True
+    except Exception as e:
+        print('FETCH_FAIL',u,e, file=sys.stderr)
+        return False
+
+def read_gz_lines(path, max_lines=None):
+    out=[]
+    try:
+        with gzip.open(path,'rt',errors='replace') as f:
+            for i,line in enumerate(f):
+                if max_lines and i>=max_lines: break
+                out.append(line.rstrip('\\n'))
+        return out
+    except Exception as e:
+        return None
+
+for n,r in enumerate(rows,1):
+    gse=r['gse']; safe=base/gse; safe.mkdir(exist_ok=True)
+    gus=urls(r['supplementary_file'],'gene'); bus=urls(r['supplementary_file'],'barcode')
+    if not gus or not bus: continue
+    best=[]
+    for gi,gu in enumerate(gus[:4]):
+        gp=safe/(Path(gu).name or f'genes{gi}.gz')
+        if not fetch(gu,gp): continue
+        genes=read_gz_lines(gp)
+        if genes is None: continue
+        gene_ids=[x.split('\\t')[0] for x in genes]
+        gene_match=(len(gene_ids)==len(local_genes) and gene_ids[:20]==local_genes[:20] and gene_ids[-20:]==local_genes[-20:])
+        if not gene_match and len(gene_ids)"'!=28692: continue
+        for bi,bu in enumerate(bus[:4]):
+            bp=safe/(Path(bu).name or f'"'barcodes{bi}.gz')
+            if not fetch(bu,bp): continue
+            bars=read_gz_lines(bp)
+            if bars is None: continue
+            overlap=len(ours_set & set(bars))
+            equal=(bars==ours)
+            subset=ours_set.issubset(set(bars))
+            best.append((gene_match,len(gene_ids),len(bars),overlap,equal,subset,Path(gu).name,Path(bu).name))
+    if best:
+        best_sorted=sorted(best, key=lambda x:(x[4],x[5],x[3],x[0]), reverse=True)
+        b=best_sorted[0]
+        if b[3]>0 or b[1]==28692:
+            print('HIT',gse,b,r['title'][:100], flush=True)
+        results.append((gse,r['title'],best_sorted))
+    if n%25==0: print('progress',n,'/',len(rows), flush=True)
+print('DONE results',len(results))
+# write summary
+with open(base/'summary.tsv','w') as f:
+    f.write('gse\\ttitle\\tgene_match\\tgenes\\tbarcodes\\toverlap\\tequal\\tsubset\\tgene_file\\tbarcode_file\\n')
+    for gse,title,bests in results:
+        for b in bests:
+            f.write('\\t'.join(map(str,[gse,title,*b]))+'\\n')
+PY"

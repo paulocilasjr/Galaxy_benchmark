@@ -1,0 +1,81 @@
+source venv/bin/activate && python3 -c "
+import pandas as pd
+import numpy as np
+from scipy.stats import spearmanr
+
+# Manual check for MYC using full column name approach
+crispr_ids_all = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=[0]).iloc[:, 0].tolist()
+omics_ids_all = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=[0]).iloc[:, 0].tolist()
+common = set(crispr_ids_all) & set(omics_ids_all)
+
+# Find the exact column names for MYC
+crispr_header = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', nrows=0).columns.tolist()
+omics_header = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', nrows=0).columns.tolist()
+
+# Find MYC columns
+for col in crispr_header:
+    if col.strip().startswith('MYC '):
+        print(f'CRISPR MYC column: \"{col}\"')
+        myc_crispr_col = col
+        break
+
+for col in omics_header:
+    if col.strip().startswith('MYC '):
+        print(f'Omics MYC column: \"{col}\"')
+        myc_omics_col = col
+        break
+
+# Read just those 2 columns
+crispr_data = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=['Unnamed: 0', myc_crispr_col])
+omics_data = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=['Unnamed: 0', myc_omics_col])
+
+crispr_data = crispr_data.rename(columns={'Unnamed: 0': 'cell_line'})
+omics_data = omics_data.rename(columns={'Unnamed: 0': 'cell_line'})
+
+crispr_data = crispr_data[crispr_data['cell_line'].isin(common)]
+omics_data = omics_data[omics_data['cell_line'].isin(common)]
+
+crispr_data = crispr_data.set_index('cell_line')
+omics_data = omics_data.set_index('cell_line')
+
+common_idx = crispr_data.index.intersection(omics_data.index)
+print(f'Common rows: {len(common_idx)}')
+
+x = crispr_data.loc[common_idx].iloc[:, 0].astype(float).values
+y = omics_data.loc[common_idx].iloc[:, 0].astype(float).values
+
+mask = ~(np.isnan(x) | np.isnan(y))
+rho, p = spearmanr(x[mask], y[mask])
+print(f'MYC: n={mask.sum()}, rho={rho:.6f}, p={p:.6f}')
+print(f'CRISPR range: [{x[mask].min():.4f}, {x[mask].max():.4f}]')
+print(f'Expression range: [{y[mask].min():.4f}, {y[mask].max():.4f}]')
+
+# Also check SGF29 for comparison
+for col in crispr_header:
+    if col.strip().startswith('SGF29 '):
+        sgf29_crispr_col = col
+        break
+for col in omics_header:
+    if col.strip().startswith('SGF29 '):
+        sgf29_omics_col = col
+        break
+
+crispr_data2 = pd.read_csv('/workspace/inputs/CRISPRGeneEffect.csv', usecols=['Unnamed: 0', sgf29_crispr_col])
+omics_data2 = pd.read_csv('/workspace/inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', usecols=['Unnamed: 0', sgf29_omics_col])
+
+crispr_data2 = crispr_data2.rename(columns={'Unnamed: 0': 'cell_line'})
+omics_data2 = omics_data2.rename(columns={'Unnamed: 0': 'cell_line'})
+
+crispr_data2 = crispr_data2[crispr_data2['cell_line'].isin(common)]
+omics_data2 = omics_data2[omics_data2['cell_line'].isin(common)]
+
+crispr_data2 = crispr_data2.set_index('cell_line')
+omics_data2 = omics_data2.set_index('cell_line')
+
+common_idx2 = crispr_data2.index.intersection(omics_data2.index)
+x2 = crispr_data2.loc[common_idx2].iloc[:, 0].astype(float).values
+y2 = omics_data2.loc[common_idx2].iloc[:, 0].astype(float).values
+mask2 = ~(np.isnan(x2) | np.isnan(y2))
+rho2, p2 = spearmanr(x2[mask2], y2[mask2])
+print(f'SGF29: n={mask2.sum()}, rho={rho2:.6f}')
+" 2>&1

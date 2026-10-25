@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import Counter, defaultdict
+import subprocess, re
+trans_gene={}
+with open('hs_cdna.fa') as f:
+    for line in f:
+        if line.startswith('>'):
+            h=line[1:].strip(); tid=h.split()[0]
+            for part in h.split():
+                if part.startswith('gene_symbol:'): trans_gene[tid]=part.split(':',1)[1]; break
+# process BAM sorted as file, get read order index from QNAME READ_n
+arr=[]
+proc=subprocess.Popen(['samtools','view','reads_cdna.bam'],stdout=subprocess.PIPE,text=True)
+for line in proc.stdout:
+    p=line.split('\\t'); flag=int(p[1]);
+    if flag & 0x100: continue
+    qname=p[0]; m=re.match(r'READ_(\\d+)"'$'"',qname)
+    idx=int(m.group(1)) if m else None
+    if idx is None: continue
+    if flag & 0x4:
+        arr.append((idx,'*')); continue
+    gs=trans_gene.get(p[2],'')
+    arr.append((idx,gs))
+proc.wait()
+arr.sort()
+# compute runs of same gene (ignoring *)
+runs=[]; prev_gene=None; start=0; count=0
+for i,(idx,g) in enumerate(arr):
+    if g==prev_gene:
+        count+=1
+    else:
+        if prev_gene is not None: runs.append((prev_gene,start,i-1,count))
+        prev_gene=g; start=i; count=1
+runs.append((prev_gene,start,len(arr)-1,count))
+print('num reads',len(arr))
+print('top runs:')
+for r in sorted(runs,key=lambda x:-x[3])[:50]: print(r)
+# print gene sequence for first 1000 reads collapsed
+print('sequence first 2000:')
+seq=[]
+for idx,g in arr[:2000]:
+    seq.append(g)
+# collapse consecutive
+coll=[]; last=None; n=0
+for g in seq:
+    if g==last:n+=1
+    else:
+        if last is not None: coll.append((last,n))
+        last=g;n=1
+if last is not None: coll.append((last,n))
+print(coll[:200])
+PY"

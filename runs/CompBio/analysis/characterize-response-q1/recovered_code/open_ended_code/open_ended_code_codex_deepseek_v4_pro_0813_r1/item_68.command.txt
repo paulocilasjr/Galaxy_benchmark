@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+import GEOparse, numpy as np, pandas as pd, re
+from collections import defaultdict
+QFILE='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/characterize.response.q1.txt'
+DEST='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/geo'
+def get_data(gse):
+ g=GEOparse.get_GEO(geo=gse,destdir=DEST,silent=True)
+ mats=[]
+ for name,gsm in g.gsms.items():
+  t=gsm.table.copy(); valcol='VALUE' if 'VALUE' in t.columns else [c for c in t.columns if c not in ['ID_REF']][0]
+  t=t[['ID_REF',valcol]].rename(columns={valcol:'value'}); t['sample']=name; mats.append(t)
+ df=pd.concat(mats,ignore_index=True); expr=df.pivot(index='ID_REF',columns='sample',values='value').astype(float)
+ sym=None
+ for gpl in g.gpls.values():
+  ann=gpl.table; symcol=next((c for c in ann.columns if c.lower() in ['gene symbol','genesymbol','symbol','gene_symbol']),None)
+  if symcol: sym=ann.set_index('ID')[symcol]; break
+ return g,expr,sym
+
+def comp(gse, condpat, ctrlpat,label):
+ g,expr,sym=get_data(gse); names=list(expr.columns); cond=[];ctrl=[]
+ for name in names:
+  gsm=g.gsms[name]; title=gsm.metadata.get('title');
+  if isinstance(title,list):title=title[0]
+  src=gsm.metadata.get('source_name_ch1');
+  if isinstance(src,list):src=src[0]
+  s=str(title)+' '+str(src)
+  if re.search(condpat,s,re.I):cond.append(name)
+  elif re.search(ctrlpat,s,re.I):ctrl.append(name)
+ print('\\n',gse,label,'cond',cond,'ctrl',ctrl)
+ if not cond or not ctrl:return
+ m0=expr[cond].mean(axis=1);m1=expr[ctrl].mean(axis=1);logfc=np.log2((m0+1)/(m1+1))
+ best=defaultdict(lambda:(0,0,''))
+ for probe in expr.index:
+  if sym is None or probe not in sym.index:continue
+  gene=str(sym.loc[probe]).split('///')[0].strip().upper()
+  if gene and abs(logfc[probe])>best[gene][0]:best[gene]=(abs(logfc[probe]),logfc[probe],probe)
+ ranked=sorted(best.items(),key=lambda kv:-kv[1][0]);top=[g for g,v in ranked[:112]]
+ qlist=open(QFILE).read().split(); q=set(x.upper() for x in qlist); inter=set(top)&q
+ print('overlap',len(inter), sorted(inter,key=lambda x:qlist.index(x.capitalize()) if x.capitalize() in qlist else 999))
+ rank={g:i+1 for i,(g,v) in enumerate(ranked)}
+ rr=[(g.capitalize(),rank.get(g.upper())) for g in qlist if g.upper() in rank]
+ print('query ranks first 40:',rr[:40])
+
+comp('GSE15718',r'wild type dendritic cells stimulated with LPS for 24 hours"'$'"',r'wild type dendritic cells unstimulated"'$'"','DC LPS24 vs unstim')
+comp('GSE15718',r'wild type dendritic cells stimulated with LPS for 6 hours"'$'"',r'wild type dendritic cells unstimulated"'$'"','DC LPS6 vs unstim')
+comp('GSE15721',r'wild type macrophages stimulated with LPS for 24 hours"'$'"',r'wild type macrophages unstimulated"'$'"','MAC LPS24 vs unstim')
+comp('GSE15721',r'wild type macrophages stimulated with LPS for 6 hours"'$'"',r'wild type macrophages unstimulated"'$'"','MAC LPS6 vs unstim')
+comp('GSE73484',r'WT BMDMs-LPS 3h',r'WT BMDMs-UT','BMDM LPS3 vs UT')
+PY"

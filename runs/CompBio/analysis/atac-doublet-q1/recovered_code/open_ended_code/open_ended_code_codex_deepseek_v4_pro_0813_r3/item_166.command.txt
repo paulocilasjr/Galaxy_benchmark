@@ -1,0 +1,24 @@
+/bin/bash -c "python3 - <<'PY'
+import snapatac2 as snap, numpy as np
+from scipy.io import mmwrite
+adata=snap.read('atac.snap.h5ad')
+feat=np.array(adata.var['selected'])
+X=adata.X[:,feat]
+mmwrite('tile_selected_matrix.mtx', X.T) # rows features? MatrixMarket transpose then R t? We'll write features x cells by transposing.
+np.savetxt('tile_selected_features.txt', np.array(adata.var_names)[feat], fmt='%s')
+np.savetxt('tile_barcodes.txt', np.array(adata.obs_names), fmt='%s')
+print(X.shape, X.nnz)
+PY
+cat > run_scdbl_tile.R <<'R'
+suppressMessages(library(SingleCellExperiment)); suppressMessages(library(scDblFinder)); suppressMessages(library(Matrix))
+mat <- readMM('tile_selected_matrix.mtx') # features x cells already
+barcodes <- readLines('tile_barcodes.txt'); features <- readLines('tile_selected_features.txt')
+rownames(mat) <- features; colnames(mat) <- barcodes
+sce <- SingleCellExperiment(assays=list(counts=mat))
+set.seed(0)
+sce <- scDblFinder(sce, dbr=0.06)
+res <- colData(sce)
+write.table(data.frame(barcode=colnames(sce), scDblFinder.score=res"'$scDblFinder.score, scDblFinder.class=res$scDblFinder.class), '"'scDblFinder_tile_results.tsv', sep='\\t', row.names=FALSE, quote=FALSE)
+cat('done\\n')
+R
+/opt/miniconda3/envs/benchmark_codex_db6b0e9401a8460c8c59/bin/Rscript run_scdbl_tile.R"

@@ -1,0 +1,41 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from gprofiler import GProfiler
+from scipy.stats import hypergeom
+from statsmodels.stats.multitest import multipletests
+
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+meta=pd.read_csv('inputs/sample_layout.csv')
+meta['sample']=meta['SampleID'].str.replace('-', '_', regex=False)
+meta=meta.set_index('sample')
+meta=meta.loc[meta['Group'].isin(['DMSO','CBD_IC50']), ['Group']]
+cts=counts.T.loc[meta.index]
+dds=DeseqDataSet(counts=cts, metadata=meta, design='~ Group', n_cpus=4, quiet=True)
+dds.deseq2()
+st=DeseqStats(dds, contrast=['Group','CBD_IC50','DMSO'], alpha=0.05, n_cpus=4, quiet=True)
+st.summary()
+res=st.results_df.dropna(subset=['padj','log2FoldChange'])
+sig=res[(res.padj<0.05)&(res.log2FoldChange.abs()>0.5)]
+sets={'up':sig[sig.log2FoldChange>0].index.astype(str).tolist(), 'down':sig[sig.log2FoldChange<0].index.astype(str).tolist()}
+universe=res.index.astype(str).tolist()
+print('DE', len(res), len(sig), {k:len(v) for k,v in sets.items()})
+gp=GProfiler(return_dataframe=True)
+pattern='metabolic|metabolism|catabolic|biosynthetic|glycol|oxidative|respir|mitochond|lipid|fatty|amino acid|carbohydrate|nucleotide|protein'
+for direction, genes in sets.items():
+    enr=gp.profile(organism='hsapiens', query=genes, sources=['GO:BP'], user_threshold=1.0, background=universe)
+    print('\\nDIR',direction,'rows',0 if enr is None else len(enr))
+    if enr is None or len(enr)==0: continue
+    # hypergeometric raw p from custom universe dimensions, BH across returned hit terms
+    e=enr.copy()
+    N=int(e['effective_domain_size'].iloc[0])
+    e['raw_p_hypergeom']=hypergeom.sf(e['intersection_size'].astype(int)-1, N, e['term_size'].astype(int), e['query_size'].astype(int))
+    e['bh']=multipletests(e['raw_p_hypergeom'].to_numpy(), method='fdr_bh')[1]
+    sig_e=e[e['bh']<0.05].sort_values('bh')
+    met=sig_e[sig_e['name'].str.contains(pattern, case=False, regex=True, na=False)]
+    print('N',N,'query_size',e['query_size'].iloc[0],'sig_terms_BH',len(sig_e),'metlike_BH',len(met))
+    print(sig_e[['native','name','raw_p_hypergeom','bh','term_size','query_size','intersection_size']].head(20).to_string(index=False))
+    print('METLIKE')
+    print(met[['native','name','raw_p_hypergeom','bh','term_size','query_size','intersection_size']].head(30).to_string(index=False))
+PY"

@@ -1,0 +1,21 @@
+/bin/bash -lc "python - <<'PY'
+import sys, torch, pathlib
+sys.path.insert(0,'.')
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+seq=pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip(); mapping={'A':7,'C':8,'G':9,'T':10}
+ids=torch.tensor([[mapping[c] for c in seq]],dtype=torch.long)
+model=CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel')); model.load_state_dict(load_file('model.safetensors'),strict=False); model.tie_weights(); model.eval(); model.to('mps'); ids=ids.to('mps')
+B=10
+batch=[]
+for i in range(B):
+ x=ids[0].clone(); x[i]=3; batch.append(x)
+inp=torch.stack(batch)
+with torch.no_grad(): out=model(input_ids=inp)
+l=out.logits
+print('finite all',torch.isfinite(l).all().item(), 'nan count',torch.isnan(l).sum().item(), 'minmax',torch.nan_to_num(l).min().item(), torch.nan_to_num(l).max().item())
+# print each masked position row finite
+for i in range(B):
+ print(i, torch.isfinite(l[i,i]).all().item(), l[i,i].cpu().tolist()[:12])
+PY"

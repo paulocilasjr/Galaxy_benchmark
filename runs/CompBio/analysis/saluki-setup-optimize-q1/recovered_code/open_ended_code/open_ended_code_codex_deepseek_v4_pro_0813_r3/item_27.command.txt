@@ -1,0 +1,59 @@
+/bin/bash -lc "cat > zip_utils.py <<'PY'
+import struct, requests, zlib, os, json
+URL='https://zenodo.org/api/records/6326409/files/datasets.zip/content'
+
+def parse_central(path='central_dir.bin'):
+    b=open(path,'rb').read(); pos=0; recs={}
+    while pos+46<=len(b) and b[pos:pos+4]==b'PK\\x01\\x02':
+        hdr=struct.unpack_from('<4s6H3L5H2L',b,pos)
+        sig,vm,vn,flag,method,mt,md,crc,cs,us,flen,xlen,clen,disk,ia,ea,off=hdr
+        pos+=46
+        fname=b[pos:pos+flen].decode('utf8','replace'); pos+=flen
+        extra=b[pos:pos+xlen]; pos+=xlen; pos+=clen
+        if cs==0xffffffff or us==0xffffffff or off==0xffffffff:
+            ep=0
+            while ep+4<=len(extra):
+                hid,hsize=struct.unpack_from('<HH',extra,ep); ep+=4
+                if hid==1:
+                    idx=ep
+                    if us==0xffffffff: us=struct.unpack_from('<Q',extra,idx)[0]; idx+=8
+                    if cs==0xffffffff: cs=struct.unpack_from('<Q',extra,idx)[0]; idx+=8
+                    if off==0xffffffff: off=struct.unpack_from('<Q',extra,idx)[0]; idx+=8
+                ep+=hsize
+        recs[fname]={'method':method,'cs':cs,'us':us,'off':off,'flen':flen,'xlen':xlen,'clen':clen}
+    return recs
+
+RECS=parse_central()
+
+def get_file_data(fname):
+    r=RECS[fname]; off=r['off']; flen=r['flen']; xlen=r['xlen']; cs=r['cs']; us=r['us']; method=r['method']
+    # fetch local header (30+flen+xlen)
+    lh_end=off+30+flen+xlen
+    hdr=requests.get(URL,headers={'Range':f'bytes={off}-{lh_end-1}'},timeout=60).content
+    if hdr[:4]"'!=b'"'PK\\x03\\x04': raise Exception('bad local')
+    lflen,lxlen=struct.unpack_from('<2H',hdr,26)
+    data_start=off+30+lflen+lxlen
+    data=requests.get(URL,headers={'Range':f'bytes={data_start}-{data_start+cs-1}'},timeout=120).content
+    if len(data)"'!=cs: print('"'short',fname,len(data),cs)
+    if method==0: return data
+    if method==8: return zlib.decompress(data,-15)
+    raise Exception('method')
+
+def save(fname,dest):
+    data=get_file_data(fname)
+    open(dest,'wb').write(data)
+    return len(data)
+PY
+python3 - <<'PY'
+import zip_utils
+for f,d in [
+('datasets/deeplearning/train_gru/params.json','train_gru_params.json'),
+('datasets/deeplearning/train_gru/f1_c1/train/params.json','f1c1_train_params.json'),
+('datasets/deeplearning/train_gru/f1_c1/data0/statistics.json','f1c1_data0_statistics.json'),
+('datasets/deeplearning/train_gru/f1_c1/data1/statistics.json','f1c1_data1_statistics.json'),
+]:
+ try:
+  n=zip_utils.save(f,d); print(f,n)
+ except Exception as e: print('ERR',f,e)
+PY
+for f in train_gru_params.json f1c1_train_params.json f1c1_data0_statistics.json f1c1_data1_statistics.json; do echo \"---"'$f"; cat "$f"; done'

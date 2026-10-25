@@ -1,0 +1,24 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re, itertools
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+cols=df.columns.tolist()
+stab=pd.read_csv('refs/wheat_root_atlas/GRN_regulon_analysis/input/stability_and_specificity_info.csv', sep=';')
+ms=stab[(stab['Specificity']=='specific') & (stab['Stability']=='stable') & stab['is_Marker_of_Cluster'].notna()].copy()
+exact_map={'1Epidermis':'epidermis','2Cortex':'cortex','3Meristems':'meristems','4ProvascularCells':'provascular','5Unknown':'root_cap','6Pericycle':'pericycle','7Epidermis':'epidermis','8RootHair':'root_hair','9Endodermis':'endodermis','10Xylem':'xylem','11Endodermis/Phloem':'root_cap','12DividingCells':'meristems','13Phloem':'phloem','14RootCap':'root_cap'}
+sets={ct:set() for ct in cols}
+for lab,bt in exact_map.items():
+ sets[bt].update(ms.loc[ms['is_Marker_of_Cluster'].str.contains(re.escape(lab),na=False),'Gene'].tolist())
+pres={ct:[g for g in genes if g in df.index] for ct,genes in sets.items()}
+# log1p mean expression score
+def score(col,genes):
+ return np.log1p(df.loc[genes,col]).mean()
+obs={ct:score(ct,pres[ct]) for ct in cols}
+print('obs log1p means')
+for ct,v in obs.items(): print(ct,round(v,3))
+# evaluate swaps; improvement = swapped total - observed
+best=[]
+for a,b in itertools.combinations(cols,2):
+ imp=(score(b,pres[a])-obs[a])+(score(a,pres[b])-obs[b])
+ best.append((imp,a,b))
+for imp,a,b in sorted(best,reverse=True)[:10]: print(f'{a},{b}: improvement {imp:.3f}')
+PY"

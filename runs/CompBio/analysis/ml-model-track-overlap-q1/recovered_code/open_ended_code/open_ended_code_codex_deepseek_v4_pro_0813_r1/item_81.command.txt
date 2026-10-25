@@ -1,0 +1,55 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-281652bfe651d812e2dd4d4b/workspace && cat > fetch_borzoi_cistrome_ids.py <<'PY'
+import json, urllib.request, time, os, re, gzip, sys
+
+workspace='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-281652bfe651d812e2dd4d4b/workspace'
+# Build provenance sets same as before
+borzoi_ids=set()
+for path in ['[REDACTED LOCAL PATH]','[REDACTED LOCAL PATH]']:
+    f=gzip.open(path,'rt'); f.readline()
+    for line in f:
+        ident=line.rstrip('\\n').split('\\t')[1]
+        borzoi_ids.add(re.sub(r'[+-]"'$'"','',ident))
+geo=set(x for x in borzoi_ids if x.startswith('GSM'))
+enc_rows=[json.loads(l) for l in open('data/borzoi_encff_metadata.jsonl')]
+exps={g['accession']:g for g in [json.loads(l) for l in open('data/borzoi_experiments_metadata.jsonl')]}
+for r in enc_rows:
+    acc=r.get('dataset','').rstrip('/').split('/')[-1]
+    g=exps.get(acc)
+    if g:
+        for d in g.get('dbxrefs',[]):
+            if d.startswith('GEO:GSM'):
+                geo.add(d.split(':',1)[1])
+encode=set()
+for r in enc_rows:
+    acc=r.get('dataset','').rstrip('/').split('/')[-1]
+    for n in r.get('biological_replicates') or []:
+        encode.add(f'{acc}_{n}')
+print('geo',len(geo),'encode',len(encode))
+exts=sorted(geo)+sorted(encode)
+print('total ext',len(exts))
+out_path='data/borzoi_cistrome_matches.jsonl'
+if os.path.exists(out_path): os.remove(out_path)
+batch_size=100
+rows=[]
+for start in range(0,len(exts),batch_size):
+    batch=exts[start:start+batch_size]
+    # POST would be better but GET works for ext list up to ~1600
+    url='https://db3.cistrome.org/cistrome/samples?external_ids='+','.join(batch)+'&limit='+str(len(batch))
+    data=None
+    for attempt in range(5):
+        try:
+            data=json.load(urllib.request.urlopen(url,timeout=120))
+            break
+        except Exception as e:
+            print('retry',start,attempt,e,flush=True); time.sleep(2*(attempt+1))
+    if data is None:
+        print('FAILED',start,file=sys.stderr); sys.exit(1)
+    samples=data.get('samples',[])
+    with open(out_path,'a') as f:
+        for s in samples:
+            f.write(json.dumps(s)+'\\n'); rows.append(s)
+    print('batch',start//batch_size+1,'got',len(samples),'total',len(rows),'time',time.strftime('%H:%M:%S'),flush=True)
+    time.sleep(0.05)
+print('done',len(rows))
+PY
+python3 fetch_borzoi_cistrome_ids.py"

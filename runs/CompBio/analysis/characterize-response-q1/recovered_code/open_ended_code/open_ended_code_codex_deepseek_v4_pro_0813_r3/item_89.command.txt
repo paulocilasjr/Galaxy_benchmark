@@ -1,0 +1,37 @@
+/bin/bash -c "python3 - <<'PY'
+import requests,re,json,collections,statistics
+w=requests.get('https://rstats.immgen.org/MyGeneSet_New/wplot.js').text
+# extract keys between var groups_colors_all = { and };
+idx=w.find('var groups_colors_all = {'); end=w.find('};',idx)+1; seg=w[idx:end]
+valid=set(re.findall(r\"'(["'^'"']+)'\\s*:\", seg))
+print('valid keys',len(valid))
+# sample-select entries with tools
+r=open('sample-select.js').read(); start=r.find('var treeData_ImmGen_ULI_RNASeq = ['); end=r.find('var treeData_Microarray', start); seg2=r[start:end]
+entries=[]
+for m in re.finditer(r'\\{(.*?)\\}', seg2, re.S):
+ s=m.group(1); title=re.search(r'title\\s*:\\s*\"(["'^"]*)"'"',s); key=re.search(r'key\\s*:\\s*\"(["'^"]*)"'"',s); tool=re.search(r'tooltip\\s*:\\s*\"(["'^"]*)"'"',s,re.S)
+ if title and key: entries.append((title.group(1),key.group(1),tool.group(1).replace('\\\\n',' ') if tool else ''))
+groups={'Monocytes':'Group Name: Monocytes','Neutrophils':'Group Name: Granulocytes','Dendritic':'Group Name: Dendritic cells','B':'Group Name: B cells','CD8':'Group Name: ab T cells','CD4':'Group Name: ab T cells','NK':'Group Name: Innate Lymphocytes','Macrophages':'Group Name: Macrophages'}
+keys_by=collections.defaultdict(list)
+for title,key,tool in entries:
+ if key not in valid: continue
+ for cat,pat in groups.items():
+  if pat.lower() in tool.lower(): keys_by[cat].append(key)
+for k in keys_by: keys_by[k]=list(dict.fromkeys(keys_by[k]))
+print({k:len(v) for k,v in keys_by.items()})
+print({k:v for k,v in keys_by.items()})
+# query each category separately with all genes[] to avoid invalid bulk
+genes=open('characterize.response.q1.txt').read().split()
+vals=collections.defaultdict(list)
+for cat,ks in keys_by.items():
+ data=[('type','rnaseq'),('groups',','.join(ks)),('groups_num',str(len(ks))),('dataset','ULI_RNASeq')]
+ for g in genes: data.append(('genes[]',g))
+ r=requests.post('https://rstats.immgen.org/MyGeneSet_New/wplot_get_data.php',data=data,timeout=180)
+ print(cat,r.status_code,len(r.content))
+ if r.status_code"'!=200: continue
+ ds=json.loads(r.text)
+ for row in ds: vals[cat].append(row['"'norm_value'])
+print('\\nMean expression of query genes across cell type populations (ImmGen ULI):')
+for cat in ['Monocytes','Dendritic','Neutrophils','Macrophages','B','CD8','CD4','NK']:
+ v=vals[cat]; print(cat,len(v),'mean',statistics.mean(v) if v else None,'median',statistics.median(v) if v else None)
+PY"

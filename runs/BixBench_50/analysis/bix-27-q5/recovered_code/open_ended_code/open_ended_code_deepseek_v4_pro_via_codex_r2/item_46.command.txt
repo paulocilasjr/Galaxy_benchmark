@@ -1,0 +1,43 @@
+/bin/bash -c "python3 - <<'PY'
+import csv, numpy as np, collections
+from numpy.linalg import svd
+with open('inputs/ROSMAP_genexp_ad.csv') as f:
+    h=next(csv.reader(f)); ids=h[1:]
+    X=np.array([[float(x) for x in row[1:]] for row in csv.reader(f)], dtype=float)
+# fit function centered, full SVD, ratio using eigenvalues/total variance
+def pca_ratio(Xsamples):
+    Y=np.log10(Xsamples+1.0)
+    Yc=Y-Y.mean(axis=0)
+    # zero variance features
+    var=Yc.var(axis=0, ddof=0)
+    Yz=Yc[:,var>1e-15]
+    # SVD of centered matrix; eigenvalues = s"'^2/n if ddof=0 denominator n
+    n,p=Yz.shape
+    # scikit-learn divides by n for variance, PCA uses n (not n-1)
+    U,s,Vt=svd(Yz, full_matrices=False)
+    eig=s*s/n
+    total=np.sum(Yz.var(axis=0,ddof=0))
+    ratio=eig/total
+    return ratio[0]*100, ratio[:100].sum(), n, p
+print('"'all', pca_ratio(X.T))
+# 178 singletons only
+cnt=collections.Counter(ids)
+keep_single=np.array([cnt[s]==1 for s in ids])
+print('singletons', pca_ratio(X.T[keep_single]))
+# 199 choose first occurrence for each duplicated base
+keep_first=np.zeros(len(ids),dtype=bool)
+seen=set()
+for i,s in enumerate(ids):
+    if s not in seen:
+        keep_first[i]=True; seen.add(s)
+print('first occurrence unique base', pca_ratio(X.T[keep_first]))
+# 222 but remove all duplicate groups? same as singleton
+# if scale features (correlation PCA)
+Y=np.log10(X.T+1.0)
+from sklearn.decomposition import PCA
+for scale in [False,True]:
+    p=PCA(n_components=100, svd_solver='full')
+    Z=Y
+    p.fit(Z)
+    print('sklearn all scale',scale,p.explained_variance_ratio_[0]*100, p.explained_variance_ratio_.sum())
+PY"

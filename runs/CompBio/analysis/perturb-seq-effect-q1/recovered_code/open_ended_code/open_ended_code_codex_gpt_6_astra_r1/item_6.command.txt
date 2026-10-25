@@ -1,0 +1,41 @@
+/bin/bash -lc "cat > analyze.py <<'PY'
+import gzip
+import numpy as np
+import pandas as pd
+from scipy.io import mmread
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
+features=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None)[1]
+barcodes=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None)[0]
+with gzip.open('filtered_feature_bc_matrix/matrix.mtx.gz','rb') as f: X=mmread(f).T.toarray().astype(float)
+calls=pd.read_csv('protospacer_calls_per_cell.csv').set_index('cell_barcode').loc[barcodes]
+ref=pd.read_csv('feature_reference.csv').set_index('id')
+calls['target']=calls.feature_call.map(ref.target_gene_name)
+lib=X.sum(1)
+Y=np.log1p(X/lib[:,None]*10000)
+pathway=features.iloc[:20].tolist()
+mask=features.isin(pathway).values
+control=(calls.target=='Non-Targeting').values
+z=(Y-Y[control].mean(0))/Y[control].std(0)
+score=z[:,mask].mean(1)
+calls['score']=score
+calls['library_size']=lib
+calls['detected']=(X>0).sum(1)
+rows=[]
+for t,g in calls.groupby('target'):
+ ix=(calls.target==t).values
+ p=mannwhitneyu(score[ix],score[control],alternative='less').pvalue
+ lfc=np.log2((X[ix].sum(0)/lib[ix].sum()+1e-7)/(X[control].sum(0)/lib[control].sum()+1e-7))
+ rows.append({'target':t,'n':sum(ix),'score':score[ix].mean(),'sd':score[ix].std(),'median_score':np.median(score[ix]),'pathway_log2FC':np.median(lfc[mask]),'decreased_pathway_genes':sum(lfc[mask]<-0.2),'background_log2FC':np.median(lfc[~mask]),'library_size':lib[ix].mean(),'p':p})
+res=pd.DataFrame(rows).sort_values('score')
+res['q']=multipletests(res.p,method='fdr_bh')[1]
+res.to_csv('target_summary.csv',index=False)
+calls.to_csv('cell_scores.csv')
+print(res.to_string(index=False))
+for t in res.target.iloc[:4]:
+ ix=(calls.target==t).values
+ print('\\nTarget',t)
+ print(pd.DataFrame({'gene':features[mask],'control':X[control][:,mask].mean(0),'perturbed':X[ix][:,mask].mean(0),'z':z[ix][:,mask].mean(0)}).to_string(index=False))
+ print('score quantiles',np.quantile(score[ix],[0,.1,.25,.5,.75,.9,1]))
+PY
+OPENBLAS_NUM_THREADS=1 python -u analyze.py"

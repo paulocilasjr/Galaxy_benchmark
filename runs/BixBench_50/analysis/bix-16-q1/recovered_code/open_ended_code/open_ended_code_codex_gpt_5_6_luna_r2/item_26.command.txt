@@ -1,0 +1,36 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import csv,time,warnings
+import numpy as np,pandas as pd
+from scipy.stats import rankdata,spearmanr
+warnings.filterwarnings('ignore')
+cp='inputs/CRISPRGeneEffect.csv'; ep='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+def hdr(p):
+ with open(p,newline='') as f:return next(csv.reader(f))[1:]
+ch=hdr(cp); eh=hdr(ep)
+common_labels=[x for x in ch if x in set(eh)]
+print('exact labels',len(common_labels))
+# Read with float64 to avoid any possible rank changes from downcasting.
+cr=pd.read_csv(cp,index_col=0,usecols=['Unnamed: 0']+common_labels,dtype={x:np.float64 for x in common_labels})
+ex=pd.read_csv(ep,index_col=0,usecols=['Unnamed: 0']+common_labels,dtype={x:np.float64 for x in common_labels})
+ids=cr.index.intersection(ex.index)
+cr=cr.loc[ids,common_labels]; ex=ex.loc[ids,common_labels]
+print('paired models',len(ids),'model table check',flush=True)
+with open('inputs/Model.csv',newline='') as f: mids={row['ModelID'] for row in csv.DictReader(f)}
+print('all paired in Model',set(ids)<=mids,'unique model ids',len(mids))
+raw=np.full(len(common_labels),np.nan); n=np.zeros(len(common_labels),dtype=int)
+a=ex.to_numpy(); b=cr.to_numpy()
+t=time.time()
+for j in range(len(common_labels)):
+ mask=np.isfinite(a[:,j])&np.isfinite(b[:,j]); n[j]=mask.sum()
+ if n[j]>=2:
+  rx=rankdata(a[mask,j],method='average'); ry=rankdata(b[mask,j],method='average')
+  rx-=rx.mean(); ry-=ry.mean(); den=np.sqrt(np.dot(rx,rx)*np.dot(ry,ry))
+  if den: raw[j]=np.dot(rx,ry)/den
+print('computed sec',round(time.time()-t,1))
+r_es=-raw
+valid=np.isfinite(r_es)
+ord=np.where(valid)[0][np.argsort(r_es[valid])]
+for j in ord[:10]: print(common_labels[j], 'symbol=',common_labels[j].rsplit(' (',1)[0], 'essentiality_r=',repr(float(r_es[j])),'raw_r=',repr(float(raw[j])),'n=',int(n[j]))
+ix=common_labels.index('CDKN1A (1026)') if 'CDKN1A (1026)' in common_labels else [i for i,x in enumerate(common_labels) if x.startswith('CDKN1A (')][0]
+print('CDKN1A direct scipy raw/es',repr(float(spearmanr(a[:,ix][np.isfinite(b[:,ix])],b[:,ix][np.isfinite(b[:,ix])]).statistic)),repr(float(spearmanr(a[:,ix][np.isfinite(b[:,ix])],-b[:,ix][np.isfinite(b[:,ix])]).statistic)))
+PY"

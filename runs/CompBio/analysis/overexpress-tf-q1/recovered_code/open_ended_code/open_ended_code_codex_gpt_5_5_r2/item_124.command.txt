@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, os, collections, math
+
+def read(path, limit):
+    out=[]
+    for i,line in enumerate(open(path)):
+        if i>=limit: break
+        c,s,e=line.split()[:3]; out.append((c,int(s),int(e)))
+    return out
+
+def names_for_regions(regions, score=400):
+    nreg=collections.Counter(); nmot=collections.Counter()
+    for c,s,e in regions:
+        p=f'work/jaspar_cache/{c}_{s}_{e}.json'
+        if not os.path.exists(p):
+            continue
+        d=json.load(open(p)); seen=set()
+        for it in d.get('jaspar2024',[]):
+            if int(it['score'])>=score:
+                name=it['TFName'].upper()
+                seen.add(name); nmot[name]+=1
+        for name in seen: nreg[name]+=1
+    return nreg,nmot
+
+def fisher(a,b,c,d):
+    n=a+b+c+d; row=a+b; col=a+c; hi=min(row,col)
+    def lc(n,k): return math.lgamma(n+1)-math.lgamma(k+1)-math.lgamma(n-k+1)
+    logs=[lc(col,x)+lc(n-col,row-x)-lc(n,row) for x in range(a,hi+1)]
+    m=max(logs); return math.exp(m)*sum(math.exp(x-m) for x in logs)
+G=read('work/top_gained_1000.bed',500); S=read('work/stable_1000.bed',500)
+g,_=names_for_regions(G); s,_=names_for_regions(S)
+rows=[]
+for name in set(g)|set(s):
+    a=g[name]; c=s[name]; b=len(G)-a; d=len(S)-c
+    if a<20: continue
+    odds=((a+.5)/(b+.5))/((c+.5)/(d+.5))
+    rows.append((fisher(a,b,c,d),-odds,name,a,c,odds))
+for r in sorted(rows)[:30]:
+    print(r[2], 'p', f'{r[0]:.2g}', 'odds', f'{r[5]:.2f}', 'regions', r[3], r[4])
+PY"

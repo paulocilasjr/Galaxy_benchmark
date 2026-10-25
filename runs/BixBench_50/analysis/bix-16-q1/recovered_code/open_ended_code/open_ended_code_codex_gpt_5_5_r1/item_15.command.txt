@@ -1,0 +1,96 @@
+/bin/bash -lc "python - <<'PY'
+import csv, re, time
+from pathlib import Path
+import numpy as np
+from scipy.stats import rankdata
+
+crispr_path = Path('inputs/CRISPRGeneEffect.csv')
+expr_path = Path('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+
+def read_header(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))
+
+def read_ids(path):
+    ids=[]
+    with open(path, newline='') as f:
+        r=csv.reader(f)
+        next(r)
+        for row in r:
+            ids.append(row[0])
+    return ids
+
+print('reading headers/ids', flush=True)
+ch = read_header(crispr_path)
+eh = read_header(expr_path)
+crispr_ids = read_ids(crispr_path)
+expr_ids = read_ids(expr_path)
+
+cmap = {g:i for i,g in enumerate(ch[1:])}
+emap = {g:i for i,g in enumerate(eh[1:])}
+# Preserve expression header order for deterministic tie behavior, paired by exact source labels.
+common_genes = [g for g in eh[1:] if g in cmap]
+print('common models', len(set(crispr_ids) & set(expr_ids)), 'common genes', len(common_genes), flush=True)
+
+print('loading expression numeric matrix', flush=True)
+t0=time.time()
+expr_all = np.loadtxt(expr_path, delimiter=',', skiprows=1, usecols=range(1, len(eh)), dtype=np.float64)
+print('expr shape', expr_all.shape, 'sec', time.time()-t0, flush=True)
+print('loading crispr numeric matrix', flush=True)
+t0=time.time()
+crispr_all = np.loadtxt(crispr_path, delimiter=',', skiprows=1, usecols=range(1, len(ch)), dtype=np.float64)
+print('crispr shape', crispr_all.shape, 'sec', time.time()-t0, flush=True)
+
+# Align rows by model ID and columns by exact gene labels.
+expr_row = {m:i for i,m in enumerate(expr_ids)}
+crispr_row = {m:i for i,m in enumerate(crispr_ids)}
+common_models = [m for m in expr_ids if m in crispr_row]
+erows = np.array([expr_row[m] for m in common_models], dtype=np.int64)
+crows = np.array([crispr_row[m] for m in common_models], dtype=np.int64)
+ecols = np.array([emap[g] for g in common_genes], dtype=np.int64)
+ccols = np.array([cmap[g] for g in common_genes], dtype=np.int64)
+
+X = expr_all[np.ix_(erows, ecols)]
+Y = -crispr_all[np.ix_(crows, ccols)]  # positive-going essentiality
+# release full matrices early
+expr_all = None; crispr_all = None
+print('aligned', X.shape, Y.shape, 'nan counts', np.isnan(X).sum(), np.isnan(Y).sum(), flush=True)
+
+if not np.isnan(X).any() and not np.isnan(Y).any():
+    print('ranking dense matrices', flush=True)
+    RX = rankdata(X, axis=0, method='average')
+    RY = rankdata(Y, axis=0, method='average')
+    RX -= RX.mean(axis=0)
+    RY -= RY.mean(axis=0)
+    num = np.sum(RX * RY, axis=0)
+    den = np.sqrt(np.sum(RX*RX, axis=0) * np.sum(RY*RY, axis=0))
+    corr = num / den
+else:
+    # Pairwise-complete fallback, ranks after filtering for each gene.
+    print('ranking pairwise due to NaNs', flush=True)
+    corr = np.full(len(common_genes), np.nan)
+    for j in range(len(common_genes)):
+        x = X[:, j]; y = Y[:, j]
+        mask = np.isfinite(x) & np.isfinite(y)
+        if mask.sum() >= 2:
+            rx = rankdata(x[mask], method='average')
+            ry = rankdata(y[mask], method='average')
+            rx = rx - rx.mean(); ry = ry - ry.mean()
+            den = np.sqrt(np.sum(rx*rx)*np.sum(ry*ry))
+            if den:
+                corr[j] = np.sum(rx*ry)/den
+
+valid = np.isfinite(corr)
+idxs = np.where(valid)[0]
+min_local = idxs[np.argmin(corr[valid])]
+label = common_genes[min_local]
+symbol = label.rsplit(' (', 1)[0]
+print('valid_corrs', int(valid.sum()))
+print('min_label', label)
+print('symbol', symbol)
+print('rho', repr(float(corr[min_local])))
+order = idxs[np.argsort(corr[valid])[:10]]
+print('top10')
+for idx in order:
+    print(common_genes[idx], float(corr[idx]))
+PY"

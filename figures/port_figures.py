@@ -263,7 +263,7 @@ def port(target, commit, only=None):
             label=label, title=title, section=SECTION[record], folder=folder, record=record, script=script,
             script_record=script_record, archive=ARCHIVE, commit=commit, short=commit[:7], doc=doc.strip()))
         print(f'{folder}: {len(body)} definitions from {script}')
-    shutil.copyfile(os.path.join(ROOT, 'manuscript_material', 'scripts', 'style.py'),
+    shutil.copyfile(os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts', 'style.py'),
                     os.path.join(target, 'figures', 'figure_style.py'))
     shutil.copyfile(os.path.join(HERE, 'panel_io.py'), os.path.join(target, 'figures', 'panel_io.py'))
 

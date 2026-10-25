@@ -1,0 +1,63 @@
+/bin/bash -c "cat > score_bigwigs.py <<'PY'
+import json, pyBigWig, math, statistics, concurrent.futures, time, sys, os
+from collections import defaultdict
+
+track=[]
+with open('track.tsv') as f:
+    for line in f:
+        c,s,e,v=line.split()
+        if c=='chr10': track.append(float(v))
+track_mean=sum(track)/len(track)
+track_sd=math.sqrt(sum((x-track_mean)**2 for x in track)/len(track))
+
+def rankvec(a):
+    order=sorted(range(len(a)), key=lambda i:a[i])
+    r=[0]*len(a)
+    for rank,i in enumerate(order): r[i]=rank
+    return r
+track_rank=rankvec(track)
+
+def score_one(item):
+    try:
+        url=item['cloud_metadata']['url']
+        bw=pyBigWig.open(url)
+        length=bw.chroms('chr10')
+        st=bw.stats('chr10',0,length,type='mean',nBins=len(track))
+        st=[0 if x is None else x for x in st]
+        # pearson
+        mean=sum(st)/len(st); sd=math.sqrt(sum((x-mean)**2 for x in st)/len(st))
+        if sd==0: return (item, 0.0,0.0,0.0)
+        cov=sum((a-track_mean)*(b-mean) for a,b in zip(track,st))/len(track)
+        pear=cov/(track_sd*sd)
+        # spearman
+        r=rankvec(st)
+        mr=sum(r)/len(r); mtr=sum(track_rank)/len(track_rank)
+        covr=sum((a-mtr)*(b-mr) for a,b in zip(track_rank,r))/len(r)
+        sdr=math.sqrt(sum((x-mr)**2 for x in r)/len(r)); sdtr=math.sqrt(sum((x-mtr)**2 for x in track_rank)/len(track_rank))
+        spear=covr/(sdr*sdtr)
+        return (item, pear, spear, len(st))
+    except Exception as e:
+        return (item, None, None, str(e))
+
+if __name__=='__main__':
+    data=json.load(open('dnase_v1_bigwigs.json'))['@graph']
+    cand=[x for x in data if (x.get('analysis_step_version') or {}).get('name')=='dnase-peak-calling-step-v-1-0']
+    if len(sys.argv)>1:
+        cand=cand[:int(sys.argv[1])]
+    print('scoring',len(cand),'bigwigs')
+    results=[]
+    t=time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+        futs=[ex.submit(score_one,x) for x in cand]
+        for i,f in enumerate(concurrent.futures.as_completed(futs)):
+            results.append(f.result())
+            if (i+1)%100==0: print('done',i+1,'elapsed',time.time()-t,flush=True)
+    good=[r for r in results if r[1] is not None]
+    good.sort(key=lambda r:r[1], reverse=True)
+    print('good',len(good))
+    for r in good[:30]:
+        item,pear,spear,n=r
+        print(item['dataset'], item['accession'], item.get('biological_replicates'), item.get('technical_replicates'), 'pear',pear,'spear',spear)
+    json.dump([{'dataset':r[0]['dataset'],'accession':r[0]['accession'],'pear':r[1],'spear':r[2],'error':r[3]} for r in results], open('scores_partial.json','w'))
+PY
+python3 score_bigwigs.py 30"

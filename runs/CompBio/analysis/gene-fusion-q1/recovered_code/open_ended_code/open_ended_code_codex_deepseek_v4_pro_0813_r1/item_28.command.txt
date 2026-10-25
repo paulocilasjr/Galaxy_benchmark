@@ -1,0 +1,47 @@
+/bin/bash -c "python3 - <<'PY'
+import pysam, json, collections, re
+sym=json.load(open('sym.json'))
+def g(ref): return sym.get(ref, ref)
+# collect query names where SA or mate pair includes GAPDH/SOX2 and different
+names=set()
+infile=pysam.AlignmentFile('aln.sam','r')
+records=[]
+for rec in infile:
+    if rec.is_unmapped: continue
+    if rec.is_secondary or rec.is_supplementary: continue
+    genes=set()
+    rg=g(rec.reference_name)
+    genes.add(rg)
+    if rec.has_tag('SA'):
+        for entry in rec.get_tag('SA').split(';'):
+            if entry:
+                parts=entry.split(',')
+                genes.add(g(parts[0]))
+    nr=rec.next_reference_name
+    if nr and nr"'!='"'=':
+        genes.add(g(nr))
+    if ('GAPDH' in genes or 'SOX2' in genes) and len({'GAPDH','SOX2'} & genes)>=1:
+        # keep if contains both and different
+        if 'GAPDH' in genes and 'SOX2' in genes:
+            names.add(rec.query_name)
+            records.append(rec)
+print('unique query names',len(names))
+# output all alignments for these names, sorted by name from SAM by reading again
+names_sorted=sorted(names)
+infile.close()
+infile=pysam.AlignmentFile('aln.sam','r')
+rows=[]
+for rec in infile:
+    if rec.query_name in names_sorted and not rec.is_unmapped:
+        rows.append(rec)
+# print first few names all records
+from collections import defaultdict
+by=defaultdict(list)
+for r in rows: by[r.query_name].append(r)
+for name in list(by)[:10]:
+    print('\\nQNAME', name)
+    for r in by[name]:
+        rg=g(r.reference_name)
+        sa=r.get_tag('SA') if r.has_tag('SA') else ''
+        print(f\"flag={r.flag} ref={r.reference_name}({rg}) pos={r.reference_start} mapq={r.mapping_quality} cigar={r.cigarstring} rnext={r.next_reference_name} pnext={r.next_reference_start} tlen={r.template_length} seq={r.query_sequence} SA={sa}\")
+PY"

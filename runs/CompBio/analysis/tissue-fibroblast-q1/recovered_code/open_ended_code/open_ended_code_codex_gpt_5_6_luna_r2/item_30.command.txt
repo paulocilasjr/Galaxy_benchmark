@@ -1,0 +1,58 @@
+/bin/bash -lc "python3 -u - <<'PY'
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
+from scipy.io import mmread
+import numpy as np, re
+p='supplement_table1.xlsx'
+ns='{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+rel_ns='{http://schemas.openxmlformats.org/package/2006/relationships}'
+with ZipFile(p) as z:
+    sroot=ET.fromstring(z.read('xl/sharedStrings.xml'))
+    ss=[''.join(t.text or '' for t in si.iter(ns+'t')) for si in sroot.findall(ns+'si')]
+    wb=ET.fromstring(z.read('xl/workbook.xml'))
+    rel=ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))
+    mp={r.attrib['Id']:r.attrib['Target'] for r in rel}
+    markers={}
+    for sh in wb.find(ns+'sheets'):
+        name=sh.attrib['name']
+        if 'Fibroblast' not in name: continue
+        f='xl/'+mp[sh.attrib['{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id']]
+        rt=ET.fromstring(z.read(f))
+        vals=[]
+        for row in rt.iter(ns+'row'):
+            d={}
+            for c in row.findall(ns+'c'):
+                v=c.find(ns+'v'); val='' if v is None else v.text
+                if c.attrib.get('t')=='s' and val: val=ss[int(val)]
+                d[c.attrib.get('r','')[:1]]=val
+            if d.get('A') and d.get('A') "'!= '"'>Log2FC2, padj<0.05':
+                try: fc=float(d.get('B','0'))
+                except: fc=0
+                vals.append((d['A'],fc))
+        markers[name]=vals
+print('markers',[(k,len(v)) for k,v in markers.items()])
+X=mmread('tmp_matrix.mtx').tocsr()
+genes=np.array([s.strip() for s in open('tmp_genes.txt')])
+cells=np.array([s.strip() for s in open('tmp_cells.txt')])
+idx={g:i for i,g in enumerate(genes)}
+for bc in ['Cell_11249_MCI','Cell_10369_WXV']:
+    j=np.where(cells==bc)[0][0]
+    col=X[:,j].toarray().ravel()
+    lib=col.sum(); norm=np.log1p(col/lib*1e4)
+    print('\\nTARGET',bc,'lib',lib,'det',np.count_nonzero(col))
+    out=[]
+    for name,ms in markers.items():
+        ids=np.array([idx[g] for g,fc in ms if g in idx],int)
+        fcs=np.array([fc for g,fc in ms if g in idx],float)
+        ex=col[ids]>0
+        # weighted score across all genes, counts normalized by marker number
+        score=(norm[ids]*np.maximum(fcs,0)).sum()/len(ids)
+        score2=norm[ids].sum()/len(ids)
+        out.append((score,score2,int(ex.sum()),name))
+    print('score weighted / avg / detected')
+    for a,b,c,n in sorted(out,reverse=True): print(f'{n:35s} {a:8.3f} {b:7.3f} {c:3d}')
+    print('detected marker genes:')
+    for name,ms in markers.items():
+        q=[(g, int(col[idx[g]]),fc) for g,fc in ms if g in idx and col[idx[g]]>0]
+        if q: print(name, q[:40])
+PY"

@@ -1,0 +1,63 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp
+sets={
+'ISG':['IFI27','IFIT1','IFIT2','IFIT3','ISG15','MX1','MX2','OAS1','OAS2','OAS3','OASL','RSAD2','IFI6','IFI44','IFI44L','XAF1','IRF7','STAT1','SIGLEC1'],
+'Inflam':['S100A8','S100A9','S100A12','IL1B','CCL3','CCL4','CXCL8','FCN1','VCAN','LST1','LYZ'],
+'Plasma':['MZB1','JCHAIN','XBP1','IGHG1','IGKC','SDC1'],
+'NaiveT':['CCR7','LEF1','TCF7','IL7R','LTB'],
+'Cyto':['NKG7','GNLY','GZMB','PRF1','KLRD1','KLRF1'],
+'cDC':['FCER1A','CLEC10A','CD1C','HLA-DRA','CST3'],
+'pDC':['LILRA4','CLEC4C','IL3RA','TCF4','GZMB'],
+'Mono':['CD14','LYZ','S100A8','S100A9','FCN1','LST1'],
+'B':['MS4A1','CD79A','CD79B','CD19','BANK1'],
+'T':['CD3D','CD3E','CD2','TRAC','IL7R'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1','KLRF1'],
+}
+A=ad.read_h5ad('covid.patients.q1.h5ad',backed='r')
+sym=np.asarray(A.var['feature_name'].astype(str)); sym_to_idx={s:i for i,s in enumerate(sym) if s not in sym_to_idx} # not correct dict comprehension? 
+sym_to_idx={}
+for i,s in enumerate(sym):
+ if s not in sym_to_idx: sym_to_idx[s]=i
+all_genes=[]
+for gs in sets.values():
+ for g in gs:
+  if g in sym_to_idx and g not in all_genes: all_genes.append(g)
+idx=[sym_to_idx[g] for g in all_genes]
+donors=A.obs['donor_id'].astype(str).values
+cats=np.array(sorted(pd.unique(donors), key=lambda s:int(s[5:])))
+cat_index={d:i for i,d in enumerate(cats)}; codes=np.array([cat_index[d] for d in donors])
+n=A.shape[0]; nd=len(cats); sums=np.zeros((nd,len(idx))); totals=np.zeros(nd)
+chunk=20000
+for i in range(0,n,chunk):
+ j=min(n,i+chunk); c=codes[i:j]; X=A.X[i:j,idx]
+ if sp.issparse(X): X=X.toarray().astype(np.float64)
+ else: X=np.asarray(X,dtype=np.float64)
+ D=sp.csr_matrix((np.ones(j-i,dtype=np.float32),(np.arange(j-i),c)),shape=(j-i,nd))
+ sums += D.T @ X; totals += np.asarray(D.T @ X.sum(axis=1,keepdims=True)).ravel()
+logcpm=np.log1p(sums/totals[:,None]*1e6)
+feats={}; gpos={g:i for i,g in enumerate(all_genes)}
+for name,gs in sets.items():
+ cols=[gpos[g] for g in gs if g in gpos]; feats[name]=logcpm[:,cols].mean(axis=1)
+df=pd.DataFrame(feats,index=cats)
+# add our marker props from cell_scores
+D=np.load('cell_scores.npz',allow_pickle=True); d={}
+for k in D.keys():
+ if k"'!='"'cats': d[k]=D[k]
+cs=pd.DataFrame(d,index=D['cats'])
+for k in ['type_CD14_Mono','type_CD16_Mono','type_T','type_NK','type_B','type_Plasma','type_cDC','type_pDC','type_Platelet','type_RBC']:
+ cs[k+'_prop']=cs[k]/cs['total_cells']
+for i,d in enumerate(cats):
+ df.loc[d,'prop_T']=cs.loc[d,'type_T_prop']
+ df.loc[d,'prop_NK']=cs.loc[d,'type_NK_prop']
+ df.loc[d,'prop_B']=cs.loc[d,'type_B_prop']+cs.loc[d,'type_Plasma_prop']
+ df.loc[d,'prop_Mono']=cs.loc[d,'type_CD14_Mono_prop']+cs.loc[d,'type_CD16_Mono_prop']
+ df.loc[d,'prop_DC']=cs.loc[d,'type_cDC_prop']+cs.loc[d,'type_pDC_prop']
+ df.loc[d,'prop_Plasma']=cs.loc[d,'type_Plasma_prop']
+ df.loc[d,'prop_Platelet']=cs.loc[d,'type_Platelet_prop']
+ df.loc[d,'prop_RBC']=cs.loc[d,'type_RBC_prop']
+ df.loc[d,'prop_Neutrophil']=0.0
+df['donor_num']=[int(d[5:]) for d in cats]
+df.to_csv('our_features.csv')
+print(df.to_string())
+PY
+python [REDACTED LOCAL PATH]"

@@ -1,0 +1,33 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp, time
+from sklearn.preprocessing import normalize
+# load centroids
+d=np.load('centroids_celltype_tumor.npz',allow_pickle=True)
+means=d['means']; cats=d['cats']; common_our=d['common_our']
+print('means',means.shape,'cats',len(cats))
+# load our data
+t=time.time(); a=ad.read_h5ad('lung.cancer.sc.h5ad'); print('loaded ours',time.time()-t)
+X=a.X
+lib=np.asarray(X.sum(axis=1)).ravel().astype(np.float64); lib[lib==0]=1
+# subset common genes
+Xc=X[:,common_our]
+Xn=Xc.multiply(1e4/lib[:,None]).tocsr(); Xn.data=np.log1p(Xn.data)
+Xn=normalize(Xn,norm='l2',axis=1,copy=False)
+C=normalize(means,norm='l2',axis=1,copy=True)
+print('matmul start',time.time()-t)
+score=Xn @ C.T  # dense 164k x 51
+pred=score.argmax(axis=1)
+labels=cats[pred]
+print('done',time.time()-t)
+res=pd.DataFrame({'cell':a.obs.index.values,'sampleID':a.obs.sampleID.values,'pred':labels,'score':score.max(axis=1)})
+res.to_csv('centroid_pred_celltype_tumor.csv',index=False)
+# save npy
+np.save('centroid_labels_celltype_tumor.npy',labels)
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+ sub=res[res.sampleID==s]
+ print('\\nSAMPLE',s,'n',len(sub))
+ print(sub['pred'].value_counts().head(20).to_string())
+print('\\nGlobal counts')
+print(res['pred'].value_counts().to_string())
+PY
+python [REDACTED LOCAL PATH]"

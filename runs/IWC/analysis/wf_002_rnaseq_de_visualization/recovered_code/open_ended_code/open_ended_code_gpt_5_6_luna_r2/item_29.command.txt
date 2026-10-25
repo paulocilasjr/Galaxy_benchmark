@@ -1,0 +1,41 @@
+/usr/bin/bash -lc "set -eu
+printf '%s\\n' '---method---'
+sed -n '1,20p' final_answer/method.json
+printf '%s\\n' '---table head---'
+sed -n '1,8p' final_answer/differential_expression.tsv
+printf '%s\\n' '---table tail---'
+tail -n 5 final_answer/differential_expression.tsv
+printf '%s\\n' '---validation---'
+/opt/conda/bin/python - <<'PY'
+from pathlib import Path
+import json, math
+import pandas as pd
+base=Path('.')
+files=[
+ base/'data/inputs/counts_from_changed_condition/srr5085169_counts_table/srr5085169_counts_table.dat',
+ base/'data/inputs/counts_from_changed_condition/srr5085170_counts_table/srr5085170_counts_table.dat',
+ base/'data/inputs/counts_from_reference_condition/srr5085167_counts_table/srr5085167_counts_table.dat',
+ base/'data/inputs/counts_from_reference_condition/srr5085168_counts_table/srr5085168_counts_table.dat',
+]
+ids=[]
+mat=[]
+for f in files:
+ d=pd.read_csv(f,sep='\\t',dtype={'Geneid':'string'})
+ ids.append(d.Geneid.tolist()); mat.append(d.iloc[:,1].to_numpy())
+keep=(pd.DataFrame(mat).T.ge(10).sum(axis=1)>=2).to_numpy()
+expected=[x for x,k in zip(ids[0],keep) if k]
+out_path=base/'final_answer/differential_expression.tsv'
+out=pd.read_csv(out_path,sep='\\t',dtype={'gene_id':'string'})
+print('header', list(out.columns))
+print('rows',len(out),'expected',len(expected),'line_count',sum(1 for _ in out_path.open()))
+print('ids_exact',out.gene_id.tolist()==expected,'unique',out.gene_id.is_unique)
+for c in ['log2_fold_change','p_value','fdr']:
+ vals=out[c].to_numpy()
+ print(c,'finite',bool(pd.Series(vals).map(math.isfinite).all()),'min',float(vals.min()),'max',float(vals.max()))
+print('fdr_monotonic_relation_violations', int((out.fdr < out.p_value).sum()))
+method=json.loads((base/'final_answer/method.json').read_text())
+print('method',method,'single_key',list(method)==['method'])
+PY
+printf '%s\\n' '---checksums/sizes---'
+wc -l -c final_answer/differential_expression.tsv final_answer/method.json
+md5sum final_answer/differential_expression.tsv final_answer/method.json"

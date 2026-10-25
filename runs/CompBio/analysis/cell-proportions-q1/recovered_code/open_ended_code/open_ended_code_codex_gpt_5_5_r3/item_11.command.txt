@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np
+
+def load(path):
+    with gzip.open(path,'rt') as f:
+        f.readline()
+        for l in f:
+            if not l.startswith('%'):
+                nrow,ncol=map(int,l.split()); break
+        data=np.fromiter((float(x) for x in f), dtype=np.float64, count=nrow*ncol)
+    return data.reshape((nrow,ncol), order='F')
+
+def kmeans(X,k,ninit=50,max_iter=200,seed=1):
+    rng=np.random.default_rng(seed); n=X.shape[0]; x2=(X*X).sum(1); best=None
+    for init in range(ninit):
+        centers=np.empty((k,X.shape[1])); idx=rng.integers(n); centers[0]=X[idx]
+        dist=((X-centers[0])**2).sum(1)
+        for j in range(1,k):
+            idx=rng.choice(n,p=dist/dist.sum())
+            centers[j]=X[idx]; dist=np.minimum(dist,((X-centers[j])**2).sum(1))
+        labels=None
+        for it in range(max_iter):
+            d=x2[:,None]+(centers*centers).sum(1)[None,:]-2*X@centers.T
+            new=d.argmin(1)
+            if labels is not None and np.array_equal(new,labels): break
+            labels=new
+            for j in range(k):
+                m=labels==j
+                centers[j]=X[m].mean(0) if m.any() else X[rng.integers(n)]
+        inertia=np.min(x2[:,None]+(centers*centers).sum(1)[None,:]-2*X@centers.T, axis=1).sum()
+        if best is None or inertia<best[0]: best=(inertia,labels.copy(),centers.copy())
+    return best
+
+X=load('cell.proportions.q1.mtx.gz')
+lib=X.sum(0); det=(X>0).sum(0)
+Y=np.log1p((X/lib)*np.median(lib)).T
+Z=(Y-Y.mean(0))/Y.std(0)
+U,S,Vt=np.linalg.svd(Z-Z.mean(0), full_matrices=False)
+P=U[:,:10]*S[:10]
+iner,lab,cent=kmeans(P,6,ninit=100,seed=42)
+# sort clusters descending size
+clusters=sorted(range(6), key=lambda c: (lab==c).sum(), reverse=True)
+print('cluster size pct lib_med lib_q01 lib_q99 det_med det_q01 det_q99 pc1med pc2med')
+for rank,c in enumerate(clusters,1):
+    m=lab==c
+    print(rank, m.sum(), round(100*m.mean(),2),
+          round(np.median(lib[m]),1), round(np.quantile(lib[m],.01),1), round(np.quantile(lib[m],.99),1),
+          round(np.median(det[m]),1), round(np.quantile(det[m],.01),1), round(np.quantile(det[m],.99),1),
+          round(np.median(P[m,0]),2), round(np.median(P[m,1]),2))
+# Other QC: max gene fraction, top50 frac, entropy/Gini-ish
+maxfrac=X.max(0)/lib
+top50=np.sort(X,axis=0)[-50:,:].sum(0)/lib
+zeros=(X==0).sum(0)
+print('\\nextra cluster size maxfrac_med top50_med zero_med')
+for rank,c in enumerate(clusters,1):
+    m=lab==c
+    print(rank, m.sum(), round(np.median(maxfrac[m]),4), round(np.median(top50[m]),3), round(np.median(zeros[m]),1))
+# global outliers by MAD for lib/det/maxfrac/top50
+for name,arr in [('lib',lib),('det',det),('maxfrac',maxfrac),('top50',top50)]:
+    med=np.median(arr); mad=np.median(np.abs(arr-med)) or 1
+    z=0.6745*(arr-med)/mad
+    print('\\n',name,'med mad',med,mad,'out>|3|',np.sum(np.abs(z)>3),'out high>3',np.sum(z>3),'out low<-3',np.sum(z<-3))
+    for rank,c in enumerate(clusters,1):
+        m=lab==c
+        print(rank, 'zmed',round(np.median(z[m]),2), 'zq01',round(np.quantile(z[m],.01),2),'zq99',round(np.quantile(z[m],.99),2),'out',np.sum(np.abs(z[m])>3))
+PY"

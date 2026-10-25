@@ -1,0 +1,59 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+canon=set()
+with gzip.open('refs/knownCanonical.txt.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>=5: canon.add(p[4])
+sym={}
+with gzip.open('refs/kgXref.txt.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>=5: sym[p[0]]=p[4]
+bygene={}
+with gzip.open('refs/knownGene.txt.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<11: continue
+        name=p[0]; chrom=p[1]; strand=p[2]; txStart=int(p[3]); txEnd=int(p[4]); starts=list(map(int,p[8].rstrip(',').split(','))); ends=list(map(int,p[9].rstrip(',').split(',')))
+        if name in canon:
+            gene=sym.get(name,name)
+            bygene.setdefault(gene,[]).append((chrom,strand,txStart,txEnd,starts,ends,name))
+order={}
+with open('refs/hg38.chrom.sizes') as f:
+    for i,line in enumerate(f):
+        c=line.split()[0]; order[c]=i
+rows=[]
+for gene,ts in bygene.items():
+    t=max(ts,key=lambda x:x[3]-x[2])
+    if t[0] not in order: continue
+    rows.append((t[0],t[2],t[3],t[4],t[5],t[1],gene))
+rows.sort(key=lambda x:(order[x[0]], x[1]))
+with open('refs/canonical_genes.bed','w') as f:
+    for chrom,start,end,exons_s,exons_e,strand,gene in rows:
+        f.write(f'{chrom}\\t{start}\\t{end}\\t{gene}\\t0\\t{strand}\\n')
+with open('refs/tss_2kb.bed','w') as f:
+    for chrom,start,end,exons_s,exons_e,strand,gene in rows:
+        tss=start if strand=='+' else end
+        f.write(f'{chrom}\\t{max(0,tss-2000)}\\t{tss+2000}\\t{gene}\\t0\\t{strand}\\n')
+with open('refs/gene_bodies.bed','w') as f:
+    for chrom,start,end,exons_s,exons_e,strand,gene in rows:
+        f.write(f'{chrom}\\t{start}\\t{end}\\t{gene}\\t0\\t{strand}\\n')
+with open('refs/canonical_exons.bed','w') as f:
+    for chrom,start,end,exons_s,exons_e,strand,gene in rows:
+        for s,e in zip(exons_s,exons_e):
+            f.write(f'{chrom}\\t{s}\\t{e}\\t{gene}\\t0\\t{strand}\\n')
+# sort by chrom order/start manually for each file because bedtools sort complains unknown
+for fn in ['refs/canonical_genes.bed','refs/tss_2kb.bed','refs/gene_bodies.bed','refs/canonical_exons.bed']:
+    data=[]
+    with open(fn) as f:
+        for line in f:
+            p=line.rstrip('\\n').split('\\t')
+            data.append((order.get(p[0],999), int(p[1]), int(p[2]), line))
+    data.sort(key=lambda x:(x[0],x[1],x[2]))
+    with open(fn,'w') as f:
+        for _,_,_,line in data: f.write(line)
+print('rows',len(rows))
+PY
+wc -l refs/canonical_genes.bed refs/tss_2kb.bed refs/gene_bodies.bed refs/canonical_exons.bed
+head -5 refs/tss_2kb.bed"

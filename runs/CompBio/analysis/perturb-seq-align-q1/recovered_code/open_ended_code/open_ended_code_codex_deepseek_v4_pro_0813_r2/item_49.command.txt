@@ -1,0 +1,39 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, re, warnings
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from collections import Counter
+warnings.filterwarnings('ignore')
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad'];out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape'];X=sp.csc_matrix((f['X/data'][:],f['X/indices'][:],f['X/indptr'][:]),shape=(n_obs,n_var)).tocsr();gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]];gc=f['obs/guide/codes'][:];g=np.array([gcats[i] for i in gc]);var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]];out.append((X,g,var))
+X1,g1,v1=out[0];X2,g2,v2=out[1];common=[x for x in v1 if x in set(v2)];X1=X1[:,[v1.index(x) for x in common]].astype(float).tocsr();X2=X2[:,[v2.index(x) for x in common]].astype(float).tocsr()
+def norm(X):
+ X=X.astype(float).tocsr();lib=np.asarray(X.sum(1)).ravel();lib[lib==0]=1;X=X.multiply(1.0/lib[:,None]).tocsr();X.data=np.log1p(X.data*1e4);return X.tocsr()
+X1=norm(X1);X2=norm(X2);nt1=np.char.startswith(g1.astype(str),'NT-');nt2=np.char.startswith(g2.astype(str),'NT-')
+# z-score using NT
+mu1=np.asarray(X1[nt1].mean(0)).ravel();sd1=np.sqrt(np.asarray(X1[nt1].power(2).mean(0)).ravel()-mu1**2);mu2=np.asarray(X2[nt2].mean(0)).ravel();sd2=np.sqrt(np.asarray(X2[nt2].power(2).mean(0)).ravel()-mu2**2);sd1[sd1==0]=1;sd2[sd2==0]=1
+# filter HVGs 3000
+m1=np.asarray(X1.mean(0)).ravel();v1=np.asarray(X1.power(2).mean(0)).ravel()-m1**2;m2=np.asarray(X2.mean(0)).ravel();v2=np.asarray(X2.power(2).mean(0)).ravel()-m2**2;comb=v1+v2;top=np.argsort(comb)[::-1][:3000]
+X1=X1[:,top];X2=X2[:,top];mu1=mu1[top];sd1=sd1[top];mu2=mu2[top];sd2=sd2[top]
+Z1=(X1.toarray()-mu1)/sd1; Z2=(X2.toarray()-mu2)/sd2
+# reference complex cell indices
+complex_guides=['LEO1-I2','CTR9-I7','PAF1-I6','CDC73-I2']
+train_idx=np.where(np.isin(g1,complex_guides))[0]
+y_train=np.array([re.sub(r'-I\\d+"'$'"','',g1[i]) for i in train_idx])
+# query nonNT indices
+q_idx=np.where(~nt2)[0]
+qg=g2[q_idx]
+for ncomp in [10,20,30,50]:
+ pca=PCA(n_components=ncomp,random_state=0);R=pca.fit_transform(Z1[train_idx]);Q=pca.transform(Z2[q_idx])
+ for name,clf in [('lda',LinearDiscriminantAnalysis()),('knn5',KNeighborsClassifier(n_neighbors=5,weights='distance')),('rf',RandomForestClassifier(n_estimators=500,random_state=0,n_jobs=-1))]:
+  clf.fit(R,y_train);pred=clf.predict(Q)
+  print('\\nncomp',ncomp,name)
+  for cls in ['LEO1','CTR9','PAF1','CDC73']:
+   qs=[q for q in np.unique(qg) if Counter(pred[qg==q]).most_common(1)[0][0]==cls]
+   print(cls, qs)
+PY
+python [REDACTED LOCAL PATH]"

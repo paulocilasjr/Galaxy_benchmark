@@ -1,0 +1,66 @@
+/bin/bash -lc "python3 - <<'PY'
+from collections import defaultdict
+# load genome
+seqs={}
+name=None
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'):
+        name=line[1:]
+        seqs[name]=''
+    else:
+        seqs[name]+=line.upper()
+print({k:len(v) for k,v in seqs.items()})
+# build index of 36-mers positions; for each kmer, list chr pos and reverse complement maybe
+idx=defaultdict(list)
+for c,s in seqs.items():
+    for i in range(len(s)-36+1):
+        k=s[i:i+36]
+        idx[k].append((c,i))
+    # reverse complement? reads might be from either strand? add RC
+import gzip
+counts={c:0 for c in seqs}
+amb=0; un=0; total=0
+for line in gzip.open('read.proportions.q1.fq.gz','rt'):
+    line=line.rstrip()
+    if line.startswith('@'):
+        continue
+    # every read seq one line; but need parse. Assume names @ and seq/+ then quality.
+# better parse
+counts={c:0 for c in seqs}
+amb=0; un=0; total=0
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline().strip()
+        if not h: break
+        s=f.readline().strip().upper()
+        q=f.readline().strip()
+        qs=f.readline().strip()
+        total+=1
+        if s in idx:
+            hits=idx[s]
+            chrs={c for c,p in hits}
+            if len(chrs)==1:
+                counts[next(iter(chrs))]+=1
+            else:
+                amb+=1
+        else:
+            un+=1
+print('exact fwd counts',counts,'amb',amb,'un',un,'total',total)
+# also reverse complement mapping
+comp=str.maketrans('ACGT','TGCA')
+def rc(x): return x.translate(comp)[::-1]
+counts_rc={c:0 for c in seqs}; amb=0;un=0
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline().strip()
+        if not h: break
+        s=f.readline().strip().upper(); f.readline(); f.readline()
+        r=rc(s)
+        if r in idx:
+            hits=idx[r]; chrs={c for c,p in hits}
+            if len(chrs)==1: counts_rc[next(iter(chrs))]+=1
+            else: amb+=1
+        else: un+=1
+print('exact rc counts',counts_rc,'amb',amb,'un',un)
+PY"

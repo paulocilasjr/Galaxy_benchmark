@@ -1,0 +1,36 @@
+/bin/bash -c "python - <<'PY'
+import urllib.request,json,concurrent.futures,pandas as pd,time
+out=pd.read_csv('work/snps_lifted.tsv',sep='\\t')
+def fetch_base(r):
+    idx,row=r
+    res={}
+    for build,chrom,pos in [('hg19',row['chr19'],int(row['pos19'])),('hg38',row['chr38'],int(row['pos38']) if pd.notna(row['chr38']) else None)]:
+        if pos is None: res[build]=None; continue
+        url=f'https://api.genome.ucsc.edu/getData/sequence?genome={build};chrom={chrom};start={pos-2};end={pos+1}'
+        try:
+            d=json.load(urllib.request.urlopen(url))
+            seq=d['dna']
+            # pos 1-based, start=pos-2 -> 3 bases positions pos-2,pos-1,pos; center index 2
+            res[build]=seq[2].upper() if len(seq)>=3 else seq[-1].upper()
+        except Exception as e:
+            res[build]='ERR'
+    return idx,res
+items=list(out.iterrows())
+t=time.time()
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    results=list(ex.map(fetch_base,items))
+print('time',time.time()-t)
+for build in ['hg19','hg38']:
+    mism=0; errs=0; nm=0
+    for idx,r in results:
+        ref=out.iloc[idx]['ref'].upper()
+        b=r[build]
+        if b is None:
+            nm+=1
+        elif b=='ERR':
+            errs+=1
+        elif ref"'!='"'N' and b"'!=ref:
+            mism+=1
+            if mism<=10: print(build,'"'mismatch idx',idx,'ref',ref,'got',b, out.iloc[idx].to_dict())
+    print(build,'mismatches',mism,'errs',errs,'none',nm)
+PY"

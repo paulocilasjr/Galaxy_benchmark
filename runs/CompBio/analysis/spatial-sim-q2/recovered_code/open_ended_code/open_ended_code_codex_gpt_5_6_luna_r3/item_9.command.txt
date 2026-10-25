@@ -1,0 +1,38 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np,gzip,scipy.io as sio
+from scipy.optimize import nnls
+from scipy.stats import spearmanr
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rt') as f: S=sio.mmread(f).tocsr().toarray().T.astype(float)
+pos=pd.read_csv('tissue_positions.csv')
+types=list(meta.cell_type.unique())
+X=sc.to_numpy(float); cell_lib=X.sum(1); Xn=X/cell_lib[:,None]*1e4
+# type centroids normalized
+C=np.array([Xn[meta.cell_type.values==t].mean(0) for t in types]).T # gene x type
+# spot normalized
+Sn=S/S.sum(1)[:,None]*1e4
+# marker genes based max lfc/ratio
+means=[]
+for t in types:
+ ix=meta.cell_type.values==t; means.append(Xn[ix].mean(0))
+means=np.array(means)
+lfc=np.log2((means+0.1)/(means.mean(0)[None,:]-means/len(types-1) if False else 1))
+# simpler each gene top type margin
+assigned=means.argmax(0); margin=np.max(means,0)/(np.partition(means, -2, axis=0)[-2]+0.1)
+marker=np.where(margin>3)[0]
+print('marker genes',len(marker),'ranges',[(a,b,int(((marker>=a)&(marker<=b)).sum())) for a,b in [(0,49),(50,99),(100,149),(150,199),(200,249),(250,299),(300,999)]])
+# nnls on all and marker, coefficients normalize
+for use,name in [(np.arange(1000),'all'),(marker,'marker')]:
+ co=np.array([nnls(C[use,:],Sn[i,use])[0] for i in range(900)])
+ prop=co/(co.sum(1)[:,None]+1e-12)
+ lab=np.array(types)[prop.argmax(1)]
+ print('\\n',name,'label counts',pd.Series(lab).value_counts().to_dict())
+ print('prop mean',dict(zip(types,np.round(prop.mean(0),3))))
+ print('confidence',np.quantile(prop.max(1),[0,.1,.25,.5,.75,.9,1]))
+ # output grid by row, col using row-major positions
+ arr=lab.reshape(30,30) # positions likely row major
+ for r in range(30): print(' '.join(x[:3] for x in arr[r]))
+ # correlations of each prop with row/col
+ for j,t in enumerate(types): print(t,'rho row',round(spearmanr(pos.array_row,prop[:,j]).statistic,3),'col',round(spearmanr(pos.array_col,prop[:,j]).statistic,3),'mean tumor neighbor?')
+PY"

@@ -1,0 +1,42 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+D=np.load('pseudobulk_raw.npz', allow_pickle=True)
+sums=D['sums']; cats=D['cats']; totals=D['totals']
+cpm=sums/totals[:,None]*1e6
+X=np.log1p(cpm)
+A=ad.read_h5ad('covid.patients.q1.h5ad', backed='r')
+ens=np.asarray(A.var_names); sym=np.asarray(A.var['feature_name'].astype(str))
+sym_series=pd.Series(sym,index=ens)
+# map symbol to ens; take first if duplicates
+sym_to_ens=pd.Series(ens,index=sym).groupby(level=0).first()
+sets={
+'T':['CD3D','CD3E','CD2','IL7R'],
+'CD4':['CD4'],
+'CD8':['CD8A','CD8B'],
+'NK':['NKG7','GNLY','KLRD1','NCAM1'],
+'B':['MS4A1','CD79A','CD79B','CD19'],
+'Mono':['CD14','LYZ','S100A8','S100A9','FCN1'],
+'cDC':['FCER1A','CLEC9A','CD1C'],
+'pDC':['LILRA4','IL3RA','CLEC4C'],
+'Platelet':['PPBP','PF4'],
+'RBC':['HBA1','HBA2','HBB'],
+'Plasma':['MZB1','XBP1','IGHG1','JCHAIN'],
+'ISG':['ISG15','IFI27','IFIT1','IFIT3','MX1','OAS1','IFI44L','RSAD2','IFITM3','IRF7','STAT1'],
+'proinflam':['IL1B','TNF','IL6','CCL2','CXCL8','S100A8','S100A9'],
+'HLA':['HLA-DRA','HLA-DRB1','HLA-DPA1','HLA-DPB1'],
+}
+# HLA-DRA may not in var as gene names? feature_name likely HLA-DRA
+for name, genes in sets.items():
+    present=[]
+    for g in genes:
+        if g in sym_to_ens.index:
+            present.append(sym_to_ens[g])
+    print(name, len(present), [g for g in genes if g in sym_to_ens.index], 'missing',[g for g in genes if g not in sym_to_ens.index])
+    if present:
+        vals=X[:, [ens.tolist().index(e) for e in present]]
+        # row mean
+        scores=vals.mean(axis=1)
+        s=pd.Series(scores,index=cats)
+        print(' top', s.sort_values(ascending=False).head(8).to_dict())
+        print(' low', s.sort_values().head(8).to_dict())
+PY"

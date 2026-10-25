@@ -1,0 +1,65 @@
+/bin/bash -lc "cat > markers.py <<'PY'
+import gzip,re,pandas as pd,numpy as np
+from collections import defaultdict
+x=pd.read_pickle('counts.pkl'); names=x.columns[3:]; a=x.iloc[:,3:].to_numpy(); norm=a/a.sum(0)*1e7
+# Restore parent chromosome coordinates from chunk lengths.
+offsets={}; total=defaultdict(int)
+for line in open('sample.swap.atac.q1.chrom.sizes'):
+ c,l=line.split(); parent=c.rsplit('_',1)[0] if '_' in c else c
+ offsets[c]=(parent,total[parent]);total[parent]+=int(l)
+x['parent']=[offsets[c][0] for c in x.chrom]
+x['pos']=x.start.to_numpy()+np.array([offsets[c][1] for c in x.chrom])
+coords={c:(g.pos.to_numpy(),g.index.to_numpy()) for c,g in x.groupby('parent',sort=False)}
+genes=[]
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  t=line.rstrip().split('\\t')
+  if t[2]"'!='"'gene' or t[0] not in coords: continue
+  attr=dict(re.findall(r'(\\w+) \"(["'^"]*)"'"',t[8]))
+  syms=re.findall(r'(?:"'^|'"\\|)(["'^|'"\\[]+) \\[(?:hs|nr)\\]',attr.get('gene_name',''))
+  genes.append((attr['gene_id'],attr.get('gene_name',''),t[0],int(t[3])-1,int(t[4]),t[6],','.join(set(syms))))
+g=pd.DataFrame(genes,columns=['id','name','chrom','start','end','strand','symbols'])
+g.to_csv('genes.tsv',sep='\\t',index=False)
+for window in [10000,30000,100000]:
+ values=[]
+ for r in g.itertuples():
+  tss=r.start if r.strand=='+' else r.end-1
+  pos,idx=coords[r.chrom]; lo=np.searchsorted(pos,tss-window-10000,side='right'); hi=np.searchsorted(pos,tss+window)
+  val=norm[idx[lo:hi]].sum(0)
+  values.append(val)
+ vals=np.array(values); np.save(f'gene_signal_{window}.npy',vals)
+print('Genes',len(g),flush=True)
+markers={
+'Brain':'SNAP25 SYT1 SYP RBFOX3 MAP2 NEFL NEFM NEFH GAD1 GAD2 SLC17A7 SLC17A6 GRIN1 GRIA1 CAMK2A TBR1 FOXG1 NEUROD1 SOX1 MBP PLP1 OLIG2 GFAP SLC1A2',
+'Heart':'TNNT2 TNNI3 MYH6 MYH7 NKX2-5 MYL2 MYL3 ACTC1 TBX5 GATA4 RYR2 PLN NPPA NPPB TTN',
+'Limb':'MYOD1 MYOG PAX7 MYF5 MYH1 MYH2 MYH4 ACTA1 TNNT3 TNNI2 CKM RYR1 TBX4 PITX1 PRRX1 SOX9 COL2A1',
+'Liver':'ALB AFP TTR APOA1 APOA2 APOB FGA FGB FGG HNF4A HNF1A CYP7A1 FABP1 HP CP ASGR1 TAT PAH G6PC',
+'Pancreas':'INS GCG SST IAPP PDX1 PTF1A CPA1 CPA2 CPB1 PRSS1 PRSS2 AMY2A CELA1 CELA2A RBPJL CTRB1 CEL',
+'Intestine':'CDX1 CDX2 VIL1 SI LCT ALPI FABP2 APOA4 SLC15A1 MUC2 KRT20 GUCA2A ATOH1',
+'Stomach':'GAST PGA3 PGA4 PGA5 PGC LIPF ATP4A ATP4B GIF MUC5AC MUC6 TFF1 TFF2 GKN1 GKN2',
+'Kidney':'PAX2 PAX8 HNF1B LHX1 SLC12A1 SLC12A3 SLC34A1 SLC22A6 SLC22A8 NPHS1 NPHS2 AQP1 AQP2 UMOD WT1 CUBN LRP2',
+'Lung':'NKX2-1 SFTPA1 SFTPB SFTPC SFTPD ABCA3 SCGB1A1 FOXJ1 AGER',
+'Spleen':'SPI1 PTPRC CD3D CD3E CD79A CD79B MS4A1 PAX5 LCK ZAP70 BLNK RAG1 RAG2 CSF1R IKZF1 BCL11B',
+'Bladder':'UPK1A UPK1B UPK2 UPK3A UPK3B KRT7 KRT13 KRT20 PPARG TP63 GATA3 ACTA2 MYH11',
+'GallBladder':'SOX17 SOX9 HNF1B KRT19 KRT7 MUC1 CFTR EPCAM SLC4A2',
+'Prostate':'AR NKX3-1 SRD5A2 KLK3 KLK2 ACPP HOXB13 FOXA1 SLC45A3 MSMB',
+'Gill':'FOXI1 GCM2 ATP6V1B1 SLC26A4 CA2 SLC12A2 KRT4 KRT13',
+'Cloaca':'HOXA13 HOXD13 CDX2 KRT14 TP63 KRT5 KRT4 KRT13'
+}
+for window in [10000,30000,100000]:
+ vals=np.load(f'gene_signal_{window}.npy'); log=np.log2(vals+.5); z=(log-log.mean(1)[:,None])/(log.std(1)[:,None]+.01)
+ print('\\nWINDOW',window)
+ for tissue,syms in markers.items():
+  ids=[i for i,s in enumerate(g.symbols) if set(s.split(',')) & set(syms.split())]
+  score=z[ids].mean(0) if ids else np.zeros(len(names)); ranks=np.argsort(score)[::-1]
+  print(tissue,'N=',len(ids),' '.join(f'{names[i]}:{score[i]:.2f}' for i in ranks[:5]))
+ if window==30000:
+  with open('marker_details.txt','w') as out:
+   for tissue,syms in markers.items():
+    print('\\n',tissue,file=out)
+    ids=[i for i,s in enumerate(g.symbols) if set(s.split(',')) & set(syms.split())]
+    for i in ids:
+     ranks=np.argsort(z[i])[::-1]
+     print(g.iloc[i]['name'],g.iloc[i]['chrom'],g.iloc[i]['start'], ' '.join(f'{names[j]}:{z[i,j]:.1f}' for j in ranks[:5]),file=out)
+PY"

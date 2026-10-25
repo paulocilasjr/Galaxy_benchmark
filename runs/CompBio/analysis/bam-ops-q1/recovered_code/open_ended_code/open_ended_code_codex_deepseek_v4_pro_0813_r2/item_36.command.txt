@@ -1,0 +1,45 @@
+/bin/bash -c "cat > list_tar.py <<'PY'
+import urllib.request, tarfile, io, time, os
+URL='https://zenodo.org/api/records/19443186/files/compbiobench_v1_data.tar/content'
+# total size from metadata
+TOTAL=12001320960
+
+class RemoteReader:
+    def __init__(self, url, total):
+        self.url=url
+        self.total=total
+        self.pos=0
+        self.calls=0
+    def seekable(self): return True
+    def readable(self): return True
+    def tell(self): return self.pos
+    def seek(self, off, whence=0):
+        if whence==0: new=off
+        elif whence==1: new=self.pos+off
+        elif whence==2: new=self.total+off
+        else: new=off
+        if new<0: new=0
+        self.pos=new
+        return self.pos
+    def read(self, n=-1):
+        if n is None or n<0:
+            n=self.total-self.pos
+        if n<=0: return b''
+        end=min(self.pos+n, self.total)-1
+        req=urllib.request.Request(self.url, headers={'Range':f'bytes={self.pos}-{end}'})
+        self.calls+=1
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data=r.read()
+        self.pos += len(data)
+        return data
+
+rr=RemoteReader(URL, TOTAL)
+f=tarfile.open(fileobj=rr, mode='r:')
+members=f.getmembers()  # may iterate full index
+print('members', len(members))
+for m in members[:300]:
+    print(m.name, m.size, m.type)
+f.close()
+print('http calls', rr.calls)
+PY
+python list_tar.py"

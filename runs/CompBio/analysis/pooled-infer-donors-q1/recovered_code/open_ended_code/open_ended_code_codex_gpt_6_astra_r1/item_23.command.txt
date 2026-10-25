@@ -1,0 +1,80 @@
+/bin/bash -lc "cat > extract_snps.py <<'PY'
+import os,gzip,pickle,time,bisect,collections,concurrent.futures
+import pysam
+import numpy as np
+from scipy import sparse
+
+def extract(chrom):
+ t=time.time()
+ with open(f'snp_sites/{chrom}.pkl','rb') as f:sites=pickle.load(f)
+ pos=sorted(sites); observations={}; nr=0; used=0
+ bam=pysam.AlignmentFile('pooled.sorted.bam','rb')
+ for a in bam.fetch(chrom):
+  nr+=1
+  if a.mapping_quality<20 or a.flag & (4|256|512|2048):continue
+  if not a.has_tag('CB') or not a.has_tag('UB'):continue
+  st=a.reference_start; en=a.reference_end
+  ix=bisect.bisect_left(pos,st)
+  if ix==len(pos) or pos[ix]>=en:continue
+  cb=a.get_tag('CB'); umi=a.get_tag('UB'); seq=a.query_sequence; quals=a.query_qualities
+  rp=st;qp=0
+  for op,n in a.cigartuples:
+   if op in (0,7,8):
+    j=bisect.bisect_left(pos,rp)
+    while j<len(pos) and pos[j]<rp+n:
+     p=pos[j]; q=qp+p-rp;j+=1
+     if q<3 or q>=len(seq)-3 or quals[q]<20:continue
+     ref,alt=sites[p]
+     b=seq[q]
+     if b"'!=ref and b!=alt:continue
+     d=observations.setdefault(p,{})
+     key=(cb,umi)
+     allele=int(b==alt)
+     if key not in d:d[key]=allele
+     elif d[key]!=allele:d[key]=2
+    rp+=n;qp+=n
+   elif op in (1,4):qp+=n
+   elif op in (2,3):rp+=n
+ keys=[];r=[];c=[];ad=[];dp=[]
+ barcodes=[line.split()[0] for line in open('"'barcodes.counts.tsv')]; bmap={b:i for i,b in enumerate(barcodes)}
+ for p,d in sorted(observations.items()):
+  counts=collections.defaultdict(lambda:[0,0])
+  for (cb,u),x in d.items():
+   if x<2:counts[cb][x]+=1
+  refn=sum(v[0] for v in counts.values());altn=sum(v[1] for v in counts.values())
+  if min(refn,altn)<5 or min(refn,altn)<.03*(refn+altn) or len(counts)<15:continue
+  row=len(keys);keys.append((chrom,p+1,*sites[p],refn,altn))
+  for cb,(rr,aa) in counts.items():
+   r.append(row);c.append(bmap[cb]);ad.append(aa);dp.append(aa+rr)
+ shape=(len(keys),len(barcodes))
+ sparse.save_npz(f'snp_counts/{chrom}.AD.npz',sparse.csr_matrix((ad,(r,c)),shape=shape,dtype=np.float32))
+ sparse.save_npz(f'snp_counts/{chrom}.DP.npz',sparse.csr_matrix((dp,(r,c)),shape=shape,dtype=np.float32))
+ with open(f'snp_counts/{chrom}.sites.pkl','wb') as f:pickle.dump(keys,f)
+ return chrom,nr,len(observations),len(keys),len(dp),round(time.time()-t)
+
+if __name__=='__main__':
+ os.makedirs('snp_sites',exist_ok=True);os.makedirs('snp_counts',exist_ok=True)
+ chroms=list(map(str,range(1,23)))
+ if not os.path.exists('snp_sites/22.pkl'):
+  groups={c:{} for c in chroms}
+  with gzip.open('common.hg19.vcf.gz','rt') as f:
+   for line in f:
+    if line.startswith('#'):continue
+    a=line.split('\\t',5);ch,p,_,ref,alt=a[:5]
+    if ch in groups and len(ref)==len(alt)==1:groups[ch][int(p)-1]=(ref,alt)
+  for ch,d in groups.items():
+   with open(f'snp_sites/{ch}.pkl','wb') as f:pickle.dump(d,f)
+  del groups
+  print('sites ready',flush=True)
+ with concurrent.futures.ProcessPoolExecutor(max_workers=5) as pool:
+  for result in pool.map(extract,chroms):print(result,flush=True)
+ ads=[];dps=[];sites=[]
+ for ch in chroms:
+  ads.append(sparse.load_npz(f'snp_counts/{ch}.AD.npz'));dps.append(sparse.load_npz(f'snp_counts/{ch}.DP.npz'))
+  with open(f'snp_counts/{ch}.sites.pkl','rb') as f:sites.extend(pickle.load(f))
+ sparse.save_npz('AD.npz',sparse.vstack(ads));sparse.save_npz('DP.npz',sparse.vstack(dps))
+ with open('sites.tsv','w') as f:
+  for s in sites:f.write('\\t'.join(map(str,s))+'\\n')
+ print('DONE',len(sites),flush=True)
+PY
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -u extract_snps.py > extract.log 2>&1"

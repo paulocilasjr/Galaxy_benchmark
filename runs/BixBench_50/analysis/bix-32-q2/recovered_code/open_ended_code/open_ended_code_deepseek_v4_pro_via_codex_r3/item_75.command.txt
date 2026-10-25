@@ -1,0 +1,24 @@
+/bin/bash -c "python3 - <<'PY'
+# raw p common under clusterprofiler defaults (q>0, size filter, universe KEGG)
+import pandas as pd
+from scipy.stats import hypergeom
+link=pd.read_csv('/workspace/tmp/pau_link_pathway.tsv',sep='\\t',header=None,names=['gene','path']); link['gene']=link['gene'].str.split(':',expand=True)[1]; link['path']=link['path'].str.split(':',expand=True)[1]
+allkg=set(link.gene); files={'97':'res_1vs97.csv','98':'res_1vs98.csv','99':'res_1vs99.csv'}
+res={}
+for st,fn in files.items():
+ df=pd.read_csv('/workspace/tmp/'+fn)
+ for dir,expr in [('up',df.log2FoldChange>1.5),('down',df.log2FoldChange< -1.5)]:
+  gene=set(df.loc[expr,'gene']); n=len([g for g in gene if g in allkg]); rows=[]
+  for p,gdf in link.groupby('path'):
+   term=set(gdf.gene); m=len(term)
+   if m<10 or m>500: continue
+   q=len(term&gene)
+   if q==0: continue
+   pv=hypergeom.sf(q-1,len(allkg),m,n); rows.append((p,pv))
+  d=pd.DataFrame(rows,columns=['path','pval'])
+  res[(st,dir)]=d
+  print(st,dir,'tested',len(d),'rawsig',int((d.pval<=.05).sum()))
+for dir in ['up','down']:
+ sets=[set(res[(st,dir)].loc[res[(st,dir)].pval<=.05,'path']) for st in ['97','98','99']]
+ print('common raw',dir,len(set.intersection(*sets)),sorted(set.intersection(*sets)))
+PY"

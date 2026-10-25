@@ -1,0 +1,72 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math, statistics
+from collections import defaultdict
+hic=list(csv.DictReader(open('ep.interactions.q1.hic.csv')))
+expr=list(csv.DictReader(open('ep.interactions.q1.expr.csv')))
+bg=[]
+cand=[]
+for r in hic:
+    c=[int(r[f'count_rep{i}']) for i in (1,2,3)]
+    (bg if r['set']=='background' else cand).append((r['pair_id'], int(r['distance_bp']), c))
+# Fit background total count vs log distance via simple linear regression
+xs=[]; ys=[]
+for _,d,c in bg:
+    xs.append(math.log(d)); ys.append(sum(c))
+mx=statistics.mean(xs); my=statistics.mean(ys)
+b=sum((x-mx)*(y-my) for x,y in zip(xs,ys))/sum((x-mx)**2 for x in xs)
+a=my-b*mx
+print('log-linear Poisson approx: intercept',a,'slope',b)
+# Use local bin median maybe Poisson rates. Compute expected using distance-binned mean total per 3 reps.
+bins=[(0,250000,30.28),(250000,500000,21.44),(500000,750000,12.43),(750000,1000000,9.19),(1000000,1250000,6.5),(1250000,1500000,5.06),(1500000,2000000,5.09)]
+def bin_exp(d):
+    for lo,hi,m in bins:
+        if lo<=d<hi:return m
+    return 5
+# exact poisson lower/upper tail for sum counts with lambda=expected
+def pois_tail(k,lam):
+    # compute lower P(X<=k), upper P(X>=k)
+    import math
+    p=math.exp(-lam); cdf=p; pmf=p
+    for i in range(1,k+1):
+        pmf*=lam/i; cdf+=pmf
+    lower=cdf
+    p=math.exp(-lam); upper=0
+    term=p
+    # easier upper=1-P(X<=k-1)
+    if k==0: upper=1
+    else:
+        cdfk=p; pmf=p
+        for i in range(1,k):
+            pmf*=lam/i; cdfk+=pmf
+        upper=1-cdfk
+    return lower,upper
+print('\\nHi-C Poisson tail vs binned mean')
+for pid,d,c in cand:
+    lam=bin_exp(d); k=sum(c); lo,up=pois_tail(k,lam)
+    z=(k-lam)/math.sqrt(lam)
+    print(pid,d,'sum',k,'lambda',lam,'z',round(z,2),'P<=',round(lo,3),'P>=',round(up,3))
+
+# expression: per pair pooled log2FC and consistency
+pairs=defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+for r in expr:
+    pairs[r['pair_id']][r['guide_id']][r['condition']].append(int(r['rna_count']))
+print('\\nExpr stats')
+for pid in sorted(pairs):
+    lfcs=[]; ctrls=[]; per=[]
+    for g,dic in pairs[pid].items():
+        c=dic['control']; p=dic['perturbed']
+        l=math.log2((statistics.mean(p)+1)/(statistics.mean(c)+1)); lfcs.append(l)
+        ctrls+=c; per+=p
+        # simple t
+        mc=statistics.mean(c); mp=statistics.mean(p)
+        vc=statistics.variance(c); vp=statistics.variance(p)
+        se=math.sqrt(vc/3+vp/3)
+        t=(mp-mc)/se if se else 0
+        # use abs? sign
+        # direction consistency
+    pooled=math.log2((statistics.mean(per)+1)/(statistics.mean(ctrls)+1))
+    # guide direction consistency: fraction same sign
+    signs=[1 if x>0.1 else -1 if x<-0.1 else 0 for x in lfcs]
+    neg=sum(1 for x in lfcs if x<-0.2); pos=sum(1 for x in lfcs if x>0.2)
+    print(pid,'pooled log2FC',round(pooled,3),'per-guide', [round(x,2) for x in lfcs], 'neg guides',neg,'pos',pos)
+PY"

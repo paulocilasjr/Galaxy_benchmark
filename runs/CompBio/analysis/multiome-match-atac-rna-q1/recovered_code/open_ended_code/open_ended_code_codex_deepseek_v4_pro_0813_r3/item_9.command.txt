@@ -1,0 +1,84 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, csv, re, numpy as np, sys
+from collections import defaultdict
+
+# Parse GTF gene entries -> TSS bins per symbol
+sym_bins=defaultdict(set)
+sym_chr=defaultdict(set)
+with gzip.open('Homo_sapiens.GRCh38.112.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        parts=line.rstrip('\\n').split('\\t')
+        if len(parts)<9 or parts[2]"'!='"'gene': continue
+        chrom=parts[0]; start=int(parts[3]); end=int(parts[4]); strand=parts[6]
+        attr=parts[8]
+        m=re.search(r'gene_name \"(["'^"]+)"'"', attr)
+        if not m: continue
+        gn=m.group(1)
+        if chrom.startswith('chr'):
+            c=chrom[3:]
+        else:
+            c=chrom
+        tss=start if strand=='+' else end
+        bstart=(tss//10000)*10000
+        sym_bins[gn].add(f'chr{c}_{bstart}_{bstart+10000}')
+        sym_chr[gn].add(f'chr{c}')
+print('symbols',len(sym_bins))
+
+# Load ATAC dict
+atac_bins={}
+with gzip.open('multiome.match.atac.rna.q1.atac.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    next(r)
+    for row in r:
+        atac_bins[row[0]]=np.array([float(x) for x in row[1:9]], dtype=np.float64)
+print('atac bins',len(atac_bins))
+
+# Load RNA
+rna_syms=[]; rna_mat=[]
+with gzip.open('multiome.match.atac.rna.q1.rna.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    next(r)
+    for row in r:
+        rna_syms.append(row[0])
+        rna_mat.append([float(x) for x in row[1:9]])
+rna_mat=np.array(rna_mat, dtype=np.float64)
+print('rna shape',rna_mat.shape)
+
+# For each gene, get atac vector (mean across bins)
+pairs=[]
+no_bin=0
+multi=0
+for gi,gn in enumerate(rna_syms):
+    bins=sym_bins.get(gn)
+    if not bins:
+        no_bin+=1; continue
+    present=[b for b in bins if b in atac_bins]
+    if not present:
+        no_bin+=1; continue
+    if len(present)>1: multi+=1
+    vec=np.mean([atac_bins[b] for b in present],axis=0)
+    pairs.append((gn, rna_mat[gi], vec))
+print('mapped genes',len(pairs),'no_bin',no_bin,'multi',multi)
+
+# compute column correlations using several transforms
+R=np.array([p[1] for p in pairs])
+A=np.array([p[2] for p in pairs])
+for name, rr, aa in [('raw',R,A),('log1p',np.log1p(R),np.log1p(A))]:
+    # For each i,j pearson across genes
+    corr=np.zeros((8,8))
+    for i in range(8):
+        for j in range(8):
+            mask=(rr[:,i]>0)&(aa[:,j]>0) # both expressed/accessible? for raw maybe use all? 
+            if mask.sum()<10:
+                corr[i,j]=np.nan
+            else:
+                corr[i,j]=np.corrcoef(rr[mask,i],aa[mask,j])[0,1]
+    print('\\n',name,'corr matrix')
+    print(np.round(corr,4))
+    # solve assignment maximize sum using scipy linear_sum_assignment on -corr
+    from scipy.optimize import linear_sum_assignment
+    cost=np.where(np.isnan(corr),0,corr)
+    ri,cj=linear_sum_assignment(-cost)
+    print('perm (RNA->ATAC)', {ri[k]:cj[k] for k in range(8)}, 'sum',cost[ri,cj].sum())
+PY"

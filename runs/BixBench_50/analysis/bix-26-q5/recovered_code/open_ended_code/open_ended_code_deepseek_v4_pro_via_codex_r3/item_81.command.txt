@@ -1,0 +1,87 @@
+/bin/bash -lc "cd /workspace && python3 - <<'PY'
+import json, math
+from math import comb
+from stats? no
+# hypergeom upper tail: P(X >= k) = 1 - CDF(k-1); use math.comb sum
+D=json.load(open('tmp/kegg_pau.json'))
+g2p=D['g2p']
+# invert to path -> list genes, unique
+p2g={}
+for gene, paths in g2p.items():
+    for p in paths:
+        p2g.setdefault(p, set()).add(gene)
+all_annotated=set(g2p.keys())
+print('unique genes',len(all_annotated),'paths',len(p2g),'total edges',sum(len(v) for v in g2p.values()))
+
+def phyper_upper(k,M,N,n):
+    # P[X>=k] = sum_{i=k}"'^{min(n,M)} C(M,i)C(N-M,n-i)/C(N,n)
+    if k>min(n,M): return 0.0
+    num=0.0
+    for i in range(k,min(n,M)+1):
+        num += comb(M,i)*comb(N-M,n-i)
+    den=comb(N,n)
+    return num/den
+
+def run(degs, universe):
+    genes=set(degs)
+    mapped=[g for g in genes if g in g2p]
+    qpaths=set()
+    for g in mapped: qpaths.update(g2p[g])
+    # extID: if universe None all annotated else intersect
+    ext=set(universe) if universe is not None else all_annotated
+    ext={g for g in ext if g in g2p} if universe is not None else ext
+    res=[]
+    for p in sorted(qpaths):
+        pathway_genes=p2g[p].copy()
+        pathway_genes &= ext
+        M=len(pathway_genes)
+        if not (10 <= M <= 500):
+            continue
+        k=len([g for g in mapped if p in g2p[g]])
+        # k should be number of query genes in pathway among ext; but only mapped genes included and all are in ext by construction? ensure
+        # qTermID2ExtID = intersect query mapped genes for term with ext, then k=length; if universe subsets and some mapped genes not in universe? here mapped from g2p and ext all annotated or subset of all annotated that includes all? 
+        qgenes=[g for g in mapped if p in g2p[g] and g in ext]
+        k=len(qgenes)
+        if k==0: continue
+        N=len(ext); n=len(mapped)
+        pv=phyper_upper(k,M,N,n)
+        res.append((p,k,M,pv))
+    # BH over all tested pathways (including k>0 only; clusterProfiler tests only qTermID with k>0, so same)
+    res.sort(key=lambda x:x[3])
+    ps=[r[3] for r in res]
+    padj=[]
+    m=len(ps)
+    prev=0.0
+    # BH p.adjust exactly uses pmin(1, cummax(ps * m / rank))? Need verify R p.adjust algorithm
+    # Implement R'"'s BH: pmin(1, cummax(ps * m / seq_len(m))) from smallest to largest? R p.adjust sorts ascending then cummax(ps*m/i), then unsort; yes.
+    for rank,r in enumerate(res,1):
+        # already sorted ascending by pvalue
+        val=ps[rank-1]*m/rank
+        # cummax
+        pass
+    vals=[]
+    cm=0.0
+    for rank,r in enumerate(res,1):
+        cm=max(cm, ps[rank-1]*m/rank)
+        vals.append(min(1.0,cm))
+    # reorder back original? res already sorted, enough for values per row
+    for r,v in zip(res,vals):
+        if v<0.05: print(p,'k',r[1],'M',r[2],'p',r[3],'padj',v)
+    print('tested',m)
+    return set(p for r,v in zip(res,vals) if v<0.05), {p:vals[i] for i,(p,_,_,_) in enumerate(res)}
+
+gl=open('tmp/GluFe_degs.txt').read().split()
+sl=open('tmp/Succ_degs.txt').read().split()
+allgenes=open('tmp/GluFe_all.txt').read().split()
+print('GluFe DEGs',len(gl),'Succ DEGs',len(sl),'all',len(allgenes))
+print('\\nDEFAULT UNIVERSE GluFe')
+g1,_=run(gl,None)
+print('\\nDEFAULT Succ')
+s1,_=run(sl,None)
+print('GluFe-only default',len(g1-s1), sorted(g1-s1))
+print('\\nALL UNIVERSE GluFe')
+g2,_=run(gl,allgenes)
+print('\\nALL Succ')
+s2,_=run(sl,allgenes)
+print('GluFe-only all',len(g2-s2), sorted(g2-s2))
+PY"

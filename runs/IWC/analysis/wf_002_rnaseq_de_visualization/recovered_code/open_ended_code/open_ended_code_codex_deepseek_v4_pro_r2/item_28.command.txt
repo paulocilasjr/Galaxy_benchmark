@@ -1,0 +1,108 @@
+/usr/bin/bash -c "python - <<'PY'
+import json
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+workspace = Path('/workspace')
+out_dir = workspace / 'final_answer'
+out_dir.mkdir(parents=True, exist_ok=True)
+
+samples = {
+    'SRR5085167': 'reference',
+    'SRR5085168': 'reference',
+    'SRR5085169': 'changed',
+    'SRR5085170': 'changed',
+}
+
+rows = []
+for sample, condition in samples.items():
+    group = 'counts_from_reference_condition' if condition == 'reference' else 'counts_from_changed_condition'
+    path = next((workspace / 'data' / 'inputs' / group).glob(f'{sample.lower()}_counts_table/*.dat'))
+    df = pd.read_csv(path, sep='\\t')
+    df.columns = ['Geneid', sample]
+    rows.append(df)
+
+counts = rows[0]
+for df in rows[1:]:
+    counts = counts.merge(df, on='Geneid', how='outer')
+counts = counts.set_index('Geneid')
+
+# Required prefilter: >= 10 raw counts in at least two of the four samples.
+keep = (counts >= 10).sum(axis=1) >= 2
+counts_filtered = counts.loc[keep].astype(int).T  # PyDESeq2 expects samples x genes
+
+metadata = pd.DataFrame(
+    {
+        'condition': pd.Categorical(
+            [samples[s] for s in counts_filtered.index],
+            categories=['reference', 'changed'],
+            ordered=True,
+        )
+    },
+    index=counts_filtered.index,
+)
+
+dds = DeseqDataSet(
+    counts=counts_filtered,
+    metadata=metadata,
+    design='~condition',
+    quiet=True,
+)
+dds.deseq2()
+
+# Unshrunken LFCs; BH adjustment across every retained gene.
+stats = DeseqStats(
+    dds,
+    contrast=['condition', 'changed', 'reference'],
+    independent_filter=False,
+    cooks_filter=False,
+    quiet=True,
+)
+stats.summary()
+res = stats.results_df.copy()
+res.index.name = 'gene_id'
+res = res.rename(
+    columns={
+        'log2FoldChange': 'log2_fold_change',
+        'pvalue': 'p_value',
+        'padj': 'fdr',
+    }
+)[['log2_fold_change', 'p_value', 'fdr']]
+
+# Guard rails required by the task.
+assert len(res) == int(keep.sum())
+assert res.index.is_unique
+assert np.isfinite(res[['log2_fold_change', 'p_value', 'fdr']].to_numpy()).all()
+assert (res[['p_value', 'fdr']].to_numpy() >= 0).all()
+assert (res[['p_value', 'fdr']].to_numpy() <= 1).all()
+
+out_tsv = out_dir / 'differential_expression.tsv'
+res.to_csv(out_tsv, sep='\\t', index=True, float_format='%.17g')
+
+method = {'method': 'DESeq2'}
+(out_dir / 'method.json').write_text(json.dumps(method) + '\\n')
+
+# Concise execution log.
+trace_dir = workspace / 'run_trace'
+trace_dir.mkdir(parents=True, exist_ok=True)
+(trace_dir / 'analysis.log').write_text(
+    'Read four raw count tables (reference: SRR5085167, SRR5085168; changed: SRR5085169, SRR5085170).\\n'
+    f'Input genes: {counts.shape[0]}.\\n'
+    'Filter: retain genes with >= 10 raw counts in at least two of four samples.\\n'
+    f'Retained genes tested: {len(res)}.\\n'
+    'Method: DESeq2 (PyDESeq2), design ~condition, contrast changed vs reference.\\n'
+    'Results: unshrunken log2 fold change, Wald p-value, BH FDR across retained genes.\\n'
+    f'Output: final_answer/differential_expression.tsv and final_answer/method.json.\\n'
+)
+
+print('wrote', out_tsv)
+print('rows', len(res))
+print('columns', res.columns.tolist())
+print('first rows:')
+print(res.head().to_string())
+print('min p', res['p_value'].min(), 'max p', res['p_value'].max())
+print('min fdr', res['fdr'].min(), 'max fdr', res['fdr'].max())
+PY"

@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy import sparse, stats
+feat=pd.read_csv('filtered_feature_bc_matrix/features.tsv.gz',sep='\\t',header=None,names=['id','gene','type'])
+bc=pd.read_csv('filtered_feature_bc_matrix/barcodes.tsv.gz',sep='\\t',header=None,names=['barcode'])
+X=mmread('filtered_feature_bc_matrix/matrix.mtx.gz').tocsr().T
+calls=pd.read_csv('protospacer_calls_per_cell.csv')
+ref=pd.read_csv('feature_reference.csv')
+meta=bc.merge(calls,left_on='barcode',right_on='cell_barcode',how='left').merge(ref[['id','name','target_gene_name']],left_on='feature_call',right_on='id',how='left')
+print('shape',X.shape,'metadata missing',meta.target_gene_name.isna().sum())
+print(meta.target_gene_name.value_counts().sort_index().to_string())
+# normalize to 10k log1p
+lib=np.asarray(X.sum(1)).ravel()
+Y=X.multiply(1e4/lib[:,None]).tocsr(); Y.data=np.log1p(Y.data)
+path=list(range(20))
+# Calculate raw counts pseudobulk CPM logFC, lognorm mean difference, per-cell module
+nt=(meta.target_gene_name=='Non-Targeting').values
+nt_raw=np.asarray(X[nt].sum(0)).ravel(); nt_cpm=(nt_raw+1)/(nt_raw.sum()+1000)*1e6
+nt_mean=np.asarray(Y[nt].mean(0)).ravel()
+mod=np.asarray(Y[:,path].mean(1)).ravel()
+rows=[]
+for target, inds in meta.groupby('target_gene_name').groups.items():
+    inds=np.array(list(inds)); raw=np.asarray(X[inds].sum(0)).ravel(); cpm=(raw+1)/(raw.sum()+1000)*1e6
+    lfc=np.log2(cpm/nt_cpm)
+    dif=np.asarray(Y[inds].mean(0)).ravel()-nt_mean
+    u,p=stats.mannwhitneyu(mod[inds],mod[nt],alternative='less')
+    rows.append([target,len(inds),mod[inds].mean(),np.median(mod[inds]),mod[inds].mean()-mod[nt].mean(),np.mean(dif[path]),np.median(dif[path]),np.mean(lfc[path]),np.median(lfc[path]),p])
+out=pd.DataFrame(rows,columns=['target','n','module_mean','module_median','module_delta','mean_gene_delta','median_gene_delta','mean_pb_lfc','median_pb_lfc','p_less'])
+print('\\nRank module mean:')
+print(out.sort_values('module_mean').head(20).to_string(index=False,float_format=lambda x:f'{x:.4g}'))
+print('\\nNT module mean',mod[nt].mean(), 'median',np.median(mod[nt]))
+# Detailed IFNG gene deltas for top
+for t in out.sort_values('module_mean').target.head(10):
+ inds=(meta.target_gene_name==t).values
+ dif=np.asarray(Y[inds].mean(0)).ravel()-nt_mean
+ raw=np.asarray(X[inds].sum(0)).ravel(); cpm=(raw+1)/(raw.sum()+1000)*1e6; lfc=np.log2(cpm/nt_cpm)
+ print('\\n',t,'n',inds.sum())
+ print(pd.DataFrame({'gene':feat.gene[:20], 'delta':dif[:20], 'pb_lfc':lfc[:20]}).to_string(index=False,float_format=lambda x:f'{x:.2f}'))
+PY"

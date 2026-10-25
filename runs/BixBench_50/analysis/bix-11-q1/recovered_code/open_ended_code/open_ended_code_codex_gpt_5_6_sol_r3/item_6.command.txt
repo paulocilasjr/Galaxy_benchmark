@@ -1,0 +1,73 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from decimal import Decimal, getcontext
+from statistics import median
+getcontext().prec=50
+
+def parse(s):
+ i=0
+ def sub():
+  nonlocal i
+  while i<len(s) and s[i].isspace(): i+=1
+  children=[]
+  if s[i]=='(':
+   i+=1
+   while True:
+    children.append(sub())
+    if s[i]==',': i+=1; continue
+    if s[i]==')': i+=1; break
+    raise ValueError(('children',i,s[i:i+20]))
+  else:
+   start=i
+   while i<len(s) and s[i] not in ':,();': i+=1
+   if start==i: raise ValueError(('label',i,s[i:i+20]))
+  # optional internal/support label
+  while i<len(s) and s[i].isspace(): i+=1
+  if i<len(s) and s[i] not in ':,();':
+   while i<len(s) and s[i] not in ':,();': i+=1
+  length=None
+  if i<len(s) and s[i]==':':
+   i+=1; start=i
+   while i<len(s) and s[i] not in ',();': i+=1
+   length=Decimal(s[start:i].strip())
+  return (children,length)
+ root=sub()
+ while i<len(s) and s[i].isspace(): i+=1
+ if i<len(s) and s[i]==';': i+=1
+ if s[i:].strip(): raise ValueError(('tail',i,s[i:]))
+ return root
+
+def score(root):
+ all_lengths=[]; internal=[]; tips=0
+ def walk(n,isroot=False):
+  nonlocal tips
+  children,length=n
+  if not isroot:
+   if length is None: raise ValueError('missing branch length')
+   all_lengths.append(length)
+   if children: internal.append(length)
+  if children:
+   for c in children: walk(c)
+  else: tips+=1
+ walk(root,True)
+ return sum(internal)/sum(all_lengths),len(all_lengths),len(internal),tips
+sets=[]
+for group in ('animals','fungi'):
+ zpath='inputs/scogs_'+group+'.zip'
+ rows=[]
+ with ZipFile(zpath) as z:
+  for n in z.namelist():
+   if n.endswith('.treefile'):
+    s=z.read(n).decode()
+    rows.append((n.removesuffix('.faa.mafft.clipkit.treefile'),score(parse(s)),s.strip()))
+ vals=[x[1][0] for x in rows]
+ m=median(vals)
+ print(group,'n',len(vals),'median',m,'min',min(vals),'max',max(vals),'structures',sorted(set(x[1][1:] for x in rows)))
+ sr=sorted(rows,key=lambda x:x[1][0])
+ for x in sr[(len(sr)-1)//2:len(sr)//2+1]: print('mid',x[:2],x[2])
+ sets.append((set(x[0] for x in rows),dict((x[0],x[1][0]) for x in rows),m))
+print('fungi-animals',sets[1][2]-sets[0][2])
+print('animals-fungi',sets[0][2]-sets[1][2])
+common=sets[0][0]&sets[1][0]
+print('common',len(common),'animal median',median([sets[0][1][x] for x in common]),'fungi median',median([sets[1][1][x] for x in common]),'diff',median([sets[1][1][x] for x in common])-median([sets[0][1][x] for x in common]))
+PY"

@@ -1,0 +1,53 @@
+/bin/bash -lc "python - <<'PY'
+# Re-run low rows and tally zygosity/so/gene for carriers, plus low VAF stats
+import openpyxl, glob, os, re, collections, statistics
+# load trio
+wb=openpyxl.load_workbook('inputs/230215_Trio_Status.xlsx', data_only=True); ws=wb.active
+trio=[]
+for r in list(ws.iter_rows(values_only=True))[1:]:
+ sid=re.sub(r'\\s+','',str(r[0])) if r[0] is not None else ''
+ if sid: trio.append((sid,str(r[1]).strip(),str(r[3]).strip()))
+blm=dict((sid,blm) for sid,st,blm in trio)
+carrier_ids={sid for sid,st,blm in trio if blm=='Carrier'}
+print('carrier ids', sorted(carrier_ids, key=lambda x:(not x.isdigit(), x)))
+# chip genes
+wb=openpyxl.load_workbook('inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx', data_only=True); ws=wb.active
+chip=set(str(r[0]).strip().upper() for r in ws.iter_rows(values_only=True) if r[0] is not None)
+zy=collections.Counter(); so=collections.Counter(); gene=collections.Counter(); vafvals=[]; posc=collections.Counter(); indels=collections.Counter()
+examples=[]
+def filesid(f):
+ token=os.path.basename(f).replace('.xlsx','').split('_')[-1]
+ if token.startswith('SRR'): return token
+ m=re.match(r'"'^('"\\d+)',token); return m.group(1) if m else token
+for f in glob.glob('inputs/CHIP_DP10_GQ20_PASS/*.xlsx'):
+ sid=filesid(f)
+ if sid not in carrier_ids: continue
+ wb=openpyxl.load_workbook(f, data_only=True); ws=wb.active; rows=list(ws.iter_rows(values_only=True)); hdr=rows[1]
+ idx={n:i for i,n in enumerate(hdr)}
+ for r in rows[2:]:
+  if r[0] is None: continue
+  if str(r[idx['Zygosity']]).strip().lower()=='reference': continue
+  s=str(r[idx['Sequence Ontology (Combined)']]).lower()
+  if 'intergenic' in s or 'utr' in s or 'intron_variant' in s: continue
+  v=r[idx['Variant Allele Freq']]
+  if v is None: continue
+  vf=float(v)
+  if vf<0.3:
+   z=r[idx['Zygosity']]; soq=r[idx['Sequence Ontology (Combined)']]; g=r[idx['Gene Names']]; pos=str(r[0]); refalt=str(r[1])
+   zy[z]+=1; so[soq]+=1
+   parts=[x.strip().upper() for x in str(g).split(',')]
+   gl=','.join(parts)
+   gene[gl]+=1
+   vafvals.append(vf); posc[pos]+=1; indels['indel' if ('-' in refalt or '/' in refalt and len(refalt.split('/')[0])"'!=len(refalt.split('"'/')[1])) else 'snp']+=1
+   examples.append((sid,pos,refalt,z,vf,soq,g))
+ wb.close()
+print('n low rows',len(vafvals))
+print('zygosity',zy)
+print('SO',so)
+print('genes',gene)
+print('vaf min/max',min(vafvals),max(vafvals))
+print('position duplicate counts', {k:v for k,v in posc.items() if v>1})
+print('indel',indels)
+print('examples')
+for e in examples[:100]: print(e)
+PY"

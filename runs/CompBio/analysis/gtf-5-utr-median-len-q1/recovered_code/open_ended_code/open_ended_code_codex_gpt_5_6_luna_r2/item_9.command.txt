@@ -1,0 +1,25 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,collections,numpy as np
+p='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'; std={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+rxa=re.compile(r'(\\w+) \"(["'^"]*)"'"')
+tx={}; fs=collections.defaultdict(lambda:collections.defaultdict(list))
+for ln in gzip.open(p,'rt'):
+ if ln.startswith('#'): continue
+ f=ln.rstrip().split('\\t'); ch,ft=f[0],f[2]
+ if ch not in std: continue
+ a=dict(rxa.findall(f[8])); tid=a.get('transcript_id','')
+ if ft=='transcript' and 'tag \"MANE Select\"' in f[8]: tx[tid]=(ch,f[6])
+ if tid: fs[tid][ft].append((int(f[3]),int(f[4])))
+for addstop in [False,True]:
+ out=[]
+ for tid,(ch,strand) in tx.items():
+  ex=fs[tid]['exon']; cds=fs[tid]['CDS']+(fs[tid]['stop_codon'] if addstop else [])
+  lo=min(x[0] for x in cds); hi=max(x[1] for x in cds)
+  p5=p3=0
+  for s,e in ex:
+   left=max(0,min(e,lo-1)-s+1); right=max(0,e-max(s,hi+1)+1)
+   if strand=='+':p5+=left;p3+=right
+   else:p5+=right;p3+=left
+  out.append([p5,sum(e-s+1 for s,e in cds),p3])
+ print('stop',addstop,'n',len(out),'med',np.median(np.array(out),axis=0),'floor',np.floor(np.median(np.array(out),axis=0)).astype(int))
+PY"

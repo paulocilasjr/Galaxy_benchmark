@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+# We'll use saved data for GSE15721? recompute quickly and print sign distribution of query genes for several datasets.
+import GEOparse,numpy as np,pandas as pd,re
+from collections import defaultdict
+QFILE='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/characterize.response.q1.txt';DEST='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-df9db11b2debf840fc5650c6/workspace/geo'
+qlist=open(QFILE).read().split();q=set(x.upper() for x in qlist)
+def get_series(gse):
+ g=GEOparse.get_GEO(geo=gse,destdir=DEST,silent=True);mats=[]
+ for name,gsm in g.gsms.items():
+  t=gsm.table.copy();vc='VALUE' if 'VALUE' in t.columns else [c for c in t.columns if c not in ['ID_REF']][0]
+  t=t[['ID_REF',vc]].rename(columns={vc:'value'});t['sample']=name;mats.append(t)
+ df=pd.concat(mats);expr=df.pivot(index='ID_REF',columns='sample',values='value').astype(float)
+ sym=None
+ for gpl in g.gpls.values():
+  ann=gpl.table;c=next((c for c in ann.columns if c.lower() in ['gene symbol','genesymbol','symbol']),None)
+  if c:sym=ann.set_index('ID')[c];break
+ return g,expr,sym
+def sign_dist(gse,condpat,ctrlpat,label):
+ g,expr,sym=get_series(gse);cond=[];ctrl=[]
+ for name in expr.columns:
+  title=g.gsms[name].metadata.get('title');
+  if isinstance(title,list):title=title[0]
+  if re.search(condpat,title,re.I):cond.append(name)
+  elif re.search(ctrlpat,title,re.I):ctrl.append(name)
+ if not cond or not ctrl: print(label,'no groups',cond,ctrl);return
+ m0=expr[cond].mean(axis=1);m1=expr[ctrl].mean(axis=1);logfc=np.log2((m0+1)/(m1+1))
+ best=defaultdict(lambda:(0,0))
+ for p in expr.index:
+  if sym is None or p not in sym.index:continue
+  gene=str(sym.loc[p]).split('///')[0].strip().upper()
+  if gene and abs(logfc[p])>best[gene][0]:best[gene]=(abs(logfc[p]),logfc[p])
+ pos=sum(1 for g in q if g in best and best[g][1]>0);neg=sum(1 for g in q if g in best and best[g][1]<0);zero=sum(1 for g in q if g in best and best[g][1]==0);missing=len(q)-pos-neg-zero
+ print(label,'pos',pos,'neg',neg,'zero',zero,'missing',missing,'top query signs:',[(g, '+' if best[g.upper()][1]>0 else '-') for g in qlist[:20] if g.upper() in best])
+for args in [('GSE15721',r'wild type macrophages stimulated with LPS for 6 hours',r'wild type macrophages unstimulated','MAC LPS6'),('GSE15721',r'wild type macrophages stimulated with LPS for 24 hours',r'wild type macrophages unstimulated','MAC LPS24'),('GSE15718',r'wild type dendritic cells stimulated with LPS for 6 hours',r'wild type dendritic cells unstimulated','DC LPS6'),('GSE15718',r'wild type dendritic cells stimulated with LPS for 24 hours',r'wild type dendritic cells unstimulated','DC LPS24'),('GSE17721',r'"'^Lps,'"\\s*6_hours',r'"'^Control,'"\\s*6_hours','BMDC LPS6'),('GSE17721',r'"'^Lps,'"\\s*24_hours',r'"'^Control,'"\\s*24_hours','BMDC LPS24')]:
+ sign_dist(*args)
+PY"

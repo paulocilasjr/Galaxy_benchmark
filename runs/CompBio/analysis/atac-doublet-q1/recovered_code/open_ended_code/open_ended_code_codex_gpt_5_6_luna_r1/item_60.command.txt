@@ -1,0 +1,23 @@
+/bin/bash -lc "python3 -u - <<'PY'
+from peak_scan import load_peak_matrix
+import numpy as np
+x,b,t,h,df=load_peak_matrix('atac.doublet.q1.bed.gz','pbmc10k_v2_peaks.h5',True)
+for kind in ['weighted','binary','rawnorm']:
+ if kind=='weighted':y=x
+ else:
+  y=x.copy(); y.data=np.ones_like(y.data)
+  if kind=='binary':
+   d=np.bincount(y.indices,minlength=y.shape[1]);idf=np.log((len(b)+1)/(d+1))+1;y=y.multiply(idf).tocsr()
+  rs=np.sqrt(np.asarray(y.multiply(y).sum(1)).ravel());y=y.multiply(1/np.maximum(rs,1e-12)[:,None]).tocsr()
+ S=np.asarray((y@y.T).toarray(),dtype=np.float32);np.fill_diagonal(S,-1)
+ N=len(b);p,q=np.triu_indices(N,1);pd=S[p,q];den=np.sqrt(2+2*pd)
+ print('\\nKIND',kind,'sim',np.round(np.quantile(pd,[0,.01,.1,.5,.9,.99,1]),4),flush=True)
+ for fq in [.01,.05,.1]:
+  th=np.quantile(pd,fq);valid=pd<=th;fit=np.full(N,-1.,np.float32); pp=np.zeros((N,2),np.int32)
+  for i in range(N):
+   z=(S[i,p]+S[i,q])/den;z[~valid]=-2;z[(p==i)|(q==i)]=-2;j=z.argmax();fit[i]=z[j];pp[i]=[p[j],q[j]]
+  order=np.argsort(fit)[::-1];print('fq',fq,'top',[(b[i],round(float(fit[i]),5),int(t[i]),int(h[i])) for i in order[:20]])
+  for name in ['CCGTAATCATGTAAAA-1','CGCACGCGTACTGCAG-1','TCTGCAAAACGCTAAC-1','CACGGTTGACCTAGTG-1','GCTTGCACGCCTTCTC-1']:
+   i=b.index(name);print(name,'rank',int(np.where(order==i)[0][0])+1,'fit',round(float(fit[i]),5))
+ del y,S
+PY"

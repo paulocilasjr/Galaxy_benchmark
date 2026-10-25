@@ -1,0 +1,51 @@
+/bin/bash -lc "cat > gse22886_contrasts.py <<'PY'
+import geo_de, json, re, pickle, itertools, pandas as pd
+from scipy.stats import spearmanr
+def groups_from_titles(titles):
+    groups={}
+    for i,t in enumerate(titles):
+        g=t.split(' [')[0].strip(); g=re.sub(r'-\\d+"'$'"','',g)
+        groups.setdefault(g,[]).append(i)
+    return groups
+geo_de.groups_from_titles=groups_from_titles
+mp=json.load(open('mouse_to_human3.json')); q=list(dict.fromkeys(mp.values())); qset=set(q)
+path='GSE22886-GPL96_series_matrix.txt'
+meta,ids,titles,mat=geo_de.parse_geo(path)
+groups=geo_de.groups_from_titles(titles)
+hmap=pickle.load(open('hmap_gpl96.pkl','rb'))
+print('groups', groups.keys())
+# select contrasts relevant: DC LPS vs ctrl, NK IL2 vs ctrl, monocyte day1 vs day0, day7 vs day0, memory activated vs unactivated, CD4 th1/2 vs N0, neutrophil none
+contrasts=[]
+contrasts.append(('DC_LPS_vs_Ctrl','DendriticCell-LPSstimulated','DendriticCell-Control'))
+contrasts.append(('NK_IL2_vs_Ctrl','NKcell-IL2stimulated','NKcell-control'))
+contrasts.append(('NK_IL15_vs_Ctrl','NKcell-IL15stimulated','NKcell-control'))
+contrasts.append(('Mono_Day1_vs_Day0','Monocyte-Day1','Monocyte-Day0'))
+contrasts.append(('Mono_Day7_vs_Day0','Monocyte-Day7','Monocyte-Day0'))
+contrasts.append(('Mem_act_vs_unact','MemoryTcell-RO-activated','MemoryTcell-RO-unactivated'))
+contrasts.append(('CD4_Th1_12h_vs_N0','CD4Tcell-Th1-restimulated12hour','CD4Tcell-N0'))
+contrasts.append(('CD4_Th2_12h_vs_N0','CD4Tcell-Th2-restimulated12hour','CD4Tcell-N0'))
+# also cell type identity contrasts
+contrasts.append(('DC_vs_Mono_Day0','DendriticCell-Control','Monocyte-Day0'))
+contrasts.append(('DC_vs_Neutro','DendriticCell-Control','Neutrophil-Resting'))
+contrasts.append(('Mono_vs_Neutro','Monocyte-Day0','Neutrophil-Resting'))
+for name,a,b in contrasts:
+ if a not in groups or b not in groups: continue
+ res=geo_de.de_contrast(mat,groups[a],groups[b])
+ agg=geo_de.aggregate_gene(res,hmap,qset)
+ df=agg[agg.gene.isin(qset)].copy()
+ if len(df)<5: continue
+ # rank query order vs logFC
+ ranks={g:i for i,g in enumerate(q)}; df['qrank']=[ranks[g] for g in df.gene]
+ rho,p=spearmanr(df.qrank,df.logFC)
+ rho_abs,p2=spearmanr(df.qrank,df.logFC.abs())
+ # top fraction query in top 112 by logFC among all genes mapped to q? For directional: how many query genes have same sign?
+ pos=df.sort_values('logFC',ascending=False)
+ # mean q rank of top 20 query genes (most up)
+ top_q=pos.head(20).gene.tolist(); bot_q=pos.tail(20).gene.tolist()
+ mean_top=sum(ranks[g] for g in top_q)/len(top_q)
+ mean_bot=sum(ranks[g] for g in bot_q)/len(bot_q)
+ print(f'{name:22s} found={len(df):3d} rho={rho:.3f} rho_abs={rho_abs:.3f} mean_qrank_top20={mean_top:.1f} mean_qrank_bot20={mean_bot:.1f}')
+ print('  top20', top_q)
+ print('  bot20', bot_q)
+PY
+python3 gse22886_contrasts.py"

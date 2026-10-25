@@ -1,0 +1,57 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, concurrent.futures, math, time
+accs=[]
+with open('summary_statistics_table_export.tsv') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>15 and p[15]=='40593539':
+            path=p[11].strip('\"').replace('http://ftp.ebi.ac.uk','https://ftp.ebi.ac.uk')
+            accs.append((p[1],f'{path}/harmonised/{p[1]}.h.tsv.gz',p[6]))
+print('n',len(accs),flush=True)
+regions=['6:32067917-32067917','17:16939677-16939677']
+target6=4.85572e-19; target17=1.4221e-16
+
+def log10safe(x):
+    try:
+        v=float(x)
+        return math.log10(v) if v>0 else -320
+    except: return -999
+
+def query(item):
+    acc,url,trait=item
+    vals={}
+    for reg in regions:
+        pos=reg.split(':')[1].split('-')[0]
+        try:
+            cp=subprocess.run(['tabix',url,reg],capture_output=True,text=True,timeout=90)
+            vals[reg]=('RET',cp.returncode)
+            for line in cp.stdout.splitlines():
+                cols=line.split('\\t')
+                if len(cols)>=8 and cols[1]==pos:
+                    vals[reg]=('OK',cols[7]); break
+            if vals[reg][0] not in ('OK','ERR'):
+                vals[reg]=('NO_ROW',cp.returncode)
+        except Exception as e:
+            vals[reg]=('EXC',str(e)[:30])
+    return acc,trait,vals
+
+results=[]
+start=time.time()
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    futs=[ex.submit(query,item) for item in accs]
+    for fut in concurrent.futures.as_completed(futs):
+        results.append(fut.result())
+valid=[]
+for acc,trait,vals in results:
+    p6=vals[regions[0]][1] if vals[regions[0]][0]=='OK' else None
+    p17=vals[regions[1]][1] if vals[regions[1]][0]=='OK' else None
+    if p6 is not None and p17 is not None:
+        l6=log10safe(p6); l17=log10safe(p17)
+        score=abs(l6-log10safe(target6))+abs(l17-log10safe(target17))
+        valid.append((score,acc,trait,p6,p17,l6,l17))
+valid.sort()
+print('elapsed',time.time()-start,'valid',len(valid),'of',len(results),flush=True)
+for x in valid[:100]:
+    print('%.4f'%x[0], x[1], x[2][:80], 'p6',x[3], 'p17',x[4], 'l6',x[5], 'l17',x[6])
+PY"

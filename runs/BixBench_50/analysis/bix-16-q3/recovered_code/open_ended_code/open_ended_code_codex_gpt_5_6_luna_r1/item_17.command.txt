@@ -1,0 +1,92 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.local_packages python3 - <<'PY'
+import csv, collections, os, time
+import numpy as np
+from scipy.stats import rankdata
+
+cp='inputs/CRISPRGeneEffect.csv'
+ep='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def read_header_ids(path):
+    with open(path, newline='', encoding='utf-8', errors='replace') as f:
+        rd=csv.reader(f)
+        header=next(rd)
+        ids=[row[0] for row in rd]
+    return header, ids
+
+def feature_id(x):
+    p=x.rfind('(')
+    return x[p+1:-1] if p >= 0 and x.endswith(')') else x
+
+t0=time.time()
+ch,cids=read_header_ids(cp)
+eh,eids=read_header_ids(ep)
+print('schemas',len(cids),len(eids),len(ch)-1,len(eh)-1,'header_scan_sec',round(time.time()-t0,2),flush=True)
+# Cell-line/model alignment by stable ModelID.
+e_row={x:i for i,x in enumerate(eids)}
+shared_ids=[x for x in cids if x in e_row]
+c_rows=np.array([i for i,x in enumerate(cids) if x in e_row],dtype=np.int64)
+e_rows=np.array([e_row[x] for x in shared_ids],dtype=np.int64)
+print('shared_models',len(shared_ids),flush=True)
+# Pair same features by Entrez ID, preferring exact source-label match in expression.
+e_id_cols=collections.defaultdict(list)
+e_label_col={}
+for j,x in enumerate(eh[1:],1):
+    e_id_cols[feature_id(x)].append(j)
+    e_label_col[x]=j
+pairs=[]
+for cj,x in enumerate(ch[1:],1):
+    fid=feature_id(x)
+    if fid not in e_id_cols:
+        continue
+    ej=e_label_col.get(x,e_id_cols[fid][0])
+    pairs.append((cj,ej,x,eh[ej],fid,x==eh[ej]))
+# Check one-to-one selected columns.
+assert len({p[0] for p in pairs})==len(pairs)
+assert len({p[1] for p in pairs})==len(pairs)
+ccols=[p[0] for p in pairs]
+ecols=[p[1] for p in pairs]
+exact=np.array([p[5] for p in pairs],dtype=bool)
+print('feature_pairs',len(pairs),'exact_label_pairs',int(exact.sum()),'renamed_pairs',int((~exact).sum()),flush=True)
+# Load numeric columns. Row order follows the matrix files, then select shared models.
+t1=time.time()
+C_all=np.loadtxt(cp,delimiter=',',skiprows=1,usecols=ccols,dtype=np.float64)
+print('loaded_CRISPR',C_all.shape,'sec',round(time.time()-t1,2),flush=True)
+t2=time.time()
+E_all=np.loadtxt(ep,delimiter=',',skiprows=1,usecols=ecols,dtype=np.float64)
+print('loaded_expression',E_all.shape,'sec',round(time.time()-t2,2),flush=True)
+C=C_all[c_rows,:]
+E=E_all[e_rows,:]
+del C_all,E_all
+print('aligned',C.shape,E.shape,'nan',int(np.isnan(C).sum()),int(np.isnan(E).sum()),flush=True)
+# Rank columns. Inputs are complete here; use pairwise fallback if any missing appears.
+if np.isfinite(C).all() and np.isfinite(E).all():
+    t3=time.time()
+    RC=rankdata(C,axis=0,method='average')
+    RE=rankdata(E,axis=0,method='average')
+    RC-=RC.mean(axis=0)
+    RE-=RE.mean(axis=0)
+    rho=np.sum(RC*RE,axis=0)/np.sqrt(np.sum(RC*RC,axis=0)*np.sum(RE*RE,axis=0))
+    print('ranked_sec',round(time.time()-t3,2),flush=True)
+else:
+    # Pairwise-complete fallback, preserving feature-specific valid observations.
+    rho=np.full(len(pairs),np.nan)
+    for j in range(len(pairs)):
+        ok=np.isfinite(C[:,j]) & np.isfinite(E[:,j])
+        if ok.sum()>=2:
+            rc=rankdata(C[ok,j],method='average'); re=rankdata(E[ok,j],method='average')
+            rho[j]=np.corrcoef(rc,re)[0,1]
+# Raw gene effect is negative-going, so positive essentiality association is -rho >= 0.6.
+bio=-rho
+finite=np.isfinite(bio)
+count_id=int(np.sum(finite & (bio>=0.6)))
+count_exact=int(np.sum(finite & exact & (bio>=0.6)))
+print('finite',int(finite.sum()),'valid_n',C.shape[0], 'count_ID_match',count_id,'count_exact_label',count_exact,flush=True)
+order=np.argsort(-bio[finite])
+inds=np.flatnonzero(finite)[order[:20]]
+for j in inds:
+    print(pairs[j][2], 'expr=',pairs[j][3], 'bio_rho=',repr(float(bio[j])), 'raw_rho=',repr(float(rho[j])), 'exact=',bool(exact[j]))
+# Also report close threshold cases for validation.
+print('threshold_near')
+for j in np.flatnonzero(finite & (bio>=0.55) & (bio<=0.65)):
+    print(pairs[j][2],repr(float(bio[j])),bool(exact[j]))
+PY"

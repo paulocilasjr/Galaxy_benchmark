@@ -1,0 +1,80 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+import pandas as pd
+import numpy as np
+import gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from pathlib import Path
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+print('raw counts', counts.shape)
+keep = (counts > 10).any(axis=1)
+counts_f = counts.loc[keep].copy()
+print('prefiltered genes', counts_f.shape[0])
+
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['SampleID_us'] = layout['SampleID'].str.replace('-', '_', regex=False)
+related = [
+    'DMSO',
+    'DMSO_Serum_starvation',
+    'Cisplatin_IC50_CBD_IC50',
+    'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h',
+]
+meta = layout.loc[layout['Group'].isin(related), ['SampleID_us','Group']].copy()
+meta = meta.set_index('SampleID_us')
+meta['Group'] = pd.Categorical(meta['Group'], categories=related, ordered=False)
+print('metadata')
+print(meta['Group'].value_counts(sort=False))
+missing = [s for s in meta.index if s not in counts_f.columns]
+if missing:
+    raise SystemExit(f'missing samples in counts: {missing}')
+cts = counts_f.loc[:, meta.index].T
+print('dds counts', cts.shape)
+
+dds = DeseqDataSet(
+    counts=cts,
+    metadata=meta,
+    design='~ Group',
+    ref_level=['Group','DMSO'],
+    n_cpus=4,
+    quiet=False,
+)
+dds.deseq2()
+print('dds done')
+stat_res = DeseqStats(
+    dds,
+    contrast=['Group','Cisplatin_IC50_CBD_IC50','DMSO'],
+    alpha=0.05,
+    n_cpus=4,
+    quiet=False,
+)
+stat_res.summary()
+res = stat_res.results_df.copy()
+print('result cols', list(res.columns))
+print('results shape', res.shape)
+mask = (res['padj'].notna()) & (res['padj'] <= 0.05) & (res['log2FoldChange'].abs() >= 0.5) & (res['baseMean'] >= 10)
+deg = res.loc[mask].copy()
+print('DEG count ensg', deg.shape[0])
+print('padj NA', res['padj'].isna().sum())
+
+mapdf = pd.read_csv('inputs/ensg_to_gene_name.tsv', sep='\\t')
+mapdf = mapdf.dropna(subset=['ENSG','gene_name'])
+mapdf = mapdf[mapdf['gene_name'].astype(str).str.len() > 0]
+ensg_to_symbol = dict(zip(mapdf['ENSG'], mapdf['gene_name']))
+fg_symbols = pd.Series(deg.index.map(ensg_to_symbol), index=deg.index).dropna().astype(str)
+bg_symbols = pd.Series(counts_f.index.map(ensg_to_symbol), index=counts_f.index).dropna().astype(str)
+fg_unique = sorted(set(fg_symbols))
+bg_unique = sorted(set(bg_symbols))
+fg_in_bg = sorted(set(fg_unique) & set(bg_unique))
+print('fg mapped unique', len(fg_unique), 'in bg', len(fg_in_bg), 'bg mapped unique', len(bg_unique))
+print('example fg', fg_in_bg[:10])
+
+# Inspect target terms in the requested library.
+lib = gp.get_library('Reactome_2022', organism='Human')
+terms = [t for t in lib if ('p53' in t.lower() and 'cell cycle' in t.lower()) or ('p53-mediated cell cycle gene regulation' in t.lower())]
+print('matching library terms')
+for t in terms:
+    print(t, len(lib[t]))
+
+ enr = gp.enrichr(gene_list=fg_in_bg, gene_sets='Reactome_2022', organism='human', background=bg_unique, outdir=None, no_plot=True, cutoff=1.0, verbose=True)
+PY"

@@ -1,0 +1,95 @@
+/bin/bash -lc "cat > grid_shift.py <<'PY'
+import gzip, numpy as np
+from pyfaidx import Fasta
+
+def parse_motifs(path):
+    pwms={'+':{},'-':{}}
+    cur=None; name=None
+    with open(path) as f:
+        for line in f:
+            line=line.rstrip('\\n')
+            if not line: continue
+            if line.startswith('>'):
+                if cur is not None: pwms[orient][name]=np.array(cur)
+                if line.endswith('_plus'): orient='+'
+                elif line.endswith('_minus'): orient='-'
+                name=line[1:]; cur=[]
+            else:
+                cur.append([float(x) for x in line.split('\\t')])
+        pwms[orient][name]=np.array(cur)
+    return pwms['+'], pwms['-']
+
+def onehot_from_windows(seqs):
+    arr=np.zeros((len(seqs),len(seqs[0]),4),dtype=np.float32)
+    mp={'A':0,'C':1,'G':2,'T':3}
+    for i,s in enumerate(seqs):
+        for j,c in enumerate(s.upper()):
+            if c in mp: arr[i,j,mp[c]]=1
+    return arr
+
+def norm(pwm): return pwm/np.sum(pwm,axis=-1,keepdims=True)
+
+def ic_scale(pwm):
+    p=norm(pwm); bg=.25
+    return p*np.log2((p+1e-9)/(bg+1e-9))
+
+def convolve(ref, inp):
+    L=len(inp)-len(ref)+1
+    return np.array([np.sum(ref*inp[i:i+len(ref)]) for i in range(L)])
+
+refp,refm=parse_motifs('ATAC.ref.motifs.txt')
+# aggregate refs by orientation? use per-ref scores then avg argmax maybe individual.
+refp_list=list(refp.values()); refm_list=list(refm.values())
+
+# read chr1 windows
+plus_windows=[]; minus_windows=[]
+with gzip.open('unknown.shift.frag.bed.gz','rt') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if p[0]"'!='"'chr1': continue
+        start=int(p[1]); end=int(p[2])
+        plus_windows.append((start,None)); minus_windows.append((end,None))
+g=Fasta('chr1.fa')
+for arr,items in [(plus_windows,None),(minus_windows,None)]: pass
+# extract windows
+PW=[]; MW=[]
+for pos,_ in plus_windows:
+    s=str(g['chr1'][pos-30:pos+30])
+    if len(s)==60: PW.append(s)
+for pos,_ in minus_windows:
+    s=str(g['chr1'][pos-30:pos+30])
+    if len(s)==60: MW.append(s)
+print('windows',len(PW),len(MW),flush=True)
+
+def calc_for(delta_plus,delta_minus):
+    plus_seqs=[s[delta_plus+10:delta_plus+50] for s in PW]
+    minus_seqs=[s[delta_minus+10:delta_minus+50] for s in MW]
+    pp=norm(onehot_from_windows(plus_seqs).mean(0))
+    mp=norm(onehot_from_windows(minus_seqs).mean(0))
+    # use ic_scale for both
+    pout=[]; mout=[]
+    for ref in refp_list:
+        conv=convolve(ic_scale(ref),ic_scale(pp))
+        pout.append(14-int(np.argmax(conv)))
+    for ref in refm_list:
+        conv=convolve(ic_scale(ref),ic_scale(mp))
+        mout.append(5-int(np.argmax(conv)))
+    return pout,mout
+
+best=[]
+for p in range(-6,11):
+  for q in range(-10,2):
+    dp=4-p; dq=-5-q
+    po,mo=calc_for(dp,dq)
+    if po[0]==0 and po[1]==0 and po[2]==0 and mo[0]==0 and mo[1]==0 and mo[2]==0:
+        print('ZERO candidate actual',p,q,'dp,dq',dp,dq,flush=True)
+    # score
+    # find candidate minimizing sum absolute mean shifts? But only integer outputs
+    # save top by number zeros
+    score=sum(1 for x in po if x==0)+sum(1 for x in mo if x==0)
+    best.append((score,sum(abs(x) for x in po)+sum(abs(x) for x in mo),p,q,po,mo))
+best.sort(key=lambda x:(-x[0],x[1]))
+print('top candidates:')
+for row in best[:20]: print(row)
+PY
+python3 grid_shift.py"

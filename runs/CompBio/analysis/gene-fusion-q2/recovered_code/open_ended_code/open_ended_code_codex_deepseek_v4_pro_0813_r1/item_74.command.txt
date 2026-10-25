@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, re, collections, gzip
+# transcript gene map
+trans_gene={}
+with open('hs_cdna.fa') as f:
+ for line in f:
+  if line.startswith('>'):
+   h=line[1:].strip();tid=h.split()[0]
+   for part in h.split():
+    if part.startswith('gene_symbol:'):trans_gene[tid]=part.split(':',1)[1];break
+# read max aligned length from transcriptome all records
+def mlen(c):
+ return sum(int(x) for x,op in re.findall(r'(\\d+)([MIDNSHP=X])',c) if op in 'MDN=X')
+maxlen=collections.defaultdict(int);best=collections.defaultdict(str)
+for line in subprocess.Popen(['samtools','view','reads_cdna.bam'],stdout=subprocess.PIPE,text=True).stdout:
+ p=line.rstrip().split('\\t');
+ if p[5]=='*':continue
+ ml=mlen(p[5])
+ if ml>maxlen[p[0]]:maxlen[p[0]]=ml;best[p[0]]=p[5]
+# collect unique reads for transcriptome gene pairs, using SA tags and dedupe unordered pair
+readsets=collections.defaultdict(set)
+for line in subprocess.Popen(['samtools','view','-F','0x900','reads_cdna.bam'],stdout=subprocess.PIPE,text=True).stdout:
+ p=line.rstrip().split('\\t');rname=p[2];g1=trans_gene.get(rname,'')
+ tags={}
+ for f in p[11:]:
+  if ':' in f:
+   k,t,v=f.split(':',2);tags[k]=v
+ sa=tags.get('SA')
+ if not sa:continue
+ for entry in sa.rstrip(';').split(';'):
+  if not entry:continue
+  parts=entry.split(',')
+  if len(parts)<6:continue
+  g2=trans_gene.get(parts[0],'')
+  key=tuple(sorted((g1,g2)))
+  if key in [('SP1','ZIC2'),('SP1','CATSPER4')]:
+   readsets[key].add(p[0])
+for key,s in readsets.items():
+ print('\\n',key,'n',len(s))
+ hist=collections.Counter()
+ full=0
+ for name in s:
+  ml=maxlen.get(name,0);hist[ml]+=1
+  if ml>=95:full+=1
+ print('hist',hist.most_common(15),'full>=95',full)
+ print('example maxlen',[(n,maxlen.get(n),best.get(n)) for n in list(s)[:10]])
+PY"

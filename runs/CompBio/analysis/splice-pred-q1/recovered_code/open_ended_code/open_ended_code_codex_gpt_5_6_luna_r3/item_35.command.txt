@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 -X faulthandler -u - <<'PY'
+import json
+from pathlib import Path
+import numpy as np
+import torch
+from openspliceai.predict.predict import create_datapoints, load_pytorch_models
+print('imports')
+data=json.loads(Path('downloads/hg38_chr12_120196699_120201111.json').read_text())
+genomic_seq=data['dna'].upper()
+transcript_seq=genomic_seq.translate(str.maketrans('ACGTNacgtn','TGCANtgcan'))[::-1].upper()
+print('seq')
+x=create_datapoints(transcript_seq,SL=5000,CL_max=10000)
+print('x')
+dna=torch.tensor(x.tolist(),dtype=torch.float32).permute(0,2,1)
+print('dna')
+models,params=load_pytorch_models('downloads/mane_10000nt_models',torch.device('cpu'),5000,10000)
+print('models',len(models))
+with torch.no_grad():
+ preds=[m(dna).detach().cpu() for m in models]
+print('preds',len(preds))
+avg=torch.stack(preds,dim=0).mean(dim=0)
+print('avg',avg.shape)
+scores=avg[0].permute(1,0).numpy()[:len(transcript_seq)]
+print('scores',scores.shape)
+print(np.flatnonzero(scores[:,1]>=.9),np.flatnonzero(scores[:,2]>=.9))
+PY"

@@ -1,0 +1,49 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+refs={'+':seq,'-':rc}
+pos=defaultdict(list)
+for lab,t in refs.items():
+ for i in range(len(t)-50+1):
+  pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+arrays={}
+for name in ['exo','endo','mix']:
+ depth=np.zeros(len(seq),dtype=float)
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h:break
+   s=f.readline().strip(); f.readline(); f.readline()
+   lab,i=bestpos(s)
+   if lab=='+': depth[i:i+50]+=1
+   else:
+    start=len(seq)-50-i; depth[start:start+50]+=1
+ arrays[name]=depth
+ print(name,'mean depth',depth.mean(),'nonzero',np.sum(depth>0))
+for name in ['exo','endo']:
+ corr=np.corrcoef(arrays[name],arrays['mix'])[0,1]
+ print('corr mix-',name,corr)
+extra=arrays['exo']-arrays['endo']
+print('extra exo-only depth stats nonzero',np.sum(extra>0),'max',extra.max(),'sum',extra.sum())
+print('corr endo vs exo-only',np.corrcoef(arrays['endo'],extra)[0,1])
+nonzero=arrays['endo']>0
+ratios=np.where(nonzero,extra/np.maximum(arrays['endo'],1),0)
+idx=np.argsort(ratios)[::-1][:100]
+print('top extra/endo positions')
+for j in idx[:50]:
+ print(j,seq[j], 'endo',arrays['endo'][j],'extra',extra[j],'mix',arrays['mix'][j])
+PY"

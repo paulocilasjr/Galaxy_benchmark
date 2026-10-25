@@ -1,0 +1,47 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, random, time
+cands=json.load(open('candidate_bw.json'))
+# selected bins top 30 and 30 random
+lines=open('counts.tsv').read().splitlines(); vals=[]
+for line in lines:
+ c,s,e,v=line.split(); vals.append((float(v),c,int(s),int(e)))
+vals.sort(reverse=True)
+random.seed(42); rand=random.sample(vals,30)
+selected=vals[:30]+rand
+# dedup by coord
+seen=set(); bins=[]; obs=[]
+for v,c,s,e in selected:
+ if (c,s,e) in seen: continue
+ seen.add((c,s,e)); bins.append((c,s,e)); obs.append(v)
+print('bins',len(bins))
+json.dump({'bins':bins,'obs':obs},open('selected_bins_test.json','w'))
+PY
+python3 - <<'PY'
+import json, pyBigWig, time, math
+sel=json.load(open('selected_bins_test.json')); bins=sel['bins']; obs=sel['obs']
+cands=json.load(open('candidate_bw.json'))[:20]
+
+def corr(a,b):
+ n=len(a); ma=sum(a)/n; mb=sum(b)/n
+ cov=sum((x-ma)*(y-mb) for x,y in zip(a,b)); va=sum((x-ma)**2 for x in a); vb=sum((y-mb)**2 for y in b)
+ return cov/math.sqrt(va*vb) if va and vb else 0
+
+def work(c):
+ vec=[0.0]*len(bins)
+ for f in c['files']:
+  try:
+   bw=pyBigWig.open(f['url'])
+   for i,(ch,s,e) in enumerate(bins):
+    try:
+     x=bw.stats(ch,s,e,nBins=1,type='sum',exact=True)
+     if x and x[0] is not None: vec[i]+=x[0]
+    except Exception: pass
+   bw.close()
+  except Exception as e:
+   return c['exp'],None,repr(e)
+ return c['exp'],corr(obs,vec),None
+t=time.time()
+for c in cands:
+ exp,co,err=work(c); print(exp,co,err)
+print('elapsed',time.time()-t)
+PY"

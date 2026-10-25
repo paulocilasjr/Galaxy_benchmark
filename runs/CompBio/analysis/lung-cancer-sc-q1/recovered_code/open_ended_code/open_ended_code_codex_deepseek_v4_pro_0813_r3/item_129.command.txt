@@ -1,0 +1,41 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, pandas as pd, numpy as np, h5py, scipy.sparse as sp, time
+from sklearn.preprocessing import normalize
+d=np.load('centroids_celltype_tumor.npz',allow_pickle=True)
+means=d['means']; cats=d['cats']; common_full=d['common_full']
+C=normalize(means,norm='l2',axis=1,copy=True)
+p='luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad'
+f=ad.read_h5ad(p,backed='r')
+obs=f.obs
+labels=obs['cell_type_tumor'].astype(str).values
+total=obs['total_counts'].values.astype(np.float64)
+h=h5py.File(p,'r'); g=h['layers/raw_counts']; data=g['data']; indices=g['indices']; indptr=g['indptr']; n=len(indptr)-1
+preds=np.empty(n,dtype=object)
+chunk=50000
+t=time.time()
+for start in range(0,n,chunk):
+    end=min(start+chunk,n)
+    s=indptr[start]; e=indptr[end]
+    row=indices[s:e].astype(np.int64); col=data[s:e].astype(np.float64)
+    rows=np.repeat(np.arange(end-start), np.diff(indptr[start:end+1]))
+    X=sp.csr_matrix((col,(rows,row)),shape=(end-start,len(f.var)))
+    Xc=X[:,common_full]
+    lib=total[start:end].copy(); lib[lib<=0]=1
+    Xn=Xc.multiply(1e4/lib[:,None]).tocsr(); Xn.data=np.log1p(Xn.data)
+    Xn=normalize(Xn,norm='l2',axis=1,copy=False)
+    score=Xn @ C.T
+    preds[start:end]=cats[score.argmax(axis=1)]
+    if start%200000==0: print('chunk',start,'elapsed',time.time()-t,flush=True)
+h.close()
+# save preds maybe
+np.save('full_centroid_preds_celltype_tumor.npy',preds)
+print('done',time.time()-t)
+# accuracy exact and broad
+print('exact acc',np.mean(preds==labels))
+# confusion key classes
+for true in ['Tumor cells LUSC','Tumor cells LUSC mitotic','Tumor cells LUAD','Tumor cells LUAD mitotic']:
+ m=labels==true
+ print('\\nTRUE',true,'n',m.sum())
+ print(pd.Series(preds[m]).value_counts().head(10).to_string())
+PY
+python [REDACTED LOCAL PATH]"

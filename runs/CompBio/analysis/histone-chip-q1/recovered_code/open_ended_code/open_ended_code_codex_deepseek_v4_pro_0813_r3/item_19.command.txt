@@ -1,0 +1,73 @@
+/bin/bash -lc "cat > compute_tss_profile.py <<'PY'
+import gzip, bisect, sys, time
+import numpy as np
+
+WINDOW=5000
+BIN=100
+NBINS=2*WINDOW//BIN
+
+# load tss
+chroms={}
+with open('coding_canonical_genes.tsv') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        chrom=p[1]; strand=p[2]; tss=int(p[5])
+        chroms.setdefault(chrom, [[],[]])
+        chroms[chrom][0].append(tss)
+        chroms[chrom][1].append(1 if strand=='+' else -1)
+for c,(tss,strands) in chroms.items():
+    order=np.argsort(tss)
+    chroms[c]=[np.array(tss)[order], np.array(strands)[order]]
+
+def process(path, use_mid=False):
+    counts=np.zeros(NBINS,dtype=np.int64); total=0; near=0
+    t0=time.time()
+    n=0
+    with gzip.open(path,'rt') as f:
+        for line in f:
+            p=line.split('\\t')
+            chrom=p[0]
+            if chrom not in chroms: continue
+            start=int(p[1]); end=int(p[2])
+            pos=(start+end)//2 if use_mid else start
+            tss, strands=chroms[chrom]
+            idx=bisect.bisect_left(tss, pos)
+            best=None
+            if idx < len(tss):
+                best=idx
+            if idx>0:
+                if best is None or abs(tss[idx-1]-pos)<abs(tss[best]-pos):
+                    best=idx-1
+            if best is None: continue
+            rel=(pos-tss[best])*strands[best]
+            if -WINDOW <= rel < WINDOW:
+                binidx=int((rel+WINDOW)//BIN)
+                if 0<=binidx<NBINS:
+                    counts[binidx]+=1; near+=1
+            total+=1
+            n+=1
+            if n%10000000==0:
+                print(path,'processed',n,'elapsed',time.time()-t0,file=sys.stderr)
+    print(path,'total canonical reads',total,'near',near,'elapsed',time.time()-t0,file=sys.stderr)
+    return counts,total
+
+for mode in ['start','mid']:
+    sc,st=process('histone.chip.q1.signal.tagalign.gz', use_mid=(mode=='mid'))
+    cc,ct=process('histone.chip.q1.control.tagalign.gz', use_mid=(mode=='mid'))
+    # normalize per million reads; total canonical counts
+    s_norm=sc/(st/1e6)
+    c_norm=cc/(ct/1e6)
+    with open(f'tss_profile_{mode}.tsv','w') as f:
+        f.write('rel_bin\\tsignal_rpm\\tcontrol_rpm\\tsignal_minus_control\\n')
+        for i in range(NBINS):
+            rel=int((i+0.5)*BIN-WINDOW)
+            f.write(f'{rel}\\t{s_norm[i]:.6f}\\t{c_norm[i]:.6f}\\t{s_norm[i]-c_norm[i]:.6f}\\n')
+    # metrics
+    arr=s_norm-c_norm
+    print(mode,'total',st,ct,'max',arr.max(),'at',np.argmax(arr),'sum_neg',arr[:NBINS//2].sum(),'sum_pos',arr[NBINS//2:].sum())
+    # downsampled print profile every 500
+    for i in range(0,NBINS,10):
+        print(i, (i+0.5)*BIN-WINDOW, arr[i])
+PY
+python3 compute_tss_profile.py"

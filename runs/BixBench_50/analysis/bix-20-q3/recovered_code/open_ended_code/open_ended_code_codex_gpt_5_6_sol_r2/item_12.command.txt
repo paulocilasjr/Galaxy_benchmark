@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter,defaultdict
+from openpyxl import load_workbook
+m=list(load_workbook('inputs/230215_Trio_Status.xlsx',data_only=True).active.iter_rows(values_only=True))
+car={str(r[0]).strip() for r in m[1:] if r[3]=='Carrier'}
+records=[]
+for p in sorted(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx')):
+ sid=p.stem.split('_CHIP_',1)[1].split('-',1)[0]
+ if sid not in car: continue
+ ws=load_workbook(p,data_only=True).active; h=[c.value for c in ws[2]]
+ for v in ws.iter_rows(min_row=3,values_only=True):
+  d=dict(zip(h,v)); d['sid']=sid; records.append(d)
+
+def keep(d):
+ try: v=float(d['Variant Allele Freq'])
+ except: return False
+ so=(d['Sequence Ontology (Combined)'] or '').lower()
+ return d['Zygosity']"'!='"'Reference' and d['Zygosity'] is not None and v<.3 and not any(x in so for x in ('intron','intergenic','utr'))
+# exact variant zyg requirement comparison
+for mode in ['not-reference-nonmissing','called-variant']:
+ rr=[]
+ for d in records:
+  try:v=float(d['Variant Allele Freq'])
+  except:continue
+  so=(d['Sequence Ontology (Combined)'] or '').lower()
+  z = d['Zygosity'] not in ('Reference',None) if mode=='not-reference-nonmissing' else d['Zygosity'] in ('Heterozygous','Homozygous Variant')
+  if z and v<.3 and not any(x in so for x in ('intron','intergenic','utr')):rr.append(d)
+ den=[d for d in rr if d['Classification'] not in (None,'')]
+ num=[d for d in den if d['Classification'] in ('Benign','Likely Benign')]
+ print(mode,'region-retained',len(rr),'clinvar denom',len(den),'num',len(num),'proportion',len(num)/len(den) if den else None)
+ print('class',Counter(d['Classification'] for d in den))
+ print('SO',Counter(d['Sequence Ontology (Combined)'] for d in den))
+ print('per sample',dict(sorted(Counter(d['sid'] for d in den).items(),key=lambda x:int(x[0]))))
+ print('ROWS')
+ for d in den: print(d['sid'],d['Chr:Pos'],d['Ref/Alt'],d['Zygosity'],d['Variant Allele Freq'],d['Sequence Ontology (Combined)'],d['Classification'],d['Gene Names'])
+PY"

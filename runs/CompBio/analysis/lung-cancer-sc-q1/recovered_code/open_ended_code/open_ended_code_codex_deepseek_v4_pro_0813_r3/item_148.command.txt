@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, math
+sub=pd.read_csv('sample_subtype.csv').set_index('sample')
+df=pd.read_csv('centroid_pred_celltype_tumor.csv')
+print('total cells',len(df))
+immune_labels=set('''T cell CD4
+T cell CD4 dividing
+T cell CD8 activated
+T cell CD8 dividing
+T cell CD8 effector memory
+T cell CD8 naive
+T cell CD8 terminally exhausted
+T cell NK-like
+T cell regulatory
+NK cell
+NK cell dividing
+B cell
+B cell dividing
+Plasma cell
+Plasma cell dividing
+Macrophage
+Macrophage alveolar
+Monocyte classical
+Monocyte non-classical
+myeloid dividing
+Mast cell
+Neutrophils
+cDC1
+cDC2
+pDC
+DC mature'''.split('\\n'))
+print('immune labels len',len(immune_labels))
+all_labels=set(df.pred)
+print('labels not classified', all_labels-immune_labels)
+print('immune total',df.pred.isin(immune_labels).sum())
+non=~df.pred.isin(immune_labels)
+print('non total',non.sum(), 'total sum', non.sum()+df.pred.isin(immune_labels).sum())
+# numerator interpretations
+submap=sub['subtype'].to_dict()
+is_lusc=df.sampleID.map(submap).eq('LUSC')
+print('LUSC cells', is_lusc.sum())
+# non-mitotic tumor LUSC among non-immune
+n_non=df[non]
+for name, sel in [
+ ('Tumor cells LUSC (all)', df.pred.eq('Tumor cells LUSC')),
+ ('Tumor cells LUSC mitotic (all)', df.pred.eq('Tumor cells LUSC mitotic')),
+ ('combined all', df.pred.isin(['Tumor cells LUSC','Tumor cells LUSC mitotic'])),
+ ('Tumor cells LUSC nonimmune', non & df.pred.eq('Tumor cells LUSC')),
+ ('Tumor cells LUSC mitotic nonimmune', non & df.pred.eq('Tumor cells LUSC mitotic')),
+ ('combined nonimmune', non & df.pred.isin(['Tumor cells LUSC','Tumor cells LUSC mitotic'])),
+]:
+    print(name, sel.sum())
+    if 'combined' in name or 'nonimmune' in name:
+        pct=sel.sum()/n_non.shape[0]*100
+        print('  pct of non-immune',pct, 'nearest20', round(pct/20)*20, 'int?',int(round(pct/20)*20))
+# LUSC patient nonimmune denominator maybe all nonimmune cells in LUSC patients? But question all samples
+# Could also denominator non-immune cells from all samples; numerator malignant basal from LUSC patients
+print('\\nPer sample subtype nonimmune counts and tumor LUSC counts')
+for s in ['Patient_018','Patient_040']:
+ d=df[df.sampleID==s]
+ non_s=d[~d.pred.isin(immune_labels)]
+ print(s, 'total',len(d),'nonimmune',len(non_s),'Tumor LUSC',d.pred.eq('Tumor cells LUSC').sum(),'mitotic',d.pred.eq('Tumor cells LUSC mitotic').sum())
+PY"

@@ -1,0 +1,58 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5c736ed7dc032d9de",
+  "history_id": "bbd44e69cb8906b5756504cadb2e4f8e",
+  "tool_id": "codex-phykit-rcv-table-v1",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-07-16T04:32:29.075575",
+  "update_time": "2026-07-16T04:34:43.920597",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\npython - <<'PY'\nimport os, re, shutil, subprocess, sys, tempfile, zipfile\nfrom pathlib import Path\n\ninputs = [\n    (\"animal\", \"/jetstream2/scratch/main/jobs/78549320/inputs/dataset_8b4b72ea-0eeb-4bac-8c9d-fe8981e98bc5.dat\"),\n    (\"fungal\", \"/jetstream2/scratch/main/jobs/78549320/inputs/dataset_178f523f-6705-4cca-b5c3-a22f134c02e6.dat\"),\n]\nfloat_re = re.compile(r'[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?')\n\ndef safe_member_name(name):\n    p = Path(name)\n    if p.is_absolute() or '..' in p.parts:\n        raise ValueError(f\"unsafe zip member: {name}\")\n    return p.name\n\ndef parse_rcv(stdout):\n    nums = float_re.findall(stdout)\n    if not nums:\n        raise ValueError(f\"no numeric RCV found in PhyKIT output: {stdout!r}\")\n    return float(nums[-1])\n\nwith open('rcv_scores.tsv', 'w') as out:\n    out.write('group\\trcv\\tortholog\\n')\n    total = {}\n    with tempfile.TemporaryDirectory() as td:\n        work = Path(td)\n        for group, archive_path in inputs:\n            extracted = work / group\n            extracted.mkdir()\n            with zipfile.ZipFile(archive_path) as zf:\n                members = sorted(n for n in zf.namelist() if n.endswith('.faa.mafft') and not n.endswith('/'))\n                if not members:\n                    raise RuntimeError(f\"no .faa.mafft alignments found for {group}\")\n                total[group] = len(members)\n                for idx, name in enumerate(members, 1):\n                    ortholog = safe_member_name(name).replace('.faa.mafft', '')\n                    aln = extracted / f\"{idx:06d}_{safe_member_name(name)}\"\n                    with zf.open(name) as src, open(aln, 'wb') as dst:\n                        shutil.copyfileobj(src, dst)\n                    proc = subprocess.run(\n                        ['phykit', 'relative_composition_variability', str(aln)],\n                        text=True, capture_output=True, check=False,\n                    )\n                    if proc.returncode != 0:\n                        raise RuntimeError(f\"PhyKIT failed for {group} {name}: {proc.stderr}\\n{proc.stdout}\")\n                    rcv = parse_rcv(proc.stdout)\n                    out.write(f\"{group}\\t{rcv:.17g}\\t{ortholog}\\n\")\n    with open('summary.txt', 'w') as s:\n        for group in sorted(total):\n            s.write(f\"{group}\\t{total[group]}\\n\")\nPY",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "animal_zip": {
+      "id": "f9cad7b01a4721354d86dce113d3ae13",
+      "src": "hda",
+      "uuid": "8b4b72ea-0eeb-4bac-8c9d-fe8981e98bc5"
+    },
+    "fungal_zip": {
+      "id": "f9cad7b01a472135e285de6630fbc2ee",
+      "src": "hda",
+      "uuid": "178f523f-6705-4cca-b5c3-a22f134c02e6"
+    }
+  },
+  "outputs": {
+    "rcv_scores": {
+      "id": "f9cad7b01a4721357ccd555f94731d75",
+      "src": "hda",
+      "uuid": "faf72530-0f69-428f-ba7d-00f952f960a7"
+    },
+    "summary": {
+      "id": "f9cad7b01a4721352556fc01fcf78f29",
+      "src": "hda",
+      "uuid": "03f1a74f-68ff-4058-a9e8-777378782ed3"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

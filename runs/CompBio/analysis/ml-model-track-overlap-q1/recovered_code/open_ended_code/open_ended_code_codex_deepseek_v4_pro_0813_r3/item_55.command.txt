@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,re,csv
+j=json.load(open('encode_experiments.json'))
+graph=j['@graph']
+print('experiments',len(graph))
+# build by accession
+by={g['accession']:g for g in graph if 'accession' in g}
+# Borzoi unique experiments
+rows=list(csv.DictReader(open('borzoi_targets_human.tsv'),delimiter='\\t'))
+exp=set()
+for r in rows:
+ m=re.search(r'/ENCSR[0-9A-Z]+/',r['file'])
+ if m: exp.add(m.group(0).strip('/'))
+print('borzoi exp',len(exp),'missing in encode dump',len([e for e in exp if e not in by]))
+# extract all library dbxrefs and top-level dbxrefs per exp
+data={}
+for e in exp:
+ g=by.get(e)
+ if not g: continue
+ gsms=set(); gses=set(); sams=set()
+ for dx in g.get('dbxrefs',[]) or []:
+  if dx.startswith('GEO:GSM'): gsms.add(dx[4:])
+  elif dx.startswith('GEO:GSE'): gses.add(dx[4:])
+  elif dx.startswith('GEO:SAM'): sams.add(dx[4:])
+  elif dx.startswith('GEO:'): pass
+ for rep in g.get('replicates',[]) or []:
+  lib=rep.get('library',{}) or {}
+  for dx in lib.get('dbxrefs',[]) or []:
+   if dx.startswith('GEO:GSM'): gsms.add(dx[4:])
+   elif dx.startswith('GEO:GSE'): gses.add(dx[4:])
+   elif dx.startswith('GEO:SAM'): sams.add(dx[4:])
+ data[e]={'gsm':gsms,'gse':gses,'sam':sams,'assay':g.get('assay_term_name')}
+print('total borzoi enc gsms',sum(len(d['gsm']) for d in data.values()),'unique gsms',len(set.union(*(d['gsm'] for d in data.values())) if data else [set()])))
+print('unique gses',len(set.union(*(d['gse'] for d in data.values())) if data else [set()])))
+# save list
+out=[]
+for e,d in data.items():
+ out.append({'accession':e,'assay':d['assay'],'gsms':','.join(sorted(d['gsm'])),'gses':','.join(sorted(d['gse']))})
+json.dump(out,open('borzoi_encode_experiments.json','w'))
+print('saved')
+# Show examples chip with gsms
+for e,d in list(data.items()):
+ if d['assay']=='ChIP-seq' and d['gsm']:
+  print(e,d['assay'],sorted(d['gsm'])[:5]); break
+PY"

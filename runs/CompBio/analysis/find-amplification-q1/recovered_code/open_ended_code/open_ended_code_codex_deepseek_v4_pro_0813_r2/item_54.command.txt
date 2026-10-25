@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, math
+rows=[]
+for line in open('bwa_cov100k.tsv'):
+ c,s,e,v=line.strip().split('\\t'); s=int(s); e=int(e); v=float(v)
+ rows.append((s,e,v))
+# ignore windows with mean <1 to avoid centromere zeros
+mask=[v>=1 for s,e,v in rows]
+idx=[i for i,m in enumerate(mask) if m]
+x=np.array([rows[i][2] for i in idx]); starts=np.array([rows[i][0] for i in idx]); ends=np.array([rows[i][1] for i in idx])
+n=len(x)
+med=np.median(x)
+def best_split(seg):
+ a,b=seg
+ if b-a<2:return None
+ vals=x[a:b]; cum=np.cumsum(vals); total=cum[-1]; m=len(vals); sumsq=np.cumsum(vals*vals); totalsq=sumsq[-1]
+ best_t=-1; split=None
+ for i in range(1,m):
+  n1=i;n2=m-i
+  s1=cum[i-1];s2=total-s1
+  mean1=s1/n1;mean2=s2/n2
+  ss1=sumsq[i-1]-s1*mean1; ss2=(totalsq-sumsq[i-1])-s2*mean2
+  var=(ss1+ss2)/(m-2)
+  if var<=0:continue
+  t=abs(mean1-mean2)/math.sqrt(var*(1/n1+1/n2))
+  if t>best_t:
+   best_t=t; split=a+i
+ return best_t,split
+segs=[(0,n)]
+for k in range(6):
+ best=None
+ for seg in segs:
+  r=best_split(seg)
+  if r and r[1] and (best is None or r[0]>best[0]): best=(r[0],seg[0],seg[1],r[1])
+ if not best or best[0]<5: break
+ t,a,b,s=best
+ print(f'split t={t:.2f} at {starts[s]} seg {a}:{s}:{b} means {x[a:s].mean():.3f} {x[s:b].mean():.3f}')
+ segs.remove((a,b)); segs.append((a,s)); segs.append((s,b))
+segs.sort()
+for a,b in segs:
+ print(f'segment {starts[a]}-{ends[b-1]} n={b-a} mean={x[a:b].mean():.3f} ratio_to_med={x[a:b].mean()/med:.3f}')
+PY"

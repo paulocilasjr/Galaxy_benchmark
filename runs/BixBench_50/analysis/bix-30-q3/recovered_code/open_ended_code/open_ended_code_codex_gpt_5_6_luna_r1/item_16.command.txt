@@ -1,0 +1,28 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, subprocess, math
+s=xlrd.open_workbook('inputs/pone.0150501.s002.xls').sheet_by_index(0)
+def vec(v): return 'c('+','.join('%.17g'%x for x in v)+')'
+exprs={k:[] for k in ['wilcox','wilcox_exact','paired_wilcox','paired_t']}
+for i in range(2,s.nrows):
+ x=[float(s.cell_value(i,j)) for j in range(1,11) if not isinstance(s.cell_value(i,j),str)]
+ y=[float(s.cell_value(i,j)) for j in range(11,21) if not isinstance(s.cell_value(i,j),str)]
+ # independent wilcox exact false; exact true; paired only if no missing both paired? R will error if lengths differ
+ exprs['wilcox'].append('wilcox.test(%s,%s,exact=FALSE)"'$p.value'"'%(vec(x),vec(y)))
+ exprs['wilcox_exact'].append('wilcox.test(%s,%s,exact=TRUE)"'$p.value'"'%(vec(x),vec(y)))
+ if len(x)==len(y):
+  exprs['paired_wilcox'].append('wilcox.test(%s,%s,paired=TRUE,exact=FALSE)"'$p.value'"'%(vec(x),vec(y)))
+  exprs['paired_t'].append('t.test(%s,%s,paired=TRUE)"'$p.value'"'%(vec(x),vec(y)))
+script='options(warn=-1);\\n'
+for k,e in exprs.items():
+ if e: script += '%s<-c(%s); cat(\"%s \",sprintf(\"%%.17g \",%s),\"\\\\n\",sep=\"\")\\n'%(k,','.join(e),k,k)
+r=subprocess.run(['R','--vanilla','--slave'],input=script,text=True,capture_output=True,check=True)
+print(r.stderr)
+for line in r.stdout.strip().splitlines():
+ p=line.split(); k=p[0]; vals=list(map(float,p[1:]));
+ m=len(vals); c=sum(1/i for i in range(1,m+1));
+ order=sorted(range(m),key=lambda i:vals[i]); adj=[1]*m; run=1
+ for pos in range(m-1,-1,-1):
+  run=min(run, vals[order[pos]]*m*c/(pos+1)); adj[order[pos]]=min(1,run)
+ print(k,'m',m,'min',min(vals),'raw',sum(x<=.05 for x in vals),'bonf',sum(min(1,m*x)<=.05 for x in vals),'BY',sum(x<=.05 for x in adj),'minbonf',min(m*x for x in vals),'minby',min(adj))
+ for i in sorted(range(m),key=lambda i:vals[i])[:5]: print(' ',s.cell_value(i+2,0),vals[i],min(1,m*vals[i]),adj[i])
+PY"

@@ -1,0 +1,48 @@
+/bin/bash -lc "python -u - <<'PY'
+import pandas as pd, numpy as np
+p='single_cell_dynamics_question.csv'
+df=pd.read_csv(p)
+xyz=df[['enh_x','enh_y','enh_z']].to_numpy()-df[['prom_x','prom_y','prom_z']].to_numpy()
+d=np.sqrt((xyz**2).sum(1))
+df['distance']=d
+df['contact']=(d<=260).astype(np.int8)
+df=df.sort_values(['cell_id','time']).copy()
+print('shape',df.shape,flush=True)
+print('cells',df.cell_id.nunique(),'time minmax',df.time.min(),df.time.max(),'per cell counts',df.groupby('cell_id').size().value_counts().to_dict(),flush=True)
+print('distance stats',df.distance.describe(percentiles=[.01,.05,.1,.25,.5,.75,.9,.95,.99]).to_dict(),flush=True)
+print('contact rate',df.contact.mean(),'trans rate',df.transcription.mean(),flush=True)
+print('joint normalized')
+print(pd.crosstab(df.contact,df.transcription,normalize=True).to_string(),flush=True)
+# fixed dimensions reshaping avoids groupby shift
+a=df.to_numpy()
+# sorted exact 600*250; create columns by positions through group shifts
+ncell=df.cell_id.nunique(); nt=df.time.nunique()
+C=df.contact.to_numpy().reshape(ncell,nt)
+T=df.transcription.to_numpy().reshape(ncell,nt)
+print('shape arrays',C.shape,T.shape,flush=True)
+# lag 1 transitions
+c=C[:,:-1].ravel(); t=T[:,:-1].ravel(); cn=C[:,1:].ravel(); tn=T[:,1:].ravel()
+print('P T_next given current C,T')
+for tv in [0,1]:
+ for cv in [0,1]:
+  z=tn[(t==tv)&(c==cv)]
+  print('T',tv,'C',cv,'n',z.size,'mean',z.mean(),flush=True)
+print('P C_next given current T,C')
+for cv in [0,1]:
+ for tv in [0,1]:
+  z=cn[(c==cv)&(t==tv)]
+  print('C',cv,'T',tv,'n',z.size,'mean',z.mean(),flush=True)
+# transition table counts
+print('transitions C->T next counts')
+print(pd.crosstab([c,t],tn).to_string(),flush=True)
+print('transitions T->C next counts')
+print(pd.crosstab([c,t],cn).to_string(),flush=True)
+# lag correlations C_t with T_t+lag
+print('lag correlations C_t vs T_t+lag')
+for lag in range(-10,11):
+ if lag>=0:
+  x=C[:,:nt-lag].ravel(); y=T[:,lag:].ravel()
+ else:
+  x=C[:,-lag:].ravel(); y=T[:,:nt+lag].ravel()
+ print(lag, round(float(np.corrcoef(x,y)[0,1]),6), round(float(x.mean()),4),round(float(y.mean()),4),flush=True)
+PY"

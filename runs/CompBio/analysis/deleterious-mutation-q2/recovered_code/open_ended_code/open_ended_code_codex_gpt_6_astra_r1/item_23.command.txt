@@ -1,0 +1,18 @@
+/bin/bash -lc "cat > work/validate_candidate.py <<'PY'
+import pysam,collections,json
+b=pysam.AlignmentFile('work/aligned.hg38.bam');f=pysam.FastaFile('reference/chr9.hg38.fa');p=127661125
+print('Reference context:',f.fetch('chr9',p-21,p+20))
+for mq,bq in [(20,20),(30,25),(40,30),(60,30)]:
+ counts=collections.Counter(); strands=collections.Counter();starts=collections.defaultdict(set);qpos=collections.defaultdict(list);qual=collections.defaultdict(list);edit=collections.defaultdict(list);reads=[]
+ for col in b.pileup('chr9',p-1,p,truncate=True,min_mapping_quality=mq,min_base_quality=bq,stepper='samtools',max_depth=100000,compute_baq=False):
+  for pr in col.pileups:
+   if pr.is_del or pr.is_refskip:continue
+   r=pr.alignment;i=pr.query_position;a=r.query_sequence[i]
+   counts[a]+=1;strands[(a,'-' if r.is_reverse else '+')]+=1;starts[a].add((r.reference_start,r.is_reverse));qpos[a].append(i);qual[a].append(r.query_qualities[i]);edit[a].append(r.get_tag('NM'))
+   if a=='T':reads.append({'read':r.query_name,'start':r.reference_start+1,'strand':'-' if r.is_reverse else '+','mapq':r.mapping_quality,'baseq':r.query_qualities[i],'read_pos':i+1,'cigar':r.cigarstring,'edit_distance':r.get_tag('NM'),'local_seq':r.query_sequence[max(0,i-6):i+7]})
+ print('MQ,BQ',mq,bq,'counts',dict(counts),'strands',dict(strands),'unique_starts',{a:len(x) for a,x in starts.items()})
+ if mq==30:
+  print('Alternate read details:',json.dumps(reads,indent=2))
+  json.dump(reads,open('work/STXBP1_alt_reads.json','w'),indent=2)
+PY
+python3 work/validate_candidate.py"

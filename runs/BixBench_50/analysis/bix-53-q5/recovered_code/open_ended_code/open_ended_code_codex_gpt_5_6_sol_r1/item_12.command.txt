@@ -1,0 +1,43 @@
+/bin/bash -lc "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python - <<'PY'
+import pandas as pd, numpy as np, gseapy as gp
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+x=pd.read_csv('/workspace/inputs/count.csv',index_col=0)
+counts=x.T
+meta=pd.DataFrame({'condition':['KL']*3+['WL']*3},index=counts.index)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~condition',refit_cooks=True,n_cpus=1,quiet=True)
+dds.deseq2()
+st=DeseqStats(dds,contrast=['condition','WL','KL'],alpha=.05,n_cpus=1,quiet=True)
+st.summary(); st.lfc_shrink(coeff='condition[T.WL]')
+res=st.results_df
+bm=gp.Biomart(verbose=False)
+mp=bm.query(dataset='mmusculus_gene_ensembl', attributes=['ensembl_gene_id','external_gene_name'])
+mp=mp.dropna().drop_duplicates('ensembl_gene_id').set_index('ensembl_gene_id')['external_gene_name']
+lib=gp.get_library(name='WikiPathways_2019_Mouse',organism='Mouse')
+print('library terms',len(lib),'union genes',len(set().union(*map(set,lib.values()))))
+for pcol in ['pvalue','padj']:
+ fg=res.index[(res[pcol]<.05)&(res.log2FoldChange.abs()>1)&(res.baseMean>10)]
+ syms=mp.reindex(fg).dropna().astype(str)
+ syms=syms[syms.str.len()>0].drop_duplicates().tolist()
+ print('\\nFILTER',pcol,'ids',len(fg),'symbols',len(syms),'in_library',sum(s.upper() in set().union(*map(set,lib.values())) for s in syms))
+ # Enrichr remote conventional call
+ try:
+  enr=gp.enrichr(gene_list=syms,gene_sets='WikiPathways_2019_Mouse',organism='Mouse',outdir=None,verbose=True)
+  rr=enr.results
+  print('REMOTE rows',len(rr), 'cols',list(rr.columns))
+  print(rr.head(20)[['Term','P-value','Adjusted P-value','Overlap']].to_string(index=False))
+  top=rr.sort_values('Adjusted P-value',kind='stable').head(20)
+  hits=top.Term.str.contains('oxidative',case=False,na=False)
+  print('REMOTE OX',hits.sum(),top.loc[hits,'Term'].tolist(),'frac',hits.sum()/20)
+ except Exception as e: print('REMOTE ERROR',type(e).__name__,e)
+ # local hypergeom, default library union background
+ try:
+  el=gp.enrich(gene_list=syms,gene_sets=lib,outdir=None,verbose=True)
+  lr=el.results
+  print('LOCAL rows',len(lr))
+  print(lr.head(20)[['Term','P-value','Adjusted P-value','Overlap']].to_string(index=False))
+  top=lr.sort_values('Adjusted P-value',kind='stable').head(20)
+  hits=top.Term.str.contains('oxidative',case=False,na=False)
+  print('LOCAL OX',hits.sum(),top.loc[hits,'Term'].tolist(),'frac',hits.sum()/20)
+ except Exception as e: print('LOCAL ERROR',type(e).__name__,e)
+PY"

@@ -1,0 +1,44 @@
+/bin/bash -lc "Rscript - <<'RS'
+options(stringsAsFactors=FALSE)
+cat('reading crispr\\n')
+crispr <- read.csv('inputs/CRISPRGeneEffect.csv', row.names=1, check.names=FALSE)
+cat('reading expression\\n')
+expr <- read.csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', row.names=1, check.names=FALSE)
+models <- intersect(rownames(crispr), rownames(expr))
+genes <- intersect(colnames(crispr), colnames(expr))
+cat('models', length(models), 'genes', length(genes), '\\n')
+# Preserve raw gene labels and model IDs; use biological essentiality strength = -gene effect.
+C <- data.matrix(crispr[models, genes, drop=FALSE])
+rm(crispr); gc()
+E <- data.matrix(expr[models, genes, drop=FALSE])
+rm(expr); gc()
+cat('subset matrices', dim(E), dim(C), 'NA', sum(is.na(E)), sum(is.na(C)), '\\n')
+if (anyNA(E) || anyNA(C)) {
+  stop('Unexpected missing values; pairwise-complete implementation needed')
+}
+Ess <- -C
+rm(C); gc()
+cat('ranking expression\\n')
+RE <- apply(E, 2, rank, ties.method='average')
+rm(E); gc()
+cat('ranking essentiality\\n')
+RC <- apply(Ess, 2, rank, ties.method='average')
+rm(Ess); gc()
+n <- nrow(RE)
+center <- (n + 1) / 2
+REc <- RE - center
+rm(RE); gc()
+RCc <- RC - center
+rm(RC); gc()
+cat('correlating\\n')
+rho <- colSums(REc * RCc) / sqrt(colSums(REc"'^2) * colSums(RCc''^2))
+rm(REc, RCc); gc()
+df <- n - 2
+tstat <- rho * sqrt(df / pmax(1 - rho''^2, .Machine$double.eps))
+p <- 2 * pt(-abs(tstat), df=df)
+q <- p.adjust(p, method='"'BH')
+sig <- sum(q < 0.05)
+pct <- 100 * sig / length(q)
+cat('sig', sig, 'total', length(q), 'pct', format(pct, digits=17), '\\n')
+cat('rho_range', range(rho), 'p_range', range(p), 'q_range', range(q), '\\n')
+RS"

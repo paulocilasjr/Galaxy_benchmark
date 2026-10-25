@@ -1,0 +1,66 @@
+/bin/bash -lc "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python - <<'PY'
+import os, gc
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+os.makedirs('codex_output', exist_ok=True)
+
+meta_all = pd.read_csv('inputs/Sample_annotated_Zenodo.csv').set_index('sample')
+meta = meta_all[['batch', 'sex']].copy()
+meta['batch'] = meta['batch'].astype(str)
+meta['sex'] = pd.Categorical(meta['sex'], categories=['F', 'M'])
+
+# First compute DESeq2/PyDESeq2 size factors from all provided batch-corrected counts.
+counts_all = pd.read_csv('inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0).T
+if list(counts_all.index) "'!= list(meta.index):
+    counts_all = counts_all.loc[meta.index]
+print('"'full counts', counts_all.shape, flush=True)
+full_dds = DeseqDataSet(counts=counts_all, metadata=meta, design='~ batch + sex', quiet=True, low_memory=True, n_cpus=1)
+full_dds.fit_size_factors()
+size_factors = full_dds.obs['size_factors'].copy()
+normed_means = pd.Series(np.asarray(full_dds.var['_normed_means']), index=full_dds.var_names)
+eligible = normed_means[normed_means > 10].index.tolist()
+if 'FAM138A' not in counts_all.columns:
+    raise SystemExit('FAM138A not present')
+if 'FAM138A' not in eligible:
+    eligible.append('FAM138A')
+print('eligible genes plus target', len(eligible), 'FAM138A baseMean', normed_means.loc['FAM138A'], flush=True)
+# Copy subset before freeing full object.
+counts = counts_all.loc[:, eligible].copy()
+del full_dds, counts_all
+_gc = gc.collect()
+
+# Run the DESeq2 pipeline on the requested baseMean scope, preserving full-table size factors.
+dds = DeseqDataSet(counts=counts, metadata=meta, design='~ batch + sex', quiet=False, low_memory=True, n_cpus=1)
+dds.obs['size_factors'] = size_factors.loc[dds.obs_names].astype(float)
+dds.layers['normed_counts'] = dds.X / dds.obs['size_factors'].values[:, None]
+dds.var['_normed_means'] = np.asarray(dds.layers['normed_counts'].mean(axis=0)).ravel()
+
+print('subset counts', counts.shape, flush=True)
+dds.fit_genewise_dispersions()
+dds.fit_dispersion_trend()
+dds.fit_dispersion_prior()
+dds.fit_MAP_dispersions()
+dds.fit_LFC()
+dds.calculate_cooks()
+if dds.refit_cooks:
+    dds.refit()
+dds.cooks_outlier()
+print('design columns', dds.obsm['design_matrix'].columns.tolist(), flush=True)
+
+stat = DeseqStats(dds, contrast=['sex', 'M', 'F'], quiet=False, n_cpus=1)
+stat.summary()
+stat.lfc_shrink(coeff='sex[T.M]')
+res = stat.results_df
+row = res.loc['FAM138A']
+print(row.to_string(), flush=True)
+val = row['log2FoldChange']
+if pd.isna(val):
+    raise SystemExit('FAM138A shrunken log2FoldChange is NA')
+answer = format(float(val), '.12g')
+with open('codex_output/answer.txt', 'w') as fh:
+    fh.write(answer + '\\n')
+print('ANSWER', answer, flush=True)
+PY"

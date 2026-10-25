@@ -3,7 +3,7 @@
 Pictogram version: text is reduced to names, counts and short labels; definitions live in the legend
 (figures/fig1_a_legend.md). Writes figures/fig1_a.svg (editable text, for Inkscape), fig1_a.pdf (vector,
 TrueType) and fig1_a.png (600 dpi, RGB) at 180 mm width with the shared Nature Portfolio style in
-manuscript_material/scripts/style.py. Task counts are read from the repository.
+manuscript/manuscript_material/scripts/style.py. Task counts are read from the repository.
 """
 import csv
 import glob
@@ -14,7 +14,7 @@ import sys
 import numpy as np
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 from style import plt  # noqa: E402
@@ -41,10 +41,10 @@ N_COND, N_REP = 2, 3
 
 
 def facts():
-    cb = list(csv.DictReader(open(os.path.join(ROOT, 'experiments/CompBioBench/source_compbiobench.v1.tsv')),
+    cb = list(csv.DictReader(open(os.path.join(ROOT, 'benchmark/experiments/CompBioBench/source_compbiobench.v1.tsv')),
                              delimiter='\t'))
-    bix = glob.glob(os.path.join(ROOT, 'experiments/BixBench/task_*.json'))
-    iwc = glob.glob(os.path.join(ROOT, 'IWC/analysis/wf_*'))
+    bix = glob.glob(os.path.join(ROOT, 'benchmark/experiments/BixBench/task_*.json'))
+    iwc = glob.glob(os.path.join(ROOT, 'runs/IWC/analysis/wf_*'))
     return dict(bix=len(bix), cb=len(cb), iwc=len(iwc))
 
 

@@ -1,0 +1,99 @@
+/bin/bash -c "cat > [REDACTED LOCAL PATH] <<'PY'
+import anndata as ad, pandas as pd, numpy as np, scipy.sparse as sp, torch, time, sys, types
+import torch.nn.functional as F
+
+# load checkpoint with alias
+m=types.ModuleType('pandas.core.indexes.numeric'); m.Int64Index=pd.Index; sys.modules['pandas.core.indexes.numeric']=m
+ckpt=torch.load('luca_scanvi_model.pt',map_location='cpu')
+sd=ckpt['model_state_dict']
+reg=ckpt['attr_dict']['registry_']['field_registries']
+label_map=reg['labels']['state_registry']['categorical_mapping']
+batch_map=reg['batch']['state_registry']['categorical_mapping']
+var_names=ckpt['var_names']
+n_genes=len(var_names); n_batch=len(batch_map); n_latent=10; n_hidden=128; n_labels=44
+
+# our data
+print('loading data')
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+# build column mapping to model genes
+sym=a.var['symbol'].values
+# create symbol->first index
+sym_to_idx={}
+for i,g in enumerate(sym):
+    if g not in sym_to_idx:
+        sym_to_idx[g]=i
+model_idx=np.full(n_genes,-1,dtype=np.int64)
+for j,g in enumerate(var_names):
+    if g in sym_to_idx:
+        model_idx[j]=sym_to_idx[g]
+missing=(model_idx<0)
+print('missing genes',missing.sum())
+
+# Extract tensors
+def W(name): return sd[name]
+zW0=W('z_encoder.encoder.fc_layers.Layer 0.0.weight'); zb0=W('z_encoder.encoder.fc_layers.Layer 0.0.bias')
+zW1=W('z_encoder.encoder.fc_layers.Layer 1.0.weight'); zb1=W('z_encoder.encoder.fc_layers.Layer 1.0.bias')
+zWm=W('z_encoder.mean_encoder.weight'); zbm=W('z_encoder.mean_encoder.bias')
+cW0=W('classifier.classifier.0.fc_layers.Layer 0.0.weight'); cb0=W('classifier.classifier.0.fc_layers.Layer 0.0.bias')
+cW1=W('classifier.classifier.0.fc_layers.Layer 1.0.weight'); cb1=W('classifier.classifier.0.fc_layers.Layer 1.0.bias')
+cWo=W('classifier.classifier.1.weight'); cbo=W('classifier.classifier.1.bias')
+# all weights float32
+
+def infer_chunk(Xsub):
+    # Xsub torch float [n, n_genes], raw counts
+    x=torch.log1p(Xsub)
+    # zero batch vector [n, n_batch]
+    batch=torch.zeros((x.shape[0],n_batch), dtype=torch.float32)
+    # layer0
+    h=torch.cat([x,batch],dim=1)
+    h=F.linear(h,zW0,zb0)
+    h=F.layer_norm(h,(n_hidden,),weight=None,bias=None,eps=1e-5)
+    h=torch.relu(h)
+    # layer1 inject batch
+    h=torch.cat([h,batch],dim=1)
+    h=F.linear(h,zW1,zb1)
+    h=F.layer_norm(h,(n_hidden,),weight=None,bias=None,eps=1e-5)
+    h=torch.relu(h)
+    z=F.linear(h,zWm,zbm)
+    # classifier
+    c=F.linear(z,cW0,cb0)
+    c=F.layer_norm(c,(n_hidden,),weight=None,bias=None,eps=1e-5)
+    c=torch.relu(c)
+    c=F.linear(c,cW1,cb1)
+    c=F.layer_norm(c,(n_hidden,),weight=None,bias=None,eps=1e-5)
+    c=torch.relu(c)
+    logits=F.linear(c,cWo,cbo)
+    return torch.softmax(logits,dim=1).numpy(), z.numpy()
+
+X=a.X
+n_cells=X.shape[0]
+chunk=5000
+probs=np.zeros((n_cells,n_labels),dtype=np.float32)
+# latents optional
+start=time.time()
+for i in range(0,n_cells,chunk):
+    j=min(i+chunk,n_cells)
+    sub=X[i:j,:].tocsc()[:,model_idx]
+    # model_idx has -1; sparse columns beyond n_vars? Need create dense with zeros and fill common columns.
+    dense=np.zeros((sub.shape[0],n_genes),dtype=np.float32)
+    # fill common
+    valid=model_idx>=0
+    cols=np.where(valid)[0]
+    if len(cols):
+        dense[:,cols]=sub[:,cols].toarray()
+    p,_=infer_chunk(torch.from_numpy(dense))
+    probs[i:j]=p
+    if (i//chunk)%5==0:
+        print('chunk',i,'elapsed',time.time()-start,flush=True)
+print('done',time.time()-start)
+labels=label_map[:n_labels][probs.argmax(1)]
+# save labels and probs
+np.save('scanvi_labels_zero_batch.npy',labels)
+np.save('scanvi_probs_zero_batch.npy',probs)
+res=pd.DataFrame({'cell':a.obs.index.values,'sampleID':a.obs.sampleID.values,'pred':labels})
+for s in ['Patient_005','Patient_006','Patient_007','Patient_018','Patient_040']:
+    sub=res[res.sampleID==s]
+    print('\\nSAMPLE',s,'n',len(sub))
+    print(sub['pred'].value_counts().head(20).to_string())
+PY
+python [REDACTED LOCAL PATH]"

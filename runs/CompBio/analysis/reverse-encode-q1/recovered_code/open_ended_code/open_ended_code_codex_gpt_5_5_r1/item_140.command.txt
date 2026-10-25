@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+import json,gzip,collections,math,random,pyBigWig,sys,time
+random.seed(42)
+N=76275859
+# groups and totals
+D=json.load(open('encode_dnase_alpha2_bams.json'))['@graph']
+files=[f for f in D if f.get('output_type')=='alignments']
+def metric(f,typ,key):
+ for qm in f.get('quality_metrics',[]):
+  if isinstance(qm,dict) and typ in qm.get('@type',[]) and key in qm: return qm[key]
+by=collections.defaultdict(list)
+for f in files: by[f['dataset']].append(f)
+totals={ds:sum((metric(f,'SamtoolsFlagstatsQualityMetric','total') or 0) for f in fs) for ds,fs in by.items()}
+# bws
+B=json.load(open('encode_dnase_alpha2_signal_bws.json'))['@graph']
+bw_by=collections.defaultdict(list)
+for f in B: bw_by[f['dataset']].append(f)
+# bins: mix target quantiles and random positive/zero
+bins=[]
+with gzip.open('reverse.encode.q1.tsv.gz','rt') as fh:
+ for line in fh:
+  c,s,e,v=line.split(); bins.append((float(v),c,int(s),int(e)))
+pos=[b for b in bins if b[0]>0]
+zeros=[b for b in bins if b[0]==0]
+sample=[]
+sample += sorted(pos, reverse=True)[:15]
+for q in [0.99,0.97,0.95,0.9,0.75,0.5,0.25,0.1]:
+ idx=int(q*(len(pos)-1)); sample += sorted(pos, key=lambda x:x[0])[idx:idx+5]
+sample += random.sample(pos,25)
+sample += random.sample(zeros,15)
+# unique
+seen=set(); uniq=[]
+for rec in sample:
+ key=rec[1:]
+ if key not in seen:
+  seen.add(key); uniq.append(rec)
+sample=uniq[:80]
+y=[math.log1p(v) for v,_,_,_ in sample]
+def pear(a,b):
+ ma=sum(a)/len(a); mb=sum(b)/len(b); va=sum((x-ma)**2 for x in a); vb=sum((x-mb)**2 for x in b)
+ return sum((x-ma)*(z-mb) for x,z in zip(a,b))/math.sqrt(va*vb) if va and vb else -9
+rows=[]
+for ds,total in totals.items():
+ if 76000000 <= total <= 90000000 and bw_by.get(ds): rows.append((abs(total-81000000),ds,total))
+rows=sorted(rows)
+print('candidates',len(rows),'sample',len(sample)); sys.stdout.flush()
+res=[]
+for i,(_,ds,total) in enumerate(rows,1):
+ f=bw_by[ds][0]
+ url=f.get('cloud_metadata',{}).get('url')
+ if not url or 'encode-public' not in url: continue
+ try:
+  bw=pyBigWig.open(url)
+  xs=[]
+  for v,c,s,e in sample:
+   z=bw.stats(c,s,e,type='sum')[0]
+   xs.append(math.log1p(z or 0.0))
+  bw.close()
+  r=pear(y,xs)
+  res.append((r,total,ds,f['accession']))
+  print(i,ds.replace('/experiments/','').strip('/'),total,f['accession'],r); sys.stdout.flush()
+ except Exception as e:
+  print(i,ds,'ERR',e); sys.stdout.flush()
+print('TOP')
+for r,total,ds,bwacc in sorted(res, reverse=True)[:20]:
+ print(ds.replace('/experiments/','').strip('/'),total,bwacc,r)
+PY"

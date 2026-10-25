@@ -1,0 +1,82 @@
+/bin/bash -lc "python - <<'PY'
+import os, urllib.request, struct, zlib, binascii, sys, time
+URL='https://zenodo.org/api/records/6330053/files/retina_models.zip/content'
+entries=[
+('retina_models/fold2/Rod.h5', 64329784, 76662176, 639001506, 8, 0),
+('retina_models/fold4/Rod.h5', 64976922, 76662176, 1473529125, 8, 0),
+('retina_models/fold3/Rod.h5', 64246455, 76662176, 2314589782, 8, 0),
+('retina_models/fold1/Rod.h5', 64978361, 76662176, 3146890737, 8, 0),
+('retina_models/fold0/Rod.h5', 63984526, 76662176, 3978450732, 8, 0),
+]
+# Re-read central dir to get CRCs too, avoiding transcription errors.
+SIZE=4172833344; TAIL=8*1024*1024
+req=urllib.request.Request(URL, headers={'Range':f'bytes={SIZE-TAIL}-{SIZE-1}', 'Accept-Encoding':'identity'})
+with urllib.request.urlopen(req, timeout=60) as r:
+    data=r.read()
+pos=data.rfind(b'PK\\x05\\x06')
+_, disk, cd_disk, n_disk, n_tot, cd_size, cd_off, comment_len=struct.unpack('<4s4H2LH', data[pos:pos+22])
+cd=data[cd_off-(SIZE-TAIL):cd_off-(SIZE-TAIL)+cd_size]
+meta={}
+i=0
+while i < len(cd):
+    vals=struct.unpack('<4s2H4H3L5H2L', cd[i:i+46])
+    sig, made, need, flag, comp, mt, md, crc, csize, usize, fnlen, extralen, commentlen, disk, int_attr, ext_attr, lhoff=vals
+    name=cd[i+46:i+46+fnlen].decode('utf-8')
+    extra=cd[i+46+fnlen:i+46+fnlen+extralen]
+    j=0
+    while j+4 <= len(extra):
+        hid, sz=struct.unpack('<HH', extra[j:j+4]); body=extra[j+4:j+4+sz]
+        if hid==0x0001:
+            k=0
+            if usize==0xffffffff: usize=struct.unpack('<Q', body[k:k+8])[0]; k+=8
+            if csize==0xffffffff: csize=struct.unpack('<Q', body[k:k+8])[0]; k+=8
+            if lhoff==0xffffffff: lhoff=struct.unpack('<Q', body[k:k+8])[0]; k+=8
+        j += 4+sz
+    meta[name]=(csize, usize, lhoff, comp, flag, crc)
+    i += 46+fnlen+extralen+commentlen
+entries=[(n,)+meta[n] for n in sorted([n for n in meta if n.endswith('/Rod.h5')])]
+print('entries:', entries, flush=True)
+os.makedirs('models/retina_models', exist_ok=True)
+
+def range_read(start, end, timeout=120):
+    req=urllib.request.Request(URL, headers={'Range':f'bytes={start}-{end}', 'Accept-Encoding':'identity'})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+for name, csize, usize, lhoff, comp, flag, crc_expected in entries:
+    out='models/'+name
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    if os.path.exists(out) and os.path.getsize(out)==usize:
+        print('exists', out, usize, flush=True)
+        continue
+    with range_read(lhoff, lhoff+4095) as r:
+        hdr=r.read(4096)
+    if hdr[:4] "'!= b'"'PK\\x03\\x04':
+        raise RuntimeError((name, 'bad local header', hdr[:4]))
+    sig, ver, lflag, lcomp, mt, md, lcrc, lcsize, lusize, fnlen, extralen = struct.unpack('<4s5H3L2H', hdr[:30])
+    data_start=lhoff+30+fnlen+extralen
+    print('downloading', name, 'range', data_start, data_start+csize-1, 'compressed', csize, flush=True)
+    decomp=zlib.decompressobj(-15) if comp==8 else None
+    crc=0; written=0
+    with range_read(data_start, data_start+csize-1, timeout=300) as r, open(out+'.tmp','wb') as f:
+        while True:
+            chunk=r.read(1024*1024)
+            if not chunk:
+                break
+            if decomp:
+                plain=decomp.decompress(chunk)
+            else:
+                plain=chunk
+            if plain:
+                f.write(plain)
+                written += len(plain)
+                crc=binascii.crc32(plain, crc)
+        if decomp:
+            plain=decomp.flush()
+            if plain:
+                f.write(plain); written += len(plain); crc=binascii.crc32(plain, crc)
+    crc &= 0xffffffff
+    if written "'!= usize or crc != crc_expected:
+        raise RuntimeError((name, written, usize, hex(crc), hex(crc_expected)))
+    os.replace(out+'"'.tmp', out)
+    print('wrote', out, written, flush=True)
+PY"

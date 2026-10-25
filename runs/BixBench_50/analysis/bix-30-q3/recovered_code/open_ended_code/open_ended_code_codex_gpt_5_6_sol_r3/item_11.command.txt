@@ -1,0 +1,60 @@
+/bin/bash -lc "python - <<'PY'
+import xlrd, math
+import numpy as np
+from scipy.stats import ttest_ind
+p='inputs/pone.0150501.s002.xls'
+s=xlrd.open_workbook(p).sheet_by_name('RAW DATA')
+names=[]; X=[]
+for i in range(2,s.nrows):
+ names.append(str(s.cell_value(i,0)))
+ row=[]
+ for j in range(1,s.ncols):
+  v=s.cell_value(i,j)
+  try: row.append(float(v))
+  except: row.append(np.nan)
+ X.append(row)
+X=np.array(X)
+samples=[s.cell_value(1,j) for j in range(1,s.ncols)]
+print('shape',X.shape,'samples',samples)
+print('NAs',np.isnan(X).sum(),'Ct>=34',np.sum(X>=34),'Ct<34',np.sum(X<34),'range',np.nanmin(X),np.nanmax(X))
+print('NAs at',[(names[i],samples[j]) for i,j in zip(*np.where(np.isnan(X)))])
+print('>=34 by sample',dict(zip(samples,np.sum(X>=34,axis=0))))
+
+def adjust(p,method):
+ p=np.asarray(p,float); m=len(p)
+ if method=='bonf': return np.minimum(1,p*m)
+ c=np.sum(1/np.arange(1,m+1))
+ order=np.argsort(p); ps=p[order]
+ q=ps*m*c/np.arange(1,m+1)
+ q=np.minimum.accumulate(q[::-1])[::-1]
+ q=np.minimum(q,1)
+ out=np.empty(m); out[order]=q
+ return out
+
+def run(exclude=True,normdet=True,targetdet=False,equal=True, exp=False):
+ Y=X.copy()
+ if normdet:
+  means=np.nanmean(np.where(Y<34,Y,np.nan),axis=0)
+ else: means=np.nanmean(Y,axis=0)
+ # log2 of 2"'^-deltaCt == -deltaCt. exp False chooses same.
+ Y=-(Y-means)
+ if targetdet: Y=np.where(X<34,Y,np.nan)
+ keep=np.ones(len(samples),bool)
+ if exclude:
+  for z in ['"'P_3','C_18']: keep[samples.index(z)]=False
+ pats=np.array([x.startswith('P_') for x in samples]) & keep
+ ctrls=np.array([x.startswith('C_') for x in samples]) & keep
+ pv=[]
+ for row in Y:
+  a=row[pats]; b=row[ctrls]; a=a[np.isfinite(a)]; b=b[np.isfinite(b)]
+  pv.append(ttest_ind(a,b,equal_var=equal).pvalue)
+ pv=np.array(pv)
+ bon=adjust(pv,'bonf'); by=adjust(pv,'by')
+ print('opts',exclude,normdet,targetdet,equal,'raw<=.05',sum(pv<=.05),'bon',sum(bon<=.05),'BY',sum(by<=.05),'min',names[np.argmin(pv)],pv.min(),bon.min(),by.min())
+ ix=np.argsort(pv)[:8]
+ for i in ix: print(' ',names[i],pv[i],bon[i],by[i])
+for ex in [True,False]:
+ for nd in [True,False]:
+  for td in [False,True]:
+   for eq in [True,False]: run(ex,nd,td,eq)
+PY"

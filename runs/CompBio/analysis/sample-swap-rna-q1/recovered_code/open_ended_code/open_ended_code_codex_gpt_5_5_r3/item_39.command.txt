@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+# Build ref collapse as before
+ann_raw=pd.read_excel('supp_data_1_6.xlsx',sheet_name='Supplementary Data 4',header=None)
+ann=ann_raw.iloc[:,1:5].copy(); ann.columns=['metacell','cell_type','dev_layer','reclustering']
+ann=ann[pd.to_numeric(ann['metacell'],errors='coerce').notna()].copy(); ann['metacell']=ann['metacell'].astype(int)
+raw=pd.read_excel('source_data.xlsx',sheet_name='Figure 1c',header=None)
+row=raw.index[raw.iloc[:,1].eq('Gene')][0]
+head=raw.iloc[row,1:].tolist()
+expr=raw.iloc[row+1:,1:].dropna(subset=[1]); expr.columns=head
+expr=expr[expr['Gene'].astype(str).str.startswith('BLAG')].set_index('Gene'); expr.columns=[int(float(c)) for c in expr.columns]; expr=expr.astype(float)
+map_ct={'endoderm':'endoderm','endostyle':'endostyle_csg','epidermal neural 1':'epidermal_neural','epidermal neural 2':'epidermal_neural','anterior epidermis':'epidermis','posterior epidermis':'epidermis','mesodermal notochord':'mesodermal_notochord','muscular somites':'muscular_somites','neural':'neural','neural like 1':'neural_like','neural like 2':'neural_like','putative neuro/endo':'putative_neuro_endo','somite':'somite','tailbud':'tailbud','tailbud neural':'tailbud_neural'}
+ann2=ann[ann.cell_type.isin(map_ct)].copy(); ann2['label']=ann2.cell_type.map(map_ct)
+ref=pd.DataFrame({label:expr[sub.metacell.tolist()].mean(axis=1) for label,sub in ann2.groupby('label')})
+df=pd.read_csv('sample.swap.rna.q1.tsv.gz',sep='\\t',index_col=0)
+common=df.index.intersection(ref.index)
+q=np.log1p(df.loc[common])
+z=(q.sub(q.mean(axis=1),axis=0)).div(q.std(axis=1).replace(0,np.nan),axis=0)
+labels=list(df.columns)
+for ct in labels:
+    r=ref.loc[common]
+    score=r[ct]/(r.drop(columns=[ct]).median(axis=1)+1e-9)
+    genes=score.sort_values(ascending=False).head(100).index
+    meanz=z.loc[genes].mean(axis=0).sort_values(ascending=False)
+    print('\\nMarker set',ct,'top query columns:', ', '.join([f'{i}:{v:.2f}' for i,v in meanz.head(4).items()]))
+PY"

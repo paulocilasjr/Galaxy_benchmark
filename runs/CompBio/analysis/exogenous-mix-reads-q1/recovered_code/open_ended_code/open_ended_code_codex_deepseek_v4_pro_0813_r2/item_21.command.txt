@@ -1,0 +1,42 @@
+/bin/bash -lc "python3 - <<'PY'
+# kmer-based classification exo vs endo, estimate mix exo fraction
+from collections import Counter,defaultdict
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_predict
+from sklearn.metrics import accuracy_score
+import pysam
+def reads(fn):
+ out=[]
+ with open(fn) as f:
+  for h in f:
+   s=f.readline().strip(); f.readline(); f.readline(); out.append(s)
+ return out
+def rc(s): return s.translate(str.maketrans('ACGT','TGCA'))[::-1]
+def kmer_counts(s,k=6):
+ c=Counter(s[i:i+k] for i in range(len(s)-k+1))
+ # maybe reverse complement normalize? use both? skip
+ return c
+exo=reads('exogenous.mix.reads.q1.exo.fq')
+endo=reads('exogenous.mix.reads.q1.endo.fq')
+mix=reads('exogenous.mix.reads.q1.mix.fq')
+Xseq=exo+endo
+y=np.array([1]*len(exo)+[0]*len(endo))
+# build all kmers from train
+from sklearn.feature_extraction.text import CountVectorizer
+# use sequences as text and char ngrams
+vec=CountVectorizer(analyzer='char',ngram_range=(5,6),binary=True)
+Xv=vec.fit_transform(Xseq)
+Mv=vec.transform(mix)
+clf=LogisticRegression(max_iter=1000,class_weight='balanced')
+clf.fit(Xv,y)
+p=clf.predict_proba(Mv)[:,1]
+print('pred exo fraction mean',p.mean(),'sum',p.sum(),'total',len(p))
+print('train acc',clf.score(Xv,y))
+# cross-val on labels
+from sklearn.model_selection import cross_val_predict
+pred=cross_val_predict(LogisticRegression(max_iter=1000,class_weight='balanced'),Xv,y,cv=5,method='predict')
+print('cv acc',accuracy_score(y,pred))
+# distribution predicted probs
+for th in [0.1,0.25,0.5,0.75,0.9]: print(th, (p>=th).sum())
+PY"

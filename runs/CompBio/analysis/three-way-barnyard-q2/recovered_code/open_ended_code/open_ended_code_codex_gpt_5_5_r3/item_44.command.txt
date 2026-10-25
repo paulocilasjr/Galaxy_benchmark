@@ -1,0 +1,83 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, re, collections, math
+# Load read index -> barcode, UMI
+cbs=['']
+umis=['']
+with gzip.open('three.way.barnyard.q2.R1.fq.gz','rt') as f:
+    rec=0
+    while True:
+        h=f.readline()
+        if not h: break
+        seq=f.readline().strip(); f.readline(); f.readline()
+        rec+=1
+        cbs.append(seq[:16]); umis.append(seq[16:28])
+print('reads', len(cbs)-1)
+# target mapping
+target={}
+with open('refs/cds/t2gene.tsv') as f:
+    for line in f:
+        tid,sp,gene,sym,desc=line.rstrip('\\n').split('\\t')
+        target[tid]=(sp,sym,desc)
+sp_counts=collections.defaultdict(lambda: collections.Counter())
+sp_gene_reads=collections.defaultdict(collections.Counter)
+sp_gene_umis=collections.defaultdict(set)
+read_sp_total=collections.Counter()
+used=0; skipped=0
+readno_re=re.compile(r'READ_(\\d+)')
+with open('cds_primary.paf') as f:
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        qname=p[0]; qlen=int(p[1]); qstart=int(p[2]); qend=int(p[3]); tid=p[5]
+        matches=int(p[9]); aln=int(p[10]); mapq=int(p[11])
+        if aln < 45 or matches / max(aln,1) < 0.88:
+            skipped+=1; continue
+        m=readno_re.match(qname)
+        if not m: continue
+        i=int(m.group(1))
+        if i>=len(cbs): continue
+        cb=cbs[i]; umi=umis[i]
+        sp,sym,desc=target[tid]
+        sp_counts[cb][sp]+=1
+        read_sp_total[sp]+=1
+        sp_gene_reads[sp][sym]+=1
+        sp_gene_umis[sp].add((cb,umi,sym))
+        used+=1
+print('used',used,'skipped',skipped,'read_sp_total',read_sp_total)
+# barcode classification across thresholds
+for minmaps in [5,10,20,30,50,100]:
+  for frac in [0.6,0.7,0.8,0.9]:
+    cls=[]; dbl=[]; amb=[]
+    for cb,c in sp_counts.items():
+      tot=sum(c.values())
+      if tot<minmaps: continue
+      sp,n=c.most_common(1)[0]
+      if n/tot>=frac:
+        cls.append((cb,sp,tot,n/tot,c))
+      else:
+        amb.append((cb,tot,c))
+    cc=collections.Counter(sp for _,sp,_,_,_ in cls)
+    if cls:
+      print('thr',minmaps,frac,'n',len(cls),'counts',dict(cc),'pct',[round(cc[s]/len(cls)*100) for s in ['human','mouse','pig']],'amb',len(amb))
+# show barcode distribution at default
+minmaps=20; frac=0.8
+cls=[]; amb=[]
+for cb,c in sp_counts.items():
+  tot=sum(c.values())
+  if tot<minmaps: continue
+  sp,n=c.most_common(1)[0]
+  if n/tot>=frac: cls.append((cb,sp,tot,n/tot,c))
+  else: amb.append((cb,tot,c))
+print('DEFAULT cls',len(cls),collections.Counter(sp for _,sp,_,_,_ in cls),'amb',len(amb))
+print('amb examples', sorted(amb, key=lambda x:-x[1])[:10])
+# Top genes by read counts all mappings
+for sp in ['human','mouse','pig']:
+    print('\\nTOPREAD',sp)
+    for sym,n in sp_gene_reads[sp].most_common(30): print(sym,n)
+# UMI counts per species from all mappings
+umi_counts=collections.defaultdict(collections.Counter)
+for sp,vals in sp_gene_umis.items():
+    for cb,umi,sym in vals: umi_counts[sp][sym]+=1
+for sp in ['human','mouse','pig']:
+    print('\\nTOPUMI_allmap',sp)
+    for sym,n in umi_counts[sp].most_common(30): print(sym,n)
+PY"

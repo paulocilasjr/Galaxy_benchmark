@@ -1,0 +1,28 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, sys, time
+fmt='%CHROM\\t%POS\\t%REF\\t%ALT\\t%INFO/gnomad_AF_afr\\t%INFO/gnomad_AF_asj\\t%INFO/gnomad_AF_nfe\\t%INFO/gnomad_AF_eas\\t%INFO/gnomad_AF_mid\\t%INFO/gnomad_AF_sas\\t%INFO/AC_papuan\\t%INFO/AN_papuan\\t%INFO/AC_melanesian\\t%INFO/AN_melanesian\\n'
+url='https://storage.googleapis.com/gcp-public-data--gnomad/release/3.1.2/vcf/genomes/gnomad.genomes.v3.1.2.hgdp_tgp.chr1.vcf.bgz'
+# select 100 well-spaced positions after first 500 list, biased to variant-discordant rows with all samples not identical
+rows=[]
+for line in open('selected_lifted.tsv'):
+    chrom,pos,ref,alt,hg38pos,*gs=line.strip().split('\\t')
+    rows.append((int(hg38pos), line))
+# use every 5th to spread remote BGZF offsets
+rows=rows[::5][:100]
+with open('refs/gnomad_single_site_af.tsv','w') as out:
+    got=0
+    for hg38pos,line in rows:
+        r=f'chr1:{hg38pos}-{hg38pos}'
+        cmd=['bcftools','query','-r',r,'-f',fmt,url]
+        try:
+            res=subprocess.run(cmd, text=True, capture_output=True, timeout=20)
+        except subprocess.TimeoutExpired:
+            continue
+        if res.returncode==0 and res.stdout:
+            out.write(res.stdout)
+            got += res.stdout.count('\\n')
+        if got>=80:
+            break
+print('queried_rows_written')
+PY
+wc -l refs/gnomad_single_site_af.tsv"

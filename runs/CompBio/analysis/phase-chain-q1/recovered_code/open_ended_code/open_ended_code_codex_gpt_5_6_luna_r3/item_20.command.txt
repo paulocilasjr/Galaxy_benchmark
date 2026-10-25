@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,urllib.parse,urllib.request
+import edlib
+from Bio.Seq import Seq
+url='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'+urllib.parse.urlencode({'db':'nuccore','id':'AL008638.1','seq_start':'60000','seq_stop':'70000','rettype':'fasta','strand':'1','retmode':'text'})
+out=urllib.request.urlopen(url,timeout=30).read().decode()
+ref=''.join(x.strip() for x in out.splitlines() if not x.startswith('>'))
+def reads(p):
+ with gzip.open(p,'rt') as f:
+  while True:
+   h=f.readline().strip()
+   if not h: return
+   s=f.readline().strip(); f.readline(); f.readline()
+   yield h,s
+r1=dict(reads('phase.chain.q1.R1.fq.gz')); r2=dict(reads('phase.chain.q1.R2.fq.gz'))
+for typ,d in [('R1',r1),('R2rc',{h:str(Seq(s).reverse_complement()) for h,s in r2.items()})]:
+ poss=[]; bad=[]
+ for h,s in d.items():
+  a=edlib.align(s,ref,mode='HW',task='locations',k=20)
+  if a['editDistance']<0: bad.append((h,a['editDistance']))
+  else: poss.append((a['editDistance'], a['locations']))
+ print(typ,'n',len(poss),'bad',bad[:3],'edits',sorted(set(x[0] for x in poss)), 'range minmax',min(x[1][0][0] for x in poss),max(x[1][0][1] for x in poss))
+ from collections import Counter
+ print('top starts',Counter(x[1][0][0] for x in poss).most_common(20))
+ print('examples high',sorted(poss,reverse=True)[:5])
+PY"

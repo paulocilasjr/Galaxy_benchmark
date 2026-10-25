@@ -1,0 +1,74 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, requests, pysam, os, tempfile, time, math, random, threading, queue
+j=json.load(open('gwasinfo.json')); dc=j['datasets_compressed']
+cands=[]
+for id,v in dc.items():
+    if len(v)<2 or not isinstance(v[1],dict): continue
+    main=v[0]
+    if len(main)<=10: continue
+    try: n=int(main[10]); ns=int(v[1].get('nsnp') or 0)
+    except: continue
+    if main[1]==0 and 48000<=n<=60000 and ns>=3000000:
+        cands.append((id,n,main[0],main[2],main[3],v[1].get('pmid')))
+proxies=[line.strip() for line in open('[REDACTED LOCAL PATH]') if line.strip()]
+random.shuffle(proxies)
+proxy_q=queue.Queue()
+for p in proxies: proxy_q.put(p)
+lock=threading.Lock(); used=set(); tmp=tempfile.mkdtemp(prefix='gidx_')
+targets={'rs1150779':('6',34215919,39.3347,-0.0886096),'rs6909732':('6',34219010,33.9083,0.0855989)}
+def gp():
+    with lock:
+        for _ in range(proxy_q.qsize()):
+            p=proxy_q.get()
+            if p not in used: return p
+        return random.choice(proxies)
+def fn(x):
+    try:return float(x)
+    except:return None
+def fetch(url,payload=None):
+    for _ in range(50):
+        p=gp(); pd={'https':'http://'+p,'http':'http://'+p}
+        try:
+            r=requests.post(url,json=payload,timeout=10,proxies=pd) if payload else requests.get(url,timeout=10,proxies=pd)
+            if r.status_code==200:
+                with lock: used.add(p)
+                return r
+        except Exception: pass
+    return None
+def process(item):
+    idx,(id,n,trait,cat,sub,pmid)=item
+    r=fetch('https://api.opengwas.io/api/gwasinfo/files/trial',{'id':id,'type':'vcf'})
+    if r is None: return (idx,id,n,trait,cat,sub,pmid,'NO_URL',False)
+    try: urls=r.json()
+    except: return (idx,id,n,trait,cat,sub,pmid,'BAD',False)
+    vcf,tbi=urls[0],urls[1]; local=os.path.join(tmp,id+'.tbi'); ok=False
+    for attempt in range(3):
+        try:
+            rr=requests.get(tbi,timeout=20) if attempt==0 else requests.get(tbi,timeout=20,proxies={'https':'http://'+gp(),'http':'http://'+gp()})
+            if rr.status_code==200: open(local,'wb').write(rr.content); ok=True; break
+        except Exception: pass
+    if not ok: return (idx,id,n,trait,cat,sub,pmid,'TBI_FAIL',False)
+    try: tb=pysam.TabixFile(vcf,index=local)
+    except Exception as e: return (idx,id,n,trait,cat,sub,pmid,'ERR '+str(e),False)
+    parts=[]; close=False
+    for rs,(chrom,pos,tlp,tes) in targets.items():
+        try: recs=list(tb.fetch(chrom,pos-1,pos))
+        except: recs=[]
+        if not recs: parts.append(rs+'=NO'); continue
+        f=recs[0].split('\\t'); d=dict(zip(f[8].split(':'),f[9].split(':')))
+        es,se,lp,af=fn(d.get('ES')),fn(d.get('SE')),fn(d.get('LP')),fn(d.get('AF'))
+        if lp is not None and abs(lp-tlp)<0.5 and es is not None and abs(es-tes)<0.01: close=True
+        parts.append(f\"{rs}:LP={lp},ES={es},SE={se},AF={af}\")
+    return (idx,id,n,trait,cat,sub,pmid,' | '.join(parts),close)
+from concurrent.futures import ThreadPoolExecutor,as_completed
+results=[]; done=0
+with ThreadPoolExecutor(max_workers=15) as ex:
+    futs=[ex.submit(process,(i,c)) for i,c in enumerate(cands)]
+    for fut in as_completed(futs):
+        res=fut.result(); done+=1; results.append(res)
+        if res[-1]: print('CLOSE',res, flush=True)
+        elif done%10==0: print('progress',done,'/',len(cands), flush=True)
+print('DONE', flush=True)
+for res in results:
+    if res[-1]: print('FINALCLOSE',res, flush=True)
+PY"

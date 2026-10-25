@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+import statsmodels.api as sm
+hic=pd.read_csv('ep.interactions.q1.hic.csv')
+expr=pd.read_csv('ep.interactions.q1.expr.csv')
+bg=hic[hic.set=='background'].copy()
+cand=hic[hic.set=='candidate'].copy()
+cand['obs_total']=cand[['count_rep1','count_rep2','count_rep3']].sum(axis=1)
+cand['obs_mean']=cand[['count_rep1','count_rep2','count_rep3']].mean(axis=1)
+# Poisson upper p with fit
+long=bg.melt(id_vars=['pair_id','distance_bp'], value_vars=['count_rep1','count_rep2','count_rep3'], var_name='rep', value_name='count')
+long['logd']=np.log(long.distance_bp)
+pois=sm.GLM(long['count'], sm.add_constant(long[['logd']]), family=sm.families.Poisson()).fit()
+mu=pois.predict(sm.add_constant(np.log(cand.distance_bp)))
+cand['mu']=mu
+cand['expected_total']=mu*3
+obs=cand['obs_total'].astype(int)
+cand['pois_upper_p']=[1-stats.poisson.cdf(k-1, lam) for k,lam in zip(obs,cand['expected_total'])]
+cand['pois_lower_p']=[stats.poisson.cdf(k, lam) for k,lam in zip(obs,cand['expected_total'])]
+print('Poisson p-values')
+print(cand[['pair_id','distance_bp','obs_total','expected_total','pois_upper_p','pois_lower_p']].to_string(index=False))
+# local nearest 30 nonparametric
+for i,row in cand.iterrows():
+    close=bg.iloc[(bg.distance_bp-row.distance_bp).abs().argsort()[:30]].copy()
+    close['sum']=close[['count_rep1','count_rep2','count_rep3']].sum(axis=1)
+    p_hi=(close['sum']>=row.obs_total).mean()
+    p_lo=(close['sum']<=row.obs_total).mean()
+    print(row.pair_id,'local30 p_hi',round(p_hi,3),'p_lo',round(p_lo,3),'median',close['sum'].median(),'minmax',close['sum'].min(),close['sum'].max(),'obs',row.obs_total)
+PY"

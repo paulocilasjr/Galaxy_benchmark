@@ -1,0 +1,31 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import numpy as np
+from scipy import sparse
+from scipy.io import mmwrite
+z=np.load('allele_counts.npz'); keys=z['keys'];dp=z['dp'].astype(np.int64);ad=z['ad'].astype(np.int64);sites=z['sites'];cb=z['barcodes'];rows=keys>>16;cells=keys&65535;ns=len(sites)
+sp=np.bincount(rows,minlength=ns);sd=np.bincount(rows,weights=dp,minlength=ns);sa=np.bincount(rows,weights=ad,minlength=ns);f=sa/np.maximum(sd,1)
+keep=np.flatnonzero((sp>=50)&(sd>=50)&(f>=.05)&(f<=.5))
+rng=np.random.default_rng(20260809)
+groups={}
+for r in keep:
+ c,p=sites[r,0],int(sites[r,1]);groups.setdefault((c,p//100),[]).append(int(r))
+gkeys=np.array(list(groups)); train_groups=rng.random(len(gkeys))<.7
+train=set(r for j,g in enumerate(gkeys) if train_groups[j] for r in groups[tuple(g)])
+train=np.array([r for r in keep if r in train]); hold=np.array([r for r in keep if r not in set(train)])
+for name,sel in [('cv_train',train),('cv_hold',hold)]:
+ rid={int(r):i for i,r in enumerate(sel)};q=np.array([rid.get(int(r),-1) for r in rows]);ok=q>=0
+ out=name;os.makedirs(out,exist_ok=True)
+ mmwrite(out+'/cellSNP.tag.AD.mtx',sparse.coo_matrix((ad[ok],(q[ok],cells[ok])),shape=(len(sel),len(cb))))
+ mmwrite(out+'/cellSNP.tag.DP.mtx',sparse.coo_matrix((dp[ok],(q[ok],cells[ok])),shape=(len(sel),len(cb))))
+ open(out+'/cellSNP.samples.tsv','w').write('\\n'.join(map(str,cb.tolist()))+'\\n')
+ with open(out+'/cellSNP.base.vcf','w') as fh:
+  fh.write('##fileformat=VCFv4.2\\n##source=local_pileup\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\n')
+  for j,r in enumerate(sel):
+   c,p,ref,alt=sites[r];fh.write(f'{c}\\t{p}\\tS{r}\\t{ref}\\t{alt}\\t.\\tPASS\\t.\\n')
+ print(name,len(sel),ok.sum())
+np.savez('cv_site_sets.npz',train=train,hold=hold)
+PY
+gzip -c cv_train/cellSNP.base.vcf > cv_train/cellSNP.base.vcf.gz
+gzip -c cv_hold/cellSNP.base.vcf > cv_hold/cellSNP.base.vcf.gz
+for n in 2 3 4 5 6 7 8; do vireo -c cv_train -N \""'$n" -o "cv_train_N$n" --noPlot -M 20 --randSeed 1 -p 4 > "cv_train_N$n.log" 2>&1; done'

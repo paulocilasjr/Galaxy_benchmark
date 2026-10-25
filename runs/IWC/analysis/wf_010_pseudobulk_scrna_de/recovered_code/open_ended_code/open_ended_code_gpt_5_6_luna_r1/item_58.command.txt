@@ -1,0 +1,36 @@
+/usr/bin/bash -lc "/opt/conda/bin/python3.11 -u - <<'PY'
+from pathlib import Path
+import h5py, numpy as np, pandas as pd, math, json
+from scipy.sparse import csr_matrix
+
+def dec(a): return np.asarray([x.decode() if isinstance(x,bytes) else str(x) for x in a], dtype=object)
+def clean(x): return x.replace(' ','_').replace('-','_')
+with h5py.File('data/inputs/source_anndata_file/Source%20AnnData%20file.h5ad','r') as f:
+    ctcat=dec(f['obs/cell_type/categories'][()]); dcat=dec(f['obs/disease/categories'][()]); icat=dec(f['obs/individual/categories'][()])
+    ct=ctcat[f['obs/cell_type/codes'][()]]; disease=dcat[f['obs/disease/codes'][()]]; ind=icat[f['obs/individual/codes'][()]]; genes=dec(f['var/gene_symbol'][()])
+    raw=f['layers/counts/data'][()]; assert np.all(raw>=0)&np.all(raw==np.floor(raw))
+    X=csr_matrix((raw.astype(np.int64),f['layers/counts/indices'][()],f['layers/counts/indptr'][()]),shape=(len(ind),len(genes)))
+meta=pd.DataFrame({'individual':ind,'cell_type':ct,'disease':disease})
+combos=list(meta.groupby(['individual','cell_type'],sort=False,observed=True).size().loc[lambda s:s>=10].index)
+cols=[clean(str(i))+'_'+clean(str(c)) for i,c in combos]
+ind_np=meta.individual.to_numpy(); ct_np=meta.cell_type.to_numpy()
+PB=np.vstack([np.asarray(X[(ind_np==i)&(ct_np==c)].sum(axis=0)).ravel() for i,c in combos]).astype(np.int64)
+tot=PB.sum(axis=1); M=float(np.median(tot)); S=math.ceil(10+0.7*(len(combos)-10)); threshold=10/M*1e6
+mask=(((PB/tot[:,None]*1e6)>=threshold).sum(axis=0)>=S)&(PB.sum(axis=0)>=1000)
+expected_genes=genes[mask]; expected=PB[:,mask].T
+pbt=pd.read_csv('final_answer/pseudobulk_counts.tsv',sep='\\t')
+assert list(pbt.columns)==['gene']+cols
+assert pbt.shape==(len(expected_genes),1+len(cols))
+assert pbt.gene.tolist()==expected_genes.tolist()
+vals=pbt.iloc[:,1:].to_numpy(); assert np.issubdtype(vals.dtype,np.integer); assert np.all(vals>=0); assert np.array_equal(vals,expected)
+det=pd.read_csv('final_answer/differential_expression.tsv',sep='\\t')
+assert list(det.columns)==['gene','log2_fold_change','p_value','fdr']; assert det.shape==(len(expected_genes),4); assert det.gene.tolist()==expected_genes.tolist()
+for c in ['log2_fold_change','p_value','fdr']: assert np.all(np.isfinite(det[c].to_numpy(float)))
+assert np.all((det.p_value>=0)&(det.p_value<=1)); assert np.all((det.fdr>=0)&(det.fdr<=1))
+p=det.p_value.to_numpy(float); order=np.argsort(p,kind='mergesort'); q=p[order]*len(p)/np.arange(1,len(p)+1); q=np.minimum.accumulate(q[::-1])[::-1]; q=np.clip(q,0,1); eq=np.empty_like(p); eq[order]=q; assert np.allclose(det.fdr.to_numpy(float),eq,rtol=0,atol=1e-14)
+assert json.loads(Path('final_answer/method.json').read_text())=={'method':'DESeq2'}
+print('PASS')
+print(f'rows={pbt.shape[0]} columns={pbt.shape[1]-1} N={len(combos)} M={M:.1f} S={S} CPM={threshold:.12g}')
+print(f'counts min={vals.min()} max={vals.max()} total={vals.sum()}')
+print(f'LFC range={det.log2_fold_change.min():.6g}..{det.log2_fold_change.max():.6g}; p range={p.min():.6g}..{p.max():.6g}; fdr min={det.fdr.min():.6g}')
+PY"

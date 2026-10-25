@@ -1,0 +1,69 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+import gzip, collections, math, time
+
+def fasta(path):
+ d={}; name=None; seq=[]
+ for line in Path(path).read_text().splitlines():
+  if line.startswith('>'):
+   if name: d[name]=''.join(seq)
+   name=line[1:].split()[0]; seq=[]
+  else: seq.append(line.strip())
+ if name: d[name]=''.join(seq)
+ return d
+ref=fasta('read.proportions.q1.fa'); names=list(ref); L=len(next(iter(ref.values()))); rl=36; k=8
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+idx=[]
+for nm in names:
+ d=collections.defaultdict(list); s=ref[nm]
+ for p in range(L-k+1): d[s[p:p+k]].append(p)
+ idx.append(d)
+reads=[]
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+ while True:
+  n=f.readline()
+  if not n: break
+  reads.append(f.readline().strip()); f.readline(); f.readline()
+
+def score(read,j):
+ cands=set()
+ for q in (read,rc(read)):
+  for qpos in range(rl-k+1):
+   mer=q[qpos:qpos+k]
+   for p in idx[j].get(mer,[]):
+    st=p-qpos
+    if 0<=st<=L-rl: cands.add(st)
+ if not cands:
+  # brute force fallback
+  cands=range(L-rl+1)
+ best=rl+1; nbest=0; hist=collections.Counter()
+ s=ref[names[j]]
+ for st in cands:
+  w=s[st:st+rl]
+  mm=sum(a"'!=b for a,b in zip(read,w))
+  # reverse orientation is equivalent compare rc read
+  mm2=sum(a!=b for a,b in zip(rc(read),w))
+  mm=min(mm,mm2)
+  hist[mm]+=1
+  if mm<best: best=mm; nbest=1
+  elif mm==best: nbest+=1
+ return best,nbest,len(cands),hist
+
+start=time.time(); patterns=collections.Counter(); best_counts=collections.Counter(); minhist=[collections.Counter() for _ in names]; no_cand=0; examples=[]
+for ix,read in enumerate(reads):
+ vals=[]
+ for j in range(4):
+  b,n,c,h=score(read,j); vals.append((b,n,c)); minhist[j][b]+=1
+ m=min(x[0] for x in vals); winners=tuple(j for j,x in enumerate(vals) if x[0]==m)
+ patterns[(m,winners)]+=1
+ if len(winners)==1: best_counts[winners[0]]+=1
+ if all(x[2]==L-rl+1 for x in vals): no_cand += 1
+ if ix<5: examples.append((read,vals,m,winners))
+print('"'time',time.time()-start,'patterns')
+for x,n in sorted(patterns.items()): print(x,n)
+print('unique best',best_counts,'no-cand',no_cand)
+for j in range(4): print(names[j],sorted(minhist[j].items()))
+print('examples')
+for x in examples: print(x)
+PY"

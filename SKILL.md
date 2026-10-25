@@ -415,11 +415,11 @@ Do not print, log, or persist secret values.
 
 BixBench tasks are final-answer benchmarks, not workflow-quality benchmarks. Use this section for:
 
-- `experiments/BixBench/task_<N>.json`
+- `benchmark/experiments/BixBench/task_<N>.json`
 
 The local task set is the 50-question verified subset from `phylobio/BixBench-Verified-50`. Matching ground truth lives under:
 
-- `ground_truth/BixBench/task_<N>.json`
+- `benchmark/ground_truth/BixBench/task_<N>.json`
 
 ### Required Galaxy Environment
 
@@ -439,7 +439,7 @@ The submitted answer must be traceable to outputs generated through `usegalaxy.o
 
 For BixBench, the ground-truth file is hidden during task execution. The agent must not open, read, search, summarize, or otherwise use:
 
-- `ground_truth/BixBench/task_<N>.json`
+- `benchmark/ground_truth/BixBench/task_<N>.json`
 - any other task-related ground-truth file
 
 until all of the following are true:
@@ -512,7 +512,7 @@ After opening ground truth, write `evaluations/comparison.json`:
   },
   "ground_truth_access": {
     "opened_after_submit_answer": true,
-    "ground_truth_path": "ground_truth/BixBench/task_<N>.json"
+    "ground_truth_path": "benchmark/ground_truth/BixBench/task_<N>.json"
   }
 }
 ```
@@ -534,7 +534,7 @@ For BixBench runs, use this reduced shape:
 {
   "experiment": "bixbench_task_<N>",
   "Ground_truth_path": [
-    "ground_truth/BixBench/task_<N>.json"
+    "benchmark/ground_truth/BixBench/task_<N>.json"
   ],
   "Galaxy_tools_used": [
     "<Galaxy tool id or display name used for this experiment>"
@@ -563,7 +563,7 @@ BixBench summary rules:
 - Copy `Experiment_score.ideal` from hidden ground truth only after the ground-truth access gate opens.
 - Set `Experiment_score.Galaxy_answer` to the fixed submitted answer extracted from preserved Galaxy analysis outputs before ground-truth access.
 - Set `Experiment_score.direct_ground_truth_match_score` equal to the binary answer score from `evaluations/comparison.json`.
-- Before evaluation, `Ground_truth_path` must be an empty list; after evaluation, list `ground_truth/BixBench/task_<N>.json`.
+- Before evaluation, `Ground_truth_path` must be an empty list; after evaluation, list `benchmark/ground_truth/BixBench/task_<N>.json`.
 
 The BixBench pipeline is:
 

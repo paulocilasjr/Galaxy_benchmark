@@ -1,0 +1,79 @@
+/bin/bash -lc "cat > scripts/profile.py <<'PY'
+import pyBigWig, math, sys, os, json
+import numpy as np
+
+sig_path='bigwig/signal.bw'
+ctrl_path='bigwig/control.bw'
+genes_path='ref/genes.pc.longest.tsv'
+out_prefix='profiles'
+
+sig=pyBigWig.open(sig_path)
+ctrl=pyBigWig.open(ctrl_path)
+# total sums
+ssum=sig.header()['sumData']; csum=ctrl.header()['sumData']; scale=csum/ssum if csum else 1.0  # multiply control to signal scale? We'll use ctrl_norm = ctrl*ssum/csum
+
+def get_region(bw, chrom, start, end, nBins=100, rev=False):
+    vals=bw.stats(chrom, max(0,start), end, nBins=nBins, type='mean')
+    if vals is None:
+        return np.zeros(nBins)
+    vals=[0.0 if v is None else float(v) for v in vals]
+    if rev:
+        vals=vals[::-1]
+    return np.array(vals)
+
+def process_genes(up=5000, down=5000, nbins=200, body_nbins=100, min_len=5000, max_genes=None):
+    ts_counts=[]; tes_counts=[]; body_counts=[]
+    n=0
+    with open(genes_path) as f:
+        next(f)
+        for line in f:
+            p=line.rstrip().split('\\t')
+            gene,chrom,strand=p[0],p[1],p[2]; start=int(p[3]); end=int(p[4])
+            length=end-start
+            if length<min_len: continue
+            if strand=='+':
+                tss=start; tes=end; rev=False
+            else:
+                tss=end; tes=start; rev=True
+            # TSS window in genome coordinates; if - reverse bins
+            win_start=tss-up; win_end=tss+down
+            a=get_region(sig,chrom,win_start,win_end,nbins,rev)
+            b=get_region(ctrl,chrom,win_start,win_end,nbins,rev)
+            ts_counts.append((a,b))
+            # TES window
+            win_start=tes-up; win_end=tes+down
+            a=get_region(sig,chrom,win_start,win_end,nbins,rev)
+            b=get_region(ctrl,chrom,win_start,win_end,nbins,rev)
+            tes_counts.append((a,b))
+            # scaled gene body: query full transcript body from min to max; orient
+            win_start=min(start,end); win_end=max(start,end)
+            a=get_region(sig,chrom,win_start,win_end,body_nbins,rev)
+            b=get_region(ctrl,chrom,win_start,win_end,body_nbins,rev)
+            body_counts.append((a,b))
+            n+=1
+            if max_genes and n>=max_genes: break
+    return n, ts_counts, tes_counts, body_counts
+
+n, ts, tes, body=process_genes()
+print('genes processed',n, flush=True)
+
+def save_profiles(name, arr):
+    # arr list (sig, ctrl)
+    S=np.mean(np.vstack([x[0] for x in arr]),axis=0)
+    C=np.mean(np.vstack([x[1] for x in arr]),axis=0)
+    Cnorm=C*(ssum/csum) if csum else C
+    ratio=np.log2((S+0.1)/(Cnorm+0.1))
+    out={'sig':S.tolist(),'ctrl':C.tolist(),'ctrl_norm':Cnorm.tolist(),'log2_ratio':ratio.tolist()}
+    with open(out_prefix+'.'+name+'.json','w') as f: json.dump(out,f)
+    # text simple
+    with open(out_prefix+'.'+name+'.txt','w') as f:
+        f.write('idx\\tsig\\tctrl\\tctrl_norm\\tlog2_ratio\\n')
+        for i in range(len(S)):
+            f.write(f'{i}\\t{S[i]:.6g}\\t{C[i]:.6g}\\t{Cnorm[i]:.6g}\\t{ratio[i]:.6g}\\n')
+    print(name, 'TSS-like', flush=True)
+
+save_profiles('tss',ts)
+save_profiles('tes',tes)
+save_profiles('body',body)
+PY
+python3 scripts/profile.py"

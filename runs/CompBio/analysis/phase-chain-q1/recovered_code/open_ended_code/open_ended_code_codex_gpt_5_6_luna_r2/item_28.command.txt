@@ -1,0 +1,46 @@
+/bin/bash -lc "python - <<'PY'
+import pysam, collections
+bam=pysam.AlignmentFile('reads.sorted.bam')
+fa=pysam.FastaFile('hg38.fa')
+# count each ref position bases, plus each boundary indel from CIGAR
+base=collections.defaultdict(collections.Counter)
+ins=collections.defaultdict(collections.Counter) # boundary = ref coordinate before inserted sequence (0-based)
+delc=collections.defaultdict(collections.Counter) # boundary = first deleted ref coordinate 0-based, sequence
+for rec in bam.fetch('chr22',27079000,27081000):
+ if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+ q=rec.query_sequence
+ rpos=rec.reference_start
+ qpos=0
+ for op,n in rec.cigartuples:
+  if op in (0,7,8):
+   for i in range(n):
+    if qpos+i < len(q): base[rpos+i][q[qpos+i]] += 1
+   rpos += n; qpos += n
+  elif op==1:
+   # inserted after ref position rpos-1; boundary represented as next ref coordinate
+   seq=q[qpos:qpos+n]
+   ins[rpos][seq]+=1
+   qpos += n
+  elif op==2:
+   seq=fa.fetch('chr22',rpos,rpos+n).upper()
+   delc[rpos][seq]+=1
+   rpos += n
+  elif op==4: qpos+=n
+  elif op==5: pass
+  elif op==3: rpos+=n
+# SNP candidates
+print('SNP/nonref candidates')
+for p in sorted(base):
+ ref=fa.fetch('chr22',p,p+1).upper()
+ c=base[p]; alt=sum(v for k,v in c.items() if k"'!=ref)
+ if alt>=3 and alt/(sum(c.values()) or 1)>0.05:
+  print(p+1,ref,dict(c),'"'altfrac',round(alt/sum(c.values()),3))
+print('insertions')
+for p,c in sorted(ins.items()):
+ if sum(c.values())>=3:
+  print('boundary',p,'between',p, p+1,'counts',c)
+print('deletions')
+for p,c in sorted(delc.items()):
+ if sum(c.values())>=3:
+  print('start',p+1,'counts',c)
+PY"

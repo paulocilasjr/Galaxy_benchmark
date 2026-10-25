@@ -1,0 +1,55 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import defaultdict, Counter
+import numpy as np
+seq=''.join(l.strip() for l in open('klf4_nm.fa') if not l.startswith('>'))
+comp=str.maketrans('ACGT','TGCA'); rc=seq.translate(comp)[::-1]
+refs={'+':seq,'-':rc}
+pos=defaultdict(list)
+for lab,t in refs.items():
+ for i in range(len(t)-50+1):
+  pos[t[i:i+50]].append((lab,i))
+def bestpos(s):
+ if s in pos:return min(pos[s])
+ best=None
+ for j,orig in enumerate(s):
+  for ch in 'ACGT':
+   if ch==orig:continue
+   t=s[:j]+ch+s[j+1:]
+   if t in pos:
+    for lab,i in pos[t]:
+     if best is None or i<best[1] or (i==best[1] and lab<best[0]):best=(lab,i)
+ return best
+# KLF4 CDS in NM_004235: start 145? Let's fetch annotation from sequence? Known CDS 145..1587 maybe.
+cds_start=144; cds_end=1587 # 0-based approximate from ATG at 147 to stop 1587? check
+records=[]
+with open('exogenous.mix.reads.q2.mix.fq') as f:
+ while True:
+  h=f.readline()
+  if not h:break
+  s=f.readline().strip(); f.readline(); f.readline()
+  lab,i=bestpos(s)
+  records.append((lab,i,s))
+L=len(seq)
+def region(i):
+ # transcript coordinate 0-based, start coordinate of read
+ if i+50 <= cds_start: return '5UTR'
+ if i>=cds_end: return '3UTR'
+ if i<cds_start and i+50>cds_start: return '5UTR_CDS'
+ if i<cds_end and i+50>cds_end: return 'CDS_3UTR'
+ return 'CDS'
+print('groups by file index: prefix endo [0:395], exo extra [395:592], mix extra [592:691]')
+for name, sl in [('endo(0:395)',slice(0,395)),('exoextra(395:592)',slice(395,592)),('mixextra(592:691)',slice(592,691))]:
+ arr=records[sl]
+ print('\\n',name,'n',len(arr))
+ print('strand +',sum(1 for lab,i,s in arr if lab=='+'),'-',sum(1 for lab,i,s in arr if lab=='-'))
+ rc=Counter(region(i) for lab,i,s in arr)
+ print('regions',dict(rc))
+ # coordinate histogram by 100bp
+ hist=Counter((i//100)*100 for lab,i,s in arr)
+ print('coord top',hist.most_common(20))
+# check if exo extra regions concentrated 3UTR
+print('\\noverall mix group counts')
+for grp,sl in [('0-395',slice(0,395)),('396-592',slice(395,592)),('593-691',slice(592,691))]:
+ arr=records[sl]; rc=Counter(region(i) for lab,i,s in arr); print(grp,dict(rc))
+PY"

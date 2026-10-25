@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import json, math
+from Bio import SeqIO
+jas={}
+for mid in ['MA0148.3','MA0114.3','MA0143.3']:
+    d=json.load(open(f'processed/{mid}.jaspar'))
+    pfm=d['pfm']; order=['A','C','G','T']
+    counts=[ [pfm[b][i] for b in order] for i in range(len(pfm['A']))]
+    tot=[sum(c) for c in counts]
+    pwm=[]
+    for c,t in zip(counts,tot):
+        pwm.append([math.log2((x+0.01)/(0.25*(t+0.04))) for x in c])
+    maxscore=sum(max(col) for col in pwm)
+    jas[d['name']]=(pwm,maxscore)
+    print(d['name'],'len',len(pwm),'maxscore',round(maxscore,3))
+
+comp=str.maketrans('ACGT','TGCA')
+def revcomp(s): return s.translate(comp)[::-1]
+
+def best_score(seq,pwm):
+    L=len(pwm); best=-1e9
+    # seq as ACGT
+    for i in range(len(seq)-L+1):
+        s=0
+        for j,base in enumerate(seq[i:i+L]):
+            idx='ACGT'.index(base); s+=pwm[j][idx]
+        if s>best: best=s
+    return best
+
+threshold=0.8
+for tf in ['TF1','TF2','TF3','TF4','TF5','TF6']:
+    seqs=[str(r.seq).upper() for r in SeqIO.parse(f'processed/motif_fa/{tf}_top10k.fa','fasta')]
+    vals=[]
+    for name,(pwm,maxs) in jas.items():
+        frac=0; scores=[]
+        for s in seqs:
+            sc=max(best_score(s,pwm), best_score(revcomp(s),pwm))
+            scores.append(sc)
+            if sc>=threshold*maxs: frac+=1
+        frac/=len(seqs)
+        mean=sum(scores)/len(scores)
+        vals.append(f'{name}:{frac:.3f}(mean{mean/maxs:.3f})')
+    print(tf, ' '.join(vals))
+PY"

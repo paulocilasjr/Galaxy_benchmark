@@ -1,0 +1,39 @@
+/workspace/venv/bin/python3 -c "
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+# Quick verification: check if LFC shrinkage preserves contrast direction
+counts_df = pd.read_csv('inputs/count.csv', index_col=0)
+counts = counts_df.T.copy()
+metadata = pd.DataFrame({'condition': ['KL','KL','KL','WL','WL','WL']}, index=['KL1','KL2','KL3','WL1','WL2','WL3'])
+
+dds = DeseqDataSet(counts=counts, metadata=metadata, design='~condition')
+dds.deseq2()
+
+stat = DeseqStats(dds, contrast=['condition', 'KL', 'WL'])
+stat.summary()
+print('Before shrinkage, first 5 LFCs:')
+print(stat.results_df[['log2FoldChange']].head(10))
+
+# Save pre-shrinkage
+pre = stat.results_df['log2FoldChange'].copy()
+
+stat.lfc_shrink(coeff='condition[T.WL]')
+print('After shrinkage, first 5 LFCs:')
+print(stat.results_df[['log2FoldChange']].head(10))
+
+post = stat.results_df['log2FoldChange']
+
+# Check correlation of absolute values
+valid = pre.notna() & post.notna()
+print(f'Correlation of pre vs post LFC: {pre[valid].corr(post[valid]):.4f}')
+print(f'Correlation of pre vs -post LFC: {pre[valid].corr(-post[valid]):.4f}')
+
+# Check a few genes
+print()
+for g in stat.results_df.index[:5]:
+    if pd.notna(pre[g]) and pd.notna(post[g]):
+        print(f'{g}: pre={pre[g]:.4f}, post={post[g]:.4f}, -post={-post[g]:.4f}')
+" 2>&1 | tail -30

@@ -1,0 +1,38 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import pandas as pd, numpy as np, time, warnings
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+warnings.filterwarnings('ignore')
+counts=pd.read_csv('inputs/counts_raw_unfiltered.csv',index_col=0)
+layout=pd.read_csv('inputs/sample_layout.csv')
+all_sample_cols=counts.columns.tolist()
+layout['count_col']=layout['SampleID'].str.replace('-','_',regex=False)
+keep_groups=['DMSO','DMSO_Serum_starvation','Cisplatin_IC50_CBD_IC50','Cisplatin_IC50_CBD_IC50_Serum_starvation_16h']
+keep_genes=(counts[all_sample_cols]>10).any(axis=1)
+model_layout=layout[layout.Group.isin(keep_groups)].copy()
+model_cols=model_layout.count_col.tolist()
+counts_model=counts.loc[keep_genes,model_cols].T
+counts_model.index=model_layout.SampleID.tolist()
+metadata=model_layout.set_index('SampleID')[['Group']].rename(columns={'Group':'condition'})
+metadata=metadata.loc[counts_model.index]
+print('prefilter',keep_genes.sum(),'model shape',counts_model.shape,'groups',metadata.condition.value_counts().to_dict())
+t=time.time()
+dds=DeseqDataSet(counts=counts_model,metadata=metadata,design='~condition',ref_level=['condition','DMSO'],quiet=True,n_cpus=1)
+print('init',time.time()-t)
+t=time.time(); dds.deseq2(); print('deseq2',time.time()-t)
+t=time.time(); stat=DeseqStats(dds,contrast=['condition','Cisplatin_IC50_CBD_IC50','DMSO'],quiet=True,n_cpus=1); stat.summary(); print('stats',time.time()-t)
+res=stat.results_df.copy()
+print('columns',res.columns.tolist())
+print(res.head().to_string())
+sel=res[(res['padj']<=0.05)&(res['log2FoldChange'].abs()>=0.5)&(res['baseMean']>=10)]
+print('result n',len(res),'selected',len(sel),'up',((sel.log2FoldChange>0)).sum(),'down',((sel.log2FoldChange<0)).sum())
+print('padj finite',res.padj.notna().sum(),'baseMean finite',res.baseMean.notna().sum())
+print('sel ids first',sel.index[:20].tolist())
+print('selected lfc/base/padj summary')
+print(sel[['baseMean','log2FoldChange','padj']].describe().to_string())
+mapdf=pd.read_csv('inputs/ensg_to_gene_name.tsv',sep='\\t').set_index('ENSG')
+sel2=sel.join(mapdf,how='left')
+print('mapping selected',sel2.gene_name.notna().sum(),'missing',sel2.gene_name.isna().sum(),'gene unique',sel2.gene_name.nunique())
+print('missing ids',sel2[sel2.gene_name.isna()].index.tolist()[:50])
+print('selected names',sel2.gene_name.dropna().tolist()[:30])
+PY"

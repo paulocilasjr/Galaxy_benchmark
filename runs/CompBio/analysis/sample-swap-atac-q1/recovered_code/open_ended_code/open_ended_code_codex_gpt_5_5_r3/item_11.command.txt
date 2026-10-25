@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+import numpy as np
+path='sample.swap.atac.q1.tsv.gz'
+with gzip.open(path,'rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    samples=header[3:]
+    sums=np.zeros(len(samples),dtype=np.float64); n=0
+    # First pass sums already? recompute
+    for line in f:
+        vals=np.fromstring(line.rstrip('\\n').split('\\t',3)[3],sep='\\t',dtype=np.float64)
+        sums+=vals; n+=1
+median=np.median(sums)
+# streaming cov of log CPM-ish
+m=len(samples)
+mean=np.zeros(m); M2=np.zeros((m,m)); n2=0
+# store maybe top variable subset? no
+with gzip.open(path,'rt') as f:
+    f.readline()
+    for line in f:
+        vals=np.fromstring(line.rstrip('\\n').split('\\t',3)[3],sep='\\t',dtype=np.float64)
+        x=np.log1p(vals/sums*median)
+        n2+=1
+        delta=x-mean
+        mean += delta/n2
+        M2 += np.outer(delta, x-mean)
+cov=M2/(n2-1)
+sd=np.sqrt(np.diag(cov))
+corr=cov/np.outer(sd,sd)
+print('samples', '\\t'.join(samples))
+print('pairwise top correlations')
+pairs=[]
+for i in range(m):
+    for j in range(i+1,m):
+        pairs.append((corr[i,j],samples[i],samples[j]))
+for r,a,b in sorted(pairs, reverse=True)[:30]: print(f'{a}\\t{b}\\t{r:.4f}')
+print('lowest')
+for r,a,b in sorted(pairs)[:20]: print(f'{a}\\t{b}\\t{r:.4f}')
+# nearest neighbor each
+print('nearest')
+for i,s in enumerate(samples):
+    j=max([j for j in range(m) if j"'!=i], key=lambda j:corr[i,j])
+    print(s, samples[j], corr[i,j])
+PY'

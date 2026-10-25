@@ -1,0 +1,52 @@
+/bin/bash -c "python - <<'PY'
+import anndata as ad, h5py, numpy as np, pandas as pd
+# our data
+a=ad.read_h5ad('lung.cancer.sc.h5ad')
+# full var HVG symbols
+with h5py.File('luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad','r') as f:
+    fvars=f['var/_index'][:].astype(str)
+    findex=f['obs/_index'][:].astype(str)
+# map our symbols
+oursym=a.var.symbol.values
+oursym_to_idx=pd.Series(np.arange(a.n_vars),index=oursym)
+# common genes
+common=[]
+for j,g in enumerate(fvars):
+    if g in oursym_to_idx.index:
+        common.append((j, oursym_to_idx[g]))
+print('common',len(common))
+# function get our row dict for cell index i
+def our_row(i):
+    coo=a.X[i].tocoo()
+    d={g:v for g,v in zip(oursym[coo.col],coo.data)}
+    return d
+# find barcode matches for first overlapping
+our_idx=pd.Series(a.obs.index.values)
+barcode=our_idx.str.extract(r'"'^Patient_'"\\d+_(.+)"'$'"')[0].str.replace(r'-\\d+"'$'"','',regex=True)
+# use sequence AAACCTGGTTCGAATC
+matches=np.where(barcode.values=='AAACCTGGTTCGAATC')[0]
+print('our matches',matches)
+if len(matches):
+ i=matches[0]
+ # find full row by barcode
+ full_barcode=pd.Series(findex).str.replace(r'"'^[''^_]+_'"','',regex=True).str.replace(r'-\\d+"'$'"','',regex=True)
+ j=np.where(full_barcode.values=='AAACCTGGTTCGAATC')[0]
+ print('full matches',j, findex[j])
+ if len(j):
+  with h5py.File('luca_full/data/20_build_atlas/annotate_datasets/35_final_atlas/full_atlas_hvg_integrated_scvi_integrated_scanvi.h5ad','r') as f:
+   g=f['layers/raw_counts']
+   indptr=g['indptr'][:]; indices=g['indices'][:]; data=g['data'][:]
+   row_full=indices[indptr[j[0]]:indptr[j[0]+1]], data[indptr[j[0]]:indptr[j[0]+1]]
+  # our row common entries
+  coo=a.X[i].tocoo(); our_dict={oursym[c]:v for c,v in zip(coo.col,coo.data)}
+  full_dict={fvars[c]:v for c,v in zip(row_full[0],row_full[1])}
+  # compare common
+  diffs=[]
+  for jg,og in common:
+   vf=full_dict.get(fvars[jg],0); vo=our_dict.get(fvars[jg],0)
+   if vf"'!=vo: diffs.append((fvars[jg],vf,vo))
+  print('"'num common nonzero ours/full',len([1 for g in fvars if full_dict.get(g,0)"'!=0]),len([1 for g in fvars if our_dict.get(g,0)!=0]))
+  print('"'diffs count',len(diffs),'first',diffs[:20])
+  print('full first entries',list(full_dict.items())[:10])
+  print('our first entries relevant',{g:our_dict.get(g) for g in list(full_dict)[:10]})
+PY"

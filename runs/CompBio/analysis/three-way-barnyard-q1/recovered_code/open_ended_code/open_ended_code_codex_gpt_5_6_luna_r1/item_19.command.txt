@@ -1,0 +1,63 @@
+/bin/bash -lc "python - <<'PY'
+import re, gzip
+from collections import defaultdict, Counter
+files=['human.paf','mouse.paf','pig.paf']
+# per qname retain max alignment score, then max aligned query span, then matches
+best={f:{} for f in files}
+for f in files:
+ d=best[f]
+ for line in open(f):
+  a=line.rstrip().split('\\t')
+  q=a[0]; span=int(a[3])-int(a[2]); nm=int(a[9]);
+  tags={x.split(':',2)[0]:x.split(':',2)[2] for x in a[12:]}
+  score=int(tags.get('AS',2*nm))
+  val=(score,span,nm,int(a[11]))
+  if val>d.get(q,(-1,0,0,0)): d[q]=val
+# get R1 barcodes by order and read id
+bc={}
+with gzip.open('three.way.barnyard.q1.R1.fq.gz','rt') as h:
+ i=0
+ while True:
+  name=h.readline()
+  if not name: break
+  seq=h.readline().strip(); h.readline(); h.readline()
+  i+=1; bc[f'READ_{i}/2']=seq[:16]
+print('mapped qnames', {f:len(d) for f,d in best.items()})
+# per read scores; classifications by score
+readstats=Counter(); ties=Counter(); win_by_delta=Counter(); barcode_scores=defaultdict(lambda: [0,0,0])
+allq=set().union(*[set(d) for d in best.values()])
+for q in allq:
+ vals=[best[f].get(q,(0,0,0,0)) for f in files]
+ scores=[v[0] for v in vals]
+ m=max(scores); winners=tuple(i for i,x in enumerate(scores) if x==m and x>0)
+ if m==0: cl='unmapped'
+ elif len(winners)>1: cl='tie' # exact tie
+ else: cl=files[winners[0]].split('.')[0]
+ readstats[cl]+=1
+ if cl=='tie': ties[tuple(scores)]+=1
+ if m:
+  sorted_scores=sorted(scores,reverse=True)
+  win_by_delta[sorted_scores[0]-sorted_scores[1]]+=1
+ # accumulate raw best scores per barcode
+ if q in bc:
+  for i,s in enumerate(scores): barcode_scores[bc[q]][i]+=s
+print('read winner',readstats)
+print('delta',win_by_delta.most_common(20))
+# barcode assignments by score sum, and number reads whose winner
+cell_cl=Counter(); cell_score_margin=[]
+for b,s in barcode_scores.items():
+ m=max(s); ws=[i for i,x in enumerate(s) if x==m]
+ cl='tie' if len(ws)>1 else files[ws[0]].split('.')[0]
+ cell_cl[cl]+=1
+ ss=sorted(s,reverse=True); cell_score_margin.append((ss[0]-ss[1],b,cl,s))
+print('cell sum score',cell_cl)
+print('lowest cell margins')
+for x in sorted(cell_score_margin)[:20]: print(x)
+# cells by best species-specific informative reads: score difference etc.
+# Count reads per barcode and per species mapped; only aligned full length >=80 and AS>=some
+for minscore in [50,80,100,120,140,160,170]:
+ c=Counter(); margins=[]
+ for b in barcode_scores:
+  # need reconstruct per barcode per read perhaps not stored, later
+  pass
+PY"

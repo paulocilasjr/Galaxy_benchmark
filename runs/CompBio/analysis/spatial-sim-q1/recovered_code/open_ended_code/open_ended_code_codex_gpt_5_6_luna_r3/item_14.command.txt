@@ -1,0 +1,33 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+sp=mmread('matrix.mtx.gz').tocsr()
+bar=pd.read_csv('barcodes.tsv.gz',header=None)[0].astype(str).tolist(); y=np.asarray(sp[:,bar.index('Spot_710-1')].todense()).ravel()
+types=sorted(md.cell_type.unique()); means=np.vstack([sc.loc[md.cell_type==t].mean(axis=0).to_numpy() for t in types])
+# Marker sets based on ratio to all other types; report aggregate target / mean expected and specificity residual
+for i,t in enumerate(types):
+    other=np.delete(means,i,axis=0).mean(0)
+    score=np.log2((means[i]+.05)/(other+.05))
+    genes=np.argsort(score)[-50:]
+    print(t,'top50 marker target sum',int(y[genes].sum()),'mean one-cell',round(means[i,genes].sum(),1),'target/mean',round(y[genes].sum()/means[i,genes].sum(),2),'other mean',round(other[genes].sum(),1),'target avg',round(y[genes].mean(),2))
+    print('  top20',','.join(map(str,genes[-20:][::-1])))
+# group block sums where strongest top markers from each type; unique markers selected to avoid overlapping
+print('type means total',dict(zip(types,means.sum(1))))
+# Fit on highly variable / marker genes, normalized to account genes
+for method in ['raw','log1p','sqrt']:
+    if method=='raw': A=means.T; yy=y
+    elif method=='log1p': A=np.log1p(means).T; yy=np.log1p(y)
+    else: A=np.sqrt(means).T; yy=np.sqrt(y)
+    x,r=nnls(A,yy)
+    print(method,dict(zip(types,np.round(x,3))),r,'corr',np.corrcoef(A@x,yy)[0,1])
+# residual fit excluding each type from raw and compare SSE
+A=means.T
+x,r=nnls(A,y); print('all res',r)
+for i,t in enumerate(types):
+    inds=[k for k in range(len(types)) if k"'!=i]
+    xx,rr=nnls(A[:,inds],y)
+    print('"'without',t,'res',rr,'coefs',dict(zip([types[k] for k in inds],np.round(xx,2))))
+PY"

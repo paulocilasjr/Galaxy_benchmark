@@ -1,0 +1,45 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,pandas as pd,numpy as np
+panels={
+'Rod':['RHO','NRL','NR2E3','GNAT1','PDE6A','PDE6B','SAG','CNGA1','CNGB1','RCVRN','ROM1','PRPH2','GNGT1','PDC'],
+'Cone':['OPN1LW','OPN1MW','OPN1SW','ARR3','GNAT2','PDE6C','PDE6H','CNGB3','GNGT2','RXRG','THRB','GUCA1C','GNB3'],
+'Mullerglia':['RLBP1','GLUL','SOX9','VIM','AQP4','CRYAB','CLU','SLC1A3','DIO2','RAX','LHX2','HES1','HES5','HEY2','APOE','ID3'],
+'Astrocyte':['GFAP','ALDH1L1','S100B','AQP4','SOX9','GJA1','SLC1A2','SLC1A3','PAX2','NFIA','NFIB','FGFR3','EDNRB','ID3'],
+'Microglia':['CX3CR1','P2RY12','AIF1','TYROBP','C1QA','C1QB','C1QC','CSF1R','SPI1','PTPRC','IRF8','ITGAM','LST1','FCER1G'],
+'Retinalganglioncell':['RBPMS','SNCG','THY1','POU4F1','POU4F2','ISL1','ISL2','NEFL','NEFM','NEFH','TUBB3','ATOH7','ELAVL4'],
+'Horizontal':['LHX1','ONECUT1','ONECUT2','PROX1','CALB1','LIM2','PAX6','TFAP2A','MEIS2'],
+'GABAamacrine':['GAD1','GAD2','SLC6A1','SLC32A1','DLX1','DLX2','DLX5','DLX6','TFAP2A','PAX6','RELN','CALB2'],
+'AIIamacrine':['GRIK1','SLC1A6','PCP2','CACNA2D3','MEIS2','TFAP2B','SLC6A9','CALB1','CALB2','PROX1','GRM6']
+}
+need={g for gs in panels.values() for g in gs}; pat=re.compile(r'gene_name \"(["'^"]+)"'"')
+coords={}
+with gzip.open('gencode.v44.annotation.gtf.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  fs=line.rstrip('\\n').split('\\t')
+  if len(fs)<9 or fs[2]"'!='"'gene': continue
+  m=pat.search(fs[8])
+  if not m or m.group(1) not in need: continue
+  tss=int(fs[3])-1 if fs[6]=='+' else int(fs[4])
+  coords[m.group(1)]=(fs[0],tss)
+df=pd.read_csv('sample.swap.atac.q2.tsv.gz',sep='\\t'); cts=list(df.columns[3:]); tot=df[cts].sum()
+for w in [10000,50000,100000]:
+ print('\\nPROMOTER WINDOW',w)
+ scores=pd.DataFrame(0.0,index=panels,columns=cts); used={}
+ for ct,gs in panels.items():
+  n=0
+  for g in gs:
+   if g not in coords: continue
+   chrom,tss=coords[g]; lo=max(0,tss-w); hi=tss+w
+   mask=df.chrom.eq(chrom)&(df.end>lo)&(df.start<hi)
+   vals=df.loc[mask,cts].sum()/tot*1e6
+   scores.loc[ct]+=np.log2(vals+1)  # log average for marker robustness
+   n+=1
+  used[ct]=n
+  if n: scores.loc[ct]/=n
+ print('used',used)
+ for ct in panels:
+  vals=scores.loc[ct].sort_values(ascending=False)
+  print(ct, 'top3', ', '.join(f'{k}:{v:.2f}' for k,v in vals.head(3).items()), 'rank_expected', list(vals.index).index(ct)+1)
+ print('\\n',scores.round(2).to_string())
+PY"

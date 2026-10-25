@@ -1,0 +1,23 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sp=mmread('matrix.mtx.gz').toarray()
+features=pd.read_csv('features.tsv.gz', sep='\\t', header=None, names=['ens','gene','type'])
+barcodes=pd.read_csv('barcodes.tsv.gz', sep='\\t', header=None, names=['barcode'])
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+means=sc.groupby(meta['cell_type']).mean()
+cts=means.index.tolist(); X=means.loc[:,features['gene']].values.T
+raw=np.zeros((sp.shape[1],len(cts)))
+for j in range(sp.shape[1]):
+    raw[j],_=nnls(X,sp[:,j])
+R=pd.DataFrame(raw,index=barcodes['barcode'],columns=cts)
+R.to_csv('deconv_raw.csv')
+print(R.describe())
+print('sum stats',R.sum(axis=1).describe())
+# correlation raw sums with total
+print('corr sum total', np.corrcoef(R.sum(axis=1), sp.sum(axis=0))[0,1])
+for ct in cts:
+    print(ct,'positive', (R[ct]>0.1).sum(), 'q', R[ct].quantile([.5,.75,.9,.95,.99]).round(3).tolist())
+PY"

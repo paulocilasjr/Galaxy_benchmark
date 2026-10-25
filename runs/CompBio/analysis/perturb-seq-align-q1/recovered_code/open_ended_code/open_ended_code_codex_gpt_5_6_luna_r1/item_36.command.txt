@@ -1,0 +1,19 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np,gc
+from scipy import sparse
+root='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-c3461555d3af4d608b5b299c/workspace'
+def agg(f):
+ with h5py.File(root+'/'+f,'r') as h:
+  z=h['X'];x=sparse.csc_matrix((z['data'][()],z['indices'][()],z['indptr'][()]),shape=tuple(z.attrs['shape']))
+  genes=np.array([v.decode() if isinstance(v,bytes) else str(v) for v in h['var/_index'][()]],object); cats=[v.decode() if isinstance(v,bytes) else str(v) for v in h['obs/guide/categories'][()]];g=np.array([cats[v] for v in h['obs/guide/codes'][()]])
+ groups=np.unique(g);c=np.searchsorted(groups,g);M=np.zeros((len(g),len(groups)),np.int8);M[np.arange(len(g)),c]=1;lib=np.asarray(x.sum(1)).ravel().astype(float);v=np.log1p(x.data.astype(float)/lib[x.indices]*1e4);y=sparse.csc_matrix((v,x.indices,x.indptr),shape=x.shape,copy=False);m=np.asarray(y.T@M)/np.bincount(c)[None,:];nt=np.flatnonzero(np.char.startswith(groups,'NT-'));p=[i for i,s in enumerate(groups) if not s.startswith('NT-')];eff=(m[:,p]-m[:,nt].mean(1)[:,None]).T
+ return genes,groups[p],eff
+rg,rr,R=agg('perturb.seq.align.q1.ref.h5ad');qg,qq,Q=agg('perturb.seq.align.q1.query.h5ad');
+common_names=['CDC73','PABPC1L','PABPC4','PABPC4L','PABPC1','NUDT21','LEO1','PABPN1','CPSF6','CPSF7','WDR33','CPSF3L','PAF1','CTR9','RBBP6','PCF11','FIP1L1','SCAF4','SCAF8','SCAF11','SF3A1','SRSF3','SYMPK','THOC5','NUPR1','DHRS2','PIK3IP1','AC008467.1','MT1F','PABPC1L']
+for f,genes,groups,E,names in [('REF',rg,rr,R,['PABPC1-I1','NUDT21-I3','LEO1-I2']),('QUERY',qg,qq,Q,['guide13','guide14','guide15','guide16','guide18','guide19'])]:
+ print('\\n'+f)
+ for gene in common_names:
+  if gene in genes:
+   j=list(genes).index(gene); print(gene,[(g,round(float(E[list(groups).index(g),j]),3)) for g in names if g in groups])
+  #else: print(gene,'absent')
+PY"

@@ -10,5 +10,5 @@ Three coding tasks run by independent AI coders (Claude, one coder per batch of 
 
 Notes:
 - These are AI-assisted second ratings, not human validation. Human blinded validation of a sample remains to be done.
-- In the first A2 attempt, 24 of 45 transcripts lacked the reference answer, because the run summaries store none for those tasks. Those codes were discarded, the references were added from `ground_truth/BixBench`, and all 45 items were coded again.
+- In the first A2 attempt, 24 of 45 transcripts lacked the reference answer, because the run summaries store none for those tasks. Those codes were discarded, the references were added from `benchmark/ground_truth/BixBench`, and all 45 items were coded again.
 - One verification coder recorded an agent's download of the public BixBench answer file as a plausibility check (D043). `make_ed_validation.py` drops that check. Benchmark-answer access is analysed separately (`make_answer_exposure.py`).

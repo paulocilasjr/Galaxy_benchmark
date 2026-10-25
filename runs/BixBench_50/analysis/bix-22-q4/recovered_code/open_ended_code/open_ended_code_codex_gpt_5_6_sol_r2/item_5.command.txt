@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+import csv, collections, math
+from pathlib import Path
+p=Path('inputs')
+with open(p/'Sample_annotated_Zenodo.csv', newline='') as f:
+    ann=list(csv.DictReader(f))
+celltypes=collections.Counter(r['celltype'] for r in ann)
+samples=[r['sample'] for r in ann]
+cd14=[r['sample'] for r in ann if r['celltype']=='CD14']
+with open(p/'GeneMetaInfo_Zenodo.csv', newline='') as f:
+    rr=csv.DictReader(f)
+    print('meta fields',rr.fieldnames)
+    meta_rows=list(rr)
+meta_idx=[r[rr.fieldnames[0]] for r in meta_rows]
+meta={r[rr.fieldnames[0]]:r for r in meta_rows}
+biotypes=collections.Counter(r['gene_biotype'] for r in meta_rows)
+length_bad=sum(not r['Length'] or float(r['Length'])<=0 for r in meta_rows)
+with open(p/'BatchCorrectedReadCounts_Zenodo.csv', newline='') as f:
+    cr=csv.reader(f)
+    hdr=next(cr)
+    gene_seen=set(); dups=[]; nrow=0; minv=math.inf; maxv=-math.inf; missing=negative=noninteger=0
+    cols={s:i for i,s in enumerate(hdr)}
+    ix=[cols[s] for s in cd14]
+    for row in cr:
+        nrow+=1
+        g=row[0]
+        if g in gene_seen: dups.append(g)
+        gene_seen.add(g)
+        for i in ix:
+            if row[i]=='': missing+=1; continue
+            v=float(row[i])
+            minv=min(minv,v); maxv=max(maxv,v)
+            negative += v<0
+            noninteger += not v.is_integer()
+print('rows counts/meta/ann',nrow,len(meta_rows),len(ann))
+print('header sample cols',len(hdr)-1,'CD14',len(cd14))
+print('celltypes',dict(celltypes))
+print('sample ann unique',len(samples)==len(set(samples)),'header unique',len(hdr)==len(set(hdr)))
+print('annotated-not-counts',len(set(samples)-set(hdr)),'counts-not-annotated',len(set(hdr[1:])-set(samples)))
+print('gene unique counts/meta',not dups,len(meta_idx)==len(set(meta_idx)),'dups',dups[:5])
+print('counts-not-meta',len(gene_seen-set(meta)),'meta-not-counts',len(set(meta)-gene_seen))
+print('protein biotypes',[(k,v) for k,v in biotypes.items() if 'protein' in k.lower()])
+print('length bad',length_bad)
+print('CD14 values missing negative noninteger min max',missing,negative,noninteger,minv,maxv)
+PY"

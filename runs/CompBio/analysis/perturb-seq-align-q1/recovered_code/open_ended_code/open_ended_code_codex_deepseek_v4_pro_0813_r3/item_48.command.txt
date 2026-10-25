@@ -1,0 +1,35 @@
+/bin/bash -lc "python - <<'PY'
+import anndata as ad, numpy as np, pandas as pd
+from scipy import sparse
+from scipy.stats import rankdata
+ref=ad.read_h5ad('perturb.seq.align.q1.ref.h5ad'); q=ad.read_h5ad('perturb.seq.align.q1.query.h5ad')
+targets=set(ref.obs['target_gene'].astype(str).unique())-{'NT'}
+common=[g for g in ref.var_names if g in set(q.var_names) and g not in targets]
+r=ref[:,common].copy(); q=q[:,common].copy()
+def norm_log(a):
+ X=a.X.astype(float).tocsr(); lib=np.asarray(X.sum(1)).ravel(); sf=1e4/np.maximum(lib,1); X=sparse.diags(sf).dot(X); X.data=np.log1p(X.data); return X.toarray()
+R=norm_log(r); Q=norm_log(q)
+rguide=r.obs.guide.astype(str).values; qguide=q.obs.guide.astype(str).values
+rnt=R[np.array([g.startswith('NT') for g in rguide])].mean(0); qnt=Q[np.array([g.startswith('NT') for g in qguide])].mean(0)
+def diff_vecs(X,guide,nt):
+ out={}; gu=sorted(set(guide))
+ for g in gu:
+  if g.startswith('NT'): continue
+  out[g]=X[guide==g].mean(0)-nt
+ return out
+rd=diff_vecs(R,rguide,rnt); qd=diff_vecs(Q,qguide,qnt)
+# For each target, compute rank-based enrichment of top N down genes among query diffs.
+for target in ['PABPC1-I1','NUDT21-I3','LEO1-I2']:
+    refdiff=rd[target]
+    print('\\nTARGET',target)
+    for direction,label in [(np.argsort(refdiff)[:100],'down100'),(np.argsort(refdiff)[:200],'down200'),(np.argsort(refdiff)[-100:][::-1],'up100')]:
+        geneset=set(direction)
+        scores=[]
+        for g,d in qd.items():
+            # mean rank percentile of geneset in query diff (small diff = lower rank)
+            ranks=rankdata(d, method='average')
+            rankset=ranks[list(geneset)]
+            scores.append((rankset.mean(),g,len(geneset)))
+        scores.sort()
+        print(label, [(g,round(s,0)) for s,g,n in scores[:10]])
+PY"

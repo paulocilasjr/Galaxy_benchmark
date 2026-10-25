@@ -1,0 +1,36 @@
+/bin/bash -lc "python3 - <<'PY'
+import subprocess, time, concurrent.futures, re, os
+# list first 20
+accs=[]
+with open('summary_statistics_table_export.tsv') as f:
+    next(f)
+    for line in f:
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)>15 and p[15]=='40593539':
+            path=p[11].strip('\"').replace('http://ftp.ebi.ac.uk','https://ftp.ebi.ac.uk')
+            acc=p[1]
+            accs.append((acc,f'{path}/harmonised/{acc}.h.tsv.gz'))
+            if len(accs)>=20: break
+regions=['1:161530617-161530617','6:32067917-32067917','17:16939677-16939677','19:49525049-49525049','4:3445429-3445429']
+def query(item):
+    acc,url=item
+    out=[]
+    for reg in regions:
+        t=time.time()
+        try:
+            cp=subprocess.run(['tabix',url,reg],capture_output=True,text=True,timeout=60)
+            for line in cp.stdout.splitlines():
+                cols=line.split('\\t')
+                if len(cols)>=8:
+                    out.append((reg,cols[1],cols[7]))
+        except Exception as e:
+            out.append((reg,'ERR',str(e)[:50]))
+    return acc,out
+start=time.time()
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+    futs=[ex.submit(query,item) for item in accs]
+    for fut in concurrent.futures.as_completed(futs):
+        acc,out=fut.result()
+        print(acc,out)
+print('elapsed',time.time()-start)
+PY"

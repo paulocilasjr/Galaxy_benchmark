@@ -1,0 +1,90 @@
+/tmp/venv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from Bio.KEGG import REST
+import time
+import urllib.error
+import json
+import os
+
+# Read significant gene lists
+sig_iron = pd.read_csv("genes_iron_depleted.txt", header=None)[0].tolist()
+sig_innate = pd.read_csv("genes_innate_media.txt", header=None)[0].tolist()
+all_genes = pd.read_csv("all_genes.txt", header=None)[0].tolist()
+
+sig_iron_set = set(sig_iron)
+sig_innate_set = set(sig_innate)
+all_set = set(all_genes)
+
+# Map to KEGG format
+sig_iron_kegg = set(f"pau:{g}" for g in sig_iron)
+sig_innate_kegg = set(f"pau:{g}" for g in sig_innate)
+all_kegg = set(f"pau:{g}" for g in all_genes)
+
+# Check cache
+cache_file = "kegg_pathway_genes.json"
+if os.path.exists(cache_file):
+    with open(cache_file) as f:
+        pw_to_genes = json.load(f)
+    print(f"Loaded {len(pw_to_genes)} pathways from cache")
+else:
+    # Get pathway IDs
+    pathways_raw = REST.kegg_list("pathway", "pau").read()
+    pw_lines = [l for l in pathways_raw.strip().split('\n') if l]
+    
+    pathway_ids = []
+    pathway_names = {}
+    for line in pw_lines:
+        parts = line.split('\t')
+        if len(parts) >= 2:
+            pid = parts[0].replace('path:', '')
+            pathway_ids.append(pid)
+            pathway_names[pid] = parts[1]
+    
+    print(f"Total pathways: {len(pathway_ids)}")
+    
+    # Get genes for each pathway
+    pw_to_genes = {}
+    pw_to_names = {}
+    
+    for i, pid in enumerate(pathway_ids):
+        if (i+1) % 20 == 0:
+            print(f"  Fetching pathway {i+1}/{len(pathway_ids)}: {pid}")
+        try:
+            # Get genes in pathway using link
+            result = REST.kegg_link("pau", pid).read()
+            genes = set()
+            for line in result.strip().split('\n'):
+                if line:
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        genes.add(parts[1])  # This gives pau:PA14_XXXXX
+            pw_to_genes[pid] = list(genes)
+            pw_to_names[pid] = pathway_names.get(pid, pid)
+            time.sleep(0.3)  # Rate limit
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"  Pathway {pid} not found (404), skipping")
+                continue
+            else:
+                print(f"  Error for {pid}: {e}")
+                time.sleep(1)
+        except Exception as e:
+            print(f"  Error for {pid}: {e}")
+            time.sleep(1)
+    
+    print(f"Retrieved gene lists for {len(pw_to_genes)} pathways")
+    
+    # Save cache
+    with open(cache_file, 'w') as f:
+        json.dump({"pw_to_genes": pw_to_genes, "pw_to_names": pw_to_names}, f)
+
+# Filter to pathways that have at least some genes
+valid_pws = {k: v for k, v in pw_to_genes.items() if len(v) > 0}
+print(f"Pathways with genes: {len(valid_pws)}")
+
+# Show a few examples
+for pid in list(valid_pws.keys())[:3]:
+    print(f"  {pid}: {len(valid_pws[pid])} genes")
+
+PYEOF

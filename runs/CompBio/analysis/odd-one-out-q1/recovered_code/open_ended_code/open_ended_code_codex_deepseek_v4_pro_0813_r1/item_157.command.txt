@@ -1,0 +1,27 @@
+/bin/bash -c "python3 - <<'PY'
+import requests, collections, json
+rows=[]
+for out in ['alignments','unfiltered alignments']:
+ url=f'https://www.encodeproject.org/search/?type=File&mapped_read_length=50&assembly=GRCh38&file_format=bam&output_type={requests.utils.quote(out)}&assay_term_name=ChIP-seq&format=json&limit=all&field=accession&field=dataset&field=biosample_ontology.term_name&field=biosample_ontology.classification&field=target.label&field=file_size&field=mapped_run_type'
+ data=requests.get(url,timeout=180).json().get('@graph',[]); print(out,len(data)); rows+=data
+print('total',len(rows))
+# filter cell line
+cells=[f for f in rows if f.get('biosample_ontology',{}).get('classification')=='cell line']
+print('cell_line',len(cells))
+# group by cell,target,dataset
+ct=collections.defaultdict(set)
+for f in cells:
+ cell=f['biosample_ontology']['term_name']; target=f.get('target',{}).get('label') if isinstance(f.get('target'),dict) else f.get('target')
+ dataset=f.get('dataset')
+ ct[(cell,target)].add(dataset)
+print('unique cell-target-dataset combos',len(ct))
+# print by target counts and cell list
+targets=collections.Counter(t for c,t in ct); print(targets)
+cells_by_target=collections.defaultdict(set)
+for c,t in ct: cells_by_target[t].add(c)
+for t,cs in sorted(cells_by_target.items(), key=lambda x:-len(x[1])): print(t,len(cs),sorted(cs))
+# print per cell available targets
+cc=collections.defaultdict(set)
+for c,t in ct: cc[c].add(t)
+for c,ts in sorted(cc.items()): print(c,len(ts),sorted(ts)[:20])
+PY"

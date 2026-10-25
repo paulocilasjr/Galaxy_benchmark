@@ -1,0 +1,22 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd,numpy as np,gzip,scipy.io as sio
+from scipy.spatial.distance import cdist
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0).values.astype(float)
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+S=sio.mmread(gzip.open('matrix.mtx.gz','rt')).tocsr().toarray().T.astype(float)
+pos=pd.read_csv('tissue_positions.csv')
+types=list(meta.cell_type.unique()); means=np.stack([sc[meta.cell_type.values==t].mean(0) for t in types])
+# use marker genes ranges plus extraneous specific; all least squares clipped
+use=np.arange(1000)
+co=np.array([np.maximum(np.linalg.lstsq(means[:,use].T,S[i,use],rcond=None)[0],0) for i in range(900)])
+rc=np.rint(co).astype(int)
+print('counts dist',np.unique(rc.sum(1),return_counts=True),flush=True)
+print('tumor n',np.sum(rc[:,0]>0),'totals',rc.sum(0),flush=True)
+print('maxdiff',np.max(np.abs(co-rc)),flush=True)
+coords=pos[['array_row','array_col']].values
+tum=rc[:,0]>0
+d=cdist(coords,coords[tum]).min(1)
+for j,t in enumerate(types):
+ m=rc[:,j]>0
+ print(t,'spots',m.sum(),'cells',rc[:,j].sum(),'d mean/median',d[m].mean(),np.median(d[m]),'nonmean',d[~m].mean(),'co tumor',rc[tum,j].sum(),flush=True)
+PY"

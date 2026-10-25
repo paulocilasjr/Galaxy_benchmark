@@ -1,0 +1,69 @@
+/bin/bash -lc "cat > correlate_candidates.py <<'PY'
+import os, sys, json, subprocess, pyBigWig, numpy as np
+from multiprocessing import Pool
+from collections import defaultdict
+
+# load track once in each process
+TRACK=[]
+def init_track():
+ global TRACK
+ if not TRACK:
+  with open('track.tsv') as f:
+   for line in f:
+    p=line.split(); TRACK.append((p[0],int(p[1]),int(p[2]),float(p[3])))
+
+bwj=json.load(open('dnase_v3_bigwigs.json'))
+bwmap=defaultdict(list)
+for f in bwj['@graph']:
+ ds=f.get('dataset'); acc=f.get('accession')
+ if acc: bwmap[ds].append(acc)
+bamj=json.load(open('dnase_v3_bams_api.json'))
+exp=defaultdict(lambda:{'total':0})
+for f in bamj['@graph']:
+ ds=f['dataset']; mapped=None
+ for qm in f.get('quality_metrics',[]):
+  if 'reads mapped' in qm: mapped=qm['reads mapped']
+ e=exp[ds]
+ if mapped is not None:e['total']+=mapped
+
+def get_candidates(T,N):
+ rows=[(abs(e['total']-T),e['total'],ds) for ds,e in exp.items() if e['total']>=T]
+ rows.sort(); return [(ds,diff,total) for diff,total,ds in rows[:N]]
+
+def work(item):
+ ds,diff,total = item
+ accs=bwmap.get(ds,[])
+ if not accs:
+  return (ds,diff,total,None,'no_bw')
+ acc=accs[0] # top candidates one bw
+ path=f'{acc}.bigWig'
+ if not os.path.exists(path):
+  url=f'https://www.encodeproject.org/files/{acc}/@@download/{acc}.bigWig'
+  subprocess.run(['curl','-s','-L',url,'-o',path],check=True)
+ try:
+  bw=pyBigWig.open(path)
+ except Exception as e:
+  return (ds,diff,total,None,f'open_error {e}')
+ init_track()
+ b=[]
+ for chrom,start,end,v in TRACK:
+  s=bw.stats(chrom,start,end,nBins=1,type='mean')[0]
+  b.append(s if s is not None else 0.0)
+ bw.close()
+ t=np.array([v for *_,v in TRACK],dtype=np.float64)
+ b=np.array(b,dtype=np.float64)
+ corr=float(np.corrcoef(t,b)[0,1])
+ nz=b>0
+ corr_nz=float(np.corrcoef(t[nz],b[nz])[0,1]) if nz.sum()>1 else 0
+ return (ds,diff,total,corr,corr_nz,os.path.getsize(path))
+
+if __name__=='__main__':
+ T=int(sys.argv[1]); N=int(sys.argv[2]); procs=int(sys.argv[3])
+ items=get_candidates(T,N)
+ print('items',len(items))
+ with Pool(procs, initializer=init_track) as p:
+  res=p.map(work, items)
+ for r in sorted(res, key=lambda x: (x[3] is None, -(x[3] or -2))):
+  print(r)
+PY
+python3 correlate_candidates.py 76275859 12 4"

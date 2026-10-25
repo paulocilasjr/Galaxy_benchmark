@@ -1,0 +1,87 @@
+python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+# 1. Load sample annotations to get CD14 samples
+samples_df = pd.read_csv('/workspace/inputs/Sample_annotated_Zenodo.csv')
+cd14_samples = samples_df[samples_df['celltype'] == 'CD14']['sample'].tolist()
+print(f"Number of CD14 samples: {len(cd14_samples)}")
+
+# 2. Load gene metadata - file has leading comma (empty column 0)
+gene_meta = pd.read_csv('/workspace/inputs/GeneMetaInfo_Zenodo.csv')
+# Columns: Unnamed: 0, Geneid, Chr, Length, gene_biotype
+# Actually pandas reads the first empty column as Unnamed: 0
+print(f"Gene metadata columns: {gene_meta.columns.tolist()}")
+print(f"Gene metadata shape: {gene_meta.shape}")
+
+# Filter for protein-coding
+pc_genes_meta = gene_meta[gene_meta['gene_biotype'] == 'protein_coding'].copy()
+print(f"Protein-coding genes: {len(pc_genes_meta)}")
+
+# 3. Load expression data
+expr = pd.read_csv('/workspace/inputs/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+# First column becomes index (gene names)
+print(f"Expression data shape: {expr.shape}")
+print(f"Expression columns (first 5): {expr.columns[:5].tolist()}")
+
+# Find CD14 columns that exist in expression data
+cd14_cols = [c for c in cd14_samples if c in expr.columns]
+print(f"CD14 columns found in expression data: {len(cd14_cols)}")
+if len(cd14_cols) < len(cd14_samples):
+    missing = set(cd14_samples) - set(cd14_cols)
+    print(f"Missing CD14 columns: {missing}")
+
+# Subset to CD14 samples
+expr_cd14 = expr[cd14_cols]
+
+# 4. Merge: keep only protein-coding genes that are in the expression data
+# gene_meta uses 'Geneid' as the gene identifier
+# expression data index is the gene name
+pc_genes_meta = pc_genes_meta.set_index('Geneid')
+common_genes = expr_cd14.index.intersection(pc_genes_meta.index)
+print(f"Common protein-coding genes in expression data: {len(common_genes)}")
+
+expr_cd14_pc = expr_cd14.loc[common_genes]
+lengths = pc_genes_meta.loc[common_genes, 'Length']
+
+# 5. Filter for expressed genes: total counts across CD14 samples >= 10
+total_counts = expr_cd14_pc.sum(axis=1)
+expressed_mask = total_counts >= 10
+print(f"Expressed protein-coding genes (total counts >= 10): {expressed_mask.sum()}")
+
+expr_expressed = expr_cd14_pc[expressed_mask]
+lengths_expressed = lengths[expressed_mask]
+
+# 6. Compute mean expression across CD14 samples
+mean_expr = expr_expressed.mean(axis=1)
+
+# 7. Pearson correlation
+# First check for zero variance
+print(f"Mean expression variance: {mean_expr.var()}")
+print(f"Length variance: {lengths_expressed.var()}")
+print(f"Mean expression range: [{mean_expr.min()}, {mean_expr.max()}]")
+print(f"Length range: [{lengths_expressed.min()}, {lengths_expressed.max()}]")
+
+# Check if log transformation is more appropriate (common in gene expression analysis)
+# The question asks for correlation between gene length and mean expression - we use the raw values
+pearson_r, pearson_p = stats.pearsonr(lengths_expressed, mean_expr)
+print(f"\nPearson r (raw): {pearson_r}")
+print(f"Pearson p-value: {pearson_p}")
+
+# Also check log-transformed
+log_mean_expr = np.log10(mean_expr + 1)
+pearson_r_log, pearson_p_log = stats.pearsonr(lengths_expressed, log_mean_expr)
+print(f"Pearson r (log10(mean+1)): {pearson_r_log}")
+print(f"Pearson p-value (log): {pearson_p_log}")
+
+# Also try log10(mean_expr + 0.5) or just checking with different transforms
+pearson_r_log1p, pearson_p_log1p = stats.pearsonr(lengths_expressed, np.log1p(mean_expr))
+print(f"Pearson r (log1p): {pearson_r_log1p}")
+
+import os
+os.makedirs('/workspace/codex_output', exist_ok=True)
+with open('/workspace/codex_output/answer.txt', 'w') as f:
+    f.write(str(pearson_r))
+print(f"\nAnswer written: {pearson_r}")
+PYEOF

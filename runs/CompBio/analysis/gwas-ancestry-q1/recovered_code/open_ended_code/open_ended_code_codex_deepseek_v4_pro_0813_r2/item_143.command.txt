@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, requests, time, json, pickle, os
+p='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-0bb2941c0318233f7b766bc0/workspace/gwas.ancestry.q1.tsv'
+df=pd.read_csv(p,sep='\\t')
+na=df[df['P'].isna()].copy()
+url='https://gnomad.broadinstitute.org/api'
+query='''query V("'$rsid: String!) { variant(rsid: $rsid, dataset: gnomad_r4) { variant_id rsids chrom pos ref alt exome { ac an af populations { id ac an } } genome { ac an af populations { id ac an } } } }'"'''
+results=[]
+for idx,(_,r) in enumerate(na.iterrows()):
+    rsid=r['RSID']; data=None
+    for attempt in range(10):
+        resp=requests.post(url,json={'query':query,'variables':{'rsid':rsid}},timeout=30)
+        if resp.status_code==200:
+            data=resp.json().get('data',{}).get('variant')
+            break
+        if resp.status_code==429:
+            time.sleep(3*(attempt+1))
+            continue
+        print('error',rsid,resp.status_code,resp.text[:200]); break
+    seq=(data or {}).get('genome') or (data or {}).get('exome')
+    pops={}
+    if seq:
+        for pop in seq.get('populations',[]):
+            if pop['an']: pops[pop['id']]=pop['ac']/pop['an']
+    results.append({'rsid':rsid,'vid':(data or {}).get('variant_id'),'af':seq.get('af') if seq else None,'pops':pops})
+    print(idx+1,rsid,(data or {}).get('variant_id'), {k:round(pops.get(k,float('nan')),5) for k in ['amr','asj','mid','afr','eas','nfe','fin','sas','remaining']})
+    time.sleep(1.5)
+with open('gnomad_na_full.pkl','wb') as f: pickle.dump(results,f)
+print('\\nSummary')
+for group in ['amr','asj','mid','afr','eas','nfe','fin','sas','remaining']:
+    vals=[res['pops'].get(group) for res in results]
+    known=[v for v in vals if v is not None]
+    zero=sum(1 for v in known if v==0); non=sum(1 for v in known if v>0)
+    print(group,'present',len(known),'zero',zero,'non',non,'max',max(known) if known else None)
+PY"

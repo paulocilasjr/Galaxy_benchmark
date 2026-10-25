@@ -1,0 +1,45 @@
+/tmp/myenv/bin/python3 << 'PYEOF'
+import pandas as pd
+import numpy as np
+
+# Verify the filtering on one file in detail
+df = pd.read_excel('inputs/CHIP_DP10_GQ20_PASS/230209_Exome_GRCh38_CHIP_185-PF.xlsx')
+
+zyg_col = df.columns[4]     # Zygosity
+vaf_col = df.columns[9]     # Variant Allele Freq  
+so_col = df.columns[13]     # Sequence Ontology
+gene_col = df.columns[12]   # Gene Names
+
+# Skip sub-header
+data_df = df[df[zyg_col] != 'Zygosity'].copy()
+data_df = data_df[data_df[so_col] != 'Sequence Ontology (Combined)']
+
+data_df['VAF_num'] = pd.to_numeric(data_df[vaf_col], errors='coerce')
+
+# Show all variants with VAF < 0.3
+low_vaf = data_df[(data_df['VAF_num'].notna()) & (data_df['VAF_num'] < 0.3)]
+print(f"Total rows: {len(data_df)}, Low VAF (<0.3): {len(low_vaf)}")
+print()
+
+exclude_so = {
+    'intron_variant',
+    '3_prime_UTR_variant',
+    '5_prime_UTR_variant',
+    '5_prime_UTR_premature_start_codon_gain_variant',
+}
+
+for i, row in low_vaf.iterrows():
+    excluded_so = row[so_col] in exclude_so or ('intergenic' in str(row[so_col]).lower())
+    excluded_zyg = row[zyg_col] == 'Reference'
+    excluded = excluded_so or excluded_zyg
+    print(f"  Gene={row[gene_col]}, Zyg={row[zyg_col]}, VAF={row['VAF_num']:.4f}, SO={row[so_col]}, Excluded={excluded} (SO_excl={excluded_so}, Zyg_excl={excluded_zyg})")
+
+# Count after exclusions
+filtered = low_vaf[
+    (low_vaf[zyg_col] != 'Reference') &
+    (~low_vaf[so_col].isin(exclude_so)) &
+    (~low_vaf[so_col].str.contains('intergenic', case=False, na=False))
+]
+print(f"\nAfter exclusions: {len(filtered)} variants")
+PYEOF
+

@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+# Re-fetch z12 local 7.5-8.05 and aggregate to 20 kb, rank differential by raw and simple distance-normalized means.
+import requests,base64,numpy as np,math
+H1='JfVtzAhFSCS-j6tNALioCQ'; HFF='3e8b4161-556e-4722-bcef-88265a3436a1'; server='https://higlass.4dnucleome.org/api/v1/tiles/'
+offset=1943767673; z=12; res=1000; win=(7500000,8050000); cache={}
+def fetch(uid,x,y):
+ key=f'{uid}.{z}.{x}.{y}'
+ if key not in cache:
+  j=requests.get(server,params={'d':key},timeout=60).json()[key]; dt='<f2' if j.get('dtype')=='float16' else '<f4'
+  cache[key]=np.frombuffer(base64.b64decode(j['dense']),dtype=dt).astype('f4').reshape(256,256)
+ return cache[key]
+def mosaic(uid):
+ gs=offset+win[0]; ge=offset+win[1]; tw=256*res; x0=gs//tw; x1=(ge-1)//tw
+ mat=np.full(((x1-x0+1)*256,(x1-x0+1)*256),np.nan,'f4')
+ for x in range(x0,x1+1):
+  for y in range(x0,x1+1): mat[(y-x0)*256:(y-x0+1)*256,(x-x0)*256:(x-x0+1)*256]=fetch(uid,x,y)
+ a=(gs//res)-x0*256; b=math.ceil(ge/res)-x0*256
+ return mat[a:b,a:b]
+h1=mosaic(H1); hff=mosaic(HFF)
+# crop length multiple 20
+n=(h1.shape[0]//20)*20; h1=h1[:n,:n]; hff=hff[:n,:n]
+def agg(A): return np.nanmean(A.reshape(n//20,20,n//20,20),axis=(1,3))
+A=agg(h1); B=agg(hff); D=A-B
+coords=np.arange(A.shape[0])*20000+win[0]+10000
+# distance expected normalize by diagonal offset median
+An=A.copy(); Bn=B.copy()
+for k in range(A.shape[0]):
+ valsA=[]; valsB=[]
+ for i in range(A.shape[0]-k): valsA.append(A[i+k,i]); valsB.append(B[i+k,i])
+ medA=np.nanmedian(valsA); medB=np.nanmedian(valsB)
+ if medA>0:
+  for i in range(A.shape[0]-k): An[i+k,i]=A[i+k,i]/medA
+ if medB>0:
+  for i in range(A.shape[0]-k): Bn[i+k,i]=B[i+k,i]/medB
+# rank lower triangle dist >=60k
+for name,M in [('H1-HFF raw',D),('HFF-H1 raw',-D),('H1/HFF normdiff',np.log2((An+1e-4)/(Bn+1e-4))),('HFF/H1 normdiff',np.log2((Bn+1e-4)/(An+1e-4))),('H1 norm',An),('HFF norm',Bn)]:
+ mask=np.zeros_like(M,dtype=bool)
+ for iy,y in enumerate(coords):
+  for ix,x in enumerate(coords):
+   if y-x>=60000: mask[iy,ix]=True
+ # local max suppression
+ C=np.where(mask,M,-np.inf).copy(); out=[]
+ for _ in range(8):
+  iy,ix=np.unravel_index(np.nanargmax(C),C.shape); v=C[iy,ix]
+  if not np.isfinite(v): break
+  out.append((v,int(coords[ix]),int(coords[iy])))
+  C[max(0,iy-1):min(C.shape[0],iy+2),max(0,ix-1):min(C.shape[1],ix+2)] = -np.inf
+ print('\\n',name)
+ for v,x,y in out: print(f'{v:.3g}\\t{x};{y}\\tdist {y-x}')
+PY"

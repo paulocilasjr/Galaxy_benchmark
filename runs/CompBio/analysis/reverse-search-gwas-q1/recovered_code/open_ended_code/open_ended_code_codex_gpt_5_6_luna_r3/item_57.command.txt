@@ -1,0 +1,32 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request,struct,zlib
+
+def getrange(u,start,end):
+ return urllib.request.urlopen(urllib.request.Request(u,headers={'Range':f'bytes={start}-{end}'}),timeout=120).read()
+def entries(u,size):
+ n=1000000; d=getrange(u,size-n,size-1); pos=d.rfind(b'PK\\x06\\x06'); x=struct.unpack('<4sQ2H2I4Q',d[pos:pos+56]); cdsize, cdoff=x[-2:]; cd=d[cdoff-(size-n):cdoff-(size-n)+cdsize]
+ out={};i=0
+ while i<len(cd):
+  vals=struct.unpack('<4s6H3L5H2L',cd[i:i+46]); fnl,exl,col=vals[10:13]; fn=cd[i+46:i+46+fnl].decode(); extra=cd[i+46+fnl:i+46+fnl+exl]; csize,usize,off=vals[8],vals[9],vals[-1]
+  # parse zip64 extra 0x0001 in order for sentinel fields
+  j=0
+  while j+4<=len(extra):
+   typ,ln=struct.unpack('<HH',extra[j:j+4]); dat=extra[j+4:j+4+ln];j+=4+ln
+   if typ==1:
+    k=0
+    if usize==0xffffffff: usize=struct.unpack('<Q',dat[k:k+8])[0]; k+=8
+    if csize==0xffffffff: csize=struct.unpack('<Q',dat[k:k+8])[0]; k+=8
+    if off==0xffffffff: off=struct.unpack('<Q',dat[k:k+8])[0]; k+=8
+  out[fn]=(off,csize,usize,vals[4],fnl,exl)
+  i+=46+fnl+exl+col
+ return out
+for name,size in [('afr',6011347563),('eur',4078857688),('oldafr',6011347563)]:
+ if name=='eur': u='https://zenodo.org/api/records/11111186/files/eur94082.zip/content'
+ else: u='https://zenodo.org/api/records/11111186/files/afr47041.zip/content'
+ e=entries(u,size); key=[k for k in e if k.endswith('_1.tsv')][0]; off,cs,us,method,fnl,exl=e[key]; dataoff=off+30+fnl+exl
+ print('\\n',name,key,off,cs,us,method,dataoff)
+ C=getrange(u,dataoff,dataoff+5000000-1); obj=zlib.decompressobj(-15); out=obj.decompress(C).decode('utf8','replace');
+ print('decoded',len(out),'pfx',out[:120]);
+ for line in out.splitlines():
+  if 'chr1:14671' in line or line.startswith('1\\t14671'): print('MATCH',line)
+PY"

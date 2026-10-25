@@ -1,0 +1,20 @@
+/bin/bash -lc "python - <<'PY'
+import sys
+sys.path.insert(0,'scan_build')
+import torch
+import selective_scan_cpu_ext
+from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+# force compare C++ through imported path with explicit Python reference copied here
+B,D,L,N=2,7,13,4
+torch.manual_seed(3)
+u=torch.randn(B,D,L); delta=torch.randn(B,D,L); A=-torch.rand(D,N); X=torch.randn(B,N,L); C=torch.randn(B,N,L); Dv=torch.randn(D); z=torch.randn(B,D,L); db=torch.randn(D)
+out=selective_scan_fn(u,delta,A,X,C,Dv,z,db,True)
+def ref(u,delta,A,B,C,D=None,z=None,delta_bias=None,delta_softplus=False):
+ dt=delta.float()+delta_bias[...,None].float(); dt=torch.nn.functional.softplus(dt); st=torch.zeros(B,D,N); ys=[]
+ for i in range(L):
+  st=torch.exp(dt[:,:,i,None]*A[None,:,:])*st+dt[:,:,i,None]*B[:,:,i][:,None,:]*u[:,:,i,None]
+  ys.append((st*C[:,:,i][:,None,:]).sum(-1))
+ y=torch.stack(ys,2)+u*D[None,:,None]; return y*torch.nn.functional.silu(z)
+r=ref(u,delta,A,X,C,Dv,z,db,True)
+print('max', (out-r).abs().max().item(),'mean',(out-r).abs().mean().item())
+PY"

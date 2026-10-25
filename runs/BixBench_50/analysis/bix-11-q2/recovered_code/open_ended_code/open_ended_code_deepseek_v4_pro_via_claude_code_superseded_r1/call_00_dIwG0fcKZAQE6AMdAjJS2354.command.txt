@@ -1,0 +1,157 @@
+cd /workspace/tmp && python3 << 'PYEOF'
+import os, sys
+
+os.chdir('/workspace/tmp')
+
+# Parse Newick to compute patristic distances
+def compute_patristic(tree_str):
+    """Parse Newick tree string, return dict {(name1,name2): distance} and list of names."""
+    s = tree_str.strip().rstrip(';')
+    
+    nodes = []  # list of dicts: children, length, name
+    
+    i = 0
+    def parse_node():
+        nonlocal i
+        node = {'children': [], 'length': 0.0, 'name': None}
+        node_id = len(nodes)
+        nodes.append(node)
+        
+        if s[i] == '(':
+            i += 1
+            while True:
+                child_id = parse_node()
+                nodes[node_id]['children'].append(child_id)
+                if s[i] == ',':
+                    i += 1
+                elif s[i] == ')':
+                    i += 1
+                    break
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        else:
+            j = i
+            while j < len(s) and s[j] not in ':),;':
+                j += 1
+            nodes[node_id]['name'] = s[i:j]
+            i = j
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        
+        return node_id
+    
+    root = parse_node()
+    
+    # Build parent map and dist to root
+    parent = {}
+    dist_to_root = {}
+    
+    def dfs(node_id, d):
+        dist_to_root[node_id] = d
+        for child_id in nodes[node_id]['children']:
+            parent[child_id] = node_id
+            dfs(child_id, d + nodes[child_id]['length'])
+    
+    dfs(root, 0)
+    parent[root] = None
+    
+    # Collect leaf nodes
+    leaves = {}
+    for nid, node in enumerate(nodes):
+        if node['name'] is not None:
+            # Find path distance from root
+            leaves[node['name']] = dist_to_root[nid]
+    
+    # Get ancestors for each leaf
+    leaf_ancestors = {}
+    for name in leaves:
+        # Find the node id
+        nid = [nid for nid, node in enumerate(nodes) if node['name'] == name][0]
+        ancestors = set()
+        p = nid
+        while p is not None:
+            ancestors.add(p)
+            p = parent.get(p)
+        leaf_ancestors[name] = (nid, ancestors)
+    
+    # Compute all pairwise distances
+    leaf_names = sorted(leaves.keys())
+    patristic = {}
+    for i in range(len(leaf_names)):
+        for j in range(i+1, len(leaf_names)):
+            n1, n2 = leaf_names[i], leaf_names[j]
+            nid1, anc1 = leaf_ancestors[n1]
+            nid2, anc2 = leaf_ancestors[n2]
+            
+            # Find LCA
+            common = anc1 & anc2
+            lca = max(common, key=lambda x: dist_to_root[x])
+            
+            tree_dist = dist_to_root[nid1] + dist_to_root[nid2] - 2 * dist_to_root[lca]
+            patristic[(n1, n2)] = tree_dist
+    
+    return patristic, leaf_names
+
+# Test a few genes
+for gene_id in ['1001705at2759', '245208at2759', '178500at2759']:
+    tree_file = f"{gene_id}.faa.mafft.clipkit.treefile"
+    mldist_file = f"{gene_id}.faa.mafft.clipkit.mldist"
+    
+    if not os.path.exists(tree_file) or not os.path.exists(mldist_file):
+        print(f"{gene_id}: missing files")
+        continue
+    
+    tree_str = open(tree_file).read().strip()
+    patristic, leaf_names = compute_patristic(tree_str)
+    
+    with open(mldist_file) as f:
+        n = int(f.readline().strip())
+        mldist_order = []
+        mldist_matrix = []
+        for i in range(n):
+            parts = f.readline().strip().split()
+            mldist_order.append(parts[0])
+            mldist_matrix.append([float(x) for x in parts[1:]])
+    
+    # Compare
+    print(f"\n{gene_id}: tree_leaves={leaf_names}, mldist_order={mldist_order}")
+    diffs = []
+    for i in range(n):
+        for j in range(i+1, n):
+            n1, n2 = mldist_order[i], mldist_order[j]
+            md = mldist_matrix[i][j]
+            td = patristic.get((n1, n2))
+            if td is None:
+                td = patristic.get((n2, n1))
+            if td is not None:
+                diffs.append(md - td)
+    
+    if diffs:
+        abs_diffs = [abs(d) for d in diffs]
+        # Through-origin treeness using ML
+        ss_res = sum(d**2 for d in diffs)
+        ml_sq = sum(mldist_matrix[i][j]**2 for i in range(n) for j in range(i+1, n))
+        treeness_ml_origin = 1.0 - ss_res / ml_sq if ml_sq > 0 else 0
+        
+        # Standard R²: ML explained by tree
+        ml_mean = sum(mldist_matrix[i][j] for i in range(n) for j in range(i+1, n)) / len(diffs)
+        ss_tot = sum((mldist_matrix[i][j] - ml_mean)**2 for i in range(n) for j in range(i+1, n))
+        treeness_ml_r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0
+        
+        print(f"  ML-tree diffs: {[f'{d:.4f}' for d in diffs]}")
+        print(f"  treeness (through origin, ML ref): {treeness_ml_origin:.6f}")
+        print(f"  treeness (R², ML ref): {treeness_ml_r2:.6f}")
+
+PYEOF

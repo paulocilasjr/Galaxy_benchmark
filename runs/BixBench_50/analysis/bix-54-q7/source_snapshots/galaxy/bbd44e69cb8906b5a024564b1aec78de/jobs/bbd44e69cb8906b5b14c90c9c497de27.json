@@ -1,0 +1,48 @@
+{
+  "model_class": "Job",
+  "id": "bbd44e69cb8906b5b14c90c9c497de27",
+  "history_id": "bbd44e69cb8906b5a024564b1aec78de",
+  "tool_id": "codex_swarm_area_model_comparison_v2",
+  "state": "ok",
+  "exit_code": 0,
+  "create_time": "2026-08-01T14:17:39.434786",
+  "update_time": "2026-08-01T14:18:02.735270",
+  "galaxy_version": "26.1",
+  "external_id": null,
+  "handler": null,
+  "job_runner_name": null,
+  "command_line": "set -eu\nRscript - \"/jetstream2/scratch/main/jobs/78852425/inputs/dataset_780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f.dat\" <<'RSCRIPT'\nargs <- commandArgs(trailingOnly = TRUE)\nif (length(args) != 1) stop(\"Expected exactly one CSV input path\")\ninput_path <- args[[1]]\n\nsuppressPackageStartupMessages(library(splines))\n\nd <- read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE)\nrequired <- c(\"StrainNumber\", \"Ratio\", \"Replicate\", \"Area\")\nmissing_cols <- setdiff(required, names(d))\nif (length(missing_cols) > 0) stop(paste(\"Missing columns:\", paste(missing_cols, collapse = \", \")))\n\nstrain <- as.character(d$StrainNumber)\nratio <- as.character(d$Ratio)\narea <- suppressWarnings(as.numeric(as.character(d$Area)))\nif (any(!is.finite(area))) stop(\"Area contains non-finite values\")\n\nis_mix <- strain == \"287_98\"\nis_98 <- strain == \"98\"\nis_287 <- strain == \"287\"\nkeep <- is_mix | is_98 | is_287\nif (!any(keep)) stop(\"No 287_98 mixture or matching pure endpoint rows found\")\n\np287 <- rep(NA_real_, nrow(d))\np287[is_98] <- 0\np287[is_287] <- 1\n\nmix_idx <- which(is_mix)\nparts <- strsplit(ratio[mix_idx], \":\", fixed = TRUE)\nif (length(parts) == 0 || any(lengths(parts) != 2)) stop(\"Mixture ratios are not two-component ratios\")\np287[mix_idx] <- vapply(parts, function(z) {\n  a <- suppressWarnings(as.numeric(z[[1]]))\n  b <- suppressWarnings(as.numeric(z[[2]]))\n  if (!is.finite(a) || !is.finite(b) || a < 0 || b < 0 || a + b <= 0) return(NA_real_)\n  a / (a + b)\n}, numeric(1))\n\nif (any(!is.finite(p287[keep])) || any(p287[keep] < 0 | p287[keep] > 1)) {\n  stop(\"Invalid strain-287 proportions\")\n}\n\nfit_data <- data.frame(area = area[keep], p = p287[keep])\ninterior_data <- data.frame(area = area[is_mix], p = p287[is_mix])\nif (nrow(fit_data) < 10 || nrow(interior_data) < 10) stop(\"Unexpectedly small analysis sets\")\n\nfind_maximum <- function(fit, lower, upper) {\n  grid <- seq(lower, upper, length.out = 20001)\n  grid_pred <- as.numeric(predict(fit, newdata = data.frame(p = grid)))\n  n <- length(grid_pred)\n  local_max <- which(\n    (seq_len(n) == 1 | grid_pred >= c(-Inf, grid_pred[-n])) &\n    (seq_len(n) == n | grid_pred >= c(grid_pred[-1], -Inf))\n  )\n  candidates <- lapply(local_max, function(i) {\n    if (i == 1 || i == n) {\n      return(c(p = grid[[i]], y = grid_pred[[i]]))\n    }\n    opt <- optimize(\n      function(x) as.numeric(predict(fit, newdata = data.frame(p = x))),\n      interval = c(grid[[i - 1]], grid[[i + 1]]),\n      maximum = TRUE\n    )\n    c(p = opt$maximum, y = opt$objective)\n  })\n  candidate_matrix <- do.call(rbind, candidates)\n  best <- candidate_matrix[which.max(candidate_matrix[, \"y\"]), ]\n  c(p = unname(best[[\"p\"]]), y = unname(best[[\"y\"]]))\n}\n\nfit_scope <- function(dat, scope_name, lower, upper) {\n  models <- list(\n    quadratic = lm(area ~ p + I(p^2), data = dat),\n    cubic = lm(area ~ p + I(p^2) + I(p^3), data = dat),\n    natural_spline_df4 = lm(area ~ ns(p, df = 4), data = dat)\n  )\n  rows <- lapply(names(models), function(model_name) {\n    fit <- models[[model_name]]\n    sm <- summary(fit)\n    mx <- find_maximum(fit, lower, upper)\n    data.frame(\n      scope = scope_name,\n      model = model_name,\n      n_obs = nrow(dat),\n      domain_min = lower,\n      domain_max = upper,\n      aic = as.numeric(AIC(fit)),\n      bic = as.numeric(BIC(fit)),\n      r_squared = as.numeric(sm$r.squared),\n      adj_r_squared = as.numeric(sm$adj.r.squared),\n      rmse = sqrt(mean(residuals(fit)^2)),\n      optimal_p287 = as.numeric(mx[[\"p\"]]),\n      max_predicted_area = as.numeric(mx[[\"y\"]]),\n      stringsAsFactors = FALSE\n    )\n  })\n  out <- do.call(rbind, rows)\n  out$aic_rank <- rank(out$aic, ties.method = \"first\")\n  out$selected_by_AIC <- out$aic_rank == 1\n  out\n}\n\nfull_lower <- min(fit_data$p)\nfull_upper <- max(fit_data$p)\ninterior_lower <- min(interior_data$p)\ninterior_upper <- max(interior_data$p)\n\nfull_results <- fit_scope(fit_data, \"full_curve_with_pure_endpoints\", full_lower, full_upper)\ninterior_results <- fit_scope(interior_data, \"interior_mixtures_only\", interior_lower, interior_upper)\nresults <- rbind(full_results, interior_results)\nresults$criterion <- \"AIC_lower_is_better\"\nresults$r_version <- paste(R.version$major, R.version$minor, sep = \".\")\n\nwrite.table(\n  results,\n  file = \"model_results.tsv\",\n  sep = \"\\t\",\n  quote = FALSE,\n  row.names = FALSE,\n  na = \"NA\"\n)\nRSCRIPT",
+  "user_email": "[redacted]",
+  "user_id": "[redacted]",
+  "command_version": "",
+  "params": {
+    "chromInfo": "\"/cvmfs/data.galaxyproject.org/managed/len/ucsc/?.len\"",
+    "dbkey": "\"?\"",
+    "__input_ext": "\"input\""
+  },
+  "inputs": {
+    "input_csv": {
+      "id": "f9cad7b01a472135432cfe6cf448e87c",
+      "src": "hda",
+      "uuid": "780ca9f5-aeb1-4cc9-99e8-a08c124a6c7f"
+    }
+  },
+  "outputs": {
+    "results": {
+      "id": "f9cad7b01a472135b1ca23856ed7f82e",
+      "src": "hda",
+      "uuid": "b2c48e11-16cc-4b52-bdbd-91fcb02e5c7c"
+    }
+  },
+  "copied_from_job_id": null,
+  "output_collections": {},
+  "tool_stdout": "",
+  "tool_stderr": "",
+  "job_stdout": "",
+  "job_stderr": "",
+  "stdout": "",
+  "stderr": "",
+  "job_messages": [],
+  "dependencies": [],
+  "job_metrics": null
+}

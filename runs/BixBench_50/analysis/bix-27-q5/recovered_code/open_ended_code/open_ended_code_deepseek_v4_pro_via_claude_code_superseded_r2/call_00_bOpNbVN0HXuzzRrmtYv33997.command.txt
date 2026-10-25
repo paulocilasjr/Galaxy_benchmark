@@ -1,0 +1,103 @@
+/workspace/venv/bin/python3 << 'PYEOF'
+import csv
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import PCA
+from collections import Counter
+
+# ---- Read expression matrix ----
+with open('inputs/ROSMAP_genexp_ad.csv') as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    all_sample_ids = header[1:]
+    genes = []
+    raw_data = []
+    for row in reader:
+        genes.append(row[0])
+        raw_data.append([float(x) for x in row[1:]])
+
+raw_matrix = np.array(raw_data, dtype=np.float64)  # genes x samples
+
+# ---- Approach 2: Keep all 222 samples ----
+expr_all = raw_matrix.T  # 222 samples x 2456 genes
+log_expr_all = np.log10(expr_all + 1.0)
+
+pca_all = PCA(n_components=100)
+pca_all.fit(log_expr_all)
+pc1_all = pca_all.explained_variance_ratio_[0] * 100
+print(f"All 222 samples: PC1 = {pc1_all:.6f}%")
+
+# ---- Approach 3: Exclude only conflict IDs (19), average no-conflict IDs (2) ----
+# For id464 and id724, average the expression values
+id_counts = Counter(all_sample_ids)
+
+# Identify conflict and no-conflict IDs
+meta_df = pd.read_csv('inputs/ROSMAP_meta_ad.csv')
+conflict_set = set()
+noconflict_set = set()
+for pid in set(all_sample_ids):
+    if id_counts[pid] <= 1:
+        continue
+    group = meta_df[meta_df['projid'] == pid]
+    sexes = set(group['msex'])
+    apoes = set(group['apoe_genotype'])
+    if len(sexes) > 1 or len(apoes) > 1:
+        conflict_set.add(pid)
+    else:
+        noconflict_set.add(pid)
+
+print(f"Conflict IDs: {conflict_set}")
+print(f"No-conflict IDs: {noconflict_set}")
+
+# Build new matrix: exclude conflict columns, average no-conflict columns
+# First handle unique IDs
+unique_ids = [sid for sid in all_sample_ids if id_counts[sid] == 1]
+unique_cols = [i for i, sid in enumerate(all_sample_ids) if id_counts[sid] == 1]
+
+# Build the expression submatrix for unique IDs
+expr_unique = raw_matrix[:, unique_cols]  # genes x unique_samples
+
+# For no-conflict IDs: average the columns
+avg_columns = []
+avg_ids = []
+for pid in sorted(noconflict_set):
+    cols = [i for i, sid in enumerate(all_sample_ids) if sid == pid]
+    avg_col = raw_matrix[:, cols].mean(axis=1)
+    avg_columns.append(avg_col)
+    avg_ids.append(pid)
+
+expr_avg = np.column_stack(avg_columns) if avg_columns else np.empty((raw_matrix.shape[0], 0))
+
+# Combine
+expr_combined = np.column_stack([expr_unique, expr_avg])  # genes x samples
+print(f"Combined matrix (approach 3): {expr_combined.shape}")
+
+# Transpose, transform, PCA
+expr_combined_t = expr_combined.T  # samples x genes
+log_combined = np.log10(expr_combined_t + 1.0)
+
+pca_combined = PCA(n_components=100)
+pca_combined.fit(log_combined)
+pc1_combined = pca_combined.explained_variance_ratio_[0] * 100
+print(f"Exclude conflicts, average no-conflicts ({expr_combined_t.shape[0]} samples): PC1 = {pc1_combined:.6f}%")
+
+# ---- Approach 4: Exclude conflict IDs, keep no-conflict IDs as separate samples ----
+# (since invariants match, they could be different samples from same person)
+keep_mask_alt = np.array([sid not in conflict_set for sid in all_sample_ids])
+expr_alt = raw_matrix[:, keep_mask_alt].T
+log_alt = np.log10(expr_alt + 1.0)
+print(f"Exclude only conflicts: {log_alt.shape}")
+
+pca_alt = PCA(n_components=100)
+pca_alt.fit(log_alt)
+pc1_alt = pca_alt.explained_variance_ratio_[0] * 100
+print(f"Exclude only conflict IDs ({log_alt.shape[0]} samples): PC1 = {pc1_alt:.6f}%")
+
+print(f"\n=== Summary ===")
+print(f"All 222 samples:          PC1 = {pc1_all:.6f}%")
+print(f"Exclude all 21 repeats:   PC1 = 55.971150% (from previous run)")
+print(f"Exclude 19 conflicts, avg 2 no-conflict ({expr_combined_t.shape[0]} samples): PC1 = {pc1_combined:.6f}%")
+print(f"Exclude only 19 conflicts ({log_alt.shape[0]} samples): PC1 = {pc1_alt:.6f}%")
+
+PYEOF
+

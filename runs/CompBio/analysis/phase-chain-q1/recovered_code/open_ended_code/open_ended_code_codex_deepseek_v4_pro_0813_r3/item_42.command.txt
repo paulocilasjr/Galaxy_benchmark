@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reconstruct strings quickly from previous method but save to /tmp? just print segments
+import pysam
+from collections import defaultdict,Counter
+sites=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]; si={s:i for i,s in enumerate(sites)}
+predA=['C','T','A','G','G','D','G','A']; predB=['A','C','T','D','C','A','D','G']
+start=27079126;end=27080624
+b=pysam.AlignmentFile('mapped.sorted.bam','rb')
+def al(rec):
+ seq=rec.query_sequence; d={}
+ for q,r in rec.get_aligned_pairs(matches_only=False):
+  if r is None: continue
+  p=r+1
+  if p in si: d[p]='D' if q is None else seq[q]
+ return d
+pairs=defaultdict(list)
+for rec in b.fetch('chr22',start-1,end+1):
+ if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+ pairs[rec.qname].append(rec)
+cons={h:defaultdict(Counter) for h in ['A','B']}
+for q,rs in pairs.items():
+ cnt=defaultdict(Counter)
+ for r in rs:
+  for p,c in al(r).items(): cnt[p][c]+=1
+ cov=[(p,c.most_common(1)[0][0]) for p,c in cnt.items()]
+ ma=sum(predA[si[p]]==c for p,c in cov); mb=sum(predB[si[p]]==c for p,c in cov)
+ h='A' if ma>=mb else 'B'
+ for r in rs:
+  seq=r.query_sequence
+  for q,rpos in r.get_aligned_pairs(matches_only=False):
+   if rpos is None: continue
+   p=rpos+1
+   if start<=p<=end: cons[h][p]['-' if q is None else seq[q]]+=1
+for h in ['A','B']:
+ s=''.join(cons[h][p].most_common(1)[0][0] if cons[h][p] else 'N' for p in range(start,end+1))
+ print('HAP',h)
+ for p in sites:
+  i=p-start; print(p,s[i-15:i+16])
+PY"

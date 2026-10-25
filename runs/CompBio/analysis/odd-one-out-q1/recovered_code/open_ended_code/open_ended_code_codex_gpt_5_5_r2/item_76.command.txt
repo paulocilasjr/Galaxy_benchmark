@@ -1,0 +1,38 @@
+/bin/bash -lc "python3 - <<'PY'
+import glob, os, numpy as np
+# Load 100kb original and dedup count tables, then aggregate to coarser bins.
+def load(pattern):
+    files=sorted(glob.glob(pattern), key=lambda p:int(os.path.basename(p).split('.')[0]))
+    records=[]; ids=[]
+    for f in files:
+        ids.append(int(os.path.basename(f).split('.')[0]))
+        d={}
+        for line in open(f):
+            id_,ch,b,c=line.split(); d[(ch,int(b))]=int(c)
+        records.append(d)
+    return ids,records
+for label,pattern in [('orig','analysis/*.100kb.tsv'),('dedup','analysis_dedup/*.100kb.dedup.tsv')]:
+    ids,records=load(pattern)
+    for factor in [1,2,5,10,20]:
+        idx={}; rows=[]
+        for d in records:
+            a={}
+            for (ch,b),c in d.items():
+                k=(ch,b//factor); a[k]=a.get(k,0)+c
+            rows.append(a)
+            for k in a: idx.setdefault(k,len(idx))
+        X=np.zeros((len(rows),len(idx)))
+        for i,a in enumerate(rows):
+            for k,c in a.items(): X[i,idx[k]]=c
+        print('\\n',label, f'{100*factor}kb', 'bins', X.shape[1])
+        for transform in ['raw','sqrt','log1p']:
+            Y = X if transform=='raw' else (np.sqrt(X) if transform=='sqrt' else np.log1p(X))
+            C=np.corrcoef(Y)
+            gaps=[]
+            for i,id_ in enumerate(ids):
+                rest=[j for j in range(len(ids)) if j"'!=i]
+                restvals=[C[a,b] for p,a in enumerate(rest) for b in rest[p+1:]]
+                gaps.append((np.mean(restvals)-np.mean([C[i,j] for j in rest]), id_))
+            gaps.sort(reverse=True)
+            print(transform, '"'topdrops', ' '.join(f'{id_}:{gap:.3f}' for gap,id_ in gaps[:3]))
+PY"

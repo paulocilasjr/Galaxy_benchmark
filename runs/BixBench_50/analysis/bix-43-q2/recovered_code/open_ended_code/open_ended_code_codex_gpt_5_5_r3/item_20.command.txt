@@ -1,0 +1,114 @@
+/bin/bash -lc ".venv/bin/python - <<'PY'
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+import gseapy as gp
+
+counts_path = Path('inputs/counts_raw_unfiltered.csv')
+layout_path = Path('inputs/sample_layout.csv')
+map_path = Path('inputs/ensg_to_gene_name.tsv')
+
+counts_all = pd.read_csv(counts_path, index_col=0)
+# Input count columns use underscores, metadata uses hyphens.
+layout = pd.read_csv(layout_path)
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample')
+
+prefilter_mask = counts_all.gt(10).any(axis=1)
+counts_pref = counts_all.loc[prefilter_mask]
+
+related = [
+    'DMSO',
+    'DMSO_Serum_starvation',
+    'Cisplatin_IC50_CBD_IC50',
+    'Cisplatin_IC50_CBD_IC50_Serum_starvation_16h',
+]
+meta = layout.loc[layout['Group'].isin(related), ['Group']].rename(columns={'Group':'condition'}).copy()
+# Preserve explicit reference and ordering.
+meta['condition'] = pd.Categorical(meta['condition'], categories=related)
+
+missing = [s for s in meta.index if s not in counts_pref.columns]
+if missing:
+    raise RuntimeError(f'Missing count columns for samples: {missing}')
+counts = counts_pref[meta.index].T.astype(int)
+# PyDESeq2 expects same index order.
+assert counts.index.equals(meta.index)
+
+print(f'counts_all={counts_all.shape} prefiltered_genes={counts_pref.shape[0]} model_counts={counts.shape} groups={meta.condition.value_counts().to_dict()}', flush=True)
+
+dds = DeseqDataSet(
+    counts=counts,
+    metadata=meta,
+    design='~condition',
+    ref_level=['condition','DMSO'],
+    n_cpus=4,
+    quiet=False,
+)
+dds.deseq2()
+stat_res = DeseqStats(
+    dds,
+    contrast=['condition', 'Cisplatin_IC50_CBD_IC50', 'DMSO'],
+    alpha=0.05,
+    quiet=False,
+    n_cpus=4,
+)
+stat_res.summary()
+res = stat_res.results_df.copy()
+print('result columns', res.columns.tolist(), flush=True)
+
+sig = res[(res['padj'].notna()) & (res['padj'] <= 0.05) & (res['log2FoldChange'].abs() >= 0.5) & (res['baseMean'] >= 10)].copy()
+print(f'significant_ensg={len(sig)} up={(sig.log2FoldChange>0).sum()} down={(sig.log2FoldChange<0).sum()}', flush=True)
+
+mapping = pd.read_csv(map_path, sep='\\t')
+# One ENSG per row in mapping. Keep symbols for DE genes and remove duplicate symbols for ORA foreground.
+sig = sig.reset_index(names='ENSG').merge(mapping, on='ENSG', how='left')
+print(f'mapped_rows={sig.gene_name.notna().sum()} unmapped_rows={sig.gene_name.isna().sum()} duplicate_symbol_rows={sig.gene_name.duplicated().sum()}', flush=True)
+genes = sig['gene_name'].dropna().astype(str)
+genes = [g for g in pd.unique(genes) if g]
+print(f'foreground_unique_symbols={len(genes)}', flush=True)
+if not genes:
+    raise RuntimeError('No foreground genes after mapping')
+
+enr = gp.enrichr(
+    gene_list=genes,
+    gene_sets='Reactome_2022',
+    organism='Human',
+    outdir=None,
+    cutoff=1.0,
+    verbose=True,
+)
+if enr.results is None or enr.results.empty:
+    raise RuntimeError('No enrichment results returned')
+res_enr = enr.results.copy()
+print('enrichr columns', res_enr.columns.tolist(), flush=True)
+# Locate requested term robustly by words from prompt and Reactome naming variants.
+term_col = 'Term'
+mask = res_enr[term_col].str.contains('p53', case=False, na=False) & res_enr[term_col].str.contains('cell cycle|cycle', case=False, regex=True, na=False)
+print('p53/cycle candidate terms:')
+print(res_enr.loc[mask, [c for c in ['Term','P-value','Adjusted P-value','Odds Ratio','Combined Score','Overlap','Genes'] if c in res_enr.columns]].to_string(index=False), flush=True)
+
+exact_masks = [
+    res_enr[term_col].str.fullmatch('p53-mediated cell cycle gene regulation', case=False, na=False),
+    res_enr[term_col].str.contains('p53-mediated cell cycle gene regulation', case=False, na=False),
+    res_enr[term_col].str.contains('TP53.*cell cycle|cell cycle.*TP53', case=False, regex=True, na=False),
+]
+term_hits = pd.concat([res_enr[m] for m in exact_masks]).drop_duplicates()
+if term_hits.empty:
+    # Print all p53 terms for diagnosis, then fail rather than guess.
+    p53 = res_enr[res_enr[term_col].str.contains('p53|TP53', case=False, regex=True, na=False)]
+    print('all p53 candidate terms:')
+    print(p53[[c for c in ['Term','P-value','Adjusted P-value','Odds Ratio','Combined Score','Overlap','Genes'] if c in p53.columns]].to_string(index=False), flush=True)
+    raise RuntimeError('Requested p53-mediated cell cycle gene regulation term not found')
+print('selected term hits:')
+print(term_hits[[c for c in ['Term','P-value','Adjusted P-value','Odds Ratio','Combined Score','Overlap','Genes'] if c in term_hits.columns]].to_string(index=False), flush=True)
+if len(term_hits) "'!= 1:
+    raise RuntimeError(f'"'Ambiguous requested term: {term_hits[term_col].tolist()}')
+val = term_hits.iloc[0]['Odds Ratio']
+# Canonical answer only. Preserve enough precision without formatting artifacts.
+out = format(float(val), '.15g')
+Path('codex_output').mkdir(exist_ok=True)
+Path('codex_output/answer.txt').write_text(out + '\\n')
+print('ANSWER', out, flush=True)
+PY"

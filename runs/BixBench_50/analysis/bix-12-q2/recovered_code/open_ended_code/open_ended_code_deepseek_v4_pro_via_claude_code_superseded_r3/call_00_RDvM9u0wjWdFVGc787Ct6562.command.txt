@@ -1,0 +1,119 @@
+cat > /workspace/verify_pis.py << 'PYEOF'
+import os
+from collections import Counter
+
+def parse_fasta_alignment(filepath):
+    records = []
+    current_header = None
+    current_seq = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_header is not None:
+                    records.append((current_header, ''.join(current_seq)))
+                current_header = line[1:]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_header is not None:
+            records.append((current_header, ''.join(current_seq)))
+    return records
+
+def count_pis_verbose(filepath):
+    """Detailed count of PIS in an alignment with per-column info."""
+    records = parse_fasta_alignment(filepath)
+    seqs = [seq for _, seq in records]
+    aln_length = len(seqs[0])
+    gap_chars = set('-Xx.?*')
+    
+    pis_count = 0
+    total_const = 0
+    total_singleton = 0
+    total_gap = 0
+    
+    for i in range(aln_length):
+        column = [seq[i] for seq in seqs]
+        valid = [c.upper() for c in column if c not in gap_chars]
+        
+        if len(valid) == 0:
+            total_gap += 1
+            continue
+        
+        counts = Counter(valid)
+        
+        if len(counts) == 1:
+            total_const += 1
+            continue
+        
+        # Check if parsimony informative
+        is_pis = all(count >= 2 for count in counts.values())
+        if is_pis:
+            pis_count += 1
+        else:
+            total_singleton += 1
+    
+    return aln_length, pis_count, total_const, total_singleton, total_gap
+
+# Check a few files manually
+mafft_dir = '/workspace/tmp_fungi'
+files = sorted([f for f in os.listdir(mafft_dir) if f.endswith('.mafft')])
+
+# Verify a high-PIS alignment
+print("=" * 60)
+print("DETAILED CHECK OF SAMPLE ALIGNMENTS")
+print("=" * 60)
+
+for fname in files[:5]:
+    fp = os.path.join(mafft_dir, fname)
+    aln_len, pis, const, sing, gaps = count_pis_verbose(fp)
+    pct = (pis / aln_len) * 100
+    print(f"{fname}: length={aln_len}, PIS={pis} ({pct:.2f}%), const={const}, singletons={sing}, all-gap={gaps}")
+
+# Find alignment with highest PIS
+print("\n" + "=" * 60)
+print("HIGHEST PIS ALIGNMENTS")
+print("=" * 60)
+
+all_results = []
+for fname in files:
+    fp = os.path.join(mafft_dir, fname)
+    aln_len, pis, const, sing, gaps = count_pis_verbose(fp)
+    pct = (pis / aln_len) * 100
+    all_results.append((pct, fname, aln_len, pis, const, sing, gaps))
+
+all_results.sort(key=lambda x: x[0], reverse=True)
+
+for pct, fname, aln_len, pis, const, sing, gaps in all_results[:5]:
+    print(f"{fname}: PIS={pct:.2f}%, length={aln_len}, PIS_sites={pis}, const={const}, singletons={sing}, all-gap={gaps}")
+
+# Check a few columns from a high-PIS alignment manually
+print("\n" + "=" * 60)
+print("MANUAL COLUMN CHECK (first 30 cols of highest PIS alignment)")
+print("=" * 60)
+
+best_fname = all_results[0][1]
+best_fp = os.path.join(mafft_dir, best_fname)
+records = parse_fasta_alignment(best_fp)
+seqs = [seq for _, seq in records]
+headers = [h for h, _ in records]
+
+gap_chars = set('-Xx.?*')
+aln_len = len(seqs[0])
+
+# Print header
+for h in headers:
+    print(f"  {h}")
+
+for i in range(min(30, aln_len)):
+    column = [seq[i] for seq in seqs]
+    valid = [c.upper() for c in column if c not in gap_chars]
+    counts = Counter(valid)
+    is_pis = len(counts) >= 2 and all(c >= 2 for c in counts.values())
+    marker = "<-- PIS" if is_pis else ""
+    print(f"Col {i}: {''.join(column)}  valid_chars={''.join(valid)}  {marker}")
+
+PYEOF
+python3 /workspace/verify_pis.py

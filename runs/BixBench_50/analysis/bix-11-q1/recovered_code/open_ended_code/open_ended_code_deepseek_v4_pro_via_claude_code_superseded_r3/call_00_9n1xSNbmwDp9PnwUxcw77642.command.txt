@@ -1,0 +1,108 @@
+cd /workspace && python3 -c "
+import sys
+sys.path.insert(0, '.')
+# Test the tokenizer with a sample tree
+import re
+s = '(Animals_Cele:1.7692000750,(Animals_Ggal:0.2602162586,Animals_Mmus:0.2641311680):0.0900936810,Animals_Xlae:0.2951345137);'
+s = re.sub(r'\[[^\]]*\]', '', s)
+
+# Simple Newick parser using stack
+# For each node, determine if it's a leaf (has a name label) or internal
+# Track branch lengths separately
+
+# Approach: parse into a tree structure, then walk it
+# Each node has: label, children, branch_length
+
+class Node:
+    def __init__(self):
+        self.label = None
+        self.children = []
+        self.branch_length = 0.0
+        self.is_leaf = False
+
+def parse_newick(s):
+    s = s.strip()
+    if s.endswith(';'):
+        s = s[:-1]
+    
+    idx = [0]
+    n = len(s)
+    
+    def parse_node():
+        node = Node()
+        
+        # Check for children (subtree)
+        if idx[0] < n and s[idx[0]] == '(':
+            idx[0] += 1  # skip '('
+            # Parse children
+            node.children.append(parse_node())
+            while idx[0] < n and s[idx[0]] == ',':
+                idx[0] += 1  # skip ','
+                node.children.append(parse_node())
+            if idx[0] < n and s[idx[0]] == ')':
+                idx[0] += 1  # skip ')'
+        
+        # Parse label (may be empty)
+        label_start = idx[0]
+        while idx[0] < n and s[idx[0]] not in ':,'):
+            idx[0] += 1
+        label = s[label_start:idx[0]].strip()
+        if label:
+            node.label = label
+        
+        # Parse branch length
+        if idx[0] < n and s[idx[0]] == ':':
+            idx[0] += 1  # skip ':'
+            num_start = idx[0]
+            while idx[0] < n and s[idx[0]] in '0123456789.eE+-':
+                idx[0] += 1
+            try:
+                node.branch_length = float(s[num_start:idx[0]])
+            except ValueError:
+                node.branch_length = 0.0
+        
+        # Determine if leaf
+        node.is_leaf = (len(node.children) == 0) and (node.label is not None)
+        
+        return node
+    
+    return parse_node()
+
+def compute_treeness_from_node(root):
+    internal_sum = 0.0
+    terminal_sum = 0.0
+    
+    def dfs(node):
+        nonlocal internal_sum, terminal_sum
+        if node.is_leaf or (len(node.children) == 0 and node.label):
+            # Leaf
+            if node.branch_length > 0:
+                terminal_sum += node.branch_length
+        else:
+            # Internal node
+            if node.branch_length > 0:
+                internal_sum += node.branch_length
+        for child in node.children:
+            dfs(child)
+    
+    dfs(root)
+    
+    total = internal_sum + terminal_sum
+    if total == 0:
+        return None
+    return internal_sum / total
+
+root = parse_newick(s)
+print(f'Root label: {root.label}, children: {len(root.children)}')
+print(f'Root branch length: {root.branch_length}')
+
+def print_tree(node, indent=0):
+    status = 'leaf' if node.is_leaf else 'internal'
+    print(f'{\"  \"*indent}{status}: label={node.label}, bl={node.branch_length}, children={len(node.children)}')
+    for child in node.children:
+        print_tree(child, indent+1)
+
+print_tree(root)
+print(f'Treeness: {compute_treeness_from_node(root)}')
+"
+

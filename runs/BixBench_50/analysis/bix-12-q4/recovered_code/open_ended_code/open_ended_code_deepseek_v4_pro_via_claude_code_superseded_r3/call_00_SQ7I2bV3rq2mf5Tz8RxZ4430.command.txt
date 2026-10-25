@@ -1,0 +1,99 @@
+cat > /tmp/compute_mwu_v2.py << 'PYEOF'
+import zipfile
+import sys
+sys.path.insert(0, '/tmp/scipy_pkg')
+import numpy as np
+from scipy.stats import mannwhitneyu
+from collections import Counter
+
+def parse_fasta(text):
+    seqs = {}
+    current_header = None
+    current_seq = []
+    for line in text.strip().split('\n'):
+        if line.startswith('>'):
+            if current_header is not None:
+                seqs[current_header] = ''.join(current_seq)
+            current_header = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line.strip())
+    if current_header is not None:
+        seqs[current_header] = ''.join(current_seq)
+    return seqs
+
+def parsimony_informative_sites(seqs):
+    if not seqs:
+        return 0, 0
+    seq_list = list(seqs.values())
+    if not seq_list:
+        return 0, 0
+    alignment_length = len(seq_list[0])
+    informative = 0
+    for pos in range(alignment_length):
+        column = [s[pos] for s in seq_list]
+        counts = Counter(c for c in column if c != '-')
+        chars_with_min2 = [c for c, cnt in counts.items() if cnt >= 2]
+        if len(chars_with_min2) >= 2:
+            informative += 1
+    return informative, alignment_length
+
+# Parse both archives
+animal_zip = zipfile.ZipFile('/workspace/inputs/scogs_animals.zip')
+fungi_zip = zipfile.ZipFile('/workspace/inputs/scogs_fungi.zip')
+
+animal_mafft = {f for f in animal_zip.namelist() if f.endswith('.mafft')}
+fungi_mafft = {f for f in fungi_zip.namelist() if f.endswith('.mafft')}
+common = sorted(animal_mafft & fungi_mafft)
+
+animal_pct = []
+fungi_pct = []
+
+for fname in common:
+    animal_text = animal_zip.read(fname).decode('utf-8')
+    fungi_text = fungi_zip.read(fname).decode('utf-8')
+    
+    animal_seqs = parse_fasta(animal_text)
+    fungi_seqs = parse_fasta(fungi_text)
+    
+    a_info, a_len = parsimony_informative_sites(animal_seqs)
+    f_info, f_len = parsimony_informative_sites(fungi_seqs)
+    
+    if a_len > 0:
+        animal_pct.append(100.0 * a_info / a_len)
+    if f_len > 0:
+        fungi_pct.append(100.0 * f_info / f_len)
+
+print(f"Animal N={len(animal_pct)}, Fungi N={len(fungi_pct)}", file=sys.stderr)
+print(f"Animal mean PI%: {np.mean(animal_pct):.6f}", file=sys.stderr)
+print(f"Fungi mean PI%: {np.mean(fungi_pct):.6f}", file=sys.stderr)
+print(f"Animal median PI%: {np.median(animal_pct):.6f}", file=sys.stderr)
+print(f"Fungi median PI%: {np.median(fungi_pct):.6f}", file=sys.stderr)
+
+# Mann-Whitney U using scipy
+# alternative='two-sided' is default
+res = mannwhitneyu(animal_pct, fungi_pct, alternative='two-sided')
+print(f"\nScipy mannwhitneyu:", file=sys.stderr)
+print(f"  statistic (U for first group, animals): {res.statistic:.6f}", file=sys.stderr)
+print(f"  p-value: {res.pvalue:.10f}", file=sys.stderr)
+
+# Also try with animals first vs fungi first
+res2 = mannwhitneyu(fungi_pct, animal_pct, alternative='two-sided')
+print(f"\nScipy mannwhitneyu (fungi first):", file=sys.stderr)
+print(f"  statistic (U for fungi): {res2.statistic:.6f}", file=sys.stderr)
+print(f"  p-value: {res2.pvalue:.10f}", file=sys.stderr)
+
+# Verify: U1 + U2 = n1 * n2
+n1, n2 = len(animal_pct), len(fungi_pct)
+print(f"\nn1*n2 = {n1*n2}", file=sys.stderr)
+print(f"U_animals + U_fungi = {res.statistic + res2.statistic}", file=sys.stderr)
+
+animal_zip.close()
+fungi_zip.close()
+
+# Print the answer: U statistic for animals as first group (scipy default)
+# or the smaller U
+print(f"\n*** U statistic (animals first, scipy convention) = {res.statistic}")
+print(f"*** U statistic (smaller/min convention) = {min(res.statistic, res2.statistic)}")
+PYEOF
+PYTHONPATH=/tmp/scipy_pkg python3 /tmp/compute_mwu_v2.py

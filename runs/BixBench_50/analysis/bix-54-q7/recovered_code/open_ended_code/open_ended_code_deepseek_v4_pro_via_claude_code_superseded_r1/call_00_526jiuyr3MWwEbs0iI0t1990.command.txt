@@ -1,0 +1,39 @@
+Rscript -e '
+library(splines)
+d <- read.csv("inputs/Swarm_2.csv")
+compute_proportion <- function(strain, ratio_str) {
+  if (strain == 287 && ratio_str == "1:0") return(1.0)
+  else if (strain == 98 && ratio_str == "1:0") return(0.0)
+  else if (strain == "287_98") {
+    parts <- as.numeric(strsplit(ratio_str, ":")[[1]])
+    return(parts[1] / (parts[1] + parts[2]))
+  } else return(NA)
+}
+d$prop287 <- mapply(compute_proportion, d$StrainNumber, d$Ratio)
+d <- d[!is.na(d$prop287), ]
+
+# Best model: natural spline df=4
+m_ns <- lm(Area ~ ns(prop287, df=4), data=d)
+
+# Use optimise for precise optimum
+obj <- function(p) predict(m_ns, newdata=data.frame(prop287=p))
+opt <- optimise(obj, interval=c(0, 1), maximum=TRUE)
+cat("Optimal proportion:", opt$maximum, "\n")
+cat("Maximum predicted Area:", opt$objective, "\n")
+
+# Also verify with very fine grid
+grid <- seq(0.8, 0.95, length.out=100001)
+pred <- predict(m_ns, newdata=data.frame(prop287=grid))
+idx <- which.max(pred)
+cat("Grid optimum prop:", grid[idx], "\n")
+cat("Grid optimum area:", pred[idx], "\n")
+
+# Also check the ANOVA comparison
+cat("\nANOVA comparing models:\n")
+m_quad <- lm(Area ~ prop287 + I(prop287^2), data=d)
+m_cubic <- lm(Area ~ prop287 + I(prop287^2) + I(prop287^3), data=d)
+cat("Quad vs Cubic:\n")
+print(anova(m_quad, m_cubic))
+cat("\nCubic vs Natural spline:\n")
+print(anova(m_cubic, m_ns))
+' 2>&1

@@ -1,0 +1,26 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py,numpy as np,scipy.sparse as sp
+
+def load(f):
+ with h5py.File(f,'r') as h:
+  X=sp.csr_matrix((h['X/data'][:],h['X/indices'][:],h['X/indptr'][:]),shape=(len(h['var/_index']),len(h['obs/_index']))).T.tocsr()
+  guides=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['obs/guide/categories'][:]])
+  codes=h['obs/guide/codes'][:]
+  genes=np.array([x.decode() if isinstance(x,bytes) else str(x) for x in h['var/_index'][:]])
+ return X,guides,codes,genes
+Xr,gr,cr,gr_genes=load('perturb.seq.align.q1.ref.h5ad'); Xq,gq,cq,gq_genes=load('perturb.seq.align.q1.query.h5ad')
+common,ri,qi=np.intersect1d(gr_genes,gq_genes,return_indices=True)
+# controls
+def norm_log(X):
+ s=np.asarray(X.sum(1)).ravel().astype(float);s[s==0]=1
+ return np.log1p(X.multiply(1/s[:,None]*1e6).tocsr()).toarray()
+Lr=norm_log(Xr[:,ri]);Lq=norm_log(Xq[:,qi])
+ntr=[i for i,g in enumerate(gr) if g.startswith('NT-')];ntq=[i for i,g in enumerate(gq) if g.startswith('NT-')]
+mr=Lr[np.isin(cr,ntr)].mean(0); mq=Lq[np.isin(cq,ntq)].mean(0)
+diff=mq-mr
+order=np.argsort(diff)[::-1]
+print('Top query-high genes:')
+for idx in order[:50]: print(common[idx], f'{diff[idx]:.2f}', f'r={mr[idx]:.2f}', f'q={mq[idx]:.2f}')
+print('Top ref-high genes:')
+for idx in order[-50:][::-1]: print(common[idx], f'{diff[idx]:.2f}', f'r={mr[idx]:.2f}', f'q={mq[idx]:.2f}')
+PY"

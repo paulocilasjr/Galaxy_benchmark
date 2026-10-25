@@ -1,0 +1,44 @@
+/bin/bash -lc "cat > download_frags.py <<'PY'
+import os, sys, time, requests, threading
+base='https://ftp.ncbi.nlm.nih.gov/geo/series/GSE196nnn/GSE196235/suppl/GSE196235_RAW.tar'
+jobs={
+'AIIamacrine':(2226539008,2331235525,'AIIamacrine_frags.tsv.gz'),
+'Astrocyte':(2331236352,2395917216,'Astrocyte_frags.tsv.gz'),
+'Cone':(2395917824,2835674188,'Cone_frags.tsv.gz'),
+'GABAamacrine':(2835675136,3177420369,'GABAamacrine_frags.tsv.gz'),
+'Horizontal':(3275070464,3559560539,'Horizontal_frags.tsv.gz'),
+'Microglia':(3559561216,3629793656,'Microglia_frags.tsv.gz'),
+'Mullerglia':(3629794304,4495781331,'Mullerglia_frags.tsv.gz'),
+'Retinalganglioncell':(5574836224,5761623900,'Retinalganglioncell_frags.tsv.gz'),
+}
+outdir='original_frags'
+os.makedirs(outdir,exist_ok=True)
+def download(name,start,end,out):
+    outpath=os.path.join(outdir,out)
+    if os.path.exists(outpath) and os.path.getsize(outpath)==end-start+1:
+        print(name,'already done'); return
+    tmp=outpath+'.part'
+    headers={'Range':f'bytes={start}-{end}'}
+    last=time.time()
+    with requests.get(base,headers=headers,stream=True,timeout=60) as r:
+        r.raise_for_status()
+        total=end-start+1; done=0
+        with open(tmp,'wb') as f:
+            for chunk in r.iter_content(chunk_size=1024*1024):
+                if chunk:
+                    f.write(chunk); done+=len(chunk)
+                    now=time.time()
+                    if now-last>5:
+                        print(f'{name}: {done/1e6:.1f}/{total/1e6:.1f} MB', flush=True)
+                        last=now
+    os.rename(tmp,outpath)
+    print(name,'DONE',os.path.getsize(outpath))
+threads=[]
+for name,(start,end,out) in jobs.items():
+    t=threading.Thread(target=download,args=(name,start,end,out),daemon=True)
+    t.start(); threads.append(t)
+    time.sleep(0.2)
+for t in threads: t.join()
+print('all done')
+PY
+python3 download_frags.py"

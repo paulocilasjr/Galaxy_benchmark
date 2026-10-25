@@ -1,0 +1,67 @@
+/bin/bash -c "python - <<'PY'
+import xlrd, math, numpy as np
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+p='/workspace/inputs/pone.0150501.s002.xls'
+sh=xlrd.open_workbook(p).sheet_by_index(0)
+headers=sh.row_values(1)[1:]
+mat=[]; names=[]
+for r in range(2,sh.nrows):
+    vals=sh.row_values(r)
+    names.append(vals[0])
+    nums=[]
+    for v in vals[1:]:
+        if isinstance(v,(int,float)):
+            nums.append(float(v))
+        else:
+            nums.append(np.nan)
+    mat.append(nums)
+A=np.array(mat, dtype=float)
+P=[i for i,h in enumerate(headers) if h.startswith('P_')]
+C=[i for i,h in enumerate(headers) if h.startswith('C_')]
+exP={'P_3'}; exC={'C_18'}
+
+def analysis(center_mode='allmean', exclude=False, threshold=None, sign='sample-gene', equal_var=True):
+    B=A.copy()
+    if threshold is not None:
+        B[B>=threshold]=np.nan
+    pidx=[i for i in P if not exclude or headers[i] not in exP]
+    cidx=[i for i in C if not exclude or headers[i] not in exC]
+    # center per sample based on available values among all 175
+    if center_mode=='allmean':
+        sample_means=np.nanmean(B, axis=0)
+    elif center_mode=='detected_mean':
+        # mean Ct of detected (<34) per sample; no threshold applied to B?
+        sample_means=np.nanmean(np.where(A<threshold if threshold else A, A, np.nan), axis=0)
+    elif center_mode=='none':
+        sample_means=np.zeros(B.shape[1])
+    if center_mode"'!='"'none':
+        if sign=='sample-gene':
+            B=sample_means[None,:]-B
+        else:
+            B=B-sample_means[None,:]
+    pvals=[]; details=[]
+    for k,name in enumerate(names):
+        x=B[k,pidx]; y=B[k,cidx]
+        x=x[~np.isnan(x)]; y=y[~np.isnan(y)]
+        if len(x)<2 or len(y)<2:
+            pvals.append(np.nan); details.append((name,np.nan,len(x),len(y))); continue
+        t,pv=stats.ttest_ind(x,y,equal_var=equal_var)
+        pvals.append(pv); details.append((name,pv,len(x),len(y)))
+    pvals=np.array(pvals)
+    valid=~np.isnan(pvals)
+    res=multipletests(pvals[valid],alpha=0.05,method='bonferroni')
+    by=multipletests(pvals[valid],alpha=0.05,method='fdr_by')
+    print('center',center_mode,'sign',sign,'threshold',threshold,'exclude',exclude,'n valid',valid.sum(),'raw',np.sum(pvals[valid]<=0.05),'bonf',np.sum(res[0]),'BY',np.sum(by[0]))
+    bonf_names=[names[valid][i] for i,s in enumerate(res[0]) if s]
+    by_names=[names[valid][i] for i,s in enumerate(by[0]) if s]
+    print('bonf',bonf_names)
+    print('by',by_names)
+    return pvals,details
+
+for cm in ['none','allmean','detected_mean']:
+  for ex in [False,True]:
+    analysis(cm, ex, threshold=None, sign='sample-gene')
+    analysis(cm, ex, threshold=None, sign='gene-sample')
+    analysis(cm, ex, threshold=34, sign='sample-gene')
+PY"

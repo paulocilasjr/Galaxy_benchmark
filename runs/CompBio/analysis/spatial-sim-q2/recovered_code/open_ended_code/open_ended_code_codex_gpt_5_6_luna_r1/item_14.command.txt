@@ -1,0 +1,27 @@
+/bin/bash -lc "python - <<'PY'
+# concise maps from all-gene NNLS
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sc=pd.read_csv('extracted/spatial_q_sc_counts.csv',index_col=0);meta=pd.read_csv('extracted/spatial_q_sc_metadata.csv',index_col=0);sp=mmread('extracted/matrix.mtx.gz').tocsr().toarray().T; pos=pd.read_csv('extracted/tissue_positions.csv')
+types=sorted(meta.cell_type.unique()); norm=sc.div(sc.sum(1),axis=0); ref=meta.join(norm).groupby('cell_type')[sc.columns].mean().loc[types].T.values; ref/=ref.sum(0,keepdims=True)
+y=sp/sp.sum(1,keepdims=True); co=np.array([nnls(ref,a)[0] for a in y]);co/=co.sum(1,keepdims=True)
+# label symbols
+sym={'B_Cell':'B','Endothelial':'E','Fibroblast_Stroma':'F','Macrophage':'M','T_Cell':'T','Tumor_Core':'X'}
+for mode in ['argmax','tumor']:
+ print('\\n',mode)
+ g=np.empty((30,30),dtype='<U1')
+ for r in range(30):
+  for c in range(30):
+   k=np.where((pos.array_row==r)&(pos.array_col==c))[0][0]
+   if mode=='argmax': g[r,c]=sym[types[co[k].argmax()]]
+   else:
+    x=co[k,types.index('Tumor_Core')]
+    g[r,c]='X' if x>.1 else ('m' if co[k,types.index('Macrophage')]>0.45 else ('f' if co[k,types.index('Fibroblast_Stroma')]>0.45 else '.'))
+ for row in g: print(''.join(row))
+# lists tumor spots with pos, composition
+ix=np.where(co[:,types.index('Tumor_Core')]>0.1)[0]
+print('\\ntumor positions n',len(ix))
+for k in ix:
+ print(int(pos.array_row[k]),int(pos.array_col[k]),' '.join(f'{types[j]}={co[k,j]:.2f}' for j in range(6)))
+PY"

@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 -u - <<'PY'
+import pandas as pd, numpy as np, time, traceback, sys
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+try:
+ raw=pd.read_csv('inputs/count.csv')
+ counts=raw.set_index('geneID').T
+ metadata=pd.DataFrame({'condition':['KL']*3+['WL']*3}, index=counts.index)
+ print('start',counts.shape,flush=True)
+ dds=DeseqDataSet(counts=counts, metadata=metadata, design='~condition', refit_cooks=True, quiet=True, n_cpus=8)
+ dds.deseq2()
+ print('deseq done',flush=True)
+ stat=DeseqStats(dds, contrast=['condition','KL','WL'], alpha=0.05, cooks_filter=True, independent_filter=True, quiet=True, n_cpus=8)
+ stat.summary()
+ print('raw stats done',flush=True)
+ print('LFC cols',stat.LFC.columns.tolist(),flush=True)
+ coeff=[c for c in stat.LFC.columns if c"'!='"'intercept'][0]
+ stat.lfc_shrink(coeff,adapt=True)
+ print('shrink done',flush=True)
+ res=stat.results_df.copy()
+ filt=(res['pvalue']<0.05)&(res['log2FoldChange'].abs()>1)&(res['baseMean']>10)
+ print('counts',res.shape,'p',int((res.pvalue<.05).sum()),'lfc',int((res.log2FoldChange.abs()>1).sum()),'base',int((res.baseMean>10).sum()),'all',int(filt.sum()),flush=True)
+ print('coeff',coeff,flush=True)
+ print(res.loc[filt].sort_values(['pvalue'],kind='mergesort').head(30).to_string(),flush=True)
+except BaseException as e:
+ print('ERROR',repr(e),flush=True); traceback.print_exc(); sys.exit(1)
+PY"

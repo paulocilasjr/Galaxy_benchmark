@@ -1,0 +1,40 @@
+/bin/bash -lc "python3 - <<'PY'
+import numpy as np, pandas as pd, glob, os, collections, gzip
+# use precomputed cov arrays and earlier summary; recompute select features from raw maybe avoid expensive? use cov for coverage features and earlier summary values manually? Let's compute from cov only plus chrom/strand via gzip streaming (could be 2 min). 
+# We'll compute features using cov and existing tss_profiles maybe.
+files=sorted(glob.glob('cov/*.counts'), key=lambda x:int(os.path.basename(x).split('.')[0]))
+names=[os.path.basename(f).split('.')[0] for f in files]
+covs=np.array([np.loadtxt(f,usecols=3) for f in files])
+rows=[]
+for i,n in enumerate(names):
+    a=covs[i].astype(float)
+    total=a.sum(); sortedd=np.sort(a)[::-1]; csum=np.cumsum(sortedd); N=len(a)
+    top1=csum[int(N*0.01)-1]/total; top5=csum[int(N*0.05)-1]/total
+    nonzero=(a>0).sum()/N
+    entropy=-(a[a>0]/total*np.log2(a[a>0]/total)).sum()
+    x=np.log2(a+1); x=x-x.mean(); denom=(x*x).sum()
+    ac1=(x[:-1]*x[1:]).sum()/denom
+    ac5=(x[:-5]*x[5:]).sum()/denom if len(x)>5 else np.nan
+    ac20=(x[:-20]*x[20:]).sum()/denom
+    rows.append({'name':n,'nonzero':nonzero,'top1':top1,'top5':top5,'entropy':entropy,'ac1':ac1,'ac5':ac5,'ac20':ac20,'std':a.std()})
+df=pd.DataFrame(rows).set_index('name')
+print(df)
+# add raw file features quickly via streaming? Let's do using gzip and counter only counts chrom and strand, unique starts maybe we have from earlier but recompute in same loop not too long.
+feat={n:{} for n in names}
+for idx,f in enumerate(files):
+    n=names[idx]
+    chroms=set(); strands=collections.Counter(); total=0; uniq=set(); maxdup=0; dups=0; counts=collections.Counter()
+    # We already did unique earlier; recompute expensive but okay ~3min? Avoid for now use previous values.
+# Instead use saved earlier manually? not. Let's skip raw in PCA first.
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+X=df.values
+Xs=StandardScaler().fit_transform(X)
+pca=PCA(n_components=3).fit(Xs)
+print('pca var',pca.explained_variance_ratio_)
+coords=pca.transform(Xs)
+for n,c in zip(names,coords): print(n,c)
+from sklearn.ensemble import IsolationForest
+clf=IsolationForest(random_state=0, contamination=0.1).fit(Xs)
+print('if scores', list(zip(names, clf.decision_function(Xs), clf.predict(Xs))))
+PY"

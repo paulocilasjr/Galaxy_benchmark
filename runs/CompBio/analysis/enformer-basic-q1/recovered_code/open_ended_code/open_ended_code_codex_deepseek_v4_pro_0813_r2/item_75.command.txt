@@ -1,0 +1,48 @@
+/bin/bash -lc "./venv/bin/python - <<'PY'
+import inspect
+if not hasattr(inspect,'ArgSpec'):
+    from collections import namedtuple
+    inspect.ArgSpec=namedtuple('ArgSpec','args varargs keywords defaults')
+if not hasattr(inspect,'getargspec'):
+    inspect.getargspec=lambda f: inspect.ArgSpec(*inspect.getfullargspec(f)[:4])
+from tensorflow_checkpoint_reader import table, core, errors
+from tensorflow_checkpoint_reader.py_checkpoint_reader import NewCheckpointReader
+import snappy
+
+_orig_read_block=table.read_block
+
+def read_block(file, handle):
+    result=table.BlockContents()
+    n=handle.size
+    contents=errors.raise_if_error(file.read(handle.offset, n+table.kBlockTrailerSize))
+    if contents.size()"'!=n+table.kBlockTrailerSize:
+        raise errors.DataLoss("truncated block read")
+    data=contents.slice()
+    comp=data[n]
+    if comp==table.CompressionType.kNoCompression.value:
+        result.data=core.StringPiece(data, n)
+    elif comp==table.CompressionType.kSnappyCompression.value:
+        raw=snappy.decompress(bytes(data[:n]))
+        result.data=core.StringPiece(raw)
+    else:
+        raise NotImplementedError(f'"'compression {comp}')
+    result.cacheable=False
+    result.heap_allocated=False
+    return result
+
+table.read_block=read_block
+
+r=NewCheckpointReader('enformer_saved/variables/variables')
+shapes=r.get_variable_to_shape_map()
+print('num vars',len(shapes))
+total=0
+for name,shape in shapes.items():
+    n=1
+    for s in shape: n*=s
+    total+=n
+print('total params sum shapes',total)
+print(f'{total:,}')
+for name in list(shapes)[:100]: print(name, shapes[name])
+print('---tail---')
+for name in list(shapes)[-100:]: print(name, shapes[name])
+PY"

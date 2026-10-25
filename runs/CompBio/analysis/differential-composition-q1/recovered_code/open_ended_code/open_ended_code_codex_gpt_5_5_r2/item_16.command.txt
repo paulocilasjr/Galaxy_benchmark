@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+# Reproduce K=24 labels and inspect selected clusters marker expression, no topgene loops heavy
+import gzip, numpy as np
+from scipy.io import mmread
+from scipy import sparse
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from collections import defaultdict
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ f.readline(); genes=[l.rstrip('\\n').split('\\t')[1] for l in f]
+sym=defaultdict(list)
+for i,g in enumerate(genes): sym[g.upper()].append(i)
+X1=mmread('differential.composition.q1.1.mtx.gz').tocsc().astype(np.float32)
+X2=mmread('differential.composition.q1.2.mtx.gz').tocsc().astype(np.float32)
+X=sparse.hstack([X1,X2], format='csc').T.tocsr(); batch=np.array([0]*X1.shape[1]+[1]*X2.shape[1])
+lib=np.asarray(X.sum(axis=1)).ravel(); Xn=X.copy().astype(np.float32); rows=np.repeat(np.arange(Xn.shape[0]), np.diff(Xn.indptr)); Xn.data=np.log1p(Xn.data*10000/lib[rows])
+mean=np.asarray(Xn.mean(axis=0)).ravel(); mean2=np.asarray(Xn.power(2).mean(axis=0)).ravel(); var=mean2-mean**2; nnz=np.diff(Xn.tocsc().indptr); mask=(mean>0.005)&(mean<5)&(nnz>=20); score=np.zeros_like(mean); score[mask]=var[mask]/(mean[mask]+1e-3); hvg=np.argsort(score)[-3000:]
+Z=StandardScaler().fit_transform(TruncatedSVD(n_components=50, random_state=1).fit_transform(Xn[:,hvg]))
+lab=KMeans(n_clusters=24,n_init=20,random_state=42).fit_predict(Z)
+# inspect clusters with sample1-only muller (21), horizontal (19), sample2 muller (18), maybe rods
+clusters=[21,19,18]
+marker_genes=['GFAP','AQP4','ALDH1L1','SLC1A3','SLC1A2','SOX9','GJA1','RLBP1','GLUL','VIM','APOE','CLU','CRYAB','TF','SPARCL1','RGS16','PROX1','ONECUT1','ONECUT2','LHX1','CALB1','CALB2','TFAP2A','TFAP2B','RHO','SAG','CABP5','VSX2']
+idx=[]; names=[]
+for m in marker_genes:
+ for i in sym.get(m.upper(),[]): idx.append(i); names.append(m)
+for c in clusters:
+ cells=(lab==c); print('\\nCluster',c,'n',cells.sum(),'n1',((cells)&(batch==0)).sum(),'n2',((cells)&(batch==1)).sum())
+ vals=np.asarray(Xn[cells][:,idx].mean(axis=0)).ravel()
+ for n,v in sorted(zip(names,vals), key=lambda x:-x[1]):
+  if v>0.02: print(f' {n:8s} {v:.3f}')
+ # top genes by diff
+ mi=np.asarray(Xn[cells].mean(axis=0)).ravel(); mo=np.asarray(Xn[~cells].mean(axis=0)).ravel(); order=np.argsort(mi-mo)[::-1]
+ print(' top', ', '.join(f'{genes[i]}({mi[i]:.2f})' for i in order[:25] if mi[i]>.05))
+PY"

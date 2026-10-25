@@ -1,0 +1,187 @@
+PYTHONPATH=/workspace/pylib:$PYTHONPATH python3 << 'PYEOF'
+import csv
+import re
+from collections import defaultdict
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+
+# 1. Load DE results
+de_data = []
+with open("/workspace/res_GluFevsGluFePlus.csv") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        de_data.append({
+            'gene_id': row['gene_id'].strip(),
+            'log2FC': float(row['log2FoldChange']),
+            'padj': float(row['padj']) if row['padj'] != 'NA' else None
+        })
+
+print(f"Total DE genes: {len(de_data)}")
+
+# 2. Define foreground: significantly upregulated
+foreground_genes = set()
+for g in de_data:
+    if g['padj'] is not None and g['padj'] < 0.05 and g['log2FC'] > 1.5:
+        foreground_genes.add(g['gene_id'])
+
+print(f"Foreground (upregulated, log2FC>1.5, padj<0.05): {len(foreground_genes)}")
+
+# Also get full DE gene set for universe
+all_de_genes = set(g['gene_id'] for g in de_data)
+print(f"All DE genes: {len(all_de_genes)}")
+
+# 3. Load KEGG genes (universe of all KEGG-mapped genes in PA14)
+kegg_genes = set()
+with open("/workspace/pau_genes.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split('\t')
+        kegg_id = parts[0]
+        gene_locus = kegg_id.replace("pau:", "")
+        kegg_genes.add(gene_locus)
+
+print(f"KEGG genes (pau): {len(kegg_genes)}")
+
+# 4. Load pathway-gene mappings
+pathway_genes = defaultdict(set)
+gene_pathways = defaultdict(set)
+
+with open("/workspace/pau_pathway_links.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split('\t')
+        pathway_id = parts[0].replace("path:", "")
+        gene_id = parts[1].replace("pau:", "")
+        pathway_genes[pathway_id].add(gene_id)
+        gene_pathways[gene_id].add(pathway_id)
+
+print(f"Pathways: {len(pathway_genes)}")
+
+# 5. Load pathway names
+pathway_names = {}
+with open("/workspace/pau_pathways.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split('\t')
+        pid = parts[0]
+        pname = parts[1] if len(parts) > 1 else ""
+        pathway_names[pid] = pname
+
+# Find ABC transporters pathway
+abc_pathway_id = None
+for pid, pname in pathway_names.items():
+    if "ABC transporter" in pname:
+        abc_pathway_id = pid
+        print(f"\nABC transporters pathway ID: {abc_pathway_id}, Name: {pname}")
+        break
+
+# 6. Universe: all DE genes that can be mapped to KEGG
+de_genes_in_kegg = all_de_genes & kegg_genes
+print(f"DE genes with KEGG mapping: {len(de_genes_in_kegg)}")
+
+fg_in_kegg = foreground_genes & kegg_genes
+print(f"Foreground genes with KEGG mapping: {len(fg_in_kegg)}")
+
+fg_not_in_kegg = foreground_genes - kegg_genes
+print(f"Foreground genes WITHOUT KEGG mapping: {len(fg_not_in_kegg)}")
+if fg_not_in_kegg:
+    print(f"  Examples: {sorted(list(fg_not_in_kegg))[:10]}")
+
+# Universe = all DE genes that have KEGG mapping
+universe = de_genes_in_kegg
+print(f"Universe size: {len(universe)}")
+
+# 7. ORA: Fisher's exact test for each pathway
+results = []
+for pid, pathway_gene_set in pathway_genes.items():
+    pathway_in_universe = pathway_gene_set & universe
+    if len(pathway_in_universe) == 0:
+        continue
+    
+    a = len(fg_in_kegg & pathway_gene_set)
+    b = len(fg_in_kegg) - a
+    c = len(pathway_in_universe) - a
+    d = len(universe) - len(fg_in_kegg) - c
+    
+    if a == 0:
+        continue
+    
+    table = [[a, b], [c, d]]
+    odds_ratio, p_value = fisher_exact(table, alternative='greater')
+    
+    pname = pathway_names.get(pid, pid)
+    results.append({
+        'pathway_id': pid,
+        'pathway_name': pname,
+        'overlap': a,
+        'pathway_size': len(pathway_in_universe),
+        'p_value': p_value,
+        'odds_ratio': odds_ratio
+    })
+
+print(f"Pathways tested (with at least 1 overlapping gene): {len(results)}")
+
+# 8. Multiple testing correction (Benjamini-Hochberg)
+if results:
+    pvals = [r['p_value'] for r in results]
+    reject, padj, _, _ = multipletests(pvals, method='fdr_bh')
+    for i, r in enumerate(results):
+        r['padj'] = padj[i]
+        r['significant'] = reject[i]
+
+# 9. Find ABC transporters result
+abc_result = None
+for r in results:
+    if r['pathway_id'] == abc_pathway_id:
+        abc_result = r
+        break
+
+print(f"\n=== ABC Transporters Enrichment ===")
+if abc_result:
+    print(f"Pathway: {abc_result['pathway_name']}")
+    print(f"Pathway ID: {abc_result['pathway_id']}")
+    print(f"Overlap (foreground genes in pathway): {abc_result['overlap']}")
+    print(f"Pathway size (in universe): {abc_result['pathway_size']}")
+    print(f"Fisher p-value: {abc_result['p_value']:.6e}")
+    print(f"Adjusted p-value (FDR): {abc_result['padj']:.6e}")
+    print(f"Significant at padj<0.05: {abc_result['significant']}")
+    
+    # List the overlapping genes
+    abc_genes_in_pathway = pathway_genes[abc_pathway_id]
+    overlapping_genes = fg_in_kegg & abc_genes_in_pathway
+    print(f"\nOverlapping genes ({len(overlapping_genes)}):")
+    for g in sorted(overlapping_genes):
+        for d in de_data:
+            if d['gene_id'] == g:
+                print(f"  {g}: log2FC={d['log2FC']:.3f}, padj={d['padj']:.4e}")
+                break
+else:
+    print("ABC transporters NOT found in enrichment results!")
+    # Check if it was tested (maybe it had 0 overlaps?)
+    abc_genes_in_pathway = pathway_genes.get(abc_pathway_id, set())
+    overlap = fg_in_kegg & abc_genes_in_pathway
+    print(f"Raw overlap check: {len(overlap)}")
+    if overlap:
+        print(f"Genes: {overlap}")
+
+# 10. Top enriched pathways for context
+results_sorted = sorted(results, key=lambda r: r['padj'])
+print(f"\n=== Top 15 Enriched Pathways (by padj) ===")
+for i, r in enumerate(results_sorted[:15]):
+    sig = "*" if r['significant'] else ""
+    print(f"{i+1}. {r['pathway_name'][:70]} (ID: {r['pathway_id']}): overlap={r['overlap']}, padj={r['padj']:.4e} {sig}")
+
+# Show where ABC transporters ranks
+for i, r in enumerate(results_sorted):
+    if r['pathway_id'] == abc_pathway_id:
+        print(f"\nABC transporters rank: {i+1}/{len(results_sorted)}")
+        break
+
+PYEOF
+

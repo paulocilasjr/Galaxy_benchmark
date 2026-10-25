@@ -1,0 +1,160 @@
+python3 << 'PYEOF'
+import os, sys
+
+# Check multiple genes to see if mldist ≈ tree patristic
+# Parse Newick to compute patristic distances
+def parse_newick_tree(tree_str):
+    """Parse Newick tree string, return dict of patristic distances between all pairs."""
+    s = tree_str.strip().rstrip(';')
+    
+    # Build node list: each node has children, length (to parent), name
+    nodes = []  # list of dicts
+    
+    i = 0
+    def parse_node():
+        nonlocal i
+        node = {'children': [], 'length': 0.0, 'name': None}
+        node_id = len(nodes)
+        nodes.append(node)
+        
+        if i < len(s) and s[i] == '(':
+            i += 1  # skip '('
+            while True:
+                child_id = parse_node()
+                nodes[node_id]['children'].append(child_id)
+                if i < len(s) and s[i] == ',':
+                    i += 1
+                elif i < len(s) and s[i] == ')':
+                    i += 1
+                    break
+            # Read length after ')'
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        else:
+            # leaf
+            j = i
+            while j < len(s) and s[j] not in ':),;':
+                j += 1
+            nodes[node_id]['name'] = s[i:j]
+            i = j
+            if i < len(s) and s[i] == ':':
+                i += 1
+                j = i
+                while j < len(s) and s[j] not in ',):;':
+                    j += 1
+                if j > i:
+                    nodes[node_id]['length'] = float(s[i:j])
+                    i = j
+        
+        return node_id
+    
+    root = parse_node()
+    
+    # Compute leaf paths and patristic distances
+    leaf_paths = {}  # name -> list of (node_id, cum_dist from root)
+    
+    def traverse(node_id, cum_dist):
+        node = nodes[node_id]
+        if node['name'] is not None:
+            leaf_paths[node['name']] = (node_id, cum_dist)
+        for child_id in node['children']:
+            traverse(child_id, cum_dist + nodes[child_id]['length'])
+    
+    traverse(root, 0)
+    
+    # Find LCA for each pair
+    # Build parent map
+    parent = {}
+    def build_parents(node_id):
+        for child_id in nodes[node_id]['children']:
+            parent[child_id] = node_id
+            build_parents(child_id)
+    build_parents(root)
+    parent[root] = None
+    
+    # Distance to root for each node
+    dist_to_root = {}
+    def build_dist(node_id, d):
+        dist_to_root[node_id] = d
+        for child_id in nodes[node_id]['children']:
+            build_dist(child_id, d + nodes[child_id]['length'])
+    build_dist(root, 0)
+    
+    leaf_names = sorted(leaf_paths.keys())
+    patristic = {}
+    for i in range(len(leaf_names)):
+        for j in range(i+1, len(leaf_names)):
+            n1, n2 = leaf_names[i], leaf_names[j]
+            id1, d1 = leaf_paths[n1]
+            id2, d2 = leaf_paths[n2]
+            
+            # Find LCA
+            ancestors1 = set()
+            p = id1
+            while p is not None:
+                ancestors1.add(p)
+                p = parent.get(p)
+            
+            p = id2
+            lca = None
+            while p is not None:
+                if p in ancestors1:
+                    lca = p
+                    break
+                p = parent.get(p)
+            
+            if lca is not None:
+                tree_dist = dist_to_root[id1] + dist_to_root[id2] - 2 * dist_to_root[lca]
+            else:
+                tree_dist = 0.0
+            
+            patristic[(n1, n2)] = tree_dist
+    
+    return patristic, leaf_names
+
+# Test a few genes
+for gene_id in ['1001705at2759', '1025450at2759', '1032689at2759'][:3]:
+    tree_file = f"{gene_id}.faa.mafft.clipkit.treefile"
+    mldist_file = f"{gene_id}.faa.mafft.clipkit.mldist"
+    
+    if not os.path.exists(tree_file) or not os.path.exists(mldist_file):
+        print(f"{gene_id}: missing files")
+        continue
+    
+    tree_str = open(tree_file).read().strip()
+    patristic, leaf_names = parse_newick_tree(tree_str)
+    
+    with open(mldist_file) as f:
+        n = int(f.readline().strip())
+        mldist_order = []
+        mldist_matrix = []
+        for i in range(n):
+            parts = f.readline().strip().split()
+            mldist_order.append(parts[0])
+            mldist_matrix.append([float(x) for x in parts[1:]])
+    
+    # Compare
+    print(f"\n{gene_id}:")
+    print(f"  Tree: {tree_str[:80]}...")
+    diffs = []
+    for i in range(n):
+        for j in range(i+1, n):
+            n1, n2 = mldist_order[i], mldist_order[j]
+            md = mldist_matrix[i][j]
+            td = patristic.get((n1, n2))
+            if td is None:
+                td = patristic.get((n2, n1))
+            if td is not None:
+                diffs.append(md - td)
+    
+    if diffs:
+        abs_diffs = [abs(d) for d in diffs]
+        print(f"  ML - tree patristic diffs: min={min(diffs):.4f}, max={max(diffs):.4f}, mean_abs={sum(abs_diffs)/len(abs_diffs):.4f}")
+
+PYEOF

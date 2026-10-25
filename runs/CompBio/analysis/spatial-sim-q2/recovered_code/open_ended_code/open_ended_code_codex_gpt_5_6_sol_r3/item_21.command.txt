@@ -1,0 +1,28 @@
+/bin/bash -lc "python -u - <<'PY'
+# quick repeat deconv, then radial summaries and conditional models
+import pandas as pd,numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+from scipy.stats import fisher_exact
+from sklearn.linear_model import LogisticRegression, PoissonRegressor
+from sklearn.preprocessing import SplineTransformer,PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import roc_auc_score
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0);md=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0);cts=sorted(md.cell_type.unique());P=np.stack([sc[md.cell_type==t].mean().values for t in cts],1);Y=mmread('matrix.mtx.gz').T.toarray();C=np.rint(np.array([nnls(P,y)[0] for y in Y])).astype(int)
+pos=pd.read_csv('tissue_positions.csv');xy=pos[['array_row','array_col']].values;r=np.sqrt(((xy-[14.5,14.5])**2).sum(1));T=C[:,cts.index('Tumor_Core')]>0
+rb=pd.cut(r,[-1,2,4,6,8,10,12,15,22])
+print('total N',pd.Series(C.sum(1)).value_counts().sort_index().to_dict())
+for t in cts:
+ j=cts.index(t);print('\\n',t);print(pd.DataFrame({'r':rb,'count':C[:,j],'pres':C[:,j]>0}).groupby('r',observed=True).agg(n=('count','size'),mean=('count','mean'),pres=('pres','mean')).to_string())
+# Conditional tumor effect controlling spline in radius and x,y: target presence ~ spatial smooth + T or neighbor T
+from scipy.spatial.distance import cdist
+d=cdist(xy,xy[T]).min(1); near=(d<=1.01).astype(int)
+for t in cts[:-1]:
+ j=cts.index(t); q=(C[:,j]>0).astype(int)
+ # flexible 2D polynomials degree 5, plus near. compare coefficient; bootstrap approx not
+ X0=PolynomialFeatures(5,include_bias=False).fit_transform((xy-14.5)/15)
+ for name,z in [('T',T.astype(int)),('near',near)]:
+  X=np.column_stack([X0,z])
+  mod=LogisticRegression(C=1e3,max_iter=5000).fit(X,q)
+  print(t,name,'coef',mod.coef_[0,-1],'OR',np.exp(mod.coef_[0,-1]),'auc',roc_auc_score(q,mod.predict_proba(X)[:,1]))
+PY"

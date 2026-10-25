@@ -1,0 +1,21 @@
+/bin/bash -lc "Rscript - <<'RS'
+read_res <- function(f) { x <- readRDS(f); ld <- attr(x, 'listData'); data.frame(gene=attr(x,'rownames'), lfc=ld"'$log2FoldChange) }
+files <- c(`97`='"'inputs/res_1vs97.rds', "'`98`='"'inputs/res_1vs98.rds', "'`99`='"'inputs/res_1vs99.rds')
+res <- lapply(files, read_res)
+links <- system(\"curl -fsSL 'https://rest.kegg.jp/link/pathway/pau'\", intern=TRUE)
+p <- strsplit(links, '\\t')
+map0 <- data.frame(gene=sub('"'^pau:'"','',vapply(p,"'`[`,character(1),1)), pathway=sub('"'"'^path:'"','',vapply(p,"'`[`,character(1),2)))
+compute <- function(use_result_universe=TRUE, minGS=10, maxGS=500) {
+  map <- map0
+  if (use_result_universe) map <- map[map$gene %in% Reduce(intersect, lapply(res, `[[`, '"'gene')),]
+  universe <- unique(map"'$gene)
+  p2g <- lapply(split(map$gene, map$pathway), function(g) unique(intersect(g, universe)))
+  sizes <- lengths(p2g); p2g <- p2g[sizes>=minGS & sizes<=maxGS]
+  ora <- function(fg) { fg<-intersect(unique(fg), universe); N<-length(universe); n<-length(fg); pv<-sapply(p2g,function(g){M<-length(g); k<-sum(fg %in% g); if(k>0) phyper(k-1,M,N-M,n,lower.tail=FALSE) else 1}); names(pv)[p.adjust(pv,'"'BH')<0.05] }
+  sigup <- sigdn <- list()
+  for (nm in names(res)) { d<-res[[nm]]; sigup[[nm]]<-ora(d"'$gene[d$lfc>1.5]); sigdn[[nm]]<-ora(d$gene[d$lfc< -1.5]) }
+  list(N=length(universe), P=length(p2g), up=Reduce(intersect,sigup), down=Reduce(intersect,sigdn))
+}
+for (u in c(TRUE,FALSE)) { z<-compute(u); cat('"'result_universe', u, 'N', z"'$N, '"'P', z"'$P, '"'common_up', length(z"'$up), paste(z$up,collapse='"','), 'common_down', length(z"'$down), paste(z$down,collapse='"','), 'total', length(union(z"'$up,z$down)), '"'\\n') }
+cat('all KEGG pathway genes', length(unique(map0"'$gene)), '"'missing from RDS', sum("'!unique(map0$gene) %in% Reduce(intersect, lapply(res, `[[`, '"'gene'))), '\\n')
+RS"

@@ -1,0 +1,39 @@
+/bin/bash -lc "python - <<'PY'
+import csv
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+
+# Recompute in float64 and list genes passing the threshold.
+def header(path):
+    with open(path, newline='') as f:
+        return next(csv.reader(f))
+crispr_header = header('inputs/CRISPRGeneEffect.csv')
+expr_header = header('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv')
+common_cols = [c for c in crispr_header[1:] if c in set(expr_header[1:])]
+usecols = [crispr_header[0]] + common_cols
+# Empty first header is awkward with usecols by name; use integer positions instead.
+crispr_pos = [0] + [i for i,c in enumerate(crispr_header) if i and c in set(common_cols)]
+expr_common = set(common_cols)
+expr_pos = [0] + [i for i,c in enumerate(expr_header) if i and c in expr_common]
+
+ge = pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0, usecols=crispr_pos)
+expr = pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0, usecols=expr_pos)
+common_rows = ge.index.intersection(expr.index)
+ge = ge.loc[common_rows, common_cols]
+expr = expr.loc[common_rows, common_cols]
+
+hits=[]
+for gene in common_cols:
+    x = expr[gene].to_numpy()
+    y = -ge[gene].to_numpy()
+    m = np.isfinite(x) & np.isfinite(y)
+    rho = spearmanr(x[m], y[m]).statistic
+    if rho >= 0.6:
+        hits.append((gene, float(rho), int(m.sum())))
+print('count', len(hits))
+for h in hits:
+    print(h[0], f'{h[1]:.12f}', h[2])
+with open('codex_output/answer.txt') as f:
+    print('answer_file_repr', repr(f.read()))
+PY"

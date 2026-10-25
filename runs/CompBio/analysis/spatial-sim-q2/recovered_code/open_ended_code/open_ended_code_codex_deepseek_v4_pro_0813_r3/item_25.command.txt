@@ -1,0 +1,35 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, scipy.optimize
+sc=pd.read_csv('data/spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('data/spatial_q_sc_metadata.csv', index_col=0)
+cts=sorted(meta['cell_type'].unique())
+S=np.column_stack([sc.values[meta['cell_type']==ct].mean(axis=0) for ct in cts])
+rng=np.random.default_rng(0)
+N=2000
+true_weights=np.zeros((N,len(cts)))
+true_binary=np.zeros((N,len(cts)),dtype=bool)
+Y=np.zeros((N,sc.shape[1]))
+for i in range(N):
+    k=int(rng.integers(1,5))
+    types=rng.choice(cts,size=k,replace=True)
+    cells=[]
+    for ct in types:
+        j=cts.index(ct); true_weights[i,j]+=1; true_binary[i,j]=True
+        cells.append(sc.values[meta['cell_type']==ct][int(rng.integers(200))])
+    Y[i]=np.sum(cells,axis=0)
+P=np.zeros((N,len(cts)))
+for i in range(N):
+    p,_=scipy.optimize.nnls(S,Y[i]); P[i]=p
+Pn=P/P.sum(axis=1,keepdims=True)
+for thr in [0.1,0.2,0.3,0.5]:
+ pred=P>thr
+ acc=(pred==true_binary).all(axis=1).mean()
+ recall=(pred & true_binary).sum()/true_binary.sum()
+ precision=(pred & true_binary).sum()/pred.sum()
+ print('thr',thr,'exact all',acc,'recall',recall,'prec',precision)
+true_norm=true_weights/true_weights.sum(axis=1,keepdims=True)
+mae=np.mean(np.abs(Pn-true_norm))
+print('mae props',mae)
+print('corr per type', [np.corrcoef(true_norm[:,i],Pn[:,i])[0,1] for i in range(len(cts))])
+print('max acc',(np.array(cts)[P.argmax(axis=1)]==np.array(cts)[true_weights.argmax(axis=1)]).mean())
+PY"

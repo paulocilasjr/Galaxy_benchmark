@@ -1,0 +1,44 @@
+/bin/bash -lc 'work_tmp=$(mktemp -d /tmp/rcv_work.XXXXXX)
+unzip -qq inputs/scogs_animals.zip -d "$work_tmp/animals"
+unzip -qq inputs/scogs_fungi.zip -d "$work_tmp/fungi"
+WORK_TMP="$work_tmp" python - <<'"'PY'
+import os, pathlib, statistics
+from scipy.stats import mannwhitneyu
+from phykit.services.alignment.base import Alignment
+from Bio import AlignIO
+
+root=pathlib.Path(os.environ['WORK_TMP'])
+def scores(domain):
+    out={}
+    for p in sorted((root/domain).glob('*.faa.mafft')):
+        out[p.name[:-len('.faa.mafft')]] = Alignment(alignment_file_path=str(p)).calculate_rcv()
+    return out
+A=scores('animals'); F=scores('fungi')
+common=sorted(set(A)&set(F))
+
+def tests(x,y):
+    vals=[]
+    for label,xx,yy in [('raw',x,y),('rounded4',[round(v,4) for v in x],[round(v,4) for v in y])]:
+        for method in ['auto','asymptotic','exact']:
+            try:
+                res=mannwhitneyu(xx,yy,alternative='two-sided',method=method)
+                vals.append((label,method,float(res.statistic),float(res.pvalue)))
+            except Exception as e: vals.append((label,method,'ERR',repr(e)))
+    return vals
+print('counts',len(A),len(F),len(common))
+for label,x,y in [
+ ('all',list(A.values()),list(F.values())),
+ ('common',[A[k] for k in common],[F[k] for k in common]),
+]:
+ print(label, 'summary', statistics.median(x),statistics.median(y),statistics.mean(x),statistics.mean(y))
+ for row in tests(x,y): print(label,*row)
+counts={}
+for p in sorted((root/'animals').glob('*.faa.mafft')):
+    n=len(AlignIO.read(str(p),'fasta'))
+    counts[n]=counts.get(n,0)+1
+print('animal_taxon_count_hist',counts)
+four=[k for k in A if len(AlignIO.read(str(root/'animals'/f'{k}.faa.mafft'),'fasta'))==4]
+print('four',len(four))
+print('four_tests',tests([A[k] for k in four],[F[k] for k in four]))
+print('first_common',[(k,A[k],F[k],round(A[k],4),round(F[k],4)) for k in common[:10]])
+PY"

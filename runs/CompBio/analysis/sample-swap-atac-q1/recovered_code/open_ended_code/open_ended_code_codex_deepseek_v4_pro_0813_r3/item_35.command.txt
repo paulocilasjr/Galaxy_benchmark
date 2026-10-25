@@ -1,0 +1,86 @@
+/bin/bash -lc "cat > build_atac_gene.py <<'PY'
+import gzip, re, csv, collections, sys, numpy as np
+# parse v6 gene entries
+genes=[] # (chrom,start,end,strand,gene_id,symbol)
+with gzip.open('AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        chrom=p[0]; start=int(p[3]); end=int(p[4]); strand=p[6]; attrs=p[8]
+        m=re.search(r'gene_id \"(["'^"]+)"'"',attrs)
+        if not m: continue
+        gid=m.group(1)
+        mn=re.search(r'gene_name \"(["'^"]+)"'"',attrs)
+        if not mn: continue
+        gn=mn.group(1)
+        # choose primary symbol: prefer token with [hs], else first token; strip bracket tags and transcript id like AMEX...
+        parts=[x.strip() for x in gn.split('|')]
+        sym=None
+        for part in parts:
+            # skip transcript-like (AMEX60DD digits)
+            if re.match(r'"'^AMEX60DD'"\\d',part): continue
+            base=re.sub(r'\\s*\\[(?:hs|nr|mm|dr|xt|zf|gg|xl|sc)\\]"'$'"','',part).strip()
+            if base and not re.match(r'"'^LOC'"\\d+', base):
+                sym=base; break
+        if sym is None:
+            for part in parts:
+                base=re.sub(r'\\s*\\[(?:hs|nr|mm|dr|xt|zf|gg|xl|sc)\\]"'$'"','',part).strip()
+                if base and base.startswith('LOC'):
+                    sym=base; break
+        if sym is None: continue
+        tss=start if strand=='+' else end
+        prom_start=max(0,tss-2000); prom_end=tss+2000
+        genes.append((chrom,prom_start,prom_end,gid,sym))
+# dedup by gene_id keep first
+seen=set(); uniq=[]
+for g in genes:
+    if g[3] not in seen:
+        seen.add(g[3]); uniq.append(g)
+genes=uniq
+print('genes',len(genes), file=sys.stderr)
+def chrom_key(c):
+    m=re.match(r'chr(\\d+)([pq])',c)
+    if m: return (int(m.group(1)), 0 if m.group(2)=='p' else 1, c)
+    return (999,0,c)
+genes_by_chrom=collections.defaultdict(list)
+for g in genes: genes_by_chrom[g[0]].append(g)
+for c in genes_by_chrom:
+    genes_by_chrom[c].sort(key=lambda x:x[1])
+# read header
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    header=next(r); cols=header[3:]
+print('\\t'.join(['gene_id','symbol']+cols))
+# initialize numpy arrays and symbol/gid lists ordered
+gid_list=[g[3] for g in genes]
+sym_list=[g[4] for g in genes]
+sums=np.zeros((len(genes),len(cols)),dtype=np.int64)
+ptr={c:0 for c in genes_by_chrom}
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    r=csv.reader(f,delimiter='\\t')
+    next(r)
+    for row in r:
+        chrom=row[0]; start=int(row[1]); end=int(row[2])
+        arr=genes_by_chrom.get(chrom)
+        if not arr: continue
+        p=ptr[chrom]
+        while p<len(arr) and arr[p][1] < start:
+            p+=1
+        ptr[chrom]=p
+        vals=np.array(list(map(int,row[3:])),dtype=np.int64)
+        j=p
+        while j<len(arr) and arr[j][1] <= end and arr[j][1] >= start:
+            # condition arr[j].start <= end (prom_end? wait arr=(chrom,prom_start,prom_end,gid,sym), index1=start,index2=end)
+            if arr[j][1] <= end:
+                sums[j,:]+=vals
+            j+=1
+# write matrix
+out=open('atac_gene_promoter_counts.tsv','w')
+out.write('gene_id\\tsymbol\\t'+'\\t'.join(cols)+'\\n')
+for i,(gid,sym) in enumerate(zip(gid_list,sym_list)):
+    out.write(gid+'\\t'+sym+'\\t'+'\\t'.join(map(str,sums[i]))+'\\n')
+out.close()
+print('done', file=sys.stderr)
+PY
+python3 build_atac_gene.py"

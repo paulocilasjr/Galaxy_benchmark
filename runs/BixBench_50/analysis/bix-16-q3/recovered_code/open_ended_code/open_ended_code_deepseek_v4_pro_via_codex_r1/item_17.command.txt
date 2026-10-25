@@ -1,0 +1,47 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, time
+from scipy.stats import rankdata
+from math import sqrt
+
+t=time.time()
+eff=pd.read_csv('inputs/CRISPRGeneEffect.csv', index_col=0)
+expr=pd.read_csv('inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv', index_col=0)
+common=eff.index.intersection(expr.index)
+print('samples',len(common), flush=True)
+eff=eff.loc[common]; expr=expr.loc[common]
+genes=eff.columns.intersection(expr.columns)
+print('genes',len(genes), flush=True)
+E=eff[genes].to_numpy(dtype=np.float64)
+X=expr[genes].to_numpy(dtype=np.float64)
+mask=np.isfinite(E) & np.isfinite(X)
+count=0; rhos=np.full(len(genes), np.nan); nvals=np.zeros(len(genes),dtype=int)
+for j in range(len(genes)):
+    m=mask[:,j]
+    n=int(m.sum())
+    nvals[j]=n
+    if n < 2:
+        continue
+    s=-E[m,j]
+    x=X[m,j]
+    # rank average ties
+    rs=rankdata(s)
+    rx=rankdata(x)
+    # avoid constant variable
+    ss=rs.std(ddof=1); sx=rx.std(ddof=1)
+    if ss==0 or sx==0:
+        continue
+    # pearson corr of ranks
+    num=np.sum((rs-rs.mean())*(rx-rx.mean()))
+    den=np.sqrt(np.sum((rs-rs.mean())**2)*np.sum((rx-rx.mean())**2))
+    rho=num/den
+    rhos[j]=rho
+    if rho>=0.6: count+=1
+print('valid n min max mean', nvals.min(), nvals.max(), nvals.mean(), flush=True)
+print('rho finite',np.isfinite(rhos).sum(),'min max',np.nanmin(rhos),np.nanmax(rhos),'count>=0.6',count,'count<=-0.6',int((rhos<=-0.6).sum()), flush=True)
+idx=np.argsort(rhos)
+print('top positive:')
+for i in idx[-20:][::-1]: print(genes[i],rhos[i],nvals[i])
+print('bottom:')
+for i in idx[:10]: print(genes[i],rhos[i],nvals[i])
+print('total sec',time.time()-t, flush=True)
+PY"

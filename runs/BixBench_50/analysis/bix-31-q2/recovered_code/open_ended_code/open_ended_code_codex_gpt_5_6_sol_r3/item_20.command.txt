@@ -1,0 +1,31 @@
+/bin/bash -lc "python -u - <<'PY'
+import gc, time
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from pydeseq2.default_inference import DefaultInference
+start=time.time(); path='inputs/BatchCorrectedReadCounts_Zenodo.csv'
+cols=pd.read_csv(path,nrows=0).columns; dtypes={c:'int32' for c in cols[1:]}
+print('reading int32 counts',flush=True)
+gx=pd.read_csv(path,index_col=0,dtype=dtypes)
+nonzero=gx.sum(axis=1)>0
+gx=gx.loc[nonzero]
+counts=gx.T
+print('removed all-zero genes',int((~nonzero).sum()),'retained',counts.shape,flush=True)
+meta=pd.read_csv('inputs/Sample_annotated_Zenodo.csv',index_col='sample').loc[counts.index,['batch','sex']].copy()
+meta['batch']=meta['batch'].astype(str); meta['sex']=pd.Categorical(meta['sex'],categories=['F','M'])
+inference=DefaultInference(n_cpus=1)
+dds=DeseqDataSet(counts=counts,metadata=meta,design='~ batch + sex',refit_cooks=True,inference=inference,quiet=False)
+del counts,gx,meta,dtypes,cols,nonzero; gc.collect()
+print('design',dds.obsm['design_matrix'].columns.tolist(),flush=True)
+dds.deseq2()
+print('fit complete elapsed',time.time()-start,flush=True)
+stats=DeseqStats(dds,contrast=['sex','M','F'],inference=inference,quiet=False)
+stats.summary()
+print('unshrunk',stats.results_df.loc['FAM138A'].to_dict(),flush=True)
+stats.lfc_shrink(coeff='sex[T.M]')
+row=stats.results_df.loc['FAM138A']
+print('shrunken',row.to_dict(),flush=True)
+print('qualifies',bool(abs(row.log2FoldChange)>0.5 and row.baseMean>10),flush=True)
+print('FINAL_VALUE',repr(float(row.log2FoldChange)),flush=True)
+PY"

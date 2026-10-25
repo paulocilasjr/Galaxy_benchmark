@@ -1,0 +1,80 @@
+/bin/bash -lc "python - <<'PY'
+import zipfile
+from collections import Counter
+
+def read_fasta(text):
+    seqs=[]; name=None; parts=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line: continue
+        if line.startswith('>'):
+            if name is not None:
+                seqs.append((name,''.join(parts)))
+            name=line[1:].split()[0]; parts=[]
+        else:
+            parts.append(line)
+    if name is not None: seqs.append((name,''.join(parts)))
+    return seqs
+
+def pis_percent(seqs, gap_state=False, denom='all'):
+    ss=[s for _,s in seqs]
+    if not ss: return None
+    L=len(ss[0])
+    assert all(len(s)==L for s in ss)
+    pis=0
+    denom_cols=0
+    for chars in zip(*ss):
+        if denom=='nongap_any' and all(c=='-' for c in chars):
+            continue
+        denom_cols += 1
+        if gap_state:
+            states=[c for c in chars if c not in {'?'}]
+        else:
+            states=[c for c in chars if c not in {'-','?','X'}]
+        counts=Counter(states)
+        if sum(1 for v in counts.values() if v>=2)>=2:
+            pis += 1
+    return pis / denom_cols * 100 if denom_cols else 0.0
+
+def vals(zip_path, complete4=False, gap_state=False, denom='all'):
+    out=[]; meta=[]
+    with zipfile.ZipFile(zip_path) as f:
+        for n in sorted(f.namelist()):
+            if not n.endswith('.mafft'): continue
+            seqs=read_fasta(f.read(n).decode())
+            if complete4 and len(seqs)"'!=4: continue
+            p=pis_percent(seqs, gap_state=gap_state, denom=denom)
+            out.append(p); meta.append((n,len(seqs),p))
+    return out, meta
+
+def mw_u(x,y):
+    # U for x as first sample: number of x>y plus half ties
+    u=0.0
+    for a in x:
+        for b in y:
+            if a>b: u += 1
+            elif a==b: u += 0.5
+    return u
+
+def rank_u(x,y):
+    data=sorted([(v,0) for v in x]+[(v,1) for v in y], key=lambda t:t[0])
+    ranks=[0]*len(data)
+    i=0
+    while i<len(data):
+        j=i+1
+        while j<len(data) and data[j][0]==data[i][0]: j+=1
+        avg=(i+1+j)/2
+        for k in range(i,j): ranks[k]=avg
+        i=j
+    r1=sum(r for r,(v,g) in zip(ranks,data) if g==0)
+    n1=len(x)
+    return r1 - n1*(n1+1)/2
+
+for complete4 in [False, True]:
+  for gap_state in [False, True]:
+    a,am=vals('"'inputs/scogs_animals.zip', complete4, gap_state)
+    f,fm=vals('inputs/scogs_fungi.zip', complete4, gap_state)
+    print('complete4',complete4,'gap_state',gap_state,'n',len(a),len(f),'U animals',mw_u(a,f),'rankU',rank_u(a,f),'minU',min(mw_u(a,f),len(a)*len(f)-mw_u(a,f)))
+    print('  animal pct min/median/max', min(a), sorted(a)[len(a)//2], max(a), 'zeros',sum(v==0 for v in a))
+    print('  fungi  pct min/median/max', min(f), sorted(f)[len(f)//2], max(f), 'zeros',sum(v==0 for v in f))
+PY"

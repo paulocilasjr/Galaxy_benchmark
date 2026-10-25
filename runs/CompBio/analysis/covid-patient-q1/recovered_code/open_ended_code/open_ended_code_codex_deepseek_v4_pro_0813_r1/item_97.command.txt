@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import AgglomerativeClustering, KMeans
+from sklearn.mixture import GaussianMixture
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
+
+adata=ad.read_h5ad('covid.patients.q1.h5ad'); names=np.array(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); sums=D['sum']; cats=D['cats']; cc=D['cell_counts']
+libs=sums.sum(axis=0,keepdims=True); log=np.log1p(sums/libs*1e6); frac=(D['nnz']/cc.reshape(1,-1))
+# filter genes: frac>0.05 in >=5 donors, remove sex/ribo/mito/hb
+remove=np.array([n.startswith(('RPS','RPL','MRPS','MRPL','MT-')) or n.startswith(('HBA','HBB','HBD','HBE','HBG','HBM','HBQ','HBZ')) or n in ['XIST','TSIX','RPS4Y1','RPS4Y2','DDX3Y','UTY','KDM5D','ZFY','NLGN4Y','PRKY','TXLNGY','EIF1AY','USP9Y','TMSB4Y'] for n in names])
+keep=(~remove)&((frac>0.05).sum(axis=1)>=5)
+# top 2000 by variance of log cpm
+var=log.var(axis=1); idx=np.where(keep)[0]; idx=idx[np.argsort(-var[idx])[:2000]]
+X=log[idx,:].T
+Xz=StandardScaler().fit_transform(X)
+# PCA
+pca=PCA(n_components=10,random_state=0).fit_transform(Xz)
+print('PC var',PCA(n_components=10,random_state=0).fit(Xz).explained_variance_ratio_[:5])
+# hierarchical on pca
+link=linkage(pca[:,:5], method='ward')
+for k in [2,3]:
+ lab=fcluster(link,k,criterion='maxclust')-1
+ print('\\nHier k',k,np.bincount(lab))
+ for l in range(k): print(l,sorted([str(c) for c,la in zip(cats,lab) if la==l]))
+# kmeans
+for n in [2,3,5,10]:
+ km=KMeans(n_clusters=2,n_init=50,random_state=0).fit(pca[:,:n])
+ print('\\nKMeans nPC',n,np.bincount(km.labels_))
+ for l in range(2): print(l,sorted([str(c) for c,la in zip(cats,km.labels_) if la==l]))
+# Marker means for hierarchical k=2
+lab=fcluster(link,k=2,criterion='maxclust')-1
+markers=['CD14','LYZ','S100A8','S100A9','CD3D','NKG7','GNLY','MS4A1','IGHG1','IFN score placeholder']
+# compute mean log for a few genes
+for l in range(2):
+ members=cats[lab==l]
+ print('\\nCluster',l,'n',len(members),'donors',sorted(members))
+ for g in ['CD14','LYZ','S100A8','S100A9','CD3D','NKG7','GNLY','MS4A1','IGHG1','IFI27','ISG15','IFITM3','MX1','HLA-DRA']:
+  j=np.where(names==g)[0]
+  if len(j): print(g, round(log[j[0],lab==l].mean(),3))
+PY"

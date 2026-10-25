@@ -1,0 +1,30 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+sp = mmread('matrix.mtx.gz').toarray() # genes x spots
+print('sp', sp.shape, sp.min(), sp.max(), sp.mean())
+features=pd.read_csv('features.tsv.gz', sep='\\t', header=None, names=['ens','gene','type'])
+barcodes=pd.read_csv('barcodes.tsv.gz', sep='\\t', header=None, names=['barcode'])
+sc=pd.read_csv('spatial_q_sc_counts.csv', index_col=0)
+meta=pd.read_csv('spatial_q_sc_metadata.csv', index_col=0)
+means=sc.groupby(meta['cell_type']).mean()
+cts=means.index.tolist()
+X=means.loc[:, features['gene']].values.T
+P=np.zeros((sp.shape[1], len(cts)))
+for j in range(sp.shape[1]):
+    coef,res=nnls(X, sp[:,j])
+    P[j]=coef
+P_df=pd.DataFrame(P,index=barcodes['barcode'],columns=cts)
+Psum=P_df.div(P_df.sum(axis=1),axis=0)
+print('P raw describe')
+print(P_df.describe())
+print('correlations among proportions')
+print(Psum.corr())
+print('dominant')
+print(Psum.idxmax(axis=1).value_counts())
+Psum.to_csv('deconv_proportions.csv')
+pos=pd.read_csv('tissue_positions.csv')
+print(pos.head())
+print('any mismatch', (~pos['barcode'].isin(Psum.index)).sum(), (~Psum.index.isin(pos['barcode'])).sum())
+PY"

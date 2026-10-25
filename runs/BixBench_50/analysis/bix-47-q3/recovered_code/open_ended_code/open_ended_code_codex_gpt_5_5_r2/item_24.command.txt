@@ -1,0 +1,62 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+from openpyxl import load_workbook
+
+base = Path('/workspace')
+status_path = base/'inputs/230215_Trio_Status.xlsx'
+chip_path = base/'inputs/230214_Schenz_et_al_2022_CHIP_Genes.xlsx'
+variants_dir = base/'inputs/CHIP_DP10_GQ20_PASS'
+
+# Identify oldest male BLM carrier.
+wb = load_workbook(status_path, read_only=True, data_only=True)
+ws = wb.active
+header = [c for c in next(ws.iter_rows(values_only=True))]
+idx = {h:i for i,h in enumerate(header) if h is not None}
+carriers = []
+for row in ws.iter_rows(values_only=True):
+    sample = row[idx['Sample ID']]
+    sex = row[idx['Sex']]
+    blm = row[idx['BLM Mutation Status']]
+    age = row[idx['Age']]
+    if sex == 'M' and blm == 'Carrier' and isinstance(age, (int, float)):
+        carriers.append((float(age), str(sample).strip(), row[idx['Status']]))
+age, sample, role = max(carriers)
+
+# Confirm/use the carrier's sample workbook.
+matches = sorted(variants_dir.glob(f'230209_Exome_GRCh38_CHIP_{sample}-*.xlsx'))
+if len(matches) "'!= 1:
+    raise SystemExit(f'"'Expected one workbook for sample {sample}, found {matches}')
+variant_path = matches[0]
+
+# Keep scope to supplied CHIP genes/list matches, then count sample non-reference genotypes by gene.
+chip_genes = {str(r[0]).strip() for r in load_workbook(chip_path, read_only=True, data_only=True).active.iter_rows(values_only=True) if r and r[0]}
+wb = load_workbook(variant_path, read_only=False, data_only=True)
+ws = wb.active
+headers = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+zyg_col = headers.index('Zygosity') + 1
+gene_col = headers.index('Gene Names') + 1
+
+counts = Counter()
+for r in range(3, ws.max_row + 1):
+    z = ws.cell(r, zyg_col).value
+    if z is None or str(z).strip().lower() == 'reference':
+        continue
+    genes = [g.strip() for g in str(ws.cell(r, gene_col).value).split(',') if g.strip()]
+    for gene in genes:
+        if gene in chip_genes:
+            counts[gene] += 1
+
+if not counts:
+    raise SystemExit('No non-reference CHIP-gene variants found')
+top_count = counts.most_common(1)[0][1]
+top = sorted(g for g,c in counts.items() if c == top_count)
+if len(top) "'!= 1:
+    raise SystemExit(f'"'Tie for top count {top_count}: {top}')
+
+out = base/'codex_output/answer.txt'
+out.parent.mkdir(exist_ok=True)
+out.write_text(top[0] + '\\n')
+print(sample, age, variant_path.name, top[0], top_count)
+PY
+cat /workspace/codex_output/answer.txt"

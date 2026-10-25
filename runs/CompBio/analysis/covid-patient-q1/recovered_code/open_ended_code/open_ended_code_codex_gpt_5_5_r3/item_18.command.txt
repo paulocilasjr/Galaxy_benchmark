@@ -1,0 +1,50 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.metrics import silhouette_score
+from scipy.cluster.hierarchy import linkage, leaves_list
+from scipy.spatial.distance import pdist, squareform
+
+d=np.load('donor_pseudobulk.npz', allow_pickle=True)
+sums=d['sums']; detected=d['detected']; cell_counts=d['cell_counts']; names=d['names'].astype(str); donors=d['donors'].astype(str); lib=d['lib']
+ids=np.array([int(x.replace('donor','')) for x in donors])
+idx={g:i for i,g in enumerate(names)}
+cpm=sums/lib[:,None]*1e6
+logcpm=np.log1p(cpm)
+# Select variable genes, exclude HB/ribo/mt if present
+means=logcpm.mean(axis=0); vars=logcpm.var(axis=0)
+mask=(means>0.05)
+exclude=np.array([n.startswith(('MT-','RPL','RPS','HBA','HBB')) for n in names])
+var_idx=np.where(mask & ~exclude)[0]
+# top variable z-scored genes
+order=var_idx[np.argsort(vars[var_idx])[-2000:]]
+X=StandardScaler().fit_transform(logcpm[:,order])
+pca=PCA(n_components=10, random_state=1).fit_transform(X)
+print('PCA explained', PCA(n_components=10, random_state=1).fit(X).explained_variance_ratio_[:5])
+print('PC coords:')
+coords=pd.DataFrame({'id':ids})
+for i in range(5): coords[f'PC{i+1}']=pca[:,i]
+print(coords.sort_values('PC1').to_string(index=False))
+# clustering for k=2..6
+for k in range(2,7):
+    lab=KMeans(n_clusters=k, n_init=50, random_state=42).fit_predict(pca[:,:5])
+    sil=silhouette_score(pca[:,:5], lab)
+    groups=[]
+    for c in range(k): groups.append(','.join(map(str, sorted(ids[lab==c]))))
+    print('kmeans', k, 'sil', round(sil,3), groups)
+for k in range(2,7):
+    lab=AgglomerativeClustering(n_clusters=k, linkage='ward').fit_predict(pca[:,:5])
+    groups=[]
+    for c in range(k): groups.append(','.join(map(str, sorted(ids[lab==c]))))
+    print('ward', k, groups)
+# Top genes by PCs
+for pc in range(3):
+    # feature loadings PCA components wrt selected gene zscores
+    comp=PCA(n_components=10, random_state=1).fit(X).components_[pc]
+    top_pos=order[np.argsort(comp)[-20:]][::-1]
+    top_neg=order[np.argsort(comp)[:20]]
+    print('\\nPC',pc+1,'pos', list(names[top_pos]))
+    print('PC',pc+1,'neg', list(names[top_neg]))
+PY"

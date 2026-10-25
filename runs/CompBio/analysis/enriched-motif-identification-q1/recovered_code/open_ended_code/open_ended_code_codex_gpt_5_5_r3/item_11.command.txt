@@ -1,0 +1,70 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'EOF'
+EOF
+python3 - <<'PY'
+import urllib.request,json,math,time
+from pathlib import Path
+candidates='FOXA1, GATA3, MAX, STAT1, OCT4, P53, NANOG, HNF4A, TBP, FOS, MYC, JUN, FOXO1, CTCF, TCF7, SOX2, E2F1, CREB1, GATA1, KLF3'.split(', ')
+alias={'P53':['TP53','p53'],'OCT4':['POU5F1','OCT4'], 'FOS':['FOS','FOS::JUN','JUN::FOS'], 'JUN':['JUN','JUN::FOS','FOS::JUN'], 'MAX':['MAX','MYC::MAX'], 'MYC':['MYC','MYC::MAX']}
+seq=''.join(l.strip() for l in Path('dna_with_secret_motif.fasta').read_text().splitlines() if not l.startswith('>')).upper()
+comp=str.maketrans('ACGT','TGCA')
+
+def fetch_name(name):
+    url='https://jaspar.elixir.no/api/v1/matrix/?collection=CORE&tax_group=vertebrates&page_size=100&name='+urllib.parse.quote(name)
+    out=[]
+    while url:
+        d=json.loads(urllib.request.urlopen(url,timeout=30).read())
+        out+=d['results']
+        url=d.get('next')
+    return out
+
+def detail(mid):
+    return json.loads(urllib.request.urlopen(f'https://jaspar.elixir.no/api/v1/matrix/{mid}/',timeout=30).read())
+
+def consensus(pfm):
+    n=len(next(iter(pfm.values())))
+    return ''.join(max('ACGT', key=lambda b: pfm[b][i]) for i in range(n))
+
+def pwm_score_setup(pfm):
+    n=len(pfm['A'])
+    cols=[]
+    for i in range(n):
+        vals={b: pfm[b][i]+0.1 for b in 'ACGT'}
+        tot=sum(vals.values())
+        cols.append({b: math.log2((vals[b]/tot)/0.25) for b in 'ACGT'})
+    minscore=sum(min(col.values()) for col in cols)
+    maxscore=sum(max(col.values()) for col in cols)
+    return cols,minscore,maxscore
+
+def scan_count(pfm, frac=.80):
+    cols,minscore,maxscore=pwm_score_setup(pfm)
+    n=len(cols); thresh=minscore+frac*(maxscore-minscore)
+    count=0; best=(-1e9,'','')
+    for strand,ss in [('+',seq),('-',seq.translate(comp)[::-1])]:
+        for i in range(len(ss)-n+1):
+            w=ss[i:i+n]
+            sc=sum(cols[j][b] for j,b in enumerate(w))
+            if sc>=thresh: count+=1
+            if sc>best[0]: best=(sc,w,strand)
+    return count,best,thresh,minscore,maxscore
+
+records={}
+for cand in candidates:
+    names=alias.get(cand,[cand])
+    seen=[]
+    for nm in names:
+        for r in fetch_name(nm):
+            # exact name or alias exact; JASPAR name search can be fuzzy-ish
+            if r['matrix_id'] not in [x['matrix_id'] for x in seen]:
+                seen.append(r)
+    records[cand]=seen
+
+for cand, recs in records.items():
+    bestline=None
+    for r in recs:
+        d=detail(r['matrix_id'])
+        pfm=d['pfm']; con=consensus(pfm)
+        cnt,best,thr,mi,ma=scan_count(pfm,0.80)
+        item=(cnt,best[0],r['matrix_id'],d['name'],con,best[1],len(con))
+        if bestline is None or item>bestline: bestline=item
+    print(cand, 'nmat', len(recs), 'best', bestline)
+PY"

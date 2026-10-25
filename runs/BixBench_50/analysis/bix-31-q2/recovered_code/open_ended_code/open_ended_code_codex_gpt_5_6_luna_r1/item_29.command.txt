@@ -1,0 +1,42 @@
+/bin/bash -lc "PYTHONUNBUFFERED=1 /workspace/tmp/pydeseq2-venv/bin/python - <<'PY'
+import pandas as pd
+import numpy as np
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+base='/workspace/inputs'
+print('loading metadata', flush=True)
+metadata=pd.read_csv(base+'/Sample_annotated_Zenodo.csv').set_index('sample')
+metadata['batch']=pd.Categorical(metadata['batch'].astype(str), categories=['1','2','3','4'], ordered=True)
+metadata['sex']=pd.Categorical(metadata['sex'], categories=['F','M'], ordered=True)
+print('loading counts', flush=True)
+gene_counts=pd.read_csv(base+'/BatchCorrectedReadCounts_Zenodo.csv', index_col=0)
+print('raw shape',gene_counts.shape, 'FAM sum',gene_counts.loc['FAM138A'].sum(), flush=True)
+# Remove only genes with no observed counts; this cannot affect normalization or the fitted target.
+gene_counts=gene_counts.loc[gene_counts.sum(axis=1)>0]
+counts=gene_counts.T
+counts=counts.loc[metadata.index]
+print('model shape',counts.shape, 'FAM sum',counts['FAM138A'].sum(), flush=True)
+print('constructing dds', flush=True)
+dds=DeseqDataSet(
+    counts=counts,
+    metadata=metadata,
+    design='~ batch + sex',
+    n_cpus=8,
+    quiet=False,
+    low_memory=True,
+)
+print('running deseq2', flush=True)
+dds.deseq2()
+print('design columns',dds.obsm['design_matrix'].columns.tolist(), flush=True)
+print('constructing stats', flush=True)
+ds=DeseqStats(dds, contrast=['sex','M','F'], n_cpus=8, quiet=False)
+print('pre-shrink summary', flush=True)
+ds.summary()
+print('pre-shrink FAM',ds.results_df.loc['FAM138A'].to_dict(), flush=True)
+print('shrinking', flush=True)
+ds.lfc_shrink(coeff='sex[T.M]')
+print('post-shrink FAM',ds.results_df.loc['FAM138A'].to_dict(), flush=True)
+row=ds.results_df.loc['FAM138A']
+print('thresholds', {'abs_lfc_gt_0.5':abs(row['log2FoldChange'])>0.5,'baseMean_gt_10':row['baseMean']>10}, flush=True)
+PY"

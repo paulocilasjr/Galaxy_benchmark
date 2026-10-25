@@ -1,0 +1,22 @@
+/bin/bash -lc "python -u - <<'PY'
+import gzip,numpy as np
+from scipy.io import mmread
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import svds
+from scipy.cluster.vq import kmeans2
+with gzip.open('differential.composition.q1.genes.txt.gz','rt') as f:
+ next(f); genes=[line.rstrip('\\n').split('\\t')[1] for line in f]
+idx={s:i for i,s in enumerate(genes)}
+for si,fn in enumerate(['differential.composition.q1.1.mtx.gz','differential.composition.q1.2.mtx.gz'],1):
+ with gzip.open(fn,'rb') as f:M=csc_matrix(mmread(f))
+ lib=np.asarray(M.sum(0)).ravel(); X=M.multiply(1e4/lib).tocsr().astype(np.float32); X.data=np.log1p(X.data); X=X.T.tocsr()
+ mu=np.asarray(X.mean(0)).ravel(); mu2=np.asarray(X.multiply(X).mean(0)).ravel(); v=mu2-mu*mu; ind=np.argsort(v)[-3000:]
+ u,s,vt=svds(X[:,ind],k=40,which='LM',tol=1e-3); o=np.argsort(s)[::-1]; Z=u[:,o]*s[o]; A=Z[:,1:30]; A/=A.std(0)+1e-8
+ cen,lab=kmeans2(A,50,minit='++',iter=100,seed=2)
+ print('\\nSAMPLE',si)
+ for g in ['LHX1','ONECUT1','ONECUT2','CALB1','PROX1','VSX1','GAD1','GAD2','RPE65','BEST1','P2RY12','RBPMS','ARR3','RHO','GFAP','RGS5','COL1A1','EMCN','CD37','CD247','SOX10']:
+  ix=M[idx[g],:].nonzero()[1]
+  counts=np.bincount(lab[ix],minlength=50)
+  best=np.argsort(counts)[::-1][:8]
+  print(g,'n',len(ix),'clusters',' '.join(f'{c}:{counts[c]}/{sum(lab==c)}' for c in best if counts[c]))
+PY"

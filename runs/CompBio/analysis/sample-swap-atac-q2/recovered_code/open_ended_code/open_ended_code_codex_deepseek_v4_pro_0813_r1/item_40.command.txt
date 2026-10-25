@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, numpy as np, time
+FN='sample.swap.atac.q2.tsv.gz'
+# build bin index for chr1 by scanning full file quickly
+starts=[]; ids=[]; rowid=0
+with gzip.open(FN,'rt') as f:
+    f.readline()
+    for i,line in enumerate(f):
+        p=line.rstrip().split('\\t')
+        if p[0]=='chr1':
+            starts.append(int(p[1])); ids.append(i)
+        rowid=i
+starts=np.array(starts,dtype=np.int64); ids=np.array(ids,dtype=np.int64)
+order=np.argsort(starts); starts=starts[order]; ids=ids[order]
+print('chr1 bins',len(starts),flush=True)
+ref=np.zeros(len(starts),dtype=np.float64)
+nlines=0
+start=time.time()
+with gzip.open('ref_Rod_frags.tsv.gz','rt') as f:
+    for line in f:
+        p=line.rstrip().split('\\t')
+        c=p[0]
+        if c"'!='"'chr1':
+            print('chrom changed at',c,'lines',nlines,flush=True); break
+        s=int(p[1]); cnt=int(p[4])
+        pos=np.searchsorted(starts,s,side='right')-1
+        if pos<0: pos=0
+        ref[pos]+=cnt
+        nlines+=1
+        if nlines%500000==0: print('processed',nlines,flush=True)
+print('lines processed',nlines,'time',time.time()-start,'sum',ref.sum(),'nonzero',np.count_nonzero(ref),flush=True)
+# load X rows by ids
+X=np.zeros((len(starts),9),dtype=np.float64)
+id_to_pos={int(v):k for k,v in enumerate(ids)}
+with gzip.open(FN,'rt') as f:
+    f.readline()
+    for i,line in enumerate(f):
+        if i in id_to_pos:
+            p=line.rstrip().split('\\t')
+            X[id_to_pos[i]]=[int(x) for x in p[3:]]
+cols=['AIIamacrine','Astrocyte','Cone','GABAamacrine','Horizontal','Microglia','Mullerglia','Retinalganglioncell','Rod']
+for j,c in enumerate(cols):
+    corr=np.corrcoef(ref,X[:,j])[0,1]
+    corr2=np.corrcoef(np.log1p(ref),np.log1p(X[:,j]))[0,1]
+    print(c,corr,corr2)
+PY"

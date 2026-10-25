@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re
+import numpy as np
+from collections import defaultdict
+fn='MANE.GRCh38.v1.3.refseq_genomic.gtf.gz'
+STANDARD={f'chr{i}' for i in range(1,23)}|{'chrX','chrY'}
+attr_re=re.compile(r'(\\S+)\\s+\"(["'^"]*)"'"')
+sel=set(); strand={}; exons=defaultdict(list); cds=defaultdict(list); stop=defaultdict(list)
+with gzip.open(fn,'rt') as f:
+  for line in f:
+    if line.startswith('#'): continue
+    p=line.rstrip().split('\\t')
+    if len(p)<9: continue
+    a=dict(attr_re.findall(p[8])); tx=a.get('transcript_id','')
+    if not tx: continue
+    if p[2]=='transcript' and p[0] in STANDARD and 'MANE Select' in a.get('tag',''):
+      sel.add(tx); strand[tx]=p[6]
+    if p[2]=='exon': exons[tx].append((int(p[3]),int(p[4])))
+    elif p[2]=='CDS': cds[tx].append((int(p[3]),int(p[4])))
+    elif p[2]=='stop_codon': stop[tx].append((int(p[3]),int(p[4])))
+def merge(iv):
+  out=[]
+  for s,e in sorted(iv):
+    if out and s<=out[-1][1]+1: out[-1][1]=max(out[-1][1],e)
+    else: out.append([s,e])
+  return out
+def ul(iv): return sum(e-s+1 for s,e in iv)
+def intlen(iv,l,r): return sum(max(0,min(e,r)-max(s,l)+1) for s,e in iv)
+arr=[]
+for tx in sel:
+ e=merge(exons[tx]); c=merge(cds[tx]+stop[tx])
+ cs=min(x[0] for x in c); ce=max(x[1] for x in c)
+ cl=ul(c)
+ if strand[tx]=='+': u5=intlen(e,1,cs-1); u3=intlen(e,ce+1,10**12)
+ else: u5=intlen(e,ce+1,10**12); u3=intlen(e,1,cs-1)
+ arr.append((u5,cl,u3))
+for i,name in enumerate(['5utr','cds','3utr']):
+ vals=np.array([x[i] for x in arr])
+ print(name,'min',vals.min(),'max',vals.max(),'mean',vals.mean(),'median',np.median(vals),'floor',int(np.floor(np.median(vals))),'sorted mid')
+ s=np.sort(vals); n=len(s)
+ if n%2: print(' exact mid',s[n//2])
+ else: print(' even',s[n//2-1],s[n//2],'mean',(s[n//2-1]+s[n//2])/2)
+print('n',len(arr))
+PY"

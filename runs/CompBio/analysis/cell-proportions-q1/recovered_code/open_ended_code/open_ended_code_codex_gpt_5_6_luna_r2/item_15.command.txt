@@ -1,0 +1,34 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score
+with gzip.open('cell.proportions.q1.mtx.gz','rt') as f:
+    for line in f:
+        if not line.startswith('%'):
+            nr,nc=map(int,line.split()); break
+    vals=np.fromiter((float(line) for line in f),dtype=np.float32,count=nr*nc)
+X=vals.reshape((nr,nc),order='F').T
+lib=X.sum(1); nnz=(X>0).sum(1)
+Y=np.log1p(X/lib[:,None]*1e4)
+# multiple feature sets and dimensionalities
+for nvar in [100,300,500,800,1000]:
+ var=Y.var(0); idx=np.argsort(var)[-nvar:]
+ Z=PCA(n_components=15,random_state=0).fit_transform(Y[:,idx])
+ for ncomp in [2,3,5,10,15]:
+  km=KMeans(n_clusters=6,n_init=20,random_state=11).fit(Z[:,:ncomp])
+  print(nvar,ncomp, sorted(np.bincount(km.labels_),reverse=True), 'sil',round(__import__('sklearn.metrics').metrics.silhouette_score(Z[:,:ncomp],km.labels_,sample_size=2000,random_state=0),4))
+# use canonical labels from 500 var, 15 pc and print within group metrics by descending size
+idx=np.argsort(Y.var(0))[-500:]; Z=PCA(n_components=20,random_state=0).fit_transform(Y[:,idx]); km=KMeans(n_clusters=6,n_init=50,random_state=42).fit(Z[:,:15]); lab=km.labels_; sizes=np.bincount(lab); order=np.argsort(-sizes)
+print('\\ncluster metrics')
+for c in order:
+ s=lab==c
+ print(c,s.sum(), 'lib q',np.round(np.percentile(lib[s],[0,5,25,50,75,95,100]),1),'nnz q',np.round(np.percentile(nnz[s],[0,5,25,50,75,95,100]),1),'pcdist q',np.round(np.percentile(np.linalg.norm(Z[s,:15]-km.cluster_centers_[c,:15],axis=1),[0,5,25,50,75,95,100]),2))
+# average raw counts in row blocks 1:100, 101:200 etc and marker scores for all
+print('\\ncluster means per row blocks (raw total / genes)')
+for c in order:
+ s=lab==c
+ print(c,s.sum(),[round(float(X[s,a:b].mean()),2) for a,b in [(0,100),(100,200),(200,300),(300,400),(400,500),(500,600),(600,700),(700,800),(800,900),(900,1000)]])
+# cluster broad expression vector correlations between means
+A=np.array([X[lab==c].mean(0) for c in order]); corr=np.corrcoef(A); print('\\ncorrelations by order',order.tolist());print(np.round(corr,3))
+PY"

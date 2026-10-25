@@ -1,0 +1,45 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.spatial.distance import cdist
+loc=np.load('donor_pseudobulk.npz', allow_pickle=True)
+src=np.load('source_panel_pseudobulk.npz', allow_pickle=True)
+loc_names=loc['names'].astype(str); loc_idx={g:i for i,g in enumerate(loc_names)}
+src_genes=src['genes'].astype(str); src_keys=src['keys'].astype(str)
+common=[g for g in src_genes if g in loc_idx]
+li=[loc_idx[g] for g in common]; si=[list(src_genes).index(g) for g in common]
+L=loc['sums'][:,li].astype(float); S=src['sums'][:,si].astype(float)
+# panel composition log fractions
+Lx=np.log1p(L/(L.sum(axis=1,keepdims=True)+1e-9)*1e6)
+Sx=np.log1p(S/(S.sum(axis=1,keepdims=True)+1e-9)*1e6)
+# zscore genes using source+local combined
+X=np.vstack([Sx,Lx])
+Z=StandardScaler().fit_transform(X)
+Sz=Z[:Sx.shape[0]]; Lz=Z[Sx.shape[0]:]
+# distances/correlations
+dist=cdist(Lz,Sz,'euclidean')
+cos=cosine_similarity(Lz,Sz)
+ids=np.array([int(d.replace('donor','')) for d in loc['donors'].astype(str)])
+rows=[]
+for i,idv in enumerate(ids):
+    nearest=np.argsort(dist[i])[:8]
+    best=nearest[0]
+    labels=[src_keys[j].split('|')[-1] for j in nearest[:5]]
+    norm5=sum(l=='normal' for l in labels)
+    rows.append({'id':idv,'best_key':src_keys[best],'best_dist':dist[i,best],'top5_normals':norm5,'top5':';'.join(src_keys[j] for j in nearest[:5])})
+df=pd.DataFrame(rows).sort_values('id')
+print(df.to_string(index=False))
+print('\\nTop normal/covid source centroid classifier')
+# centroids exclude respiratory, maybe exclude IVLPS? show normal all, normal no IVLPS, covid all
+for normal_filter_name, normal_mask in [
+ ('all_normal', np.array([k.endswith('|normal') for k in src_keys])),
+ ('healthy_no_IVLPS', np.array([k.endswith('|normal') and not k.startswith('IVLPS') for k in src_keys]))]:
+    covid_mask=np.array([k.endswith('|COVID-19') for k in src_keys])
+    c_norm=Sz[normal_mask].mean(axis=0); c_covid=Sz[covid_mask].mean(axis=0)
+    dn=np.linalg.norm(Lz-c_norm,axis=1); dc=np.linalg.norm(Lz-c_covid,axis=1)
+    out=pd.DataFrame({'id':ids,'dn':dn,'dc':dc,'margin_dc_minus_dn':dc-dn,'pred':np.where(dn<dc,'normal','covid')}).sort_values('margin_dc_minus_dn', ascending=False)
+    print('\\n',normal_filter_name)
+    print(out.sort_values('id').to_string(index=False))
+    print('pred normal', ','.join(map(str, sorted(out[out.pred=='normal'].id))))
+PY"

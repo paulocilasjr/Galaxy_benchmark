@@ -1,0 +1,32 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+import statsmodels.api as sm
+hic=pd.read_csv('ep.interactions.q1.hic.csv')
+expr=pd.read_csv('ep.interactions.q1.expr.csv')
+bg=hic[hic.set=='background']
+cand=hic[hic.set=='candidate'].copy()
+cand['obs_total']=cand[['count_rep1','count_rep2','count_rep3']].sum(axis=1)
+long=bg.melt(id_vars=['pair_id','distance_bp'], value_vars=['count_rep1','count_rep2','count_rep3'], var_name='rep', value_name='count')
+long['logd']=np.log(long.distance_bp)
+pois=sm.GLM(long['count'], sm.add_constant(long[['logd']]), family=sm.families.Poisson()).fit()
+mu=pois.predict(sm.add_constant(np.log(cand.distance_bp)))
+cand['p_hic_up']=[1-stats.poisson.cdf(k-1, lam) for k,lam in zip(cand['obs_total'].astype(int), mu*3)]
+# expr paired p two-sided
+rows=[]
+for pair in expr.pair_id.unique():
+    d=expr[expr.pair_id==pair]
+    c=d[d.condition=='control'].sort_values(['guide_id','replicate']).rna_count.values
+    p=d[d.condition=='perturbed'].sort_values(['guide_id','replicate']).rna_count.values
+    t,pv=stats.ttest_rel(np.log2(p), np.log2(c))
+    logfc=np.log2((p/c).mean()) if False else np.mean(np.log2(p/c))
+    rows.append((pair,pv,logfc))
+ex=pd.DataFrame(rows,columns=['pair_id','p_expr','logFC'])
+cand=cand.merge(ex,on='pair_id')
+# fisher combine
+cand['fisher']=[stats.combine_pvalues([h,e], method='fisher')[1] for h,e in zip(cand['p_hic_up'], cand['p_expr'])]
+cand['neglog_fisher']=-np.log10(cand['fisher'])
+cand['score_contact']=-np.log10(cand['p_hic_up'])
+cand['score_expr']=-np.log10(cand['p_expr'])
+print(cand[['pair_id','obs_total','p_hic_up','p_expr','logFC','score_contact','score_expr','fisher','neglog_fisher']].sort_values('fisher').to_string(index=False))
+PY"

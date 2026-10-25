@@ -1,0 +1,62 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam
+from collections import defaultdict, Counter
+sites=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+si={s:i for i,s in enumerate(sites)}
+predA=['C','T','A','G','G','D','G','A']
+predB=['A','C','T','D','C','A','D','G']
+start=27079126; end=27080624; L=end-start+1
+b=pysam.AlignmentFile('mapped.sorted.bam','rb')
+def alleles(rec):
+ seq=rec.query_sequence; d={}
+ for qpos,rpos in rec.get_aligned_pairs(matches_only=False):
+  if rpos is None: continue
+  pos=rpos+1
+  if pos in si: d[pos]='D' if qpos is None else seq[qpos]
+ return d
+pairs=defaultdict(list)
+for rec in b.fetch('chr22',start-1,end+1):
+ if rec.is_unmapped or rec.is_secondary or rec.is_supplementary: continue
+ pairs[rec.qname].append(rec)
+cons={h: defaultdict(Counter) for h in ['A','B']}
+assign_counts=Counter()
+for qname,recs in pairs.items():
+ counts=defaultdict(Counter)
+ for rec in recs:
+  for p,ch in alleles(rec).items(): counts[p][ch]+=1
+ covered=[]
+ for p,c in counts.items(): covered.append((p,c.most_common(1)[0][0]))
+ mA=sum(1 for p,ch in covered if predA[si[p]]==ch)
+ mB=sum(1 for p,ch in covered if predB[si[p]]==ch)
+ hap='A' if mA>=mB else 'B'
+ assign_counts[hap]+=1
+ for rec in recs:
+  seq=rec.query_sequence
+  for qpos,rpos in rec.get_aligned_pairs(matches_only=False):
+   if rpos is None: continue
+   pos=rpos+1
+   if start<=pos<=end:
+    ch='-' if qpos is None else seq[qpos]
+    cons[hap][pos][ch]+=1
+strings={}
+for hap in ['A','B']:
+ chars=[]
+ for p in range(start,end+1):
+  c=cons[hap][p]
+  if not c: chars.append('N'); continue
+  top=c.most_common(1)[0][0]
+  chars.append(top)
+ strings[hap]=''.join(chars)
+print('assign counts',assign_counts)
+ref=pysam.FastaFile('hg38.fa')
+print('diff positions between A and B:')
+diffs=[]
+for i,(a,b) in enumerate(zip(strings['A'],strings['B'])):
+ if a"'!=b:
+  pos=start+i
+  diffs.append((pos,a,b))
+  print(pos, a,b, '"'ref', ref.fetch('chr22',pos-1,pos))
+print('num diffs',len(diffs))
+for h in ['A','B']:
+ print(h, strings[h][:200])
+PY"

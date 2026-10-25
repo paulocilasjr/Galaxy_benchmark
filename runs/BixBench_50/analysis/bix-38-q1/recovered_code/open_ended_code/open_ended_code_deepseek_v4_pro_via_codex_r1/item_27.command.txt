@@ -1,0 +1,24 @@
+/bin/bash -c "python3 - <<'PY'
+import zipfile, tempfile, pathlib, subprocess, statistics, re
+root=pathlib.Path('/workspace/tmp'); root.mkdir(exist_ok=True)
+def newick_edges(s):
+    # remove comments, whitespace
+    s=s.strip()
+    # find all length colon numbers including scientific
+    return [float(x) for x in re.findall(r':([0-9.]+(?:[eE][+-]?\\d+)?)', s)]
+for group,zpath in [('animals','inputs/scogs_animals.zip'),('fungi','inputs/scogs_fungi.zip')]:
+    td=tempfile.mkdtemp(prefix=f'manual_{group}_', dir=str(root))
+    maxdiff=0; bad=0; n=0; vals=[]
+    with zipfile.ZipFile(zpath) as zf:
+        for name in zf.namelist():
+            b=name.split('/')[-1]
+            if not b.endswith('.treefile'): continue
+            p=pathlib.Path(td)/b; data=zf.read(name); p.write_bytes(data)
+            s=data.decode()
+            manual=sum(newick_edges(s))
+            r=subprocess.run(['phykit','total_tree_length',str(p)],capture_output=True,text=True)
+            phy=float(r.stdout.strip().split()[0])
+            diff=abs(manual-phy); maxdiff=max(maxdiff,diff); n+=1; vals.append(phy)
+            if diff>1e-6: bad+=1
+    print(group,'n',n,'maxdiff',maxdiff,'bad',bad,'median manual/phy',statistics.median(vals))
+PY"

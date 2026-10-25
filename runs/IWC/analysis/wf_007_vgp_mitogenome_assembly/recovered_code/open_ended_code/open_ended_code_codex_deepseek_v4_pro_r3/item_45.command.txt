@@ -1,0 +1,37 @@
+/usr/bin/bash -lc 'export PATH=/opt/conda/bin:$PATH; minimap2 -x asm5 -c --eqx -a reference/OZ203683.1.fa assembly/mito_r_utg_500.fa 2>/dev/null > assembly/r500_to_ref.sam; python - <<'"'PY'
+from pathlib import Path
+import re
+ref=''.join(l.strip() for l in Path('reference/OZ203683.1.fa').read_text().splitlines() if not l.startswith('>'))
+q=''.join(l.strip() for l in Path('assembly/mito_r_utg_500.fa').read_text().splitlines() if not l.startswith('>'))
+def parse_cigar(c):
+    return [(int(n),op) for n,op in re.findall(r'(\\d+)([MIDNSHP=X])', c)]
+for line in Path('assembly/r500_to_ref.sam').read_text().splitlines():
+    if line.startswith('@'): continue
+    a=line.split('\\t'); flag=int(a[1])
+    if flag & 2048: continue
+    refstart=int(a[3])-1; cig=parse_cigar(a[5])
+    ri=refstart; qi=0; pairs=[]; diffs=[]
+    for n,op in cig:
+        if op in 'M=X':
+            for k in range(n):
+                if qi<len(q) and ri<len(ref) and q[qi]"'!=ref[ri]:
+                    diffs.append((qi,ri,q[qi],ref[ri]))
+                pairs.append((qi,ri,q[qi] if qi<len(q) else '"'-', ref[ri] if ri<len(ref) else '-')); qi+=1; ri+=1
+        elif op=='I':
+            for k in range(n):
+                diffs.append((qi,None,q[qi],'-')); pairs.append((qi,None,q[qi],'-')); qi+=1
+        elif op=='D':
+            for k in range(n):
+                diffs.append((None,ri,'-',ref[ri])); pairs.append((None,ri,'-',ref[ri])); ri+=1
+        elif op=='S': qi+=n
+        elif op=='H': pass
+    print('CIGAR',a[5],'pairs',len(pairs),'diffs',len(diffs))
+    for d in diffs[:20]:
+        qi,ri,qc,rc=d; idx=next((i for i,p in enumerate(pairs) if p[0]==qi and p[1]==ri),0) if qi is not None else 0
+        lo=max(0,idx-20); hi=min(len(pairs),idx+21)
+        print(d, 'qctx',''.join((p[2] if p[2] else '') for p in pairs[lo:hi]), 'rctx',''.join((p[3] if p[3] else '') for p in pairs[lo:hi]))
+    print('last diffs')
+    for d in diffs[-5:]:
+        print(d)
+    break
+PY"

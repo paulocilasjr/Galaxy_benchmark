@@ -1,0 +1,52 @@
+/bin/bash -lc "wc -l refs/gnomad_single_site_af_more.tsv; python3 - <<'PY'
+import math
+sel={}
+for line in open('selected_lifted.tsv'):
+    chrom,pos,ref,alt,hg38pos,*gs=line.strip().split('\\t')
+    sel[int(hg38pos)]=(ref,alt,[int(x) for x in gs],pos)
+labels=['AFR','ASJ','EUR','EAS','MID','SAS','OCE']
+def fval(x):
+    try: return None if x in ('.','') else float(x)
+    except: return None
+records={}
+for fname in ['refs/gnomad_selected_af.tsv','refs/gnomad_selected_af_batched.tsv','refs/gnomad_single_site_af.tsv','refs/gnomad_single_site_af_more.tsv']:
+  try: fh=open(fname)
+  except: continue
+  for line in fh:
+    p=line.strip().split('\\t')
+    if len(p)<14: continue
+    records[tuple(p[:4])]=p
+logs=[[0.0]*len(labels) for _ in range(4)]; counts=[0]*4; used=0
+for key,p in records.items():
+    chrom,pos,ref,alts=key; pos=int(pos); alts=alts.split(',')
+    if pos not in sel: continue
+    oref,oalt,ugs,hg19pos=sel[pos]
+    if ref"'!=oref or oalt not in alts: continue
+    idx=alts.index(oalt)
+    vals=[]
+    for v in p[4:10]:
+        parts=v.split('"',')
+        vals.append(fval(parts[idx] if len(parts)>idx else v))
+    acp,anp,acm,anm=[] ,None,None,None
+    x=[]
+    for v in p[10:14]:
+        parts=v.split(',')
+        x.append(fval(parts[idx] if len(parts)>idx else v))
+    acp,anp,acm,anm=x
+    oce=((acp or 0)+(acm or 0))/(anp+anm) if anp is not None and anm is not None and (anp+anm)>0 else None
+    freqs=[vals[0],vals[1],vals[2],vals[3],vals[4],vals[5],oce]
+    if sum(z is not None for z in freqs)<4: continue
+    used+=1
+    for i,u in enumerate(ugs):
+        counts[i]+=1
+        for j,f in enumerate(freqs):
+            if f is None: continue
+            f=max(min(f,1-1e-6),1e-6)
+            den=1-(1-f)**2
+            prob=(2*f*(1-f) if u==1 else f*f)/den
+            logs[i][j]+=math.log(max(prob,1e-300))
+print('gnomad unique records',len(records),'used',used,'counts',counts)
+for i in range(4):
+    ranked=sorted(zip(labels,logs[i]), key=lambda x:x[1], reverse=True)
+    print('Sample',i+1,ranked,'delta',ranked[0][1]-ranked[1][1])
+PY"

@@ -1,0 +1,87 @@
+/bin/bash -lc "python3 - <<'PY'
+import pysam, collections
+loci=[27079306,27079366,27079666,27079826,27080076,27080275,27080279,27080526]
+X=['C','T','A','G','G','D','G','A']
+Y=['A','C','T','D','C','A','D','G']
+local_start=27078000
+bam=pysam.AlignmentFile('aln_bwa.sorted.bam','rb')
+def allele_at(r,pos):
+    lp=pos-local_start
+    for qp,rp in r.get_aligned_pairs(matches_only=False):
+        if rp==lp:
+            return 'D' if qp is None else r.query_sequence[qp]
+    return None
+reads={}
+for r in bam.fetch():
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    reads[r.query_name,'R1' if r.is_read1 else 'R2']=[allele_at(r,p) for p in loci]
+bam.close()
+pair_class={}
+for name in set(k[0] for k in reads if k[1]=='R1'):
+    arr=[None]*len(loci)
+    for mate in ['R1','R2']:
+        for i,c in enumerate(reads.get((name,mate),[])):
+            if c is None: continue
+            if arr[i] is None: arr[i]=c
+            elif arr[i]"'!=c: arr[i]=None
+    sx=sum(1 for i,a in enumerate(arr) if a==X[i]); sy=sum(1 for i,a in enumerate(arr) if a==Y[i])
+    if sx>=sy: pair_class[name]='"'X'
+    else: pair_class[name]='Y'
+
+# build counts per haplotype for reads by pair class
+bam=pysam.AlignmentFile('aln_bwa.sorted.bam','rb')
+def add_counts(r, cls):
+    base=collections.defaultdict(collections.Counter); dele=collections.Counter(); cov=collections.Counter()
+    # use local positions 0-based
+    refpos=r.reference_start; qpos=0
+    for op,length in r.cigartuples:
+        if op==0:
+            for i in range(length):
+                qp=qpos+i
+                b=r.query_sequence[qp]; q=r.query_qualities[qp] if r.query_qualities else 20
+                if q>=10:
+                    base[refpos+i][b]+=1; cov[refpos+i]+=1
+            refpos+=length; qpos+=length
+        elif op==1: qpos+=length
+        elif op==2:
+            if length==1: dele[refpos]+=1
+            refpos+=length
+        elif op==3: refpos+=length
+        elif op==4: qpos+=length
+    return base,dele,cov
+counts={cls:{'base':collections.defaultdict(collections.Counter),'del':collections.Counter(),'cov':collections.Counter()} for cls in ['X','Y']}
+for r in bam.fetch():
+    if r.is_unmapped or r.is_secondary or r.is_supplementary: continue
+    cls=pair_class.get(r.query_name)
+    if not cls: continue
+    # classify read itself? same pair
+    base,dele,cov=add_counts(r,cls)
+    c=counts[cls]
+    for p,d in base.items():
+        c['base'][p].update(d)
+    for p,n in dele.items(): c['del'][p]+=n
+    for p,n in cov.items(): c['cov'][p]+=n
+bam.close()
+# produce consensus for positions with cov>0 in both
+positions=set(counts['X']['cov']) & set(counts['Y']['cov'])
+print('positions covered both',min(positions),max(positions))
+diff=[]
+for p in sorted(positions):
+    cons={}
+    for cls in ['X','Y']:
+        c=counts[cls]; bases=c['base'][p]; d=c['del'].get(p,0); tot=sum(bases.values())+d
+        if tot==0: continue
+        # if d >= 0.5*tot choose D, else max base
+        if d>0 and d>=max(bases.values(), default=0):
+            cons[cls]='D'
+        elif bases:
+            cons[cls]=bases.most_common(1)[0][0]
+        else:
+            cons[cls]='D'
+    if 'X' in cons and 'Y' in cons and cons['X']"'!=cons['"'Y']:
+        gen=local_start+p
+        diff.append((gen, cons['X'], cons['Y'], counts['X']['base'][p].most_common(3), counts['X']['del'].get(p,0), counts['Y']['base'][p].most_common(3), counts['Y']['del'].get(p,0)))
+print('differences X vs Y:')
+for d in diff:
+    print(d)
+PY"

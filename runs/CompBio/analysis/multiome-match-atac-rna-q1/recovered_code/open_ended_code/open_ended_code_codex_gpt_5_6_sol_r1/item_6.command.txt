@@ -1,0 +1,56 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip, re
+from scipy.optimize import linear_sum_assignment
+rna=pd.read_csv('multiome.match.atac.rna.q1.rna.tsv.gz',sep='\\t',index_col=0)
+atac=pd.read_csv('multiome.match.atac.rna.q1.atac.tsv.gz',sep='\\t',index_col=0)
+print(rna.shape,atac.shape)
+# parse gene features
+coords={}
+pat=re.compile(r'gene_name \"(["'^"]+)"'"')
+with gzip.open('gencode.annotation.gtf.gz','rt') as f:
+ for line in f:
+  if line.startswith('#'): continue
+  z=line.rstrip().split('\\t')
+  if len(z)<9 or z[2]"'!='"'gene': continue
+  m=pat.search(z[8])
+  if m: coords[m.group(1)]=(z[0],int(z[3])-1,int(z[4]),z[6])
+# atac mapping
+amap={k:i for i,k in enumerate(atac.index)}
+common=[g for g in rna.index if g in coords]
+print('coords common',len(common))
+A=atac.to_numpy(float); R=rna.loc[common].to_numpy(float)
+
+def calc(radius,emin,topvar=None, standard=True):
+ rows=[]; vals=[]; gs=[]
+ for ri,g in enumerate(common):
+  chrom,s,e,strand=coords[g]; t=s if strand=='+' else e-1
+  inds=[]
+  b=(t//10000)*10000
+  for off in range(-radius,radius+1):
+   st=b+off*10000
+   j=amap.get(f'{chrom}_{st}_{st+10000}')
+   if j is not None: inds.append(j)
+  if inds:
+   rows.append(ri); vals.append(A[inds].mean(0)); gs.append(g)
+ rr=R[rows]; aa=np.array(vals)
+ keep=(rr.max(1)>=emin)&(aa.max(1)>0)&(np.std(rr,1)>0)&(np.std(aa,1)>0)
+ rr=np.log1p(rr[keep]); aa=np.log1p(aa[keep]); gg=np.array(gs)[keep]
+ # rank/filter variable by RNA specificity
+ if topvar:
+  score=np.std(rr,1)*np.std(aa,1)
+  ix=np.argsort(score)[-topvar:]
+  rr,aa,gg=rr[ix],aa[ix],gg[ix]
+ rr-=rr.mean(1,keepdims=True); aa-=aa.mean(1,keepdims=True)
+ if standard:
+  rr/=rr.std(1,keepdims=True)+1e-9; aa/=aa.std(1,keepdims=True)+1e-9
+ sim=rr.T@aa/len(rr)
+ x,y=linear_sum_assignment(-sim)
+ perm=y[np.argsort(x)]
+ return len(rr),perm,sim
+for rad in [0,1,2,5]:
+ for emin in [0.1,1,5,10]:
+  for tv in [None,1000,3000,8000]:
+   n,p,s=calc(rad,emin,tv)
+   margin=np.mean([s[i,p[i]]-np.partition(s[i],-2)[-2] for i in range(8)])
+   print(rad,emin,tv,n,''.join(map(str,p)), 'diag',np.round(s[np.arange(8),p],3),'margin',round(margin,4))
+PY"

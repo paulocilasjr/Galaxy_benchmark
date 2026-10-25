@@ -1,0 +1,98 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,re,pickle,os,bisect,math
+from collections import defaultdict, deque
+import numpy as np
+# chunks
+chunks_by_base=defaultdict(list)
+with open('sample.swap.atac.q1.chrom.sizes') as f:
+    for line in f:
+        chunk,size=line.strip().split('\\t'); size=int(size)
+        base=chunk.rsplit('_',1)[0]
+        chunks_by_base[base].append((chunk,size))
+# parse genes
+attr_re=re.compile(r'(\\S+) \"(["'^"]*)"'"')
+genes=[]; intervals_by_chunk=defaultdict(list)
+with gzip.open('data/AmexT_v47-AmexG_v6.0-DD.gtf.gz','rt') as f:
+    for line in f:
+        if line.startswith('#'): continue
+        p=line.rstrip('\\n').split('\\t')
+        if len(p)<9 or p[2]"'!='"'gene': continue
+        chrom,start,end,strand,attr=p[0],int(p[3]),int(p[4]),p[6],p[8]
+        if chrom not in chunks_by_base: continue
+        attrs=dict(attr_re.findall(attr)); gid=attrs.get('gene_id','')
+        gname=attrs.get('gene_name',gid)
+        hs=re.search(r'([A-Za-z0-9_.-]+) \\[hs\\]',gname)
+        nr=re.search(r'([A-Za-z0-9_.-]+) \\[nr\\]',gname)
+        symbol=(hs.group(1) if hs else (nr.group(1) if nr else gname)).upper()
+        tss=start if strand=='+' else end
+        idx=len(genes); genes.append((gid,symbol,gname,chrom,tss))
+        lo=max(1,tss-50000); hi=tss+50000
+        off=0
+        for chunk,size in chunks_by_base[chrom]:
+            c_lo=off+1; c_hi=off+size
+            ovlo=max(lo,c_lo); ovhi=min(hi,c_hi)
+            if ovlo<=ovhi:
+                intervals_by_chunk[chunk].append((ovlo-off-1,ovhi-off,idx))
+            off+=size
+for ch in intervals_by_chunk:
+    intervals_by_chunk[ch].sort()
+print('genes',len(genes),'chunks',len(intervals_by_chunk),'intervals',sum(len(v) for v in intervals_by_chunk.values()))
+# stream matrix with sweep
+with gzip.open('sample.swap.atac.q1.tsv.gz','rt') as f:
+    header=f.readline().rstrip('\\n').split('\\t')
+    samples=header[3:]; m=len(samples)
+    libs=np.zeros(m,dtype=np.float64)
+    act=np.zeros((len(genes),m),dtype=np.float64)
+    current_chunk=None; intervals=[]; ptr=0; active=[]
+    for line_num,line in enumerate(f,1):
+        # split first 3 then np for vals
+        p=line.rstrip('\\n').split('\\t',3)
+        chunk=p[0]; bs=int(p[1]); be=int(p[2])
+        vals=np.fromstring(p[3],sep='\\t',dtype=np.float64)
+        libs+=vals
+        if chunk"'!=current_chunk:
+            current_chunk=chunk; intervals=intervals_by_chunk.get(chunk,[]); ptr=0; active=[]
+        # add intervals with start < be
+        L=len(intervals)
+        while ptr<L and intervals[ptr][0] < be:
+            active.append(intervals[ptr]); ptr+=1
+        # keep end > bs and add if overlap
+        if active:
+            new=[]
+            for lo,hi,idx in active:
+                if hi > bs:
+                    if lo < be:
+                        act[idx]+=vals
+                    new.append((lo,hi,idx))
+            active=new
+        if line_num%500000==0: print('"'rows',line_num)
+# aggregate by symbol (sum duplicate gene records)
+sym_to_indices=defaultdict(list)
+for i,(gid,sym,gname,chrom,tss) in enumerate(genes): sym_to_indices[sym].append(i)
+syms=sorted(sym_to_indices)
+sym_act=np.zeros((len(syms),m),dtype=np.float64)
+for k,sym in enumerate(syms): sym_act[k]=act[sym_to_indices[sym]].sum(axis=0)
+np.savez_compressed('tmp/all_promoter_activity.npz',sym_act=sym_act,libs=libs,samples=np.array(samples),syms=np.array(syms,dtype=object))
+print('saved',sym_act.shape,'nonzero',np.count_nonzero(sym_act.sum(axis=1)))
+# top z per sample excluding uninformative LOC/hypothetical? compute log cpm z
+x=np.log1p(sym_act/libs*1e6)
+std=x.std(axis=1)
+mask=(std>0)&(sym_act.sum(axis=1)>0)
+z=np.zeros_like(x); z[mask]=(x[mask]-x[mask].mean(axis=1,keepdims=True))/std[mask,None]
+# score specificity = z and absolute cpm min?
+for j,s in enumerate(samples):
+    order=np.argsort(-z[:,j])
+    print('\\nSAMPLE',s)
+    cnt=0
+    for idx in order:
+        sym=syms[idx]
+        if sym.startswith('LOC') or sym.startswith('AMEX') or sym in ['HYPOTHETICAL','UNCHARACTERIZED']:
+            continue
+        val=z[idx,j]; cpm=sym_act[idx,j]/libs[j]*1e6
+        # require accessible cpm > 2 maybe
+        if cpm<1: continue
+        print(f'{sym}:{val:.2f}:{cpm:.1f}',end=' ')
+        cnt+=1
+        if cnt>=30: break
+    print()
+PY"

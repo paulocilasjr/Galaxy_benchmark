@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, re, pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+z=np.load('donor_aggregates.npz',allow_pickle=True); d=z['donor_names'].astype(str); g=z['gene_names'].astype(str); s=z['sums']; n=z['cell_counts'];tc=z['total_counts'];
+order=np.argsort([int(re.search(r'\\d+',x).group()) for x in d])
+# CPM pseudobulk, log1p; remove genes not detected at donor level and MT/RP/MALAT maybe inspect both
+lib=s.sum(1)
+cpm=s/lib[:,None]*1e6
+x=np.log1p(cpm)
+var=x.var(0)
+for filt in [('all',np.ones(len(g),bool)),('no_mt_rp',~np.array([q.startswith(('MT-','RPS','RPL')) or q=='MALAT1' for q in g]))]:
+ name,mask=filt
+ print('\\n===',name,'===')
+ inds=np.where(mask)[0][np.argsort(var[mask])[-60:][::-1]]
+ print('top variable:', ', '.join(f'{g[i]}({var[i]:.2f})' for i in inds))
+ # PCA standardized? on log cpm, no gene z scaling
+ p=PCA(n_components=5).fit(x[:,mask])
+ scores=p.transform(x[:,mask]); load=p.components_
+ print('explained',np.round(p.explained_variance_ratio_,3))
+ for k in range(5):
+  top=np.argsort(load[k])[-12:][::-1]; bot=np.argsort(load[k])[:12]
+  gm=g[mask]
+  print('PC',k+1,'scores',dict(zip(d[order],np.round(scores[order,k],2))))
+  print(' +',','.join(gm[top]),' -',','.join(gm[bot]))
+PY"

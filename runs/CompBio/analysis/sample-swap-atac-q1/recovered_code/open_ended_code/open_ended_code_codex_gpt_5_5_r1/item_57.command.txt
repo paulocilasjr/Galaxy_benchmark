@@ -1,0 +1,64 @@
+/bin/bash -lc "python3 - <<'PY'
+# Quick candidate-specific summary from previously computed individual-marker evidence is enough; recompute compact 50kb score for selected sets only.
+import pandas as pd, numpy as np, re, glob, bisect, collections
+path='sample.swap.atac.q1.tsv.gz'
+samples=pd.read_csv(path,sep='\\t',nrows=0).columns.tolist()[3:]
+lib=np.array([701506327,1168148790,484000505,565994637,1094125058,868549497,699794434,745602917,1147926115,398317869,877686879,1398702406,973845979,497829833,455786546],float)
+sets={
+ 'Stomach_specific':['Gkn1','Muc5ac','Pgc','Atp4b'],
+ 'Cloaca_terminal_gut':['Cdx2','Muc2','Krt8','Krt13','Krt14','Tp63','Foxa1'],
+ 'Bladder_specific':['Upk1a','Upk1b','Upk3a'],
+ 'Gill_candidate':['Krt5','Tp63','Foxi1','Cldn10','Atp1a1']
+}
+markers=sorted({m for v in sets.values() for m in v}); key={m.upper().replace('-','').replace('.',''):m for m in markers}
+# chunks
+chrom_chunks=collections.defaultdict(list)
+for line in open('sample.swap.atac.q1.chrom.sizes'):
+    c,s=line.split(); chrom_chunks[c.rsplit('_',1)[0]].append((c,int(s)))
+orig={}
+for base,l in chrom_chunks.items():
+    off=0; orig[base]=[]
+    for c,s in l: orig[base].append((off,off+s,c)); off+=s
+def to_chunk(chrom,start,end):
+    for a,b,c in orig.get(chrom,[]):
+        st=max(start,a); en=min(end,b)
+        if st<en: yield c,st-a,en-a
+rec=[]
+for fn in glob.glob('*.primary.tsv'):
+    df=pd.read_csv(fn,sep='\\t')
+    if not {'name','txStart','txEnd'}.issubset(df.columns): continue
+    for _,r in df.iterrows():
+        for p in str(r['name']).split('|'):
+            nm=re.sub(r'\\s*\\[["'^'"\\]]+\\]','',p).strip(); k=nm.upper().replace('-','').replace('.','')
+            if k in key:
+                tss=int(r['txStart']) if r['strand']=='+' else int(r['txEnd'])
+                rec.append((key[k],str(r['chrom']),tss))
+seen=set(); u=[]
+for x in rec:
+    if x not in seen: seen.add(x); u.append(x)
+ids={(g,c,t):i for i,(g,c,t) in enumerate(u)}
+intervals=collections.defaultdict(list); win=50000
+for i,(g,c,t) in enumerate(u):
+    for ch,st,en in to_chunk(c,max(0,t-win),t+win): intervals[ch].append((st,en,i))
+starts={}
+for ch,l in intervals.items(): l.sort(); starts[ch]=[x[0] for x in l]
+sums=np.zeros((len(u),len(samples))); nb=np.zeros(len(u),int)
+for chunk in pd.read_csv(path,sep='\\t',chunksize=250000):
+    arr=chunk[samples].to_numpy(float)
+    for i,(ch,a,b) in enumerate(zip(chunk['chrom'].to_numpy(),chunk['start'].to_numpy(),chunk['end'].to_numpy())):
+        if ch not in intervals: continue
+        l=intervals[ch]; j=bisect.bisect_left(starts[ch],b)
+        for x,y,gid in l[:j]:
+            if y>a and x<b: sums[gid]+=arr[i]; nb[gid]+=1
+log=np.log2(sums/lib*1e6+1); z=(log-log.mean(1,keepdims=True))/(log.std(1,keepdims=True)+1e-9)
+# collapse each gene by best locus max z, then average set genes
+gene_best={}
+for i,(g,c,t) in enumerate(u):
+    if nb[i]==0: continue
+    if g not in gene_best or z[i].max()>z[gene_best[g]].max(): gene_best[g]=i
+for name,gs in sets.items():
+    idx=[gene_best[g] for g in gs if g in gene_best]
+    vals=z[idx].mean(0)
+    order=np.argsort(-vals)
+    print(name, '; '.join(f'{samples[j]}={vals[j]:.2f}' for j in order[:6]), 'genes', [g for g in gs if g in gene_best])
+PY"

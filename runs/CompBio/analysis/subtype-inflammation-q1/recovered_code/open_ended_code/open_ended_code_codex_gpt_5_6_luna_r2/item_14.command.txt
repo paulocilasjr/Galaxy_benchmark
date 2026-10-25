@@ -1,0 +1,48 @@
+/bin/bash -lc "python - <<'PY'
+import gzip, numpy as np, time, warnings
+from scipy.io import mmread
+from scipy.sparse import vstack
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+warnings.filterwarnings('ignore')
+t0=time.time()
+with gzip.open('subtype.inflammation.q1.genes.txt.gz','rt') as h:
+ next(h); genes=[x.rstrip().split('\\t')[1] for x in h]
+idx={x:i for i,x in enumerate(genes)}
+Xs=[]; ns=[]
+for f in ['subtype.inflammation.q1.1.mtx.gz','subtype.inflammation.q1.2.mtx.gz']:
+ X=mmread(f).tocsr().astype(np.float32)
+ lib=np.asarray(X.sum(0)).ravel().astype(np.float32)
+ X=X.multiply(1e4/lib).tocsr().astype(np.float32)
+ X.data=np.log1p(X.data)
+ Xs.append(X.T.tocsr()); ns.append(X.shape[1])
+print('loaded',time.time()-t0, 'shape',Xs[0].shape,Xs[1].shape,flush=True)
+X=vstack(Xs,format='csr')
+# hvg
+mean=np.asarray(X.mean(0)).ravel(); var=np.asarray(X.multiply(X).mean(0)).ravel()-mean**2
+valid=(mean>0.02)
+for exclude in ['MALAT1']:
+ valid &= np.array([g"'!=exclude for g in genes])
+# exclude obvious technical genes only for embedding
+valid &= np.array([not (g.startswith('"'MT-') or g.startswith('RPS') or g.startswith('RPL')) for g in genes])
+hvg=np.where(valid)[0][np.argsort(var[valid])[-5000:]]
+print('hvg',len(hvg),'mean range',mean[hvg].min(),mean[hvg].max(),'top',[(genes[i],round(var[i],2)) for i in hvg[-20:]],flush=True)
+Y=X[:,hvg]
+svd=TruncatedSVD(n_components=50,n_iter=5,random_state=1)
+Z=svd.fit_transform(Y)
+Z=(Z-Z.mean(0))/(Z.std(0)+1e-8)
+print('svd',time.time()-t0,'explained',svd.explained_variance_ratio_[:10].sum(),flush=True)
+for k in [20,30,40,50,60]:
+ km=KMeans(n_clusters=k,n_init=5,random_state=1,max_iter=200,verbose=0)
+ lab=km.fit_predict(Z)
+ print('\\nK',k,'inertia',km.inertia_)
+ print('cluster sample ccl5')
+ ccl5=np.asarray(X[:,idx['CCL5']].todense()).ravel() if 'CCL5' in idx else np.zeros(X.shape[0])
+ for c in range(k):
+  sel=lab==c; n=sel.sum(); n1=sel[:ns[0]].sum(); cp=(ccl5[sel]>0).sum()
+  print(f'{c:2d}: n={n:4d} eye1={n1:4d} eye2={n-n1:4d} ccl5={cp:4d}({cp/max(n,1)*100:4.1f}%)',end=' | ')
+  # top genes by avg log exp? mean log, subtract global mean for specificity
+  av=np.asarray(X[sel].mean(0)).ravel(); eff=av-mean
+  ix=np.argsort(eff)[-8:][::-1]
+  print(','.join(genes[i] for i in ix))
+PY"

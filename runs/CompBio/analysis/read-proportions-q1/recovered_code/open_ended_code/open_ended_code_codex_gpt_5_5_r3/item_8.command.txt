@@ -1,0 +1,92 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, math
+from collections import defaultdict, Counter
+contigs=[]; name=None; seq=[]
+for line in open('read.proportions.q1.fa'):
+    line=line.strip()
+    if line.startswith('>'):
+        if name: contigs.append((name,''.join(seq)))
+        name=line[1:].split()[0]; seq=[]
+    else: seq.append(line.upper())
+if name: contigs.append((name,''.join(seq)))
+L=36; seed_len=9
+comp=str.maketrans('ACGTN','TGCAN')
+def rc(s): return s.translate(comp)[::-1]
+windows=[]
+# (ci,pos,orient,window) orient + means read same as forward window; - means read equals rc, convert bases back via comp and coordinate pos+L-1-i
+for ci,(name,s) in enumerate(contigs):
+    for pos in range(len(s)-L+1):
+        k=s[pos:pos+L]
+        windows.append((ci,pos,'+',k))
+        windows.append((ci,pos,'-',rc(k)))
+idx=defaultdict(list)
+for sid,(_,_,_,w) in enumerate(windows):
+    for off in range(0,L,seed_len):
+        idx[(off,w[off:off+seed_len])].append(sid)
+# variable sites
+vars=[]
+for j in range(3000):
+    pat=tuple(s[j] for _,s in contigs)
+    if len(set(pat))>1: vars.append((j,pat))
+print('var sites',len(vars), flush=True)
+site_counts={j:Counter() for j,_ in vars}
+mapstats=Counter(); coord_ties=0; reads_used=0
+best_contig_frac=Counter()
+for recno in range(40000):
+    pass
+with gzip.open('read.proportions.q1.fq.gz','rt') as f:
+    while True:
+        h=f.readline()
+        if not h: break
+        r=f.readline().strip().upper(); f.readline(); f.readline()
+        cand=set()
+        for off in range(0,L,seed_len): cand.update(idx.get((off,r[off:off+seed_len]),()))
+        best=[]; mind=99
+        for sid in cand:
+            ci,pos,ori,w=windows[sid]
+            d=sum(a"'!=b for a,b in zip(r,w))
+            if d<mind: mind=d; best=[sid]
+            elif d==mind: best.append(sid)
+        mapstats[mind]+=1
+        # pick coordinate/orient if all best agree coordinate/orient? ignore contig differences
+        cos={(windows[sid][1],windows[sid][2]) for sid in best}
+        if mind<=3 and len(cos)==1:
+            pos,ori=next(iter(cos)); reads_used+=1
+            for j,pat in vars:
+                if pos <= j < pos+L:
+                    if ori=='"'+': base=r[j-pos]
+                    else: base=comp.get(r[pos+L-1-j], 'N')
+                    site_counts[j][base]+=1
+        elif mind<=3:
+            coord_ties+=1
+print('mapstats',mapstats,'reads_used',reads_used,'coord_ties',coord_ties, flush=True)
+# Aggregate observations by allele pattern, compute allele fractions
+pattern_obs=defaultdict(Counter)
+pattern_sites=Counter()
+for j,pat in vars:
+    pattern_sites[pat]+=1
+    pattern_obs[pat].update(site_counts[j])
+print('patterns obs:')
+for pat,nsite in pattern_sites.most_common():
+    c=pattern_obs[pat]
+    tot=sum(c.values())
+    print(pat,'sites',nsite,'tot',tot,'counts',dict(c),'freq',{b:round(c[b]/tot,3) for b in c} if tot else {})
+# For biallelic unique patterns estimate pi for unique allele minus error approx
+# least squares over site allele counts perhaps use scipy? use numpy installed likely.
+try:
+ import numpy as np
+ rows=[]; y=[]; weights=[]
+ for pat,c in pattern_obs.items():
+    tot=sum(c.values())
+    if tot==0: continue
+    bases=sorted(set(pat))
+    for b in bases:
+      rows.append([1.0 if pat[i]==b else 0.0 for i in range(4)])
+      y.append(c[b]/tot)
+      weights.append(tot)
+ A=np.array(rows); y=np.array(y); W=np.sqrt(np.array(weights))[:,None]
+ # constrained sum=1: replace with use scipy? brute grid 0.001?
+ print('unconstr lstsq',np.linalg.lstsq(A*W,y*W[:,0],rcond=None)[0])
+except Exception as e:
+ print('np fail',e)
+PY"

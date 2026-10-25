@@ -1,0 +1,39 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, pandas as pd, re, warnings
+warnings.filterwarnings('ignore')
+files=['perturb.seq.align.q1.ref.h5ad','perturb.seq.align.q1.query.h5ad']; out=[]
+for fn in files:
+ with h5py.File(fn,'r') as f:
+  n_obs,n_var=f['X'].attrs['shape']
+  X=sp.csc_matrix((f['X/data'][:], f['X/indices'][:], f['X/indptr'][:]), shape=(n_obs,n_var)).tocsr()
+  gcats=[x.decode() if isinstance(x,bytes) else x for x in f['obs/guide/categories'][:]]
+  gc=f['obs/guide/codes'][:]
+  g=np.array([gcats[i] for i in gc])
+  var=[x.decode() if isinstance(x,bytes) else x for x in f['var/_index'][:]]
+  out.append((X,g,var))
+X1,g1,v1=out[0]; X2,g2,v2=out[1]
+# genes of interest in both
+for gene in ['CDC73','CPSF3L','PABPC1','NUDT21','LEO1']:
+ print('\\nGENE',gene)
+ for name,(X,g,v) in [('ref',out[0]),('query',out[1])]:
+  if gene not in v:
+   print(name,'gene absent'); continue
+  j=v.index(gene)
+  # raw counts and lognorm
+  x=np.asarray(X[:,j].toarray()).ravel()
+  lib=np.asarray(X.sum(1)).ravel(); lib[lib==0]=1
+  lx=np.log1p(x/lib*1e4)
+  df=[]
+  for gg in sorted(set(g)):
+   idx=g==gg
+   df.append((gg,idx.sum(),x[idx].mean(),lx[idx].mean()))
+  d=pd.DataFrame(df,columns=['guide','n','rawmean','logmean'])
+  nt=d[d.guide.str.startswith('NT-')]
+  ntmean=nt.logmean.mean()
+  d['delta']=d.logmean-ntmean
+  # print top 10 down for query/ref
+  d=d.sort_values('delta')
+  print('\\n',name,'bottom10:')
+  print(d.head(10).to_string(index=False))
+PY
+python [REDACTED LOCAL PATH]"

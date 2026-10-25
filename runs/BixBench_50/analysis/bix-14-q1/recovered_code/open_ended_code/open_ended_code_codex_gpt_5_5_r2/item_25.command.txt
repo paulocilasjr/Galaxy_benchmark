@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+from openpyxl import load_workbook
+from pathlib import Path
+from collections import Counter
+import re
+base=Path('inputs')
+# load status
+wb=load_workbook(base/'230215_Trio_Status.xlsx', data_only=True)
+rows=list(wb.active.iter_rows(values_only=True))
+h=[str(x).strip() if x is not None else '' for x in rows[0]]; idx={x:i for i,x in enumerate(h)}
+status={str(r[idx['Sample ID']]).strip(): str(r[idx['BLM Mutation Status']]).strip() for r in rows[1:] if r[idx['Sample ID']] is not None}
+files=list((base/'CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+file_by_sample={p.stem.split('230209_Exome_GRCh38_CHIP_')[1].split('-')[0]:p for p in files}
+coding_terms={'transcript_ablation','splice_acceptor_variant','splice_donor_variant','stop_gained','frameshift_variant','stop_lost','start_lost','transcript_amplification','inframe_insertion','inframe_deletion','missense_variant','protein_altering_variant','synonymous_variant','coding_sequence_variant','incomplete_terminal_codon_variant','start_retained_variant','stop_retained_variant'}
+def parse(p):
+    wb=load_workbook(p, data_only=True)
+    ws=wb[wb.sheetnames[0]]
+    row2=[c.value for c in ws[2]]; col={v:i for i,v in enumerate(row2) if v is not None}
+    vaf_col=[i for i,v in enumerate(row2) if v is not None and 'Allele Freq' in str(v) and 'Alt Allele' not in str(v)][0]
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        try: vaf=float(row[vaf_col])
+        except Exception: continue
+        yield {k: row[col[k]] if col[k] < len(row) else None for k in ['Chr:Pos','Ref/Alt','Zygosity','Sequence Ontology (Combined)','Effect (Combined)']} | {'VAF': vaf}
+def coding(so): return any(t in coding_terms for t in re.split(r'[,&;|/\\s]+', str(so)))
+def syn(so): return 'synonymous_variant' in str(so)
+ids=[sid for sid,s in status.items() if s=='Carrier']
+ctr=Counter(); rows=[]
+for sid in ids:
+    if sid not in file_by_sample: continue
+    for r in parse(file_by_sample[sid]):
+        if r['VAF']<0.3 and coding(r['Sequence Ontology (Combined)']):
+            ctr[str(r['Zygosity'])]+=1
+            rows.append((sid,r['Chr:Pos'],r['Ref/Alt'],r['VAF'],r['Zygosity'],r['Sequence Ontology (Combined)']))
+print('den zygosity counts', ctr)
+print('num/den all rows', sum(1 for x in rows if syn(x[5])), len(rows))
+print('num/den nonref zygosity', sum(1 for x in rows if x[4]"'!='"'Reference' and syn(x[5])), sum(1 for x in rows if x[4]"'!='"'Reference'))
+print('Reference coding denominator rows:')
+for x in rows:
+    if x[4]=='Reference': print(x)
+PY"

@@ -1,0 +1,54 @@
+/bin/bash -lc "cat > twobit_locate.py <<'PY'
+import mmap,struct,gzip,json,collections
+f=open('hg38.2bit','rb');m=mmap.mmap(f.fileno(),0,access=mmap.ACCESS_READ)
+endian='>' if m[:4]==bytes.fromhex('1a412743') else '<'
+def u32(p):return struct.unpack_from(endian+'I',m,p)[0]
+n=u32(8);p=16;index=[]
+for i in range(n):
+ l=m[p];p+=1;name=m[p:p+l].decode();p+=l;off=u32(p);p+=4;index.append((name,off))
+info=[]
+for name,off in index:
+ length=u32(off);p=off+4;nn=u32(p);p+=4;nstarts=[u32(p+i*4) for i in range(nn)];p+=4*nn;nsizes=[u32(p+i*4) for i in range(nn)];p+=4*nn;nm=u32(p);p+=4+8*nm+4
+ info.append((name,p,length,nstarts,nsizes))
+print('Sequences',len(info),flush=True)
+enc={'T':0,'C':1,'A':2,'G':3}
+def packed(s):
+ out=[]
+ for i in range(0,len(s),4):
+  v=0
+  for b in s[i:i+4]:v=(v<<2)|enc[b]
+  out.append(v)
+ return bytes(out)
+hits=[]
+with gzip.open('identify.donor.R1.fq.gz','rt') as f:
+ for i in range(12):
+  name=f.readline().strip();s=f.readline().strip();f.readline();f.readline()
+  for strand,seq in [('+',s),('-',s.translate(str.maketrans('ACGT','TGCA'))[::-1])]:
+   for shift in range(4):
+    sub=seq[40+shift:72+shift]
+    if any(b not in enc for b in sub):continue
+    pat=packed(sub);start=0
+    while True:
+     h=m.find(pat,start)
+     if h<0:break
+     start=h+1
+     for chrom,beg,length,_,_ in info:
+      if beg<=h<beg+(length+3)//4:
+       pos=(h-beg)*4-40-shift
+       hits.append((name,chrom,pos,strand));print(hits[-1],flush=True);break
+counts=collections.Counter(x[1] for x in hits);chrom=counts.most_common(1)[0][0]
+positions=[x[2] for x in hits if x[1]==chrom]
+start=max(0,min(positions)-1000000);end=max(positions)+1000000
+name,beg,length,ns,nl=next(x for x in info if x[0]==chrom);end=min(end,length)
+table=[''.join('TCAG'[(v>>shift)&3] for shift in (6,4,2,0)) for v in range(256)]
+dna=''.join(table[v] for v in m[beg+start//4:beg+(end+3)//4])[start%4:start%4+end-start]
+a=bytearray(dna.encode())
+for p,l in zip(ns,nl):
+ lo=max(start,p);hi=min(end,p+l)
+ if hi>lo:a[lo-start:hi-start]=b'N'*(hi-lo)
+with open('region.fa','w') as out:
+ out.write('>'+chrom+'\\n')
+ for i in range(0,len(a),60):out.write(a[i:i+60].decode()+'\\n')
+json.dump({'chrom':chrom,'start':start,'end':end,'hits':hits},open('region.json','w'),indent=2)
+print('REGION',chrom,start,end,flush=True)
+PY"

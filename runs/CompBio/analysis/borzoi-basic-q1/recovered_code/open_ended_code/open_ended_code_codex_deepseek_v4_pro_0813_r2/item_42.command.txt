@@ -1,0 +1,46 @@
+/bin/bash -lc "python3 - <<'PY'
+import h5py, numpy as np, json, re
+path='model0_best.h5'
+
+def walk(group, prefix=''):
+    datasets=[]
+    for key in group:
+        obj=group[key]
+        name=prefix+'/'+key
+        if isinstance(obj,h5py.Group):
+            datasets += walk(obj,name)
+        else:
+            datasets.append((name,obj))
+    return datasets
+
+with h5py.File(path,'r') as f:
+    datasets=walk(f['model_weights'])
+    total=0; train=0; nontrain=0
+    categories={}
+    for name,ds in datasets:
+        n=int(np.prod(ds.shape,dtype=np.int64))
+        total += n
+        # classify trainable
+        is_nontrain = '/moving_mean:0' in name or '/moving_variance:0' in name
+        if is_nontrain:
+            nontrain += n
+        else:
+            train += n
+        # category by top layer group name
+        parts=name.split('/')
+        # weight group: /model_weights/layer_group/subgroup/dataset
+        layer_group=parts[1] if len(parts)>1 else parts[0]
+        categories[layer_group]=categories.get(layer_group,0)+n
+    print('total all weights', total)
+    print('sum trainable (exclude moving stats)', train)
+    print('sum non-trainable moving stats', nontrain)
+    print('diff total-train', total-train)
+    # show categories sorted
+    for k,v in sorted(categories.items(), key=lambda kv: -kv[1]):
+        print(k, v)
+
+# compute mouse head from params: final dense 1920*2608+2608
+mouse=1920*2608+2608
+print('mouse head params', mouse)
+print('human+mouse trainable', train+mouse)
+PY"

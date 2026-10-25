@@ -1,0 +1,34 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py,numpy as np
+from scipy.sparse import csc_matrix
+from scipy.optimize import linear_sum_assignment
+
+def load(fn):
+ with h5py.File(fn,'r') as f:
+  nobs,nvar=len(f['obs/_index']),len(f['var/_index'])
+  X=csc_matrix((f['X/data'][...],f['X/indices'][...],f['X/indptr'][...]),shape=(nobs,nvar)).tocsr()
+  genes=f['var/_index'][...].astype(str); cats=f['obs/guide/categories'][...].astype(str); codes=f['obs/guide/codes'][...]
+ lib=np.asarray(X.sum(1)).ravel().astype(float)
+ Y=X.multiply(1e4/np.maximum(lib,1)[:,None]).tocsr(); Y.data=np.log1p(Y.data)
+ ctr=np.array([x.startswith('NT-') for x in cats]); base=Y[ctr[codes]].mean(0).A1
+ means=np.vstack([Y[codes==i].mean(0).A1 for i in range(len(cats))])
+ return genes,cats,codes,means-base
+
+gr,rg,rc,DR=load('perturb.seq.align.q1.ref.h5ad'); gq,qg,qc,DQ=load('perturb.seq.align.q1.query.h5ad')
+idx={g:i for i,g in enumerate(gr)}; iq=np.array([i for i,g in enumerate(gq) if g in idx]); ir=np.array([idx[g] for g in gq if g in idx]); A=DR[:,ir]; B=DQ[:,iq]
+ri=[i for i,g in enumerate(rg) if not g.startswith('NT-')]; qj=[j for j,g in enumerate(qg) if not g.startswith('NT-')]
+for name in ['all','global500','global1000','global2000','global5000']:
+ if name=='all': S=np.ones(A.shape[1],bool)
+ else:
+  k=int(name[6:]); S=np.zeros(A.shape[1],bool); S[np.argsort(np.max(np.abs(A[ri]),axis=0))[-k:]]=1
+ AA=A[ri][:,S]; BB=B[qj][:,S]
+ AA=AA-AA.mean(1)[:,None]; BB=BB-BB.mean(1)[:,None]
+ AA/=np.linalg.norm(AA,axis=1)[:,None]+1e-12; BB/=np.linalg.norm(BB,axis=1)[:,None]+1e-12
+ sim=AA@BB.T
+ sim2=np.column_stack([sim,np.zeros(len(ri))])
+ rows,cols=linear_sum_assignment(-sim2)
+ print('\\n',name,'mean',sim2[rows,cols].mean(),'sum',sim2[rows,cols].sum())
+ for r,c in zip(rows,cols):
+  if rg[ri[r]] in ['LEO1-I2','NUDT21-I3','PABPC1-I1'] or (c<len(qj) and qg[qj[c]] in ['guide13','guide14','guide18']):
+   print(rg[ri[r]], '->', qg[qj[c]] if c<len(qj) else 'UNMATCHED', round(sim2[r,c],3))
+PY"

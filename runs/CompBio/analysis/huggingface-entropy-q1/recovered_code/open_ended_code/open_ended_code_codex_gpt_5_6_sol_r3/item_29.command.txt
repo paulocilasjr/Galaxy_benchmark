@@ -1,0 +1,26 @@
+/bin/bash -lc 'HF_HOME="$PWD/hf_home" PYTHONPATH="$PWD" arch -arm64 runtime_arm64/bin/python - <<'"'PY'
+import json, types, torch
+from torch.nn import functional as F
+from transformers import AutoTokenizer,AutoModelForMaskedLM
+from mamba_ssm.modules.mamba_simple import Mamba
+p='downloads/model'; tok=AutoTokenizer.from_pretrained(p,trust_remote_code=True); model=AutoModelForMaskedLM.from_pretrained(p,trust_remote_code=True).eval()
+seq=json.load(open('downloads/ucsc_sequence.json'))['dna'][:48]
+ids=tok(seq,return_tensors='pt')['input_ids']; ids[0,17]=tok.mask_token_id
+with torch.inference_mode(): assoc=model(ids).logits
+
+def scan_ref(self,u,delta,A,B,C,z):
+ b,d,l=u.shape; state=torch.zeros(b,d,self.d_state,dtype=torch.float32); ys=[]
+ for i in range(l):
+  da=torch.exp(delta[:,:,i,None].float()*A[None,:,:])
+  dbu=delta[:,:,i,None].float()*u[:,:,i,None].float()*B[:,i,None,:].float()
+  state=da*state+dbu
+  ys.append((state*C[:,i,None,:].float()).sum(-1))
+ y=torch.stack(ys,dim=2)+u.float()*self.D.float()[None,:,None]
+ return (y*F.silu(z.float())).to(u.dtype)
+Mamba._scan=scan_ref
+with torch.inference_mode(): ref=model(ids).logits
+err=(assoc-ref).abs()
+print('finite',torch.isfinite(ref).all().item(),'max_abs',err.max().item(),'mean_abs',err.mean().item(),'logit_scale',ref.abs().max().item())
+print('masked_assoc',assoc[0,17].tolist())
+print('masked_ref',ref[0,17].tolist())
+PY"

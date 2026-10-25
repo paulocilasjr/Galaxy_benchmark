@@ -1,0 +1,39 @@
+/bin/bash -lc "PYTHONPATH=/workspace/.deps python - <<'PY'
+import csv, gc, time
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+from statsmodels.stats.multitest import multipletests
+
+def header(fn):
+ with open(fn,newline='') as f:return next(csv.reader(f))
+cf='inputs/CRISPRGeneEffect.csv'; ef='inputs/OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+hc=header(cf); he=header(ef)
+epos={g:i for i,g in enumerate(he) if i>0 and g}
+genes=[g for i,g in enumerate(hc) if i>0 and g in epos]
+cpos=[i for i,g in enumerate(hc) if i>0 and g in epos]
+epos2=[epos[g] for g in genes]
+cd={hc[i]:np.float64 for i in cpos}; ed={he[i]:np.float64 for i in epos2}
+cdf=pd.read_csv(cf,index_col=0,usecols=[0]+cpos,dtype=cd)
+edf=pd.read_csv(ef,index_col=0,usecols=[0]+epos2,dtype=ed)
+ids=[x for x in cdf.index if x in edf.index]
+C=cdf.loc[ids,genes].to_numpy(dtype=np.float64,copy=True)
+E=edf.loc[ids,genes].to_numpy(dtype=np.float64,copy=True)
+finite=np.isfinite(C)&np.isfinite(E)
+print('shape',C.shape,'missing C',int((~np.isfinite(C)).sum()),'E',int((~np.isfinite(E)).sum()),'joint',int((~finite).sum()))
+print('genes with missing C/E/joint',int((~np.isfinite(C)).any(axis=0).sum()),int((~np.isfinite(E)).any(axis=0).sum()),int((~finite).any(axis=0).sum()))
+print('sample n range',int(finite.sum(axis=0).min()),int(finite.sum(axis=0).max()),'counts',dict(zip(*np.unique(finite.sum(axis=0),return_counts=True))))
+# Public scipy per-gene p-values with pairwise complete observations.
+p=np.empty(len(genes)); r=np.empty(len(genes))
+for j in range(len(genes)):
+ ok=finite[:,j]
+ x=spearmanr(E[ok,j],C[ok,j],alternative='two-sided')
+ r[j]=x.statistic;p[j]=x.pvalue
+rej,q,_,_=multipletests(p,alpha=0.05,method='fdr_bh')
+print('statsmodels BH rejected',int(rej.sum()),'pct',repr(100*rej.mean()),'qmin',repr(q.min()))
+print('sig signs negative/positive',int((rej&(r<0)).sum()),int((rej&(r>0)).sum()))
+# Show boundary values for reproducibility of the decision.
+ord=np.argsort(q)
+for j in ord[[0,1,2,3850,3851,3852,3853,3854,3855,-1]]:
+ print(j,genes[j],repr(r[j]),repr(p[j]),repr(q[j]),bool(rej[j]))
+PY"

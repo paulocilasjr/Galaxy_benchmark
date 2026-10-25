@@ -36,10 +36,11 @@ import numpy as np
 import panel_io  # noqa: E402  (figures/panel_io.py)
 import openpyxl
 import pandas as pd
+import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_narrative'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_narrative'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -51,11 +52,11 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-ERRORS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig5.xlsx')
-ACTIONS = os.path.join(ROOT, 'manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
-COMPBIO_AUDIT = os.path.join(ROOT, 'CompBio', 'compBio_overview_audit.json')
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+ERRORS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig5.xlsx')
+ACTIONS = os.path.join(ROOT, 'manuscript/manuscript_material', 'on_demand', 'Source_Data_OD_Fig6.xlsx')
+COMPBIO_AUDIT = os.path.join(ROOT, 'runs/CompBio', 'compBio_overview_audit.json')
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM = 20000, 20261002, 200000
@@ -177,6 +178,7 @@ def load_calls():
     c = c[c.model.isin(TRACE_MODEL) & c.galaxy_server].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
     cov = pd.read_csv(os.path.join(GC, 'run_coverage.csv'))
     cov = cov[cov.model.isin(TRACE_MODEL)].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
+    c, cov = replaced_runs.drop_replaced(c), replaced_runs.drop_replaced(cov)   # IWC wf_007: superseded runs
     return c, cov[['benchmark', 'task', 'cfg', 'replicate']].drop_duplicates()
 
 
@@ -188,6 +190,7 @@ def read_sheet(path, name):
     if name in ('abc_runs', 'abc_every_error') and os.path.exists(extra):
         e = pd.concat([e, pd.read_csv(extra)], ignore_index=True)
     e = e[e.model_configuration != 'DeepSeek V4 Pro (Claude Code, superseded)']
+    e = replaced_runs.drop_replaced(e)                   # IWC wf_007: the superseded runs' records
     return e.assign(benchmark=e.benchmark.map({'BixBench-Verified-50': 'BixBench50', 'BixBench50': 'BixBench50',
                                                'CompBioBench': 'CompBio', 'IWC': 'IWC'}),
                     cfg=e.model_configuration.replace({'DeepSeek V4 Pro (Codex)': 'DeepSeek V4 Pro'}),
@@ -419,6 +422,8 @@ def panel_f():
                                   run=lambda x: x.run_id + '|' + x.task)
     # 6,904 in runs that were not rerun plus 237 in the 53 reviewed reruns (the replaced runs had 450; total was 7,354)
     assert len(f) == 7141, 'failed requests of the four primary configurations'
+    f = replaced_runs.drop_replaced(f)          # IWC wf_007: 43 in the superseded runs, which the site replaced
+    assert len(f) == 7098
     rows, book = [], []
     for name, codes, desc in FIXES:
         g = f[f.code.isin(codes)]

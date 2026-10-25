@@ -1,0 +1,52 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math
+import numpy as np
+from scipy.optimize import minimize
+from scipy.stats import norm
+T=250; cells=[]
+with open('single_cell_dynamics_question.csv') as f:
+ r=csv.DictReader(f); cur=[]; last=None
+ for row in r:
+  cid=int(row['cell_id'])
+  if last is not None and cid"'!=last: cells.append(cur); cur=[]
+  last=cid
+  ex=float(row['"'enh_x']);ey=float(row['enh_y']);ez=float(row['enh_z']);px=float(row['prom_x']);py=float(row['prom_y']);pz=float(row['prom_z'])
+  d=math.sqrt((ex-px)**2+(ey-py)**2+(ez-pz)**2)
+  cur.append((int(d<=260.0), int(row['transcription'])))
+ cells.append(cur)
+
+def make(outcome, pred_lags):
+    Y=[]; X=[]
+    for c in cells:
+        for t in range(2,T):
+            if all(t-lag>=0 for _,lag in pred_lags):
+                Y.append(c[t][outcome])
+                X.append([c[t-lag][var] for var,lag in pred_lags])
+    return np.array(X,float),np.array(Y,float)
+
+def fit(X,Y):
+    X1=np.column_stack([np.ones(len(X)),X])
+    def nll(beta):
+        z=X1@beta
+        p=1/(1+np.exp(-np.clip(z,-30,30)))
+        return -np.sum(Y*np.log(p+1e-15)+(1-Y)*np.log(1-p+1e-15))
+    res=minimize(nll, np.zeros(X1.shape[1]), method='BFGS')
+    beta=res.x
+    z=X1@beta; p=1/(1+np.exp(-np.clip(z,-30,30)))
+    W=p*(1-p)
+    H=X1.T@(W[:,None]*X1)
+    se=np.sqrt(np.diag(np.linalg.inv(H+np.eye(H.shape[0])*1e-8)))
+    pvals=2*(1-norm.cdf(np.abs(beta/se)))
+    return beta,se,pvals,res.fun,len(Y)
+
+for outcome,name,specs in [
+ (1,'T_t',[(0,1),(1,1),(0,2),(1,2)]),  # var 0=C,1=T
+ (0,'C_t',[(1,1),(0,1),(1,2),(0,2)]),
+]:
+    X,Y=make(outcome,specs)
+    print('\\nModel',name,'n',len(Y),'base',Y.mean())
+    beta,se,p,_=fit(X,Y)
+    labels=['intercept']+[f'var{var} lag{lag}' for var,lag in specs]
+    for lab,b,s,pv in zip(labels,beta,se,p):
+        print(f'{lab:12s} coef {b:+.4f} se {s:.4f} z {b/s:+.2f} p {pv:.4g} OR {math.exp(b):.3f}')
+PY"

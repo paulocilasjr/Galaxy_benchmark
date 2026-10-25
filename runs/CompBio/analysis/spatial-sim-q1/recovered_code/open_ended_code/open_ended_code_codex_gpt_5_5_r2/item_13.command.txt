@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np, gzip
+from scipy.io import mmread
+from collections import defaultdict
+base='extracted'
+meta=pd.read_csv(f'{base}/spatial_q_sc_metadata.csv')
+counts=pd.read_csv(f'{base}/spatial_q_sc_counts.csv', index_col=0)
+X=counts.values.astype(np.int16)
+libs=X.sum(axis=1).astype(int)
+barcodes=[l.strip() for l in gzip.open(f'{base}/barcodes.tsv.gz','rt')]
+M=mmread(f'{base}/matrix.mtx.gz').tocsc()
+y=np.asarray(M[:,barcodes.index('Spot_710-1')].todense()).ravel().astype(np.int16)
+ysum=int(y.sum())
+# hash exact cell vectors by bytes, grouped by lib
+group=defaultdict(list)
+for k,(lib,row) in enumerate(zip(libs,X)):
+    group[int(lib)].append(k)
+# one-cell exact
+for k,row in enumerate(X):
+    if np.array_equal(row,y): print('one', k, meta.loc[k,'cell_type'])
+# pair/triple exact with library prefilter
+found=[]
+n=X.shape[0]
+for i in range(n):
+    xi=X[i]
+    for j in range(i,n):
+        rem_sum=ysum-int(libs[i])-int(libs[j])
+        if rem_sum not in group: continue
+        rem=y.astype(np.int32)-xi.astype(np.int32)-X[j].astype(np.int32)
+        if (rem<0).any(): continue
+        rem16=rem.astype(np.int16)
+        for k in group[rem_sum]:
+            if k<j: continue
+            if np.array_equal(X[k], rem16):
+                found.append((i,j,k, tuple(meta.loc[[i,j,k],'cell_type'])))
+                print('triple', i,j,k, found[-1][3])
+                raise SystemExit
+print('found triples', len(found))
+# closest triplet maybe not needed
+PY"

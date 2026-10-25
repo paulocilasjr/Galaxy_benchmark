@@ -1,0 +1,40 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+from openpyxl import load_workbook
+
+# metadata
+wb=load_workbook('inputs/230215_Trio_Status.xlsx',read_only=True,data_only=True)
+rows=list(wb.active.iter_rows(values_only=True))
+meta=[dict(zip(rows[0],r)) for r in rows[1:]]
+carriers=[str(x['Sample ID']).strip() for x in meta if x['BLM Mutation Status']=='Carrier']
+files=list(Path('inputs/CHIP_DP10_GQ20_PASS').glob('*.xlsx'))
+matched={sid: next((f for f in files if f.stem.endswith('_'+sid) or f.stem.split('_CHIP_')[-1].split('-')[0]==sid),None) for sid in carriers}
+print('carriers',len(carriers),carriers)
+print('missing',[s for s,f in matched.items() if f is None])
+print('matched',[(s,f.name if f else None) for s,f in matched.items()])
+
+zy=Counter(); eff=Counter(); so=Counter(); inchip=Counter(); vtypes=Counter(); nrows={}
+for sid,f in matched.items():
+    if not f: continue
+    wb=load_workbook(f,read_only=True,data_only=True)
+    ws=wb.active; ws.reset_dimensions()
+    it=ws.iter_rows(values_only=True)
+    next(it); hdr=next(it); ix={v:i for i,v in enumerate(hdr)}
+    n=0
+    for r in it:
+        if not r or r[0] is None: continue
+        n+=1
+        zy[r[ix['Zygosity']]]+=1
+        eff[r[ix['Effect (Combined)']]]+=1
+        so[r[ix['Sequence Ontology (Combined)']]]+=1
+        inchip[r[ix['In_CHIP']]]+=1
+        vtypes[type(r[ix['Variant Allele Freq']]).__name__]+=1
+    nrows[sid]=n
+print('nrows',nrows)
+print('zygosity',zy)
+print('effect',eff)
+print('SO',so)
+print('In_CHIP',inchip)
+print('VAF types',vtypes)
+PY"

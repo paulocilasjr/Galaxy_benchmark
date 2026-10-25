@@ -1,0 +1,26 @@
+/bin/bash -lc "cat > match_peak.py <<'PY'
+import json,requests,concurrent.futures,math,os
+sig={int(a[1]):float(a[-1]) for a in json.load(open('significant.json')) if a[0]=='1'}
+snps=json.load(open('peak_catalog_snps.json'))['_embedded']['singleNucleotidePolymorphisms']; todo=[]
+for s in snps:
+ for l in s['locations']:
+  p=l['chromosomePosition']
+  if p in sig:todo.append((sig[p],s['rsId'],p))
+todo=sorted(set(todo))[:65]
+print('N',len(todo),flush=True)
+def f(t):
+ p,s,pos=t
+ try:
+  if os.path.exists(s+'.json') and os.path.getsize(s+'.json')>10:j=json.load(open(s+'.json'))
+  else:
+   r=requests.get('https://www.ebi.ac.uk/gwas/rest/api/singleNucleotidePolymorphisms/'+s+'/associations',params={'projection':'associationBySnp','size':1000},timeout=40)
+   if not r.ok:return
+   j=r.json();open(s+'.json','w').write(r.text)
+  for a in j.get('_embedded',{}).get('associations',[]):
+   v=a.get('pvalue',0)
+   if v and abs(math.log10(v/p))<0.7:
+    print(s,pos,p,v,[t['trait'] for t in a.get('efoTraits',[])],a['_links']['study']['href'],flush=True)
+ except Exception as e:print(s,str(e),flush=True)
+with concurrent.futures.ThreadPoolExecutor(max_workers=6) as e:list(e.map(f,todo))
+PY
+python -u match_peak.py > peak_matches.txt"

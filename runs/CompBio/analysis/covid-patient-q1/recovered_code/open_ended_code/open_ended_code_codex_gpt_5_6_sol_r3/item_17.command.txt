@@ -1,0 +1,26 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np
+from scipy.cluster.hierarchy import linkage,dendrogram,fcluster
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+z=np.load('donor_aggregate.npz',allow_pickle=True)
+names=z['donor_names']; ids=np.array([int(x[5:]) for x in names])
+S=z['gene_sum']; lib=z['donor_lib']; cells=z['donor_cells']; genes=z['gene_names']
+cpm=S/lib[:,None]*1e6
+# log CPM pseudobulk, variable genes; exclude sex/ribo/mt/ig/tcr and sparse
+L=np.log1p(cpm)
+var=L.var(0); mean=L.mean(0)
+exclude=np.array([g.startswith(('MT-','RPL','RPS','IGH','IGK','IGL','TRAV','TRBV','TRDV','TRGV')) for g in genes])
+keep=(mean>0.1)&(var>np.quantile(var[mean>0.1],.5))&~exclude
+X=StandardScaler().fit_transform(L[:,keep])
+p=PCA().fit_transform(X)
+print('PCA variance',PCA().fit(X).explained_variance_ratio_[:6])
+for i in np.argsort(ids): print(f'{ids[i]:2d}',*(f'{x:7.2f}' for x in p[i,:5]))
+for method in ['ward','average','complete']:
+ Z=linkage(X,method=method,metric='euclidean' if method=='ward' else 'correlation')
+ leaves=dendrogram(Z,no_plot=True)['leaves']
+ print(method,' '.join(str(ids[i]) for i in leaves))
+ for k in [2,3,4,5]:
+  lab=fcluster(Z,k,criterion='maxclust')
+  print('k',k,' | '.join(','.join(map(str,sorted(ids[lab==x]))) for x in np.unique(lab)))
+PY"

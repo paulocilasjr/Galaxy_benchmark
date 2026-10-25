@@ -1,0 +1,67 @@
+/bin/bash -lc "python3 - <<'PY'
+import openpyxl, pandas as pd, numpy as np
+from collections import defaultdict
+# load
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz',sep='\\t',index_col=0)
+log=np.log1p(df)
+z=log.sub(log.mean(axis=1),axis=0).div(log.std(axis=1),axis=0).replace([np.inf,-np.inf],0).fillna(0)
+def fnum(x):
+    try: return float(x)
+    except: return 0.0
+wb=openpyxl.load_workbook('supp/mmc5.xlsx', read_only=True, data_only=True)
+ws=wb['Table S4']
+rows=[]
+for r in ws.iter_rows(values_only=True):
+    if r[0] and isinstance(r[0],str) and r[0].startswith('Traes') and r[7] and r[7]"'!='"'cluster':
+        gene=r[0]; cl=str(r[7]).strip()
+        if cl.startswith('10 - Xylem'): cl='10 - Xylem'
+        lfc=fnum(r[2]); ratio=fnum(r[5]); p1=fnum(r[3])
+        rows.append((gene,cl,lfc,ratio,p1))
+wb.close()
+clusters=['0 - Unknown','1 - Epidermis','2 - Cortex','3 - G1/S','4 - Provascular Cells','5 - Unknown','6 - Pericycle','7 - Epidermis','8 - Root Hair','9 - Endodermis','10 - Xylem','11 - Endodermis/Phloem','12 - G2/M','13 - Phloem','14 - Root Cap']
+print('counts')
+for cl in clusters: print(cl, sum(1 for r in rows if r[1]==cl))
+
+def score_sets(mapping, topN=100, score='zmean'):
+    chosen=defaultdict(list)
+    for broad, clusters in mapping.items():
+        pool=[r for r in rows if r[1] in clusters]
+        best={}
+        for g,c,lfc,ratio,p1 in pool:
+            key=(ratio,lfc,p1)
+            if g not in best or key > best[g][0]:
+                best[g]=(key,c)
+        sorted_genes=sorted(best.items(), key=lambda kv:kv[1][0], reverse=True)
+        chosen[broad]=[g for g,_ in sorted_genes[:topN]]
+    res=pd.DataFrame(index=list(mapping.keys()), columns=df.columns, dtype=float)
+    for broad,genes in chosen.items():
+        present=[g for g in genes if g in df.index]
+        if score=='zmean': res.loc[broad]=z.loc[present].mean()
+        elif score=='logmean': res.loc[broad]=log.loc[present].mean()
+        elif score=='mean': res.loc[broad]=df.loc[present].mean()
+        elif score=='rankz': res.loc[broad]=df.loc[present].rank(axis=1,pct=True).mean()
+        elif score=='sumlog': res.loc[broad]=log.loc[present].sum()
+    return res, chosen
+
+mapping_basic={
+ 'cortex':['2 - Cortex'],
+ 'endodermis':['9 - Endodermis'],
+ 'epidermis':['1 - Epidermis','7 - Epidermis'],
+ 'meristems':['3 - G1/S','12 - G2/M'],
+ 'pericycle':['6 - Pericycle'],
+ 'phloem':['13 - Phloem'],
+ 'provascular':['4 - Provascular Cells'],
+ 'root_cap':['14 - Root Cap'],
+ 'root_hair':['8 - Root Hair'],
+ 'xylem':['10 - Xylem'],
+}
+for N in [30,50,100,200]:
+    for sc in ['zmean','logmean','rankz']:
+        res,chosen=score_sets(mapping_basic,N,sc)
+        pred=res.idxmax()
+        mism=[c for c in df.columns if pred[c]"'!=c]
+        print('"'\\nN',N,sc)
+        print(res.round(2))
+        print('preds',pred.tolist())
+        print('mism',mism)
+PY"

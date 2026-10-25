@@ -1,0 +1,106 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import gzip,re,os,sys
+import pandas as pd,numpy as np
+base='[REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-ec221395f1b5bf178d5522b6/workspace'
+# sizes/chunk metadata
+chunks={}; std_chunks={}
+for line in open(base+'/sample.swap.atac.q1.chrom.sizes'):
+ c,l=line.rstrip().split('\\t'); l=int(l); chunks[c]=l
+ m=re.match(r'(chr\\d+[pq])(.*)',c)
+ if not m: raise ValueError(c)
+ std=m.group(1); std_chunks.setdefault(std,[]).append((c,l))
+# row matrix
+print('loading matrix',flush=True)
+df=pd.read_csv(base+'/sample.swap.atac.q1.tsv.gz',sep='\\t')
+names=df.columns[3:].tolist(); x=df.iloc[:,3:].to_numpy(dtype=np.float64); totals=x.sum(axis=0)
+# row group starts
+row_groups={}
+for i,c in enumerate(df.chrom):
+ if i==0 or c"'!=df.chrom.iat[i-1]:
+  row_groups[c]=(i,int(df.start.iat[i]))
+# offsets
+offsets={}
+for std,ls in std_chunks.items():
+ off=0; offsets[std]=[]
+ for c,l in ls:
+  offsets[std].append((c,off,l)); off+=l
+# genes, map symbol -> records
+symbols={}
+with gzip.open(base+'"'/axolotl.gtf.gz','rt') as h:
+ for line in h:
+  if '\\tgene\\t' not in line: continue
+  a=line.rstrip('\\n').split('\\t'); attrs=a[8]
+  gd=dict(re.findall(r'(\\w+) \"(["'^"]*)"'"',attrs))
+  ns=[]
+  for n in gd.get('gene_name','').split('|'):
+   n=re.sub(r'\\s*\\[(?:hs|nr)\\]','',n).strip()
+   if n: ns.append(n.upper())
+  for n in ns:
+   symbols.setdefault(n,[]).append((a[0],int(a[3]),int(a[4]),a[6],gd.get('gene_id')))
+# map pos to row; 1-based pos
+def maprow(std,pos):
+ if std not in offsets: return None
+ p0=pos-1
+ for c,off,l in offsets[std]:
+  if off <= p0 < off+l:
+   local=p0-off
+   b=(local//10000)*10000
+   if c not in row_groups: return None
+   first,fs=row_groups[c]
+   idx=first+(b-fs)//10000
+   if b<fs or idx<first or idx>=len(df) or df.chrom.iat[idx]"'!=c or int(df.start.iat[idx])!=b: return None
+   return idx
+ return None
+# marker sets
+sets={
+'"'heart':'MYH6 MYL7 TNNT2 TNNI3 ACTC1 NKX2-5 TBX5 GATA4'.split(),
+'brain':'NEFL SNAP25 RBFOX3 SYT1 TUBB3 MAP2 GAD1 GAD2'.split(),
+'liver':'ALB APOA1 APOB TTR HNF4A'.split(),
+'pancreas':'PRSS1 AMY2A INS GCG IAPP PDX1 PTF1A CPA1'.split(),
+'intestine':'FABP2 ALPI EPCAM VIL1 MUC2 SI CDX2'.split(),
+'stomach':'ATP4B MUC5AC GKN1 GKN2 PGA3'.split(),
+'bladder':'UPK1A UPK3A KRT19 KRT8 KRT18 FOXA1'.split(),
+'kidney':'NPHS1 NPHS2 PODXL SLC12A1 UMOD'.split(),
+'limb':'COL1A1 COL1A2 COL3A1 DCN LUM COL2A1 SOX9 MYOG PAX7'.split(),
+'spleen':'CD74 CD79A C1QA C1QB CD3E'.split(),
+'prostate':'NKX3-1 MSMB'.split(),
+'lung':'SFTPC FOXJ1 CFTR'.split(),
+'gallbladder':'KRT19 KRT8 KRT18 FOXA1 CFTR SPP1'.split(),
+}
+allm=[]
+for s,ms in sets.items(): allm += ms
+allm=list(dict.fromkeys(allm))
+# for each marker, aggregate all loci (mean / max standardized? sum)
+vals={}
+recinfo={}
+for m in allm:
+ arr=[]; info=[]
+ for rec in symbols.get(m,[]):
+  std,start,end,strand,gid=rec
+  pos=start if strand=='+' else end
+  idx=maprow(std,pos)
+  if idx is None: continue
+  # exact bin plus adjacent bins, but avoid cross-chrom
+  inds=[idx]
+  if idx>0 and df.chrom.iat[idx-1]==df.chrom.iat[idx]: inds.insert(0,idx-1)
+  if idx+1<len(df) and df.chrom.iat[idx+1]==df.chrom.iat[idx]: inds.append(idx+1)
+  arr.append(x[inds,:].sum(axis=0)); info.append((std,pos,idx,gid))
+ if arr:
+  # use max across loci per sample? sum all loci can overcount duplicated genes. mean per locus
+  vals[m]=np.vstack(arr).mean(axis=0); recinfo[m]=info
+print('marker loci',len(vals),'of',len(allm),flush=True)
+# normalized per million and log1p
+V=np.vstack([vals[m] for m in vals]) / totals[None,:]*1e6
+print('\\nMarker values CPM (mean 30kb around TSS)')
+for m,v in zip(vals,V): print(m, ' '.join(f'{z:.2f}' for z in v))
+# per set score: z-score each gene across samples, average; print
+print('\\nSet scores (within-marker z mean)')
+for s,ms in sets.items():
+ present=[m for m in ms if m in vals]
+ if not present: continue
+ a=V[[list(vals).index(m) for m in present]]
+ z=(a-a.mean(axis=1,keepdims=True))/(a.std(axis=1,keepdims=True)+1e-9)
+ score=z.mean(axis=0)
+ print(s,'present='+','.join(present), ' '.join(f'{names[j]}:{score[j]:.2f}' for j in np.argsort(-score)))
+PY
+python3 [REDACTED LOCAL PATH]"

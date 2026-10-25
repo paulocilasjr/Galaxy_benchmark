@@ -1,0 +1,31 @@
+/bin/bash -lc "cd [REPO_ROOT]/compbiobench/runs/.agent_runtime/exec-4f28973e7799493c47bfc76c/workspace && python - <<'PY'
+import csv, json, re
+from collections import Counter
+# Independent check: use the released Sei target.names list rather than the workbook.
+sei = []
+for line in open('sei_framework_repo/model/target.names'):
+    m = re.search(r'\\| ID:(\\d+)\\s*"'$'"', line)
+    if m:
+        sei.append((int(m.group(1)), line.strip()))
+assert len(sei) == len({i for i, _ in sei}) == 19905
+# The two API pages cover all Cistrome sample IDs used by Sei.
+samples = {}
+for fn in ('cistrome_all_samples.json', 'cistrome_all_samples_2.json'):
+    for row in json.load(open(fn))['samples']:
+        samples[row['id']] = row
+assert all(i in samples for i, _ in sei)
+# Borzoi's released hg38 target table: GEO sample IDs are identifiers;
+# ENCODE experiment IDs are in the source paths.
+borzoi = list(csv.DictReader(open('borzoi_targets_hg38_storage.txt'), delimiter='\\t'))
+assert len(borzoi) == 7611
+source_text = '\\n'.join(row['identifier'] + '\\t' + row['file'] for row in borzoi)
+gsm = set(re.findall(r'GSM\\d+', source_text))
+encsr = set(re.findall(r'ENCSR[A-Z0-9]+', source_text))
+def source_key(value):
+    m = re.fullmatch(r'(ENCSR[A-Z0-9]+)(?:_\\d+)?', value)
+    return m.group(1) if m else value
+matched = [(i, line, samples[i]['external_id']) for i, line in sei
+           if samples[i]['external_id'] in gsm or source_key(samples[i]['external_id']) in encsr]
+print(Counter('GEO' if e.startswith('GSM') else 'ENCODE' for _, _, e in matched))
+print(len(matched), round(len(matched), -2))
+PY"

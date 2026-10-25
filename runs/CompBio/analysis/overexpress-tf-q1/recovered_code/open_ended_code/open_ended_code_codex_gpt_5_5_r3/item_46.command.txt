@@ -1,0 +1,27 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pathlib import Path
+cands = pd.read_csv('diff_bins.tsv', sep='\\t')
+# keep canonical chromosomes and away from negative expansion boundary
+keep = cands[cands.chrom.str.match(r'"'^chr([1-9]|1[0-9]|2[0-2]|X|Y)$'"')].copy()
+# gained by z among all candidate bins
+for N in [1000,3000,10000,30000]:
+    sub=keep.sort_values(['z','logfc'], ascending=False).head(N).copy()
+    # expand 500 bp bin to 1000 bp centered around bin center
+    starts=(sub.start+250-500).clip(lower=0).astype(int)
+    ends=(sub.start+250+500).astype(int)
+    out=pd.DataFrame({'chrom':sub.chrom,'start':starts,'end':ends,'name':['gain_'+str(i) for i in range(len(sub))]})
+    out.drop_duplicates(['chrom','start','end']).to_csv(f'gain_top{N}.bed',sep='\\t',header=False,index=False)
+# background: highly accessible by total cpm but minimal fold-change and z
+stable=keep[(keep['ref']>=5)&(keep['pert']>=5)&(keep['logfc'].abs()<0.08)&(keep['z'].abs()<0.8)].copy()
+stable['total_cpm']=stable['ref_cpm']+stable['pert_cpm']
+stable=stable.sort_values('total_cpm',ascending=False)
+for N in [1000,3000,10000,30000]:
+    sub=stable.head(N).copy()
+    starts=(sub.start+250-500).clip(lower=0).astype(int); ends=(sub.start+250+500).astype(int)
+    out=pd.DataFrame({'chrom':sub.chrom,'start':starts,'end':ends,'name':['bg_'+str(i) for i in range(len(sub))]})
+    out.drop_duplicates(['chrom','start','end']).to_csv(f'bg_top{N}.bed',sep='\\t',header=False,index=False)
+print('stable bins',len(stable))
+for fn in ['gain_top1000.bed','gain_top3000.bed','bg_top1000.bed','bg_top3000.bed']:
+ print(fn, sum(1 for _ in open(fn)))
+PY"

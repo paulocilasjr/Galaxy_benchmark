@@ -1,0 +1,39 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip
+from collections import defaultdict
+# parse alignments
+pairs=defaultdict(list)
+for line in open('aln.primary.sam'):
+    if line.startswith('@'): continue
+    f=line.rstrip('\\n').split('\\t')
+    flag=int(f[1])
+    if flag & 4 or flag & 0x900: continue
+    rname=f[2]; gene=rname.split('|')[5] if '|' in rname else rname
+    mate=1 if flag & 64 else 2 if flag & 128 else 0
+    tags={x[:2]:x[5:] for x in f[11:]}
+    pairs[f[0]].append((mate,gene,rname,int(f[3]),int(f[4]),f[5],flag,tags.get('NM'),tags.get('AS')))
+# original sequences
+def readfq(path):
+    with gzip.open(path,'rt') as fh:
+        while True:
+            h=fh.readline().strip()
+            if not h: break
+            s=fh.readline().strip(); fh.readline(); q=fh.readline().strip()
+            yield h[1:],s,q
+seqs={}
+for h,s,q in readfq('gene.fusion.q1.R1.fq.gz'):
+    seqs[(h,1)]=s
+for h,s,q in readfq('gene.fusion.q1.R2.fq.gz'):
+    seqs[(h,2)]=s
+sel=[]
+for q,alns in pairs.items():
+    m={a[0]:a for a in alns if a[0] in (1,2)}
+    if 1 in m and 2 in m and {m[1][1],m[2][1]}=={'GAPDH','SOX2'}:
+        sel.append((q,m[1],m[2]))
+print('selected',len(sel))
+for item in sel[:50]:
+    q,a1,a2=item
+    print('\\n',q)
+    print('R1',seqs[(q,1)],a1)
+    print('R2',seqs[(q,2)],a2)
+PY"

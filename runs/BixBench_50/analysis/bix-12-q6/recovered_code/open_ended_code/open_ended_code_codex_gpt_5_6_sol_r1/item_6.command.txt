@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from scipy.stats import mannwhitneyu, rankdata
+from pathlib import Path
+
+def readfa(txt):
+    seqs=[]
+    for line in txt.splitlines():
+        if line.startswith('>'): seqs.append('')
+        else: seqs[-1]+=line.strip()
+    return seqs
+
+def metrics(zpath):
+    out=[]; chars=Counter(); bad=[]
+    with ZipFile(zpath) as z:
+        for name in z.namelist():
+            if not name.endswith('.mafft'): continue
+            ss=readfa(z.read(name).decode())
+            if len(ss)"'!=4 or len({len(s) for s in ss})!=1: bad.append((name,len(ss),[len(s) for s in ss])); continue
+            chars.update('"''.join(ss))
+            vals={}
+            for mode, missing in [('gap_missing',set('-?Xx*')),('gap_state',set('?Xx*')),('all_state',set())]:
+                n=0
+                for col in zip(*ss):
+                    c=Counter(x.upper() for x in col if x not in missing)
+                    if sum(v>=2 for v in c.values())>=2: n+=1
+                vals[mode]=n
+            out.append((name, vals, len(ss[0])))
+    return out,chars,bad
+
+allm={}
+for group in ('animals','fungi'):
+    m,ch,bad=metrics('inputs/scogs_'+group+'.zip'); allm[group]=m
+    print(group,'n',len(m),'bad',bad,'chars',dict(ch))
+    for mode in ('gap_missing','gap_state','all_state'):
+        a=[x[1][mode] for x in m]
+        print(mode,'min q med q max mean',min(a),*__import__('numpy').percentile(a,[25,50,75]),max(a),sum(a)/len(a),'zeros',a.count(0))
+
+for mode in ('gap_missing','gap_state','all_state'):
+    a=[x[1][mode] for x in allm['animals']]; f=[x[1][mode] for x in allm['fungi']]
+    u=mannwhitneyu(a,f,alternative='two-sided')
+    print('ALL',mode,'U_animals',u.statistic,'U_fungi',len(a)*len(f)-u.statistic,'minU',min(u.statistic,len(a)*len(f)-u.statistic),'p',u.pvalue)
+    # rank sum relation manual and tie groups
+    comb=a+f; ranks=rankdata(comb,method='average')
+    print('rank sum animal',ranks[:len(a)].sum(),'U manual',ranks[:len(a)].sum()-len(a)*(len(a)+1)/2,'ties',len(comb)-len(set(comb)))
+
+sa={x[0].removesuffix('.faa.mafft') for x in allm['animals']}
+sf={x[0].removesuffix('.faa.mafft') for x in allm['fungi']}
+print('sets',len(sa),len(sf),'intersection',len(sa&sf),'animal-only',sorted(sa-sf),'fungi-only',sorted(sf-sa))
+for mode in ('gap_missing','gap_state'):
+    da={x[0].removesuffix('.faa.mafft'):x[1][mode] for x in allm['animals']}
+    df={x[0].removesuffix('.faa.mafft'):x[1][mode] for x in allm['fungi']}
+    common=sorted(sa&sf); a=[da[x] for x in common]; f=[df[x] for x in common]
+    u=mannwhitneyu(a,f,alternative='two-sided')
+    print('COMMON',mode,len(common),'U animal',u.statistic,'other',len(a)*len(f)-u.statistic,'min',min(u.statistic,len(a)*len(f)-u.statistic),'p',u.pvalue)
+PY"

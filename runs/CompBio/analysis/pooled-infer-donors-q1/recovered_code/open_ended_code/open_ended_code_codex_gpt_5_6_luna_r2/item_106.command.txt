@@ -1,0 +1,21 @@
+/bin/bash -lc "python - <<'PY'
+import os
+import numpy as np
+from scipy import sparse
+from scipy.io import mmwrite
+z=np.load('allele_counts.npz');keys=z['keys'];dp=z['dp'].astype(np.int64);ad=z['ad'].astype(np.int64);sites=z['sites'];cb=z['barcodes'];rows=keys>>16;cells=keys&65535;ns=len(sites);nc=len(cb)
+sp=np.bincount(rows,minlength=ns);sd=np.bincount(rows,weights=dp,minlength=ns);sa=np.bincount(rows,weights=ad,minlength=ns);f=sa/np.maximum(sd,1);keep=np.flatnonzero((sp>=50)&(sd>=50)&(f>=.05)&(f<=.5));rid={int(r):i for i,r in enumerate(keep)}
+rng=np.random.default_rng(20260809);train_cells=np.flatnonzero(rng.random(nc)<.7);test_cells=np.flatnonzero(~np.isin(np.arange(nc),train_cells));col={int(c):i for i,c in enumerate(train_cells)}
+q=np.array([rid.get(int(r),-1) for r in rows]); cc=np.array([col.get(int(c),-1) for c in cells]);ok=(q>=0)&(cc>=0);out='cv_cells_train';os.makedirs(out,exist_ok=True)
+mmwrite(out+'/cellSNP.tag.AD.mtx',sparse.coo_matrix((ad[ok],(q[ok],cc[ok])),shape=(len(keep),len(train_cells))))
+mmwrite(out+'/cellSNP.tag.DP.mtx',sparse.coo_matrix((dp[ok],(q[ok],cc[ok])),shape=(len(keep),len(train_cells))))
+open(out+'/cellSNP.samples.tsv','w').write('\\n'.join(map(str,cb[train_cells].tolist()))+'\\n')
+with open(out+'/cellSNP.base.vcf','w') as fh:
+ fh.write('##fileformat=VCFv4.2\\n##source=local_pileup\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\n')
+ for j,r in enumerate(keep):
+  c,p,ref,alt=sites[r];fh.write(f'{c}\\t{p}\\tS{r}\\t{ref}\\t{alt}\\t.\\tPASS\\t.\\n')
+np.savez('cv_cell_sets.npz',train=train_cells,test=test_cells,keep=keep)
+print('train/test',len(train_cells),len(test_cells),'variants',len(keep),'pairs',ok.sum())
+PY
+gzip -c cv_cells_train/cellSNP.base.vcf > cv_cells_train/cellSNP.base.vcf.gz
+for n in 2 3 4 5 6 7 8; do vireo -c cv_cells_train -N \""'$n" -o "cv_cells_train_N$n" --noPlot -M 20 --randSeed 1 -p 4 > "cv_cells_train_N$n.log" 2>&1; done'

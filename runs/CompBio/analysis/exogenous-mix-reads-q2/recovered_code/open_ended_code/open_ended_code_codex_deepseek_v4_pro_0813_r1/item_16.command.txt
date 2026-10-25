@@ -1,0 +1,48 @@
+/bin/bash -c "python3 - <<'PY'
+from pathlib import Path
+from collections import Counter
+import numpy as np
+from scipy.optimize import nnls, minimize
+from scipy.stats import multinomial
+# read
+C={}; order=[]
+for name in ['exo','endo','mix']:
+ c=Counter()
+ with open(f'exogenous.mix.reads.q2.{name}.fq') as f:
+  while True:
+   h=f.readline()
+   if not h: break
+   s=f.readline().strip(); f.readline(); f.readline(); c[s]+=1
+ C[name]=c
+ # union unique
+ for s in c: 
+  if s not in order: order.append(s)
+print('union',len(order))
+X=np.array([[C['exo'].get(s,0) for s in order],[C['endo'].get(s,0) for s in order]],dtype=float).T
+y=np.array([C['mix'].get(s,0) for s in order],dtype=float)
+# NNLS no intercept
+coef,res=nnls(X,y)
+print('NNLS exo/endo coef',coef,'res',res)
+a,b=coef
+pi=a*sum(C['exo'].values())/(a*sum(C['exo'].values())+b*sum(C['endo'].values())) if a+b>0 else np.nan
+print('pi NNLS',pi, pi*100)
+# NNLS with intercept (background / neither)
+X2=np.column_stack([X,np.ones(len(order))])
+coef2,res2=nnls(X2,y)
+print('NNLS intercept coef exo,endo,one',coef2,'res',res2)
+a,b,cint=coef2
+tot=a*sum(C['exo'].values())+b*sum(C['endo'].values())
+print('pi with intercept exo reads/total modeled',a*sum(C['exo'].values())/tot if tot else np.nan)
+# MLE mixture pure profiles via scipy direct minimize alpha and maybe lambda total
+P_exo=X[:,0]/X[:,0].sum(); P_endo=X[:,1]/X[:,1].sum()
+def negll(theta):
+ alpha=theta[0]
+ lam=theta[1] if len(theta)>1 else 1
+ p=alpha*P_exo+(1-alpha)*P_endo
+ p=p/p.sum()
+ return -np.sum(y*np.log(p))
+for init in [0.1,0.5,0.8,0.95]:
+ res=minimize(lambda t: negll([t[0],1]), [init], bounds=[(1e-6,1-1e-6)], method='L-BFGS-B')
+ print('MLE pure alpha init',init,'alpha',res.x[0],'ll',-res.fun)
+# multinomial MLE with alpha and total exo lambda? Actually y fixed N, alpha only.
+PY"

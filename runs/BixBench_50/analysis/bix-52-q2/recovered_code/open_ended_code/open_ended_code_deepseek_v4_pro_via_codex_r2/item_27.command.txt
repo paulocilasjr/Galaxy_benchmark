@@ -1,0 +1,50 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, collections, statistics, itertools
+fn='inputs/JD_AgeRelated_CpG_noMT_Final.csv'
+lens={}
+with open('inputs/JD_Chromosome_Length.csv',newline='',encoding='utf-8-sig') as f:
+ for row in csv.DictReader(f): lens[row['Chromosome']]=int(row['Length'])
+rows=list(csv.DictReader(open(fn,newline='')))
+
+def densities(sites):
+ c=collections.Counter(chrom for chrom,_ in sites)
+ return {chrom:n/lens[chrom] for chrom,n in c.items()}
+
+# A filter rows then unique
+A={(r['Chromosome'],r['Pos']) for r in rows if float(r['MethylationPercentage'])>90 or float(r['MethylationPercentage'])<10}
+print('A count',len(A),'chroms',len(densities(A)),'mean',statistics.mean(densities(A).values()))
+# B unique by Pos first occurrence, then filter
+seen=set(); B=set()
+for r in rows:
+ k=(r['Chromosome'],r['Pos'])
+ if k not in seen:
+  seen.add(k)
+  if float(r['MethylationPercentage'])>90 or float(r['MethylationPercentage'])<10:
+   B.add(k)
+print('B count',len(B),'chroms',len(densities(B)),'mean',statistics.mean(densities(B).values()))
+# C unique by Pos last occurrence
+seen={}
+for r in rows:
+ seen[(r['Chromosome'],r['Pos'])]=r
+C={k for k,r in seen.items() if float(r['MethylationPercentage'])>90 or float(r['MethylationPercentage'])<10}
+print('C count',len(C),'chroms',len(densities(C)),'mean',statistics.mean(densities(C).values()))
+# D unique by Pos min methylation (first per site?) extremes any vs all vs mean
+G=collections.defaultdict(list)
+for r in rows: G[(r['Chromosome'],r['Pos'])].append(float(r['MethylationPercentage']))
+for name, pred in [
+ ('any extreme',lambda v:any(p>90 or p<10 for p in v)),
+ ('all extreme',lambda v:all(p>90 or p<10 for p in v)),
+ ('mean extreme',lambda v:(sum(v)/len(v))>90 or (sum(v)/len(v))<10),
+ ('min or max extreme?',lambda v:min(v)<10 or max(v)>90),
+ ('median extreme',lambda v:statistics.median(v)>90 or statistics.median(v)<10),
+]:
+ S={k for k,v in G.items() if pred(v)}
+ d=densities(S)
+ print(name,len(S),len(d),statistics.mean(d.values()) if d else None)
+# E filter rows by 10 < p < 90 (opposite), unique
+E={(r['Chromosome'],r['Pos']) for r in rows if float(r['MethylationPercentage'])>10 and float(r['MethylationPercentage'])<90}
+print('E between',len(E),len(densities(E)),statistics.mean(densities(E).values()))
+# F filter rows by >=10 <=90, unique
+F={(r['Chromosome'],r['Pos']) for r in rows if 10<=float(r['MethylationPercentage'])<=90}
+print('F between inclusive',len(F),len(densities(F)),statistics.mean(densities(F).values()))
+PY"

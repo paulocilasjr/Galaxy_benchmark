@@ -1,0 +1,23 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip,json,urllib.request,concurrent.futures
+rows=[]
+with gzip.open('vcf.infer.build.q1.vcf.gz','rt') as f:
+    for line in f:
+        if not line.startswith('#'):
+            c,p,_,ref,*_=line.split('\\t'); rows.append((int(p),ref))
+# 25 evenly spaced records across chromosome
+sample=[rows[round(i*(len(rows)-1)/24)] for i in range(25)]
+dbs=['hg18','hg19','hg38','hs1']
+def get(x):
+    db,(p,ref)=x
+    url=f'https://api.genome.ucsc.edu/getData/sequence?genome={db};chrom=chr20;start={p-1};end={p}'
+    with urllib.request.urlopen(url,timeout=20) as h:
+        base=json.load(h)['dna'].upper()
+    return db,p,ref,base
+scores={db:[0,0] for db in dbs}
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+    for db,p,ref,base in ex.map(get,[(d,r) for d in dbs for r in sample]):
+        scores[db][0]+=base==ref; scores[db][1]+=1
+print(scores)
+for p,ref in sample[:5]: print(p,ref)
+PY"

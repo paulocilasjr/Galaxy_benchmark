@@ -1,0 +1,46 @@
+/bin/bash -c "python3 - <<'PY'
+import json, collections
+# build kraken read->genus
+parent={}; rank={}; name={}
+for line in open('kraken_db/ktaxonomy.tsv'):
+    parts=line.rstrip('\\n').split('\\t|\\t')
+    if len(parts)<5: continue
+    taxid=int(parts[0].strip()); par=int(parts[1].strip()); r=parts[2].strip(); nm=parts[4].strip()
+    parent[taxid]=par; rank[taxid]=r; name[taxid]=nm
+def genus_of(t):
+    seen=set()
+    while t in parent and t not in seen:
+        seen.add(t)
+        if rank.get(t)=='G': return name[t]
+        t=parent[t]
+    return None
+kmap={}
+for line in open('q3_kraken.out'):
+    p=line.rstrip('\\n').split('\\t')
+    if len(p)<5 or p[0]"'!='"'C': continue
+    kmap[p[1]]=genus_of(int(p[2]))
+# parse blast json
+j=json.load(open('blast_top_nonhuman.json'))
+arr=[]
+for rep in j['BlastOutput2']:
+    r=rep['report']['results']['search']; rid=r.get('query_title') or r.get('query_id')
+    hits=r.get('hits',[])
+    if not hits:
+        arr.append((rid,kmap.get(rid),'NO_HIT','',0,'',0)); continue
+    h=hits[0]; d=h['description'][0]; sc=d.get('sciname',''); taxid=d.get('taxid','')
+    hsp=h['hsps'][0]; ident=hsp.get('identity',0); alen=hsp.get('align_len',0)
+    arr.append((rid,kmap.get(rid),sc,taxid,ident,genus_of_name:=sc.split()[0].lower() if sc else '', alen))
+# summarize by kraken genus
+from collections import defaultdict, Counter
+summ=defaultdict(lambda: Counter())
+for rid,kg,sc,taxid,ident,bg,alen in arr:
+    summ[kg][(sc,bg)]+=1
+for kg,c in sorted(summ.items(), key=lambda kv:-sum(kv[1].values())):
+    print('\\nKRAKEN GENUS',kg,'total',sum(c.values()))
+    for (sc,bg),n in c.most_common(10): print('  ',n,sc,bg)
+# print all with kraken genus top, blast not homo
+print('\\nnon-human/blast mismatches:')
+for rid,kg,sc,taxid,ident,bg,alen in arr:
+    if bg not in ('homo','eukaryotic','unknown',''):
+        print(rid,kg,'=>',sc,taxid,ident,alen)
+PY"

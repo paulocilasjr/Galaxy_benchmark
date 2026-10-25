@@ -37,10 +37,11 @@ import sys
 import numpy as np
 import panel_io  # noqa: E402  (figures/panel_io.py)
 import pandas as pd
+import replaced_runs  # noqa: E402  (figures/replaced_runs.py)
 from scipy.stats import rankdata
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 import style  # noqa: E402  (sets rcParams on import)
 from style import plt  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
@@ -53,10 +54,10 @@ plt.rcParams.update({'mathtext.fontset': 'custom', 'mathtext.rm': 'Arial', 'math
                      'mathtext.cal': 'Arial', 'mathtext.bf': 'Arial:bold', 'mathtext.sf': 'Arial'})
 style.ENV_LABEL = {'open_ended_code': 'Custom code', 'galaxy': 'Galaxy'}   # the paper's name for the condition
 
-AN = os.path.join(ROOT, 'manuscript_narrative', 'original_layout', 'analysis')
-GC = os.path.join(ROOT, 'manuscript_narrative', 'derived', 'galaxy_calls')
-EVIDENCE = [os.path.join(ROOT, 'BixBench_50', 'analysis', '*', 'history_analysis_evidence.json'),
-            os.path.join(ROOT, 'CompBio', 'analysis', '*', 'history_analysis_evidence.json')]
+AN = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'original_layout', 'analysis')
+GC = os.path.join(ROOT, 'manuscript/manuscript_narrative', 'derived', 'galaxy_calls')
+EVIDENCE = [os.path.join(ROOT, 'runs/BixBench_50', 'analysis', '*', 'history_analysis_evidence.json'),
+            os.path.join(ROOT, 'runs/CompBio', 'analysis', '*', 'history_analysis_evidence.json')]
 OUT = os.path.join(ROOT, 'figures')
 SCORED = os.path.join(OUT, 'scored_runs.csv')      # per-run scores as the results site shows them (make_scored_runs.py)
 B, SEED, B_PERM = 20000, 20261002, 20000
@@ -158,7 +159,7 @@ OUTCOMES = [('same_rejected', 'Same rejected answer in all three runs', '#CC79A7
 MATCH_RULES = [('exact', 'Exact text (trimmed, lower case)'), ('3sig', 'Numbers to 3 significant digits'),
                ('2sig', 'Numbers to 2 significant digits'),
                ('task', 'Task-aware: benchmark tolerance, lists as sets (primary)')]
-RUN_SUMMARIES = os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
+RUN_SUMMARIES = os.path.join(ROOT, 'manuscript/manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz')
 rng = np.random.default_rng(SEED)
 
 
@@ -237,6 +238,7 @@ def load_calls():
     c['completed'] = c.job_states.fillna('').str.contains(r'(?:^|;)ok(?=;|$)')
     cov = pd.read_csv(os.path.join(GC, 'run_coverage.csv'))
     cov = cov[cov.model.isin(TRACE_MODEL)].assign(cfg=lambda x: x.model.map(TRACE_MODEL))
+    c, cov = replaced_runs.drop_replaced(c), replaced_runs.drop_replaced(cov)   # IWC wf_007: superseded runs
     return c, cov[['benchmark', 'task', 'cfg', 'replicate']].drop_duplicates()
 
 
@@ -403,8 +405,8 @@ def job_steps(calls):
     udt_ids = set(calls[calls.tool == 'run_galaxy_udt_and_wait'].tool_id_full.dropna()) if 'tool_id_full' in calls \
         else set()
     rows = []
-    paths = EVIDENCE + [os.path.join(ROOT, 'IWC', 'analysis', '*', 'history_analysis_evidence.json')]
-    for path in sorted(p for pattern in paths for p in glob.glob(pattern)):
+    paths = EVIDENCE + [os.path.join(ROOT, 'runs/IWC', 'analysis', '*', 'history_analysis_evidence.json')]
+    for path in sorted(p for pattern in paths for p in glob.glob(pattern) if not replaced_runs.replaced_evidence(p)):
         d = json.load(open(path))
         bm = 'BixBench50' if os.sep + 'BixBench_50' + os.sep in path else (
             'CompBio' if os.sep + 'CompBio' + os.sep in path else 'IWC')

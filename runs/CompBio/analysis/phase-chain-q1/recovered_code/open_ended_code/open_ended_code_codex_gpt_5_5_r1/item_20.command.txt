@@ -1,0 +1,49 @@
+/bin/bash -lc "python3 - <<'PY'
+# simple de Bruijn unitig assembly from all reads, trying k=61
+import gzip, collections
+seqs=[]
+for fn in ['phase.chain.q1.R1.fq.gz','phase.chain.q1.R2.fq.gz']:
+    with gzip.open(fn,'rt') as f:
+        for i,line in enumerate(f):
+            if i%4==1: seqs.append(line.strip())
+comp=str.maketrans('ACGT','TGCA')
+def rc(s): return s.translate(comp)[::-1]
+for k in [71,91,111,121,131]:
+    counts=collections.Counter()
+    for s in seqs:
+        for t in [s, rc(s)]:
+            for i in range(len(t)-k+1): counts[t[i:i+k]]+=1
+    # keep kmers count >=2 in either orientation due duplicated both dirs maybe canonical? current both strands doubles
+    kmers={x for x,c in counts.items() if c>=4}
+    out_edges=collections.defaultdict(list); in_edges=collections.defaultdict(list)
+    for mer in kmers:
+        a=mer[:-1]; b=mer[1:]
+        out_edges[a].append(b); in_edges[b].append(a)
+    visited=set(); contigs=[]
+    for mer in list(kmers):
+        a=mer[:-1]; b=mer[1:]
+        edge=(a,b)
+        if edge in visited: continue
+        if len(in_edges[a])"'!=1 or len(out_edges[a])!=1:
+            seq=a; cur=a
+            while len(out_edges[cur])==1:
+                nxt=out_edges[cur][0]; e=(cur,nxt)
+                if e in visited: break
+                visited.add(e); seq += nxt[-1]; cur=nxt
+                if len(in_edges[cur])!=1 or len(out_edges[cur])!=1: break
+            if len(seq)>=150: contigs.append(seq)
+    for mer in list(kmers):
+        a=mer[:-1]; b=mer[1:]
+        if (a,b) not in visited:
+            seq=a; cur=a
+            while True:
+                if not out_edges[cur]: break
+                nxt=out_edges[cur][0]; e=(cur,nxt)
+                if e in visited: break
+                visited.add(e); seq+=nxt[-1]; cur=nxt
+            if len(seq)>=150: contigs.append(seq)
+    print('"'k',k,'kmers',len(kmers),'contigs',len(contigs),'max',max(map(len,contigs), default=0),'lens',sorted([len(c) for c in contigs], reverse=True)[:10])
+    with open(f'unitigs_k{k}.fa','w') as out:
+        for i,c in enumerate(sorted(contigs,key=len,reverse=True)):
+            out.write(f'>utg{i}_len{len(c)}\\n{c}\\n')
+PY"

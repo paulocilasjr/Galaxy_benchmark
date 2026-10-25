@@ -1,0 +1,19 @@
+/bin/bash -lc "python -u - <<'PY'
+import h5py, scipy.sparse as sp, numpy as np, anndata as ad
+p='GSM3578982_raw_gene_bc_matrices_h5.h5'
+with h5py.File(p,'r') as f:
+ g=f['output_genome2']; X=sp.csc_matrix((g['data'][:],g['indices'][:],g['indptr'][:]),shape=tuple(g['shape'][:]))
+ genes=np.char.decode(g['genes'][:]); names=np.char.decode(g['gene_names'][:]); bars=np.char.decode(g['barcodes'][:])
+cs=np.asarray(X.sum(0)).ravel(); selc=np.flatnonzero(cs>275)
+A=ad.read_h5ad('finding.geo.q1.h5ad')
+print('barcodes exact ordered >275',np.array_equal(A.obs_names.values,bars[selc]))
+tset=set(A.var_names); miss=np.flatnonzero([x not in tset for x in genes])
+print('missing',[(genes[i],names[i],int(X[i].sum()),int(X[i,selc].sum())) for i in miss])
+gmap={x:i for i,x in enumerate(genes)}
+gi=np.array([gmap[x] for x in A.var_names])
+Y=X[gi][:,selc].T.tocsr()
+print('same shape nnz',Y.shape,Y.nnz,A.X.nnz)
+D=Y-A.X
+print('diff nnz',D.nnz,'sum',abs(D).sum(),'max',D.max() if D.nnz else 0)
+print('target gene names exact',np.array_equal(names[gi],A.var.gene_symbols.astype(str).values))
+PY"

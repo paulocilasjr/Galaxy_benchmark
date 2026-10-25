@@ -1,0 +1,65 @@
+/bin/bash -lc "python3 - <<'PY'
+import csv, math
+from collections import defaultdict, Counter
+by=defaultdict(dict)
+with open('single_cell_dynamics_question.csv', newline='') as f:
+    for d in csv.DictReader(f):
+        cid=int(d['cell_id']); t=int(d['time'])
+        ex,ey,ez=[float(d[k]) for k in ['enh_x','enh_y','enh_z']]
+        px,py,pz=[float(d[k]) for k in ['prom_x','prom_y','prom_z']]
+        contact=int(math.dist((ex,ey,ez),(px,py,pz))<=260)
+        tr=int(d['transcription'])
+        by[cid][t]=(contact,tr)
+# print autocorr-ish transition rates
+for var,name in [(0,'contact'),(1,'tx')]:
+    cnt=Counter()
+    for cid,d in by.items():
+        for t in range(249):
+            a=d[t][var]; b=d[t+1][var]
+            cnt[(a,b)]+=1
+    print(name, cnt, 'P(next=1|1)',cnt[(1,1)]/(cnt[(1,0)]+cnt[(1,1)]),'P(next=1|0)',cnt[(0,1)]/(cnt[(0,0)]+cnt[(0,1)]))
+# Condition future tx on current contact and current/past tx; future contact on current tx and current/past contact
+for hist in ['current','prev','both']:
+    print('---',hist)
+    # t ranges depending
+    table=Counter()
+    table2=Counter()
+    for cid,d in by.items():
+        for t in range(1,249):
+            c,tr=d[t]
+            cp,tp=d[t-1]
+            cn,tn=d[t+1]
+            if hist=='current': key=(tr,c)
+            elif hist=='prev': key=(tp,c)
+            else: key=(tp,tr,c)
+            table[(key,tn)]+=1
+            if hist=='current': key2=(c,tr)
+            elif hist=='prev': key2=(cp,tr)
+            else: key2=(cp,c,tr)
+            table2[(key2,cn)]+=1
+    # summarize effect of c within strata for tx next
+    print('Tx_next by contact within tx history')
+    strata=sorted(set(k[:-1] if isinstance(k, tuple) else None for k,yn in []))
+    # keys include c last for table
+    keys=set(k for (k,y) in table)
+    prefixes=sorted(set(k[:-1] for k in keys))
+    for pref in prefixes:
+        n=[]
+        for c in [0,1]:
+            key=pref+(c,)
+            den=table[(key,0)]+table[(key,1)]
+            if den: n.append((c,table[(key,1)]/den,den))
+            else: n.append((c,None,0))
+        print(pref,n,'diff', None if None in [n[0][1],n[1][1]] else n[1][1]-n[0][1])
+    print('Contact_next by tx within contact history')
+    keys=set(k for (k,y) in table2)
+    prefixes=sorted(set(k[:-1] for k in keys))
+    for pref in prefixes:
+        n=[]
+        for tr in [0,1]:
+            key=pref+(tr,)
+            den=table2[(key,0)]+table2[(key,1)]
+            if den: n.append((tr,table2[(key,1)]/den,den))
+            else: n.append((tr,None,0))
+        print(pref,n,'diff', None if None in [n[0][1],n[1][1]] else n[1][1]-n[0][1])
+PY"

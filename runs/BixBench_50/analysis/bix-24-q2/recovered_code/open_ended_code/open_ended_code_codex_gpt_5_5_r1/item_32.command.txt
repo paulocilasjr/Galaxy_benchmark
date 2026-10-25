@@ -1,0 +1,44 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from gprofiler import GProfiler
+
+counts = pd.read_csv('inputs/counts_raw_unfiltered.csv', index_col=0)
+layout = pd.read_csv('inputs/sample_layout.csv')
+layout['sample'] = layout['SampleID'].str.replace('-', '_', regex=False)
+layout = layout.set_index('sample')
+counts = counts.loc[:, layout.index]
+counts = counts.loc[counts.sum(axis=1) > 0]
+metadata = layout[['Group']].copy()
+metadata['Group'] = metadata['Group'].astype('category')
+
+dds = DeseqDataSet(counts=counts.T.astype(int), metadata=metadata, design='~Group', quiet=True, n_cpus=4)
+dds.deseq2()
+stat = DeseqStats(dds, contrast=['Group','CBD_IC50','DMSO'], alpha=0.05, quiet=True, n_cpus=4)
+stat.summary()
+res = stat.results_df.copy()
+# g:Profiler strips versioned IDs, but these are already unversioned Ensembl IDs.
+universe = res[res['padj'].notna()].index.tolist()
+sig = res[(res['padj'] < 0.05) & (res['log2FoldChange'].abs() > 0.5)]
+up = sig[sig['log2FoldChange'] > 0].index.tolist()
+down = sig[sig['log2FoldChange'] < 0].index.tolist()
+print('DE_COUNTS universe', len(universe), 'sig', len(sig), 'up', len(up), 'down', len(down))
+
+gp = GProfiler(return_dataframe=True)
+for label, genes in [('up', up), ('down', down)]:
+    enr = gp.profile(organism='hsapiens', query=genes, sources=['GO:BP'], background=universe, user_threshold=0.05, significance_threshold_method='fdr')
+    if enr is None or len(enr)==0:
+        print(label, 'NO_TERMS')
+        continue
+    # keep significant GO:BP (gprofiler already thresholded by user_threshold but retain explicit column)
+    e = enr[enr['significant']].copy()
+    metab = e[e['name'].str.contains('metabolic|metabolism|biosynthetic|catabolic', case=False, regex=True, na=False)].copy()
+    print('\\nENR', label, 'terms', len(e), 'metabolic_like', len(metab))
+    if len(e):
+        print('top all')
+        print(e[['native','name','p_value','intersection_size','term_size','query_size']].head(20).to_string(index=False))
+    if len(metab):
+        print('top metabolic')
+        print(metab[['native','name','p_value','intersection_size','term_size','query_size']].head(30).to_string(index=False))
+PY"

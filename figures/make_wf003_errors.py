@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Execution errors of the 24 IWC host-read removal (wf_003) runs, in the schema of On-demand Fig. 5's Source Data.
 
-The archive's error tables (manuscript_material/on_demand/Source_Data_OD_Fig5.xlsx, sheets abc_runs and abc_every_error)
+The archive's error tables (manuscript/manuscript_material/on_demand/Source_Data_OD_Fig5.xlsx, sheets abc_runs and abc_every_error)
 leave out wf_003, which the archive did not score. This script applies the same extraction to those 24 runs: it imports
-manuscript_material/scripts/fig_on_demand.py and uses its shell_failures(), galaxy_error_jobs() and classify_error()
+manuscript/manuscript_material/scripts/fig_on_demand.py and uses its shell_failures(), galaxy_error_jobs() and classify_error()
 unchanged, with the same run checks. A run ends correct at >= 0.99 output agreement (scored_runs.csv), the rule of the
 figures.
 
@@ -20,7 +20,7 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..'))
-sys.path.insert(0, os.path.join(ROOT, 'manuscript_material', 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manuscript/manuscript_material', 'scripts'))
 sys.dont_write_bytecode = True
 import fig_on_demand as od  # noqa: E402
 
@@ -31,7 +31,7 @@ def main():
     scored = pd.read_csv(os.path.join(HERE, 'scored_runs.csv'))
     score = {(r.cfg, r.env, r.replicate): r.score for r in scored[scored.task == TASK].itertuples()}
     sums = {(s['benchmark'], s['task'], s['run_id']): s for s in map(json.loads, gzip.open(
-        os.path.join(ROOT, 'manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz'), 'rt'))}
+        os.path.join(ROOT, 'manuscript/manuscript_material', 'source_data', 'derived', 'run_summaries.jsonl.gz'), 'rt'))}
     gjobs = od.galaxy_error_jobs()
     types = [k for k, _ in od.ERROR_TYPES]
     runs, errs = [], []

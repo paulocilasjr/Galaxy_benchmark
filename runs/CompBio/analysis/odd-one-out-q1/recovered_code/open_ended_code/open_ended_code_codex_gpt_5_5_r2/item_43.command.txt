@@ -1,0 +1,54 @@
+/bin/bash -lc "python3 - <<'PY'
+import gzip, glob, os, bisect, time
+cats={'exon':{}, 'gene':{}}
+seen_ex=set(); seen_gene=set()
+with gzip.open('ref/refGene.hg38.txt.gz','rt') as fh:
+    for line in fh:
+        f=line.rstrip('\\n').split('\\t')
+        if len(f)<11: continue
+        chrom=f[2]
+        if not chrom.startswith('chr') or '_' in chrom: continue
+        txs,txe=int(f[4]),int(f[5])
+        if (chrom,txs,txe) not in seen_gene:
+            seen_gene.add((chrom,txs,txe)); cats['gene'].setdefault(chrom,[]).append((txs,txe))
+        starts=[int(x) for x in f[9].rstrip(',').split(',') if x]
+        ends=[int(x) for x in f[10].rstrip(',').split(',') if x]
+        for s,e in zip(starts,ends):
+            if (chrom,s,e) not in seen_ex:
+                seen_ex.add((chrom,s,e)); cats['exon'].setdefault(chrom,[]).append((s,e))
+
+def merge(iv):
+    iv=sorted(iv); out=[]
+    for s,e in iv:
+        if out and s<=out[-1][1]:
+            if e>out[-1][1]: out[-1]=(out[-1][0],e)
+        else: out.append((s,e))
+    return out
+starts={}; ends={}
+for cat in cats:
+    starts[cat]={}; ends[cat]={}
+    bp=0; n=0
+    for chrom,iv in cats[cat].items():
+        m=merge(iv); n+=len(m); bp+=sum(e-s for s,e in m)
+        starts[cat][chrom]=[s for s,e in m]; ends[cat][chrom]=[e for s,e in m]
+    print(cat,n,bp)
+
+def contains(cat,chrom,pos):
+    ss=starts[cat].get(chrom)
+    if not ss: return False
+    i=bisect.bisect_right(ss,pos)-1
+    return i>=0 and pos < ends[cat][chrom][i]
+files=sorted(glob.glob('odd.one.out.q1/*.tagAlign.gz'), key=lambda p:int(os.path.basename(p).split('.')[0]))
+print('id\\texon\\tgene\\tintron_only\\tintergenic')
+for path in files:
+    t=time.time(); id_=os.path.basename(path).split('.')[0]
+    n=ex=ge=0
+    with gzip.open(path,'rt') as fh:
+        for line in fh:
+            f=line.split('\\t')
+            chrom=f[0]; pos=(int(f[1])+int(f[2]))//2
+            n+=1
+            isex=contains('exon',chrom,pos); isge=contains('gene',chrom,pos)
+            ex += isex; ge += isge
+    print(id_, f'{ex/n:.4f}', f'{ge/n:.4f}', f'{(ge-ex)/n:.4f}', f'{(n-ge)/n:.4f}', 'sec', f'{time.time()-t:.1f}', flush=True)
+PY"

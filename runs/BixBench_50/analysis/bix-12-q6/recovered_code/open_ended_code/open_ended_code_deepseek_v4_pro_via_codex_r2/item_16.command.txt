@@ -1,0 +1,54 @@
+/bin/bash -lc "python - <<'PY'
+from pathlib import Path
+from collections import Counter
+
+def parse_fasta(path):
+    seqs=[]; name=None; buf=[]
+    for line in path.read_text().splitlines():
+        if line.startswith('>'):
+            if name is not None:
+                seqs.append(''.join(buf).replace(' ',''))
+            name=line[1:].strip(); buf=[]
+        else:
+            buf.append(line.strip())
+    if name is not None:
+        seqs.append(''.join(buf).replace(' ',''))
+    return seqs
+
+def count_info(seqs, gap_mode='exclude', ambiguous='exclude'):
+    if not seqs: return 0
+    L=max(len(s) for s in seqs)
+    arr=[]
+    for s in seqs:
+        arr.append(s.ljust(L,'-'))
+    # strict amino acid alphabet excluding stop/unknown; gaps '-' and '.' considered gaps
+    ok=set('ABCDEFGHIKLMNPQRSTVWYZ')
+    info=0
+    for col in zip(*arr):
+        # count valid amino acids; gap_mode exclude: ignore gap/unknown
+        counts=Counter()
+        for c in col:
+            u=c.upper()
+            if u in ok:
+                counts[u]+=1
+            elif u=='-' or u=='.' or u=='X' or u=='*':
+                pass
+            else:
+                pass
+        states=[v for v in counts.values() if v>=2]
+        if len(states)>=2:
+            info+=1
+    return info
+
+for group in ['animals','fungi']:
+    base=Path('/workspace/tmp')/f'inspect_{group}'/group
+    files=sorted(base.glob('*.mafft'))
+    counts=[]
+    for f in files:
+        seqs=parse_fasta(f)
+        c=count_info(seqs)
+        counts.append(c)
+    print(group, 'n alignments', len(files), 'sum', sum(counts), 'minmax', min(counts), max(counts), 'zeros', sum(c==0 for c in counts))
+    print('first 20', counts[:20])
+    Path(f'/workspace/tmp/{group}_counts.txt').write_text('\\n'.join(map(str,counts)))
+PY"

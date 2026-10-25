@@ -1,0 +1,59 @@
+/bin/bash -lc "python - <<'PY'
+import gzip,re,csv,math
+markers={
+'AIIamacrine':['GRIK1','TFAP2A','TFAP2B','PROX1','SLC6A9','GLRA1','GJD2'],
+'Astrocyte':['GFAP','AQP4','SLC1A3','ALDH1L1','S100B','GJA1'],
+'Cone':['OPN1SW','OPN1MW','ARR3','GNAT2','PDE6C','PDE6H','GUCA1C'],
+'GABAamacrine':['GAD1','GAD2','SLC32A1','SLC6A1','DLX1','DLX2'],
+'Horizontal':['LHX1','ONECUT1','ONECUT2','PROX1','CALB1'],
+'Microglia':['C1QA','C1QB','C1QC','AIF1','CX3CR1','P2RY12','TMEM119','CSF1R'],
+'Mullerglia':['RLBP1','GLUL','SLC1A3','VIM','CLU','SLC1A2','SOX9'],
+'Retinalganglioncell':['RBPMS','SNCG','POU4F1','POU4F2','NEFL','NEFM','ISL1'],
+'Rod':['RHO','NRL','PDE6A','PDE6B','GNAT1','SAG','CNGA1','GNGT1']}
+wanted={g for x in markers.values() for g in x}
+coords={}
+try:
+  with gzip.open('gencode.v49.basic.annotation.gtf.gz','rt') as f:
+    for line in f:
+      if line.startswith('#'): continue
+      a=line.rstrip().split('\\t')
+      if len(a)<9 or a[2]"'!='"'gene': continue
+      m=re.search(r'gene_name \"(["'^"]+)"'"',a[8])
+      if m and m.group(1) in wanted:
+        coords[m.group(1)]=(a[0], int(a[3])-1 if a[6]=='+' else int(a[4])-1)
+except (EOFError,OSError) as e:
+  pass
+print('coordinates',len(coords),'of',len(wanted),'missing',sorted(wanted-set(coords)))
+# bins centered within +/- 20kb around TSS, collect exact rows
+keys={}
+for g,(ch,tss) in coords.items():
+  b=tss//10000
+  for delta in range(-2,3): keys.setdefault((ch,b+delta),[]).append((g,delta))
+vals={g:{} for g in coords}; totals=None; names=None
+with gzip.open('sample.swap.atac.q2.tsv.gz','rt') as f:
+  rd=csv.reader(f,delimiter='\\t'); h=next(rd); names=h[3:]; totals=[0]*len(names)
+  for a in rd:
+    nums=list(map(int,a[3:])); totals=[x+y for x,y in zip(totals,nums)]
+    k=(a[0],int(a[1])//10000)
+    if k in keys:
+      for g,d in keys[k]: vals[g][d]=nums
+# sum +/-10kb = delta -1..1 and CPM then log2(CPM+0.1); print per gene rankings
+scores={ct:[0.0]*len(names) for ct in markers}; nused={ct:0 for ct in markers}
+for ct,gs in markers.items():
+  print('\\n',ct)
+  for g in gs:
+    if g not in vals: continue
+    raw=[sum(vals[g].get(d,[0]*len(names))[i] for d in (-1,0,1)) for i in range(len(names))]
+    x=[math.log2(v/t*1e6+0.1) for v,t in zip(raw,totals)]
+    mean=sum(x)/len(x); sd=(sum((q-mean)**2 for q in x)/len(x))**.5 or 1
+    z=[(q-mean)/sd for q in x]
+    # include only genes showing some specificity
+    for i,q in enumerate(z): scores[ct][i]+=q
+    nused[ct]+=1
+    order=sorted(range(len(names)),key=lambda i:x[i],reverse=True)
+    print(f'{g:8s}', ' '.join(f'{names[i]}:{x[i]:.1f}' for i in order[:4]))
+print('\\nAVERAGE Z BY MARKER SET')
+print('set\\t'+'\\t'.join(names))
+for ct in markers:
+ print(ct+'\\t'+'\\t'.join(f'{q/nused[ct]:.2f}' for q in scores[ct]))
+PY"

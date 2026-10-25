@@ -1,0 +1,30 @@
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy.io import mmread
+from scipy.optimize import nnls
+import gzip
+meta=pd.read_csv('spatial_q_sc_metadata.csv',index_col=0)
+sc=pd.read_csv('spatial_q_sc_counts.csv',index_col=0)
+with gzip.open('matrix.mtx.gz','rb') as f: X=mmread(f).tocsc()
+with gzip.open('barcodes.tsv.gz','rt') as f: bars=[x.strip() for x in f]
+j=bars.index('Spot_710-1'); y=X[:,j].toarray().ravel()
+print('spot',j,'sum',y.sum(),'nonzero',(y>0).sum())
+types=sorted(meta.cell_type.unique())
+M=np.column_stack([sc.loc[meta.index[meta.cell_type==t]].mean(axis=0).values for t in types])
+# raw NNLS
+for mode in ['raw','norm','log']:
+ if mode=='raw': a,b=M,y
+ elif mode=='norm': a,b=M/M.sum(0),y/y.sum()
+ else: a,b=np.log1p(M),np.log1p(y)
+ coef,res=nnls(a,b)
+ print(mode,'res',res)
+ print(sorted(zip(types,coef),key=lambda z:-z[1]))
+# cosine/correlation each
+for i,t in enumerate(types):
+ print(t,'cos',np.dot(M[:,i],y)/(np.linalg.norm(M[:,i])*np.linalg.norm(y)),'corr',np.corrcoef(M[:,i],y)[0,1])
+# strongest type-specific genes and spot expression
+for i,t in enumerate(types):
+ score=M[:,i]/(M.sum(1)-M[:,i]+1)
+ inds=np.argsort(score)[-10:][::-1]
+ print('\\n',t,[(sc.columns[k],round(M[k,i],1),int(y[k]),round(score[k],2)) for k in inds])
+PY"

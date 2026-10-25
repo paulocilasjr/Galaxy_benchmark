@@ -1,0 +1,31 @@
+/bin/bash -c "python - <<'PY'
+import xlrd, numpy as np
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+p='/workspace/inputs/pone.0150501.s002.xls'
+sh=xlrd.open_workbook(p).sheet_by_index(0)
+headers=sh.row_values(1)[1:]
+A=np.array([[float(v) if isinstance(v,(int,float)) else np.nan for v in sh.row_values(r)[1:]] for r in range(2,sh.nrows)],float)
+names=[sh.row_values(r)[0] for r in range(2,sh.nrows)]
+P=[i for i,h in enumerate(headers) if h.startswith('P_')]
+C=[i for i,h in enumerate(headers) if h.startswith('C_')]
+means=np.nanmean(A,axis=0)
+B=means[None,:]-A # sample-gene positive = high expr
+pvals=[]
+for k in range(A.shape[0]):
+    x=B[k,P]; y=B[k,C]
+    x=x[~np.isnan(x)]; y=y[~np.isnan(y)]
+    if len(x)>=2 and len(y)>=2:
+        pvals.append(stats.ttest_ind(x,y,equal_var=True).pvalue)
+    else:
+        pvals.append(np.nan)
+pv=np.array(pvals)
+valid=~np.isnan(pv)
+nm=np.array(names)[valid]
+for method in ['bonferroni','fdr_by']:
+    res=multipletests(pv[valid], alpha=0.05, method=method)
+    print(method, 'sig count', np.sum(res[0]))
+    for n,p,a,s in zip(nm,pv[valid],res[1],res[0]):
+        if s or (n in ['hsa-miR-21','hsa-miR-20b']):
+            print(n, 'raw p',p, 'adj',a, 'sig',s)
+PY"

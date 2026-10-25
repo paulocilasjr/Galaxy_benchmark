@@ -1,0 +1,96 @@
+/bin/bash -lc "python - <<'PY'
+import csv, time, gc
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import rankdata, t
+
+base=Path('inputs')
+dep_path=base/'CRISPRGeneEffect.csv'
+expr_path=base/'OmicsExpressionProteinCodingGenesTPMLogp1BatchCorrected.csv'
+
+def header(path):
+    with path.open(newline='') as f:
+        return next(csv.reader(f))
+
+def first_col(path):
+    # Model IDs contain no commas; reading only the first field avoids loading metadata.
+    ids=[]
+    with path.open() as f:
+        next(f)
+        for line in f:
+            ids.append(line.split(',',1)[0])
+    return ids
+
+t0=time.time()
+hd=header(dep_path); he=header(expr_path)
+common=[x for x in hd[1:] if x in set(he[1:])]
+print('common_features',len(common),flush=True)
+dids=first_col(dep_path); eids=first_col(expr_path)
+print('rows',len(dids),len(eids),flush=True)
+eset=set(eids)
+shared=[x for x in dids if x in eset]
+print('shared_models',len(shared),flush=True)
+
+# Read only the exact shared gene columns, retaining floating-point precision.
+t1=time.time()
+df_d=pd.read_csv(dep_path,usecols=common,dtype=np.float64)
+print('dep_read',df_d.shape,'sec',round(time.time()-t1,2),flush=True)
+t1=time.time()
+df_e=pd.read_csv(expr_path,usecols=common,dtype=np.float64)
+print('expr_read',df_e.shape,'sec',round(time.time()-t1,2),flush=True)
+df_d.index=dids; df_e.index=eids
+# Reindex both assay matrices to the same model order.
+dep=-df_d.loc[shared,common].to_numpy(dtype=np.float64,copy=True)
+expr=df_e.loc[shared,common].to_numpy(dtype=np.float64,copy=True)
+print('aligned',dep.shape,expr.shape,'dep_nan',int(np.isnan(dep).sum()),'expr_nan',int(np.isnan(expr).sum()),flush=True)
+del df_d,df_e
+# free the source-index strings/dataframes before the rank loop
+gc.collect()
+
+nfeat=dep.shape[1]
+rhos=np.full(nfeat,np.nan,dtype=np.float64)
+pvals=np.full(nfeat,np.nan,dtype=np.float64)
+ns=np.zeros(nfeat,dtype=np.int32)
+constant=0
+for j in range(nfeat):
+    x=dep[:,j]
+    y=expr[:,j]
+    ok=np.isfinite(x) & np.isfinite(y)
+    n=int(ok.sum()); ns[j]=n
+    if n < 3:
+        continue
+    rx=rankdata(x[ok],method='average')
+    ry=rankdata(y[ok],method='average')
+    rx-= (n+1.0)/2.0
+    ry-= (n+1.0)/2.0
+    den=np.sqrt(np.dot(rx,rx)*np.dot(ry,ry))
+    if den==0 or not np.isfinite(den):
+        constant+=1
+        continue
+    rho=float(np.dot(rx,ry)/den)
+    rhos[j]=rho
+    if abs(rho)>=1.0:
+        pvals[j]=0.0
+    else:
+        stat=abs(rho)*np.sqrt((n-2.0)/((1.0-rho)*(1.0+rho)))
+        pvals[j]=2.0*t.sf(stat,n-2)
+
+ok=np.isfinite(pvals)
+ptest=int(ok.sum())
+p=np.clip(pvals[ok],0.0,1.0)
+# Benjamini-Hochberg adjusted p values, equivalent to statsmodels fdr_bh.
+order=np.argsort(p,kind='mergesort')
+sp=p[order]
+q_sorted=np.minimum.accumulate((sp*ptest/np.arange(1,ptest+1,dtype=np.float64))[::-1])[::-1]
+q=np.empty_like(q_sorted); q[order]=q_sorted
+sig=q <= 0.05
+count=int(sig.sum())
+percent=100.0*count/ptest
+print('tested',ptest,'n_min',int(ns[ok].min()),'n_median',float(np.median(ns[ok])),'n_max',int(ns[ok].max()),'constant',constant,flush=True)
+print('rho_minmax',float(np.nanmin(rhos)),float(np.nanmax(rhos)),'raw_p_lt_0.05',int((p<0.05).sum()),flush=True)
+print('bh_significant',count,'percent',format(percent,'.15g'),flush=True)
+# show the BH boundary for reproducibility without creating an evidence file
+if count:
+    print('q_boundary',format(float(np.sort(q)[-count]),'.17g'),flush=True)
+PY"

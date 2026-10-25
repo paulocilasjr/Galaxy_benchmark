@@ -1,0 +1,33 @@
+/bin/bash -lc "python3 - <<'PY'
+import pandas as pd, numpy as np, re, itertools, json
+# load
+df=pd.read_csv('sample.swap.rna.q2.tsv.gz', sep='\\t', index_col=0)
+cols=df.columns.tolist()
+stab=pd.read_csv('refs/wheat_root_atlas/GRN_regulon_analysis/input/stability_and_specificity_info.csv', sep=';')
+ms=stab[(stab['Specificity']=='specific') & (stab['Stability']=='stable') & stab['is_Marker_of_Cluster'].notna()].copy()
+
+def build(map5,map11,map12):
+ exact_map={'1Epidermis':'epidermis','2Cortex':'cortex','3Meristems':'meristems','4ProvascularCells':'provascular','5Unknown':map5,'6Pericycle':'pericycle','7Epidermis':'epidermis','8RootHair':'root_hair','9Endodermis':'endodermis','10Xylem':'xylem','11Endodermis/Phloem':map11,'12DividingCells':map12,'13Phloem':'phloem','14RootCap':'root_cap'}
+ sets={ct:set() for ct in cols}
+ for lab,bt in exact_map.items():
+  genes=ms.loc[ms['is_Marker_of_Cluster'].str.contains(re.escape(lab), na=False),'Gene'].tolist()
+  sets[bt].update(genes)
+ pres={ct:[g for g in genes if g in df.index] for ct,genes in sets.items()}
+ def score(ct,g):
+  if not g:return 0
+  mat=df.loc[g]
+  mx=mat.max(axis=1); prop=mat.div(mx.where(mx>0),axis=0).fillna(0)
+  return prop[ct].mean()
+ obs={ct:score(ct,pres[ct]) for ct in cols}
+ best=max((obs[a]-score(a,pres[b])+obs[b]-score(b,pres[a]), a,b) for a,b in itertools.combinations(cols,2))
+ # best positive means swap would improve: diff=swap_total-obs_total; positive better. Actually negative observed better.
+ return sum(obs.values()), best, {ct:round(v,3) for ct,v in obs.items()}
+variants=[]
+for map5 in ['root_cap','meristems']:
+ for map11 in ['root_cap','phloem','endodermis']:
+  for map12 in ['meristems']:
+   tot,best,obs=build(map5,map11,map12)
+   variants.append((tot,best,map5,map11,map12,obs))
+   print(f'map5={map5} map11={map11}: total {tot:.3f}, best swap {best[1]},{best[2]} diff {best[0]:.3f}')
+print('overall best diff',min(v[1][0] for v in variants), 'max total',max(v[0] for v in variants))
+PY"

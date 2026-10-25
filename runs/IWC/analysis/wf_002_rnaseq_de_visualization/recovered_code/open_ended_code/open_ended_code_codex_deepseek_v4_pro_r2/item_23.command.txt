@@ -1,0 +1,43 @@
+/usr/bin/bash -c "python - <<'PY'
+import pandas as pd, numpy as np
+from pathlib import Path
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+samples={
+ 'SRR5085167':'reference',
+ 'SRR5085168':'reference',
+ 'SRR5085169':'changed',
+ 'SRR5085170':'changed',
+}
+rows=[]
+for s, cond in samples.items():
+    group='counts_from_reference_condition' if cond=='reference' else 'counts_from_changed_condition'
+    p=next(Path('/workspace/data/inputs').joinpath(group).glob(f'{s.lower()}_counts_table/*.dat'))
+    d=pd.read_csv(p,sep='\\t')
+    d.columns=['Geneid',s]
+    rows.append(d)
+counts=rows[0]
+for d in rows[1:]:
+    counts=counts.merge(d,on='Geneid',how='outer')
+counts=counts.set_index('Geneid')
+# exact filter
+keep=(counts>=10).sum(axis=1)>=2
+counts_filt=counts.loc[keep].astype(int).copy()
+print('filtered shape', counts_filt.shape)
+meta=pd.DataFrame({'condition': pd.Categorical([samples[c] for c in counts_filt.columns], categories=['reference','changed'], ordered=True)}, index=counts_filt.columns)
+print(meta)
+dds=DeseqDataSet(counts=counts_filt, metadata=meta, design='~condition', quiet=False)
+dds.deseq2()
+stat=DeseqStats(dds, contrast=['condition','changed','reference'], independent_filter=False, cooks_filter=False, quiet=False)
+stat.summary()
+res=stat.results_df.copy()
+print(res.head())
+print(res.columns)
+print('n',len(res),'NA lfc',res['log2FoldChange'].isna().sum(),'NA p',res['pvalue'].isna().sum(),'NA padj',res['padj'].isna().sum())
+print('inf lfc',np.isinf(res['log2FoldChange']).sum())
+print('p range',res['pvalue'].min(),res['pvalue'].max())
+print('padj range',res['padj'].min(),res['padj'].max())
+print('number sig', (res['padj']<0.05).sum())
+print(res.sort_values('pvalue').head(20).to_string())
+PY"

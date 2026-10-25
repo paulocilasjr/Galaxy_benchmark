@@ -1,0 +1,77 @@
+/bin/bash -lc "cat > rna_score.py <<'PY'
+import numpy as np, re
+RNA=np.load('rna_matrix.npz',allow_pickle=True)
+rna_genes=list(RNA['genes']); rna_tissues=list(RNA['tissues']); Z=RNA['Z']
+PM=np.load('promoter_matrix.npz',allow_pickle=True)
+G=PM['G']; promoter_genes=list(PM['genes']); atac_names=list(PM['names'])
+Md=np.load('matrix_data.npz',allow_pickle=True); totals=Md['X'].sum(axis=0)
+# build promoter index map by symbol variants
+from collections import defaultdict
+p_index=defaultdict(list)
+for i,g in enumerate(promoter_genes):
+    # token before [nr] etc, after | variants, base
+    base=g.split('[')[0]
+    # add base and ortholog tokens
+    variants=set()
+    variants.add(base.upper())
+    for part in g.split('|'):
+        s=part.split('[')[0].strip().upper()
+        if s: variants.add(s)
+    for v in variants:
+        p_index[v].append(i)
+# normalize ATAC promoter counts per sample
+Gn=G/(totals[None,:]+1e-9)
+L=np.log2(Gn*1e6+1)
+# zscore promoter per gene across samples
+mu=L.mean(axis=1,keepdims=True); sd=L.std(axis=1,keepdims=True)+1e-9
+PZ=(L-mu)/sd
+# For each RNA tissue, score ATAC samples using top N RNA z genes matched to promoter
+for method,N in [('top',100),('top',200),('weighted',500)]:
+    print('\\nMETHOD',method,N)
+    score=np.full((len(rna_tissues),len(atac_names)),np.nan)
+    matches=[]
+    for ti,t in enumerate(rna_tissues):
+        # candidate genes by z descending, matched
+        order=np.argsort(Z[ti])[::-1]
+        genes_sel=[]
+        for gi in order:
+            sym=rna_genes[gi]
+            if not re.match(r'"'^(LOC|MRNA|AMEX|PRO-|V2|7ALPHA|PANCREAS|LUTEINIZING|VASOACTIVE|IMMEDIATE|PAIRED|T-BOX|PRO-OPIOMELANOCORTIN|GOOSECOID)'"',sym) and len(sym)>2:
+                pass
+            if sym in p_index:
+                genes_sel.append((gi,sym,p_index[sym]))
+            if len(genes_sel)>=N:
+                break
+        matches.append(len(genes_sel))
+        rows=[]
+        weights=[]
+        for gi,sym,inds in genes_sel:
+            for ii in inds:
+                rows.append(ii); weights.append(Z[ti,gi])
+        rows=np.array(rows); weights=np.array(weights)
+        if method=='top':
+            score[ti]=PZ[rows].mean(axis=0)
+        elif method=='weighted':
+            # weighted by RNA z, but each promoter row same weight; average unique gene mean
+            uniq_genes=[]
+            for gi,sym,inds in genes_sel:
+                uniq_genes.append(PZ[inds].mean(axis=0))
+            # weights normalized abs maybe
+            w=np.array([Z[ti,gi] for gi,sym,inds in genes_sel])
+            w=np.maximum(w,0)
+            score[ti]=np.average(np.array(uniq_genes),axis=0,weights=w+1e-8)
+    print('match counts',matches)
+    print('tissue\\t'+'\\t'.join(atac_names))
+    for ti,t in enumerate(rna_tissues):
+        print(t+'\\t'+'\\t'.join(f'{score[ti,j]:.2f}' for j in range(len(atac_names))))
+    print('Argmax ATAC sample per RNA tissue')
+    for ti,t in enumerate(rna_tissues):
+        order=np.argsort(score[ti])[::-1]
+        print(f'{t:12s} best {atac_names[order[0]]:12s} {score[ti,order[0]]:.2f} 2nd {atac_names[order[1]]:12s} {score[ti,order[1]]:.2f} 3rd {atac_names[order[2]]:12s} {score[ti,order[2]]:.2f}')
+    print('Top RNA tissue per ATAC sample')
+    for j,s in enumerate(atac_names):
+        order=np.argsort(score[:,j])[::-1]
+        print(f'{s:12s} best {rna_tissues[order[0]]:12s} {score[order[0],j]:.2f} 2nd {rna_tissues[order[1]]:12s} {score[order[1],j]:.2f}')
+    np.save(f'rna_score_{method}{N}.npy',score)
+PY
+python3 rna_score.py"

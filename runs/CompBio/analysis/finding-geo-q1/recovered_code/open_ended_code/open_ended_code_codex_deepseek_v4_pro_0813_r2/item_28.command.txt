@@ -1,0 +1,44 @@
+/bin/bash -lc "python - <<'PY'
+import urllib.request, io, h5py, time, sys, gc
+URL='https://ftp.ncbi.nlm.nih.gov/geo/series/GSE102nnn/GSE102934/suppl/GSE102934_iCell_10x_brain.h5'
+req=urllib.request.Request(URL,method='HEAD')
+with urllib.request.urlopen(req,timeout=30) as r: size=int(r.headers['Content-Length'])
+class RR(io.RawIOBase):
+ def __init__(self): self.pos=0
+ def seekable(self): return True
+ def readable(self): return True
+ def seek(self,o,w=0):
+  self.pos=[o,self.pos+o,size+o][w]; return self.pos
+ def tell(self): return self.pos
+ def _get(self,a,b):
+  req=urllib.request.Request(URL,headers={'Range':f'bytes={a}-{b-1}'})
+  with urllib.request.urlopen(req,timeout=120) as r: return r.read()
+ def read(self,n=-1):
+  if n<0: n=size-self.pos
+  if n<=0: return b''
+  data=self._get(self.pos,min(size,self.pos+n)); self.pos+=len(data); return data
+ def readinto(self,b):
+  data=self.read(len(b)); b[:len(data)]=data; return len(data)
+r=RR()
+f=h5py.File(r,'r')
+print('keys root',list(f.keys()))
+def show(name):
+ try:
+  o=f[name]
+  print('OBJ',name, 'type',type(o))
+  if isinstance(o,h5py.Group): print(' group keys',list(o.keys()),'attrs',dict(o.attrs))
+  else: print(' ds shape',o.shape,'dtype',o.dtype,'attrs',dict(o.attrs))
+ except Exception as e: print('err',name,e)
+for k in list(f.keys()): show(k)
+# possible names from attributes?
+try:
+ print('root attrs',dict(f.attrs))
+except Exception as e: print('root attrs err',e)
+# inspect small datasets names maybe in attrs not keys
+for path in ['/cell_ix','/gene_ix','/value','/genes','/gene_names','/barcodes','/cell_names','/shape']:
+ try:
+  show(path)
+ except: pass
+f.close()
+print('done')
+PY"

@@ -1,0 +1,78 @@
+/bin/bash -lc "python - <<'PY'
+from zipfile import ZipFile
+from collections import Counter
+from scipy.stats import mannwhitneyu, rankdata
+import numpy as np
+
+def read(z, fn):
+    rec=[]; name=None; seq=[]
+    for line in z.read(fn).decode().splitlines():
+        if line.startswith('>'):
+            if name is not None: rec.append(''.join(seq))
+            name=line[1:].strip(); seq=[]
+        else: seq.append(line.strip())
+    if name is not None: rec.append(''.join(seq))
+    return rec
+
+def calc(rec):
+    cols=list(zip(*rec)); L=len(cols)
+    # aligned columns: gap as missing vs state
+    pi_gapstate=0; pi_ignore=0; pi_complete=0
+    var_gapstate=0; var_ignore=0; var_complete=0
+    nongap_cols=0; complete_cols=0
+    for col in cols:
+        c=Counter(col)
+        if len(c)>=2: var_gapstate+=1
+        if sum(v>=2 for v in c.values())>=2: pi_gapstate+=1
+        ng=[x for x in col if x not in '-?']
+        if len(ng)>0:
+            nongap_cols+=1
+            cc=Counter(ng)
+            if len(cc)>=2: var_ignore+=1
+            if sum(v>=2 for v in cc.values())>=2: pi_ignore+=1
+        if len(ng)==len(col):
+            complete_cols+=1
+            if len(cc)>=2: var_complete+=1
+            if sum(v>=2 for v in cc.values())>=2: pi_complete+=1
+    return locals()
+
+def read_group(g):
+    vals=[]
+    with ZipFile('inputs/scogs_'+g+'.zip') as z:
+        for fn in z.namelist():
+            if fn.endswith('.faa.mafft'):
+                rec=read(z,fn); vals.append(calc(rec))
+    return vals
+A=read_group('animals'); F=read_group('fungi')
+
+def u(x,y):
+    r=mannwhitneyu(x,y,alternative='two-sided',method='asymptotic')
+    # min as scipy doesn't always? 
+    return r.statistic, min(r.statistic,len(x)*len(y)-r.statistic),r.pvalue
+variants={
+ 'gapstate/L':(lambda m:m['pi_gapstate']/m['L']*100),
+ 'ignore/L':(lambda m:m['pi_ignore']/m['L']*100),
+ 'complete/L':(lambda m:m['pi_complete']/m['L']*100),
+ 'ignore/nongap':(lambda m:m['pi_ignore']/m['nongap_cols']*100 if m['nongap_cols'] else np.nan),
+ 'complete/complete':(lambda m:m['pi_complete']/m['complete_cols']*100 if m['complete_cols'] else np.nan),
+ 'gapstate/var':(lambda m:m['pi_gapstate']/m['var_gapstate']*100 if m['var_gapstate'] else np.nan),
+ 'ignore/var':(lambda m:m['pi_ignore']/m['var_ignore']*100 if m['var_ignore'] else np.nan),
+ 'complete/var':(lambda m:m['pi_complete']/m['var_complete']*100 if m['var_complete'] else np.nan),
+}
+for name,fn in variants.items():
+    x=np.array([fn(m) for m in A],float); y=np.array([fn(m) for m in F],float)
+    mask=np.isfinite(x)&np.isfinite(y)
+    # usually each separately drop nan
+    xx=x[np.isfinite(x)]; yy=y[np.isfinite(y)]
+    if len(xx)==0 or len(yy)==0: continue
+    stat=min(u(xx,yy)[0],len(xx)*len(yy)-u(xx,yy)[0])
+    print(name,'n',len(xx),len(yy),'U_first=',u(xx,yy)[0],'Umin=',stat,'p=',u(xx,yy)[2], 'zeroes',sum(xx==0),sum(yy==0),'ranges', (np.nanmin(xx),np.nanmax(xx)),(np.nanmin(yy),np.nanmax(yy)))
+
+# filter n=4 variants
+for name,fn in variants.items():
+    x=np.array([fn(m) for m in A if m['n']==4],float); y=np.array([fn(m) for m in F if m['n']==4],float)
+    xx=x[np.isfinite(x)]; yy=y[np.isfinite(y)]
+    if len(xx) and len(yy):
+        st=u(xx,yy)[0]
+        print('4only',name,'n',len(xx),len(yy),'U_first=',st,'Umin=',min(st,len(xx)*len(yy)-st),'zeros',sum(xx==0),sum(yy==0))
+PY"

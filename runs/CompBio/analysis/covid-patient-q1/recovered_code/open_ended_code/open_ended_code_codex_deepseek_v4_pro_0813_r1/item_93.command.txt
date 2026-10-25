@@ -1,0 +1,37 @@
+/bin/bash -lc "python - <<'PY'
+import numpy as np, pandas as pd, anndata as ad
+from sklearn.preprocessing import StandardScaler
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans
+adata=ad.read_h5ad('covid.patients.q1.h5ad'); names=list(adata.var['feature_name'].astype(str))
+D=np.load('donor_sum.npz'); sums=D['sum']; cats=D['cats']; cc=D['cell_counts']
+libs=sums.sum(axis=0,keepdims=True); cpm=sums/libs*1e6; log=np.log1p(cpm)
+def score(gs):
+ idx=[names.index(g) for g in gs if g in names]
+ # z-score per gene across donors then mean
+ z=(log[idx,:]-log[idx,:].mean(axis=1,keepdims=True))/(log[idx,:].std(axis=1,keepdims=True)+1e-9)
+ return z.mean(axis=0)
+features={
+ 'IFN': ['ISG15','IFI27','IFI44L','IFIT1','IFIT2','IFIT3','IFIT5','MX1','MX2','OAS1','OAS2','OAS3','OASL','IFI6','IFIH1','IFI44','IFI35','IFITM1','IFITM2','IFITM3','ISG20'],
+ 'Myeloid': ['S100A8','S100A9','LYZ','CD14','IL1B','FCGR3A','CSF1R','MS4A7'],
+ 'Lymphoid': ['CD3D','CD3E','CD8A','NKG7','GNLY','MS4A1','CD19','CD79A','JCHAIN','IGHG1'],
+ 'HLA': ['HLA-DRA','HLA-DRB1','HLA-DQA1','HLA-DPA1','HLA-DPB1'],
+ 'Platelet': ['PPBP','PF4','GP9','ITGA2B'],
+}
+F=pd.DataFrame({k:score(v) for k,v in features.items()},index=cats)
+F['Myeloid_Lymphoid_ratio']=F['Myeloid']-F['Lymphoid']
+F['IFN_Myeloid']=F['IFN']+F['Myeloid']-F['Lymphoid']
+print(F.round(3).to_string())
+# GMM on combined biology score or first 2 PCs
+for cols in [['IFN','Myeloid','Lymphoid'],['IFN','Myeloid','Lymphoid','HLA'],['IFN_Myeloid']]:
+ X=StandardScaler().fit_transform(F[cols])
+ g=GaussianMixture(n_components=2,random_state=0).fit(X)
+ labs=g.predict(X)
+ print('\\ncols',cols,'GMM counts',np.bincount(labs),'means',g.means_.ravel() if X.shape[1]==1 else '')
+ for l in range(2):
+  print(l,sorted([str(c) for c,lab in zip(cats,labs) if lab==l]))
+# print ranked score
+print('\\nranked IFN_Myeloid')
+for c in F.sort_values('IFN_Myeloid',ascending=False).index:
+ print(c, round(F.loc[c,'IFN_Myeloid'],3), 'IFN',round(F.loc[c,'IFN'],2),'My',round(F.loc[c,'Myeloid'],2),'Ly',round(F.loc[c,'Lymphoid'],2))
+PY"

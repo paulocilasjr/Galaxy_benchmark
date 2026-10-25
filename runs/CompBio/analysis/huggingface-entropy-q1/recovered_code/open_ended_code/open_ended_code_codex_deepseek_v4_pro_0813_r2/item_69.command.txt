@@ -1,0 +1,75 @@
+/bin/bash -lc "cat > [REDACTED LOCAL PATH] <<'PY'
+import sys, os, time, pathlib, math, json
+sys.path.insert(0,'.')
+import torch
+import torch.nn.functional as F
+import numpy as np
+from safetensors.torch import load_file
+from cadmodel.configuration_caduceus import CaduceusConfig
+from cadmodel.modeling_caduceus import CaduceusForMaskedLM
+
+workspace = '.'
+seq = pathlib.Path('sequence.fa').read_text().split('\\n')[1].strip().upper()
+L = len(seq)
+assert L == 1000, L
+mapping = {'A':7,'C':8,'G':9,'T':10,'N':11}
+base_ids = [7,8,9,10]
+acgtn_ids = [7,8,9,10,11]
+ids = torch.tensor([[mapping[c] for c in seq]], dtype=torch.long)
+print('Loading model...', flush=True)
+model = CaduceusForMaskedLM(CaduceusConfig.from_pretrained('./cadmodel'))
+model.load_state_dict(load_file('model.safetensors'), strict=False)
+model.tie_weights()
+model.eval()
+model.to('mps')
+ids = ids.to('mps')
+
+B = 30
+ent_full = np.empty(L, dtype=np.float32)
+ent_base_norm = np.empty(L, dtype=np.float32)
+ent_base_unnorm = np.empty(L, dtype=np.float32)
+ent_acgtn_norm = np.empty(L, dtype=np.float32)
+base_probs = np.empty((L,4), dtype=np.float32)
+acgtn_probs = np.empty((L,5), dtype=np.float32)
+start_all = time.time()
+for chunk_start in range(0, L, B):
+    chunk_end = min(L, chunk_start + B)
+    n = chunk_end - chunk_start
+    batch = []
+    for i in range(chunk_start, chunk_end):
+        x = ids[0].clone()
+        x[i] = 3  # [MASK]
+        batch.append(x)
+    inp = torch.stack(batch)
+    t0 = time.time()
+    with torch.no_grad():
+        out = model(input_ids=inp)
+    logits = out.logits
+    # gather masked-position logits for each sequence in this chunk
+    gathered = logits[torch.arange(n, device=logits.device), torch.arange(chunk_start, chunk_end, device=logits.device), :].float().cpu()
+    del out, inp, batch, logits
+    log_full = torch.log_softmax(gathered, dim=-1)
+    prob_full = torch.exp(log_full)
+    # full entropy (all 16 vocab)
+    ent_full[chunk_start:chunk_end] = (-(prob_full * log_full).sum(dim=-1) / math.log(2)).numpy()
+    # base normalized entropy over A,C,G,T
+    lpb = prob_full[:, base_ids]
+    Zb = lpb.sum(dim=-1, keepdim=True).clamp_min(1e-30)
+    pb = lpb / Zb
+    base_probs[chunk_start:chunk_end] = pb.numpy()
+    ent_base_norm[chunk_start:chunk_end] = (-(pb * torch.log2(pb.clamp_min(1e-30))).sum(dim=-1)).numpy()
+    ent_base_unnorm[chunk_start:chunk_end] = (-(lpb * torch.log2(lpb.clamp_min(1e-30))).sum(dim=-1)).numpy()
+    # ACGTN normalized entropy
+    lpn = prob_full[:, acgtn_ids]
+    Zn = lpn.sum(dim=-1, keepdim=True).clamp_min(1e-30)
+    pn = lpn / Zn
+    acgtn_probs[chunk_start:chunk_end] = pn.numpy()
+    ent_acgtn_norm[chunk_start:chunk_end] = (-(pn * torch.log2(pn.clamp_min(1e-30))).sum(dim=-1)).numpy()
+    print(f'chunk {chunk_start}:{chunk_end} time {time.time()-t0:.2f}s elapsed {time.time()-start_all:.1f}s', flush=True)
+
+np.savez('entropies.npz', seq=np.array(list(seq)), ent_full=ent_full, ent_base_norm=ent_base_norm,
+         ent_base_unnorm=ent_base_unnorm, ent_acgtn_norm=ent_acgtn_norm,
+         base_probs=base_probs, acgtn_probs=acgtn_probs)
+print('saved entropies.npz; total', time.time()-start_all, flush=True)
+PY
+python [REDACTED LOCAL PATH]"

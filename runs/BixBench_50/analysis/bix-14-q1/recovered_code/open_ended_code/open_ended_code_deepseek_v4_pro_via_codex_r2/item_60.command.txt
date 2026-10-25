@@ -1,0 +1,57 @@
+/bin/bash -lc "python - <<'PY'
+import glob, os, re
+import openpyxl
+
+trio_path='/workspace/inputs/230215_Trio_Status.xlsx'
+wb=openpyxl.load_workbook(trio_path,data_only=True)
+ws=wb.active
+rows=list(ws.iter_rows(values_only=True))
+carrier_ids=set()
+for row in rows[1:]:
+    if row[3] == 'Carrier':
+        sid=str(row[0]).strip().replace('\\t','').strip()
+        carrier_ids.add(sid)
+print('carrier_ids:', sorted(carrier_ids, key=lambda x:(x.isdigit(), x)))
+
+CODING_SO_TERMS = {
+    \"synonymous_variant\", \"missense_variant\", \"splice_region_variant\",
+    \"stop_gained\", \"stop_lost\", \"start_lost\", \"frameshift_variant\",
+    \"inframe_insertion\", \"inframe_deletion\",
+}
+
+total = 0
+coding = 0
+syn = 0
+for f in glob.glob('/workspace/inputs/CHIP_DP10_GQ20_PASS/*.xlsx'):
+    m=re.match(r'230209_Exome_GRCh38_CHIP_(\\d+)-', os.path.basename(f))
+    if not m or m.group(1) not in carrier_ids:
+        continue
+    wb=openpyxl.load_workbook(f,data_only=True)
+    ws=wb.active
+    data=list(ws.iter_rows(min_row=3, values_only=True))
+    for r in data:
+        if r[0] is None:
+            continue
+        total += 1
+        try:
+            vaf=float(r[9])
+        except (TypeError,ValueError):
+            vaf=None
+        if vaf is None or not vaf < 0.3:
+            continue
+        so=str(r[13]) if r[13] is not None else ''
+        terms=set(part.strip() for part in so.split(',') if part.strip())
+        if not terms & CODING_SO_TERMS:
+            continue
+        coding += 1
+        if 'synonymous_variant' in terms:
+            syn += 1
+print('total carrier rows:', total)
+print('coding VAF<0.3:', coding)
+print('synonymous VAF<0.3:', syn)
+fraction=syn/coding if coding else 0
+print('fraction:', repr(fraction), fraction)
+with open('/workspace/codex_output/answer.txt','w') as out:
+    out.write(f'{fraction}\\n')
+PY
+cat /workspace/codex_output/answer.txt"
